@@ -134,6 +134,20 @@ struct State {
     activated: bool,
     seeded: BTreeSet<String>,
     outputs: Vec<CredentialOutput>,
+    /// Installed prerequisites this session resolved, keyed by command name.
+    /// A state document written by an earlier session records none.
+    #[serde(default)]
+    binaries: BTreeMap<String, Binary>,
+}
+
+/// One resolved prerequisite as the session found it. The path resolves
+/// symlinks so a later diagnosis names the file that actually ran, which the
+/// executed path deliberately does not.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Binary {
+    path: PathBuf,
+    version: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -385,6 +399,7 @@ fn start(args: StartArgs) -> Result<Value> {
             activated: false,
             seeded: BTreeSet::new(),
             outputs: vec![],
+            binaries: BTreeMap::new(),
         };
         ports(state.breg_port, state.mint_port, state.database_port)?;
         for port in [state.breg_port, state.mint_port, state.database_port] {
@@ -421,6 +436,11 @@ fn start(args: StartArgs) -> Result<Value> {
     }
     probe(state.database_port)?;
     remove_socket(&root)?;
+    state.binaries = BTreeMap::from([
+        ("breg".into(), binary(&root, &breg)?),
+        ("mint".into(), binary(&root, &mint)?),
+        ("docker".into(), binary(&root, &docker)?),
+    ]);
     state.status = Status::Starting;
     state.save()?;
     let log = log_file(&root, "supervisor")?;
@@ -991,6 +1011,40 @@ fn executable(name: &str, explicit: Option<&Path>) -> Result<PathBuf> {
         bail!("installed executable must be a regular file");
     }
     Ok(path)
+}
+/// Recorded when an installed prerequisite does not report a usable version.
+/// A command that declines to identify itself still serves the session, and
+/// losing its recorded path would cost a later diagnosis more than the
+/// unknown version does.
+const UNREPORTED_VERSION: &str = "unreported";
+/// Longest version line kept; a prerequisite that prints a banner is bounded
+/// like every other captured output.
+const MAX_VERSION: usize = 200;
+
+/// Identify a resolved prerequisite for the state document: the fully
+/// canonical path of the file that runs, and the version it reports for
+/// itself. Diagnostics stay in the owner-only log directory.
+fn binary(root: &Path, path: &Path) -> Result<Binary> {
+    let (success, bytes) = output(
+        Command::new(path).arg("--version"),
+        root,
+        &format!(
+            "version-{}",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        ),
+        None,
+    )?;
+    let reported = String::from_utf8_lossy(&bytes);
+    let reported = reported.lines().next().unwrap_or_default().trim();
+    let version = if !success || reported.is_empty() {
+        UNREPORTED_VERSION.to_string()
+    } else {
+        reported.chars().take(MAX_VERSION).collect()
+    };
+    Ok(Binary {
+        path: fs::canonicalize(path)?,
+        version,
+    })
 }
 fn log_file(root: &Path, name: &str) -> Result<File> {
     let path = root

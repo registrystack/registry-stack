@@ -45,6 +45,7 @@ seed: []
         activated: false,
         seeded: BTreeSet::new(),
         outputs: vec![],
+        binaries: BTreeMap::new(),
     };
     (
         temporary,
@@ -172,6 +173,53 @@ fn occupied_and_ambiguous_ports_are_refused() {
     assert!(ports(0, 2, 3).is_err());
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     assert!(probe(listener.local_addr().unwrap().port()).is_err());
+}
+
+fn script(path: &Path, body: &str) {
+    fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn resolved_prerequisites_record_a_canonical_path_and_their_reported_version() {
+    let (_temp, state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let installed = state.project.join("installed-probe");
+    script(&installed, "echo 'probe 9.9.9 (build 1)'");
+    let linked = state.project.join("probe");
+    std::os::unix::fs::symlink(&installed, &linked).unwrap();
+
+    // The executed path keeps the installed command name, so a distribution
+    // that routes a symlink by argv[0] still behaves as installed.
+    let resolved = executable("probe", Some(&linked)).unwrap();
+    assert_eq!(resolved, linked);
+    // The recorded path resolves that symlink, so a later diagnosis names the
+    // file that served the session rather than the name it was reached by.
+    let recorded = binary(&root, &resolved).unwrap();
+    assert_eq!(recorded.path, fs::canonicalize(&installed).unwrap());
+    assert_eq!(recorded.version, "probe 9.9.9 (build 1)");
+
+    // A prerequisite that cannot answer keeps its path and says so.
+    let silent = state.project.join("silent-probe");
+    script(&silent, "exit 3");
+    let silent = binary(&root, &silent).unwrap();
+    assert_eq!(silent.version, UNREPORTED_VERSION);
+    assert!(silent.path.ends_with("silent-probe"));
+
+    let mut recorded_state = read_state(&root).unwrap();
+    recorded_state.binaries = BTreeMap::from([("probe".into(), recorded.clone())]);
+    recorded_state.save().unwrap();
+    assert_eq!(read_state(&root).unwrap().binaries["probe"], recorded);
+    // A state document written before this record stays readable.
+    let mut document = serde_json::to_value(&recorded_state).unwrap();
+    document.as_object_mut().unwrap().remove("binaries");
+    private::replace(
+        &root.join("state.json"),
+        &serde_json::to_vec(&document).unwrap(),
+    )
+    .unwrap();
+    assert!(read_state(&root).unwrap().binaries.is_empty());
 }
 
 #[test]
