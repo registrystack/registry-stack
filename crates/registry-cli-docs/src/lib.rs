@@ -576,7 +576,13 @@ mod tests {
         assert!(generate.arguments.iter().any(|argument| {
             argument.possible_values
                 == [
-                    "openapi", "schemas", "actions", "manifest", "metadata", "sql",
+                    "openapi",
+                    "schemas",
+                    "actions",
+                    "manifest",
+                    "metadata",
+                    "sql",
+                    "evidence-source",
                 ]
         }));
         for invocation in [
@@ -877,7 +883,12 @@ mod tests {
         let evidencectl_new = find_command(&catalog.binaries, "evidencectl new");
         assert!(evidencectl_new.constraints.iter().any(|constraint| {
             constraint.kind == ConstraintKind::RequiredExactlyOne
-                && constraint.arguments == ["--openapi <OPENAPI>", "--transport <TRANSPORT>"]
+                && constraint.arguments
+                    == [
+                        "--openapi <OPENAPI>",
+                        "--transport <TRANSPORT>",
+                        "--starter <STARTER>",
+                    ]
         }));
         assert!(evidencectl_new
             .options
