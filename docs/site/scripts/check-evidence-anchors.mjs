@@ -526,27 +526,58 @@ function pluralLines(count) {
 // owns their vocabulary and the frontmatter's YAML shape, so the two lines are read where
 // they sit rather than through a parser this check would have to install: the
 // `evidence-anchors` CI job runs this script against a bare checkout with no dependencies
-// fetched. The line pattern strips a leading UTF-8 BOM, normalizes CRLF to LF, and matches a
-// bare, single-, or double-quoted scalar with an optional trailing `# comment`. It is not a
-// full YAML grammar: a folded or flow-style value, or a scalar spanning more than one line,
-// reads as absent rather than as its value.
-function declaresVerifiedSpecification(text) {
+// fetched. The reader strips a leading UTF-8 BOM, normalizes CRLF to LF, and accepts one
+// word, bare or single- or double-quoted, with an optional trailing `# comment`. It is not
+// a YAML grammar, so a value it cannot read (a folded or literal block, a flow sequence, a
+// value continued on the next line) is reported as unreadable rather than taken as absent:
+// a specification cannot step around REQ-DOC-014 by spelling `verified` another way.
+const PLAIN_WORD = /^(?:(['"])([A-Za-z0-9_-]+)\1|([A-Za-z0-9_-]+))(?:[ \t]+#.*|[ \t]*)$/;
+
+// One top-level frontmatter field: `{ present: false }`, `{ present: true, value }` for a
+// word this check reads, or `{ present: true, value: null }` for a form it does not.
+function readFrontmatterWord(block, key) {
+  const line = new RegExp(`^${key}:(.*)$`, 'm').exec(block);
+  if (!line) {
+    return { present: false };
+  }
+  const match = PLAIN_WORD.exec(line[1].trimStart());
+  return { present: true, value: match ? (match[2] ?? match[3]) : null };
+}
+
+// Where the page stands against REQ-DOC-014: 'verified' for a specification that declares
+// verified evidence, 'unreadable' when a field the rule depends on is written in a form this
+// check does not read, and null for every other page.
+function evidenceAxis(text) {
   if (text.charCodeAt(0) === 0xfeff) {
     text = text.slice(1);
   }
   text = text.replaceAll('\r\n', '\n');
   if (!text.startsWith('---\n')) {
-    return false;
+    return null;
   }
   const end = text.indexOf('\n---\n', 4);
   if (end === -1) {
-    return false;
+    return null;
   }
   const block = text.slice(4, end);
-  return (
-    /^doc_type:[ \t]*(['"]?)specification\1(?:[ \t]+#.*|[ \t]*)$/m.test(block) &&
-    /^evidence:[ \t]*(['"]?)verified\1(?:[ \t]+#.*|[ \t]*)$/m.test(block)
-  );
+  const docType = readFrontmatterWord(block, 'doc_type');
+  if (!docType.present) {
+    return null;
+  }
+  if (docType.value === null) {
+    return 'unreadable';
+  }
+  if (docType.value !== 'specification') {
+    return null;
+  }
+  const evidence = readFrontmatterWord(block, 'evidence');
+  if (!evidence.present) {
+    return null;
+  }
+  if (evidence.value === null) {
+    return 'unreadable';
+  }
+  return evidence.value === 'verified' ? 'verified' : null;
 }
 
 function mdxPages(directory) {
@@ -608,7 +639,14 @@ export function checkEvidenceAnchors({
   for (const page of mdxPages(contentRoot)) {
     const location = relative(contentRoot, page).replaceAll('\\', '/');
     const text = readFileSync(page, 'utf8');
-    const verifiedSpecification = declaresVerifiedSpecification(text);
+    const axis = evidenceAxis(text);
+    if (axis === 'unreadable') {
+      errors.push(
+        `${location} writes doc_type or evidence in a form this check does not read; write ` +
+          'each as one plain word on its own line so RS-DOC REQ-DOC-014 can be applied',
+      );
+    }
+    const verifiedSpecification = axis === 'verified';
     // Whether an anchor on this page reached past the site's own content.
     let citesArtifact = false;
     for (const anchor of extractAnchors(text)) {

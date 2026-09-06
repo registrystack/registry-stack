@@ -1107,6 +1107,55 @@ test('recognizes a verified evidence axis behind a leading UTF-8 BOM', (t) => {
   assert.match(result.errors[0], /REQ-DOC-014/);
 });
 
+test('refuses a specification whose evidence axis is a folded scalar', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence: >-\n  verified',
+    '{/* Evidence: crates/demo/src/lib.rs, verify_source_shape(). */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+  assert.match(page.errors[0], /does not read/);
+});
+
+test('refuses a specification whose evidence axis is a flow sequence', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence: [verified]',
+    '{/* Evidence: crates/demo/src/lib.rs, verify_source_shape(). */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+  assert.match(page.errors[0], /does not read/);
+});
+
+test('refuses a page whose doc_type is a folded scalar', (t) => {
+  const root = repository(t);
+  write(
+    root,
+    'docs/site/src/content/docs/spec/page.mdx',
+    '---\ntitle: Page\ndoc_type: >-\n  specification\nevidence: verified\n---\n\n' +
+      '{/* Evidence: crates/demo/src/lib.rs, verify_source_shape(). */}\n',
+  );
+  const result = checkEvidenceAnchors({ repoRoot: root });
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /REQ-DOC-014/);
+  assert.match(result.errors[0], /does not read/);
+});
+
+test('leaves a readable non-specification page alone whatever form its evidence axis takes', (t) => {
+  const root = repository(t);
+  write(
+    root,
+    'docs/site/src/content/docs/explanation/page.mdx',
+    '---\ntitle: Page\ndoc_type: explanation\nevidence: >-\n  verified\n---\n\nProse.\n',
+  );
+  const result = checkEvidenceAnchors({ repoRoot: root });
+  assert.deepEqual(result.errors, []);
+});
+
 test('leaves a specification alone whose evidence value only starts with verified', (t) => {
   const root = repository(t);
   const page = specification(
