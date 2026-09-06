@@ -876,7 +876,7 @@ the global `--runtime` (equivalently `REGISTRY_EVIDENCE_RUNTIME`), so it can
 never be pointed at an audit chain the deployment does not own and never takes
 a secret on a command line:
 
-```
+```sh
 evidence --runtime /etc/registry-evidence/runtime.yaml verify-audit
 ```
 
@@ -1375,7 +1375,8 @@ recommended deployment posture. Keep the shipped defaults and tune from
 observed traffic.
 
 ## Capacity planning
- The rate in the Measured throughput section is one host with one constant
+
+The rate in the Measured throughput section is one host with one constant
 source. Sizing a real deployment is a matter of finding which ceiling binds
 first, and for most
 deployments it is not Evidence.

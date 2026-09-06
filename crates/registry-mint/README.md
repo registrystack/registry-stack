@@ -39,7 +39,7 @@ authentication (RFC 7523) remains the default. A client builds a short-lived
 JWT assertion signed with its own private key, and posts it to the token
 endpoint:
 
-```
+```http
 POST /token
 Content-Type: application/x-www-form-urlencoded
 
@@ -58,7 +58,7 @@ client-secret compatibility profile. Mint accepts both `client_secret_basic`
 and `client_secret_post`. The registration stores one or two canonical SHA-256
 fingerprints, never the raw secret:
 
-```
+```http
 POST /token
 Authorization: Basic <base64(form-encode(client-id):form-encode(client-secret))>
 Content-Type: application/x-www-form-urlencoded

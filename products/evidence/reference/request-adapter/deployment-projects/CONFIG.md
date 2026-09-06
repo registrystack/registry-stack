@@ -419,7 +419,7 @@ Beyond the shared keys, an `http-json` source declares:
 | Key | Required | Meaning |
 |---|---|---|
 | `connection` | no | Explicit `sourceConnections` owner. Every copied endpoint, authentication, TLS and concurrency value must equal that owner at startup. |
-| `behaviorRevision` | no | Provider-selected behavior digest, exactly `sha256:` followed by 64 lowercase hexadecimal characters. This reached source dependency changes its questions’ revisions independently of export provenance. |
+| `behaviorRevision` | no | Provider-selected behavior digest, exactly `sha256:` followed by 64 lowercase hexadecimal characters. This reached source dependency changes its questions' revisions independently of export provenance. |
 | `baseUrl` | yes | Fixed HTTPS origin, except for the `kind: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
 | `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin. |
@@ -482,7 +482,7 @@ In an authored source, `connection: shared-read` replaces `baseUrl`,
 must be absent, so source overrides have no precedence rule. Build resolves
 the reference into concrete values in the governed candidate and retains the
 connection identity and owner. Startup rejects missing owners and mismatched
-copies. Runtime configuration cannot retarget the source. Each question’s
+copies. Runtime configuration cannot retarget the source. Each question's
 configuration revision includes only its reached connection owners.
 
 The operation still owns its method, fixed path, headers, preparation limits,
@@ -613,7 +613,7 @@ URL log. Token redirects are denied and token responses are bounded. The token
 request is credential bootstrap, not a second evidence-data lookup.
 
 `audience` is sent as a token-request parameter only when the bundle states it.
-An authorization server that scopes a token to a named API needs it; without it
+An authorization server that scopes a token to a named API needs it; without it,
 it returns a token the source will reject. It is not
 `clientAssertionAudience`: this one is a form field of the token request, that
 one is a claim inside the signed assertion, and a server may want both, neither,
