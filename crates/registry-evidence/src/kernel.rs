@@ -1705,6 +1705,15 @@ fn validate_public_string(value: &str, declared_maximum: usize) -> Result<(), Ke
     Ok(())
 }
 
+/// Check one projected list against the range its concept declares.
+///
+/// The declared range itself is not in question here.
+/// `validate_collection_constraints` refuses an incoherent or out-of-range
+/// declaration while the bundle loads, over every concept of every
+/// requirement, so a deployment whose declaration is unsound never starts and
+/// this never sees one. What is in question is the length a derivation
+/// actually produced for this one question, which nothing before the
+/// projection knows.
 fn validate_cardinality(concept: &ConceptConfig, length: usize) -> Result<(), KernelError> {
     let minimum = constraint_usize(concept, "minimumItems")?;
     let maximum = constraint_usize(concept, "maximumItems")?;

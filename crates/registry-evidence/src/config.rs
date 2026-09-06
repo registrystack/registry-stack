@@ -7315,6 +7315,93 @@ mod tests {
         assert!(!validator.is_valid(&structured_projection));
     }
 
+    /// A list concept's declared cardinality is checked while the bundle
+    /// loads, not when a question first reaches the concept.
+    ///
+    /// The kernel checks an actual list length against the declared range
+    /// every time it projects one, but that check runs only for a concept some
+    /// question reached. An incoherent range on a concept no fixture case and
+    /// no configured grant exercises would otherwise sit in a deployment that
+    /// started cleanly and refuse the first real request that ever reached it.
+    /// `validate_collection_constraints` runs over every concept of every
+    /// requirement during `EvidenceConfig::validate`, so the deployment does
+    /// not start at all.
+    ///
+    /// The cause names the rule and not the concept: `ConfigError::Invalid`
+    /// carries fixed text by contract, and a concept handle or id is
+    /// configured content.
+    #[test]
+    fn list_concept_cardinality_is_refused_at_load_not_when_a_question_reaches_it() {
+        const SUPPORTED_VALUES: &str = include_str!(
+            "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
+        );
+        EvidenceConfig::parse_yaml(SUPPORTED_VALUES.as_bytes())
+            .expect("the conformance fixture validates as written");
+
+        const INCOHERENT: &str = "collection constraints are invalid";
+        const OUT_OF_BOUNDS: &str = "numeric value is outside Version 1 bounds";
+        for (form, sound, unsound) in [
+            (
+                ConceptForm::ControlledCodeList,
+                "minimumItems: 1, maximumItems: 3, unique: true",
+                [
+                    ("minimumItems: 3, maximumItems: 1, unique: true", INCOHERENT),
+                    (
+                        "minimumItems: 1, maximumItems: 3, unique: false",
+                        INCOHERENT,
+                    ),
+                    (
+                        "minimumItems: 1, maximumItems: 65, unique: true",
+                        OUT_OF_BOUNDS,
+                    ),
+                    (
+                        "minimumItems: 0, maximumItems: 3, unique: true",
+                        OUT_OF_BOUNDS,
+                    ),
+                ],
+            ),
+            (
+                ConceptForm::EntityReferenceList,
+                "minimumItems: 1, maximumItems: 2, unique: true",
+                [
+                    ("minimumItems: 2, maximumItems: 1, unique: true", INCOHERENT),
+                    (
+                        "minimumItems: 1, maximumItems: 2, unique: false",
+                        INCOHERENT,
+                    ),
+                    (
+                        "minimumItems: 1, maximumItems: 65, unique: true",
+                        OUT_OF_BOUNDS,
+                    ),
+                    (
+                        "minimumItems: 0, maximumItems: 2, unique: true",
+                        OUT_OF_BOUNDS,
+                    ),
+                ],
+            ),
+        ] {
+            for (replacement, cause) in unsound {
+                let document = edited(SUPPORTED_VALUES, sound, replacement);
+                assert_eq!(
+                    invalid_reason(&document),
+                    cause,
+                    "{form:?} accepted {replacement}"
+                );
+            }
+        }
+
+        // The concept the fixture cases never disclose is refused just the
+        // same, so the refusal cannot depend on a question reaching it.
+        let unreached = edited(
+            SUPPORTED_VALUES,
+            "minimumItems: 1, maximumItems: 2, unique: true",
+            "minimumItems: 2, maximumItems: 1, unique: true",
+        );
+        let error = EvidenceConfig::parse_yaml(unreached.as_bytes())
+            .expect_err("an unreached list concept is refused before anything is evaluated");
+        assert_eq!(error.fault().cause(), INCOHERENT);
+    }
+
     #[test]
     fn structured_sd_jwt_claim_projection_is_generic_unique_and_non_reserved() {
         let mut config = EvidenceConfig::parse_yaml(include_bytes!(
