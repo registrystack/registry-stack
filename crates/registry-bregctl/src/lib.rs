@@ -5798,6 +5798,52 @@ enum MigrationWriteFault {
     Stage(usize),
     #[cfg(test)]
     Commit(usize),
+    /// Stand in for a process whose soft open file limit is this many files.
+    #[cfg(test)]
+    OpenFileLimit(u64),
+}
+
+/// Descriptors one migration target holds at once: the resolved parent of its
+/// destination, and the transaction directory staging opens beside it.
+const MIGRATION_DESCRIPTORS_PER_FILE: u64 = 2;
+/// Descriptors left for everything else this process holds while a migration
+/// runs: the standard streams, the source and staged files each target is
+/// written through, and whatever the operator's environment inherited.
+const MIGRATION_DESCRIPTOR_RESERVE: u64 = 64;
+
+/// Report whether a write set of `file_count` files fits an open file limit of
+/// `limit`.
+fn migration_descriptors_fit(file_count: usize, limit: u64) -> bool {
+    u64::try_from(file_count)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(MIGRATION_DESCRIPTORS_PER_FILE)
+        .saturating_add(MIGRATION_DESCRIPTOR_RESERVE)
+        <= limit
+}
+
+/// The soft open file limit this process runs under, where the platform
+/// reports one.
+#[cfg(unix)]
+fn process_open_file_limit() -> Option<u64> {
+    rustix::process::getrlimit(rustix::process::Resource::Nofile).current
+}
+
+#[cfg(not(unix))]
+fn process_open_file_limit() -> Option<u64> {
+    None
+}
+
+/// Name the limit a write set cannot fit. Descriptor exhaustion part way
+/// through staging would otherwise surface as an opaque write failure, and the
+/// operator would have no way to tell it from a permission or disk refusal.
+fn migration_open_file_limit_diagnostic(file_count: usize, limit: u64) -> Diagnostic {
+    diagnostic(
+        "project.migrate.open_file_limit",
+        "project",
+        &format!(
+            "the migration holds {MIGRATION_DESCRIPTORS_PER_FILE} open files per rewritten file and this process may open {limit} at once, which the {file_count} files of this migration cannot fit; raise the open file limit (ulimit -n) and migrate again"
+        ),
+    )
 }
 
 fn write_migration_files(
@@ -5812,6 +5858,18 @@ fn write_migration_files_with_fault(
     files: &BTreeMap<String, (Vec<u8>, Vec<u8>)>,
     _fault: MigrationWriteFault,
 ) -> Result<(), Diagnostic> {
+    let observed_limit = match _fault {
+        #[cfg(test)]
+        MigrationWriteFault::OpenFileLimit(limit) => Some(limit),
+        _ => process_open_file_limit(),
+    };
+    // A migration holds descriptors for every file at once, so refuse a write
+    // set the process cannot hold before opening the first one.
+    if let Some(limit) = observed_limit {
+        if !migration_descriptors_fit(files.len(), limit) {
+            return Err(migration_open_file_limit_diagnostic(files.len(), limit));
+        }
+    }
     // Preflight the complete write set before creating even a staging
     // directory. A refusal here therefore cannot partially migrate a project.
     let mut targets = Vec::with_capacity(files.len());
@@ -9456,6 +9514,49 @@ mod tests {
             b"module: original\n"
         );
         assert_no_migration_transaction_directories(&directory);
+    }
+
+    #[test]
+    fn project_migration_refuses_a_write_set_the_open_file_limit_cannot_hold() {
+        let directory = TestDirectory::create();
+        let files = migration_transaction_fixture(&directory);
+
+        let failure = write_migration_files_with_fault(
+            &directory.path,
+            &files,
+            MigrationWriteFault::OpenFileLimit(4),
+        )
+        .expect_err("a write set larger than the open file limit is refused");
+
+        assert_eq!(failure.code, "project.migrate.open_file_limit");
+        assert!(
+            failure.message.contains("open file limit"),
+            "the refusal names the limit: {}",
+            failure.message
+        );
+        // The refusal runs before the first descriptor is opened, so nothing
+        // is staged and no source moves.
+        assert_eq!(
+            fs::read(directory.path.join("registry.yaml")).unwrap(),
+            b"registry: original\n"
+        );
+        assert_eq!(
+            fs::read(directory.path.join("modules/core/module.yaml")).unwrap(),
+            b"module: original\n"
+        );
+        assert_no_migration_transaction_directories(&directory);
+    }
+
+    #[test]
+    fn project_migration_fits_an_ordinary_write_set_in_an_ordinary_limit() {
+        // Two descriptors per file plus the reserve, against the smallest
+        // limit a POSIX process is guaranteed.
+        assert!(migration_descriptors_fit(2, 256));
+        assert!(!migration_descriptors_fit(1024, 256));
+        assert!(
+            process_open_file_limit().is_none_or(|limit| migration_descriptors_fit(2, limit)),
+            "the fixture write set has to fit the limit this process runs under"
+        );
     }
 
     #[test]
