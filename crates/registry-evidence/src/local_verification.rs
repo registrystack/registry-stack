@@ -94,7 +94,7 @@ pub async fn prepare_local_relying_procedure(
     deployment: &DeploymentInputs,
     input: &LocalRelyingProcedureInput,
 ) -> Result<LocalRelyingProcedure, LocalProcedureError> {
-    let bundle = &deployment.bundle;
+    let bundle = deployment.bundle();
     if input.schema != LOCAL_RELYING_PROCEDURE_INPUT_SCHEMA_V1
         || bundle.config.assurance_profile != AssuranceProfile::Local
         || input.audience.is_empty()
@@ -125,14 +125,14 @@ pub async fn prepare_local_relying_procedure(
 
     let secrets = SecretResolver::new(
         [SecretProvider::File],
-        &deployment.runtime.config.secret_providers.file.root,
+        &deployment.runtime().config.secret_providers.file.root,
     )
     .map_err(|_| LocalProcedureError)?;
     let ValidatedVerificationMaterial {
         subject_binding_secret,
         signer: _,
         jwks,
-    } = validate_verification_material(bundle, &deployment.runtime.config.signer, &secrets)
+    } = validate_verification_material(bundle, &deployment.runtime().config.signer, &secrets)
         .await
         .map_err(|_| LocalProcedureError)?;
     let expected_subjects = expected_subjects(
