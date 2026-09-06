@@ -787,11 +787,11 @@ class RuntimePreflightTest(unittest.TestCase):
         cap = self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES
         program = (
             "import sys\n"
+            "sys.stderr.write("
+            "\"error: unexpected argument '--require-audit-under' found\\n\")\n"
             "chunk = 'x' * 1024\n"
             "for _ in range(4096):\n"
             "    sys.stderr.write(chunk)\n"
-            "sys.stderr.write("
-            "\"\\nerror: unexpected argument '--require-audit-under' found\\n\")\n"
         )
         with self.module.BoundedStderr() as sink:
             result = subprocess.run(
@@ -808,10 +808,14 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertTrue(self.module.rejects_audit_containment_flag(captured))
 
     def test_the_captured_stderr_is_bounded_and_still_classifies(self) -> None:
+        # An argument parser refuses before the command it fronts does anything,
+        # so its message is the first thing on the stream. A wrapper entrypoint
+        # that keeps printing afterwards must not push it out of the capture,
+        # and the classification searches everything the capture kept.
         cap = self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES
         with self.module.BoundedStderr() as sink:
+            sink.write(b"error: unexpected argument '--require-audit-under' found\n")
             sink.write(b"x" * (cap * 4))
-            sink.write(b"\nerror: unexpected argument '--require-audit-under' found\n")
         captured = sink.captured()
         self.assertLessEqual(len(captured), cap)
         self.assertTrue(self.module.rejects_audit_containment_flag(captured))
