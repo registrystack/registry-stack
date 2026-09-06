@@ -280,3 +280,68 @@ fn only_an_unready_database_classifies_a_doctor_refusal_as_not_activated() {
     assert!(activation(false, b"not a report").is_err());
     assert!(activation(false, br#"{"ok":false,"diagnostics":[]}"#).is_err());
 }
+
+#[test]
+fn redaction_hides_whole_and_truncated_secret_runs() {
+    let secret = b"6f0a1b2c3d4e5f60718293a4b5c6d7e8";
+    assert_eq!(
+        redact(b"before 6f0a1b2c3d4e5f60718293a4b5c6d7e8 after", secret),
+        b"before [redacted] after".to_vec()
+    );
+    // A client can echo a window around an error position, not the whole
+    // statement, so a long run of secret bytes must not survive either.
+    assert_eq!(
+        redact(b"LINE 1: ...a1b2c3d4e5f60718293a4b5c6d7... ", secret),
+        b"LINE 1: ...[redacted]... ".to_vec()
+    );
+    assert_eq!(
+        redact(b"unrelated diagnostics", secret),
+        b"unrelated diagnostics".to_vec()
+    );
+}
+
+#[test]
+fn role_password_bytes_cannot_reach_diagnostics_or_errors() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let root = state.root();
+    let password = "6f0a1b2c3d4e5f60718293a4b5c6d7e8";
+    let statement = format!("DO $$ BEGIN CREATE ROLE r LOGIN PASSWORD '{password}'; END $$;");
+    // A refused psql echoes the statement it could not run, both whole and as
+    // the truncated window a client reports around an error position.
+    let mut echo = Command::new("/bin/sh");
+    echo.arg("-c").arg(
+        "statement=$(cat)\n\
+         printf 'ERROR:  syntax error at or near \"END\"\\nLINE 1: %s\\n' \"$statement\" >&2\n\
+         printf 'CONTEXT: ...%s...\\n' \"$(printf '%s' \"$statement\" | cut -c 45-75)\" >&2\n\
+         printf '{\"ok\":false,\"echo\":\"%s\"}\\n' \"$statement\"\n\
+         exit 1\n",
+    );
+    let error = command(
+        &mut echo,
+        &root,
+        "secret-echo",
+        Some(Input {
+            bytes: statement.as_bytes(),
+            secret: Some(password.as_bytes()),
+        }),
+    )
+    .expect_err("a refused prerequisite fails");
+    let error = format!("{error:#}");
+    assert!(!error.contains(password), "{error}");
+    assert!(!error.contains(&password[2..30]), "{error}");
+    let mut echoed = 0;
+    for entry in fs::read_dir(root.join("logs")).unwrap() {
+        let bytes = fs::read(entry.unwrap().path()).unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert!(!rendered.contains(password), "{rendered}");
+        assert!(!rendered.contains(&password[2..30]), "{rendered}");
+        if rendered.contains("[redacted]") {
+            echoed += 1;
+            assert!(rendered.contains("syntax error") || rendered.contains("\"ok\":false"));
+        }
+    }
+    // Both the captured diagnostics and the preserved failure report keep
+    // their surrounding text, so the redaction is not an empty assertion.
+    assert_eq!(echoed, 2);
+}
