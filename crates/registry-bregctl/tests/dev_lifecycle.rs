@@ -40,12 +40,7 @@ impl Session {
         serde_json::from_slice(&output.stdout).expect("native JSON report")
     }
     fn start(&self) -> Value {
-        self.success(&[
-            "dev",
-            "--detach",
-            "--project",
-            self.project.to_str().unwrap(),
-        ])
+        self.success(&["dev", "--project", self.project.to_str().unwrap()])
     }
     fn stop(&self) {
         self.success(&["dev", "stop", "--project", self.project.to_str().unwrap()]);

@@ -9219,6 +9219,18 @@ mod tests {
     }
 
     #[test]
+    fn dev_start_takes_no_detach_flag() {
+        assert!(Cli::try_parse_from(["bregctl", "dev", "--project", "."]).is_ok());
+        assert!(Cli::try_parse_from(["bregctl", "dev", "start", "--project", "."]).is_ok());
+        for arguments in [
+            vec!["bregctl", "dev", "--detach"],
+            vec!["bregctl", "dev", "start", "--detach"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
+    }
+
+    #[test]
     fn global_format_is_accepted_before_or_after_the_subcommand() {
         for arguments in [
             vec!["bregctl", "--format", "json", "check", "project"],

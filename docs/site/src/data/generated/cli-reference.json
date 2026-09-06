@@ -562,15 +562,6 @@
               "environment": null
             },
             {
-              "display": "--detach",
-              "description": "Return when the local services are ready (the supervisor always detaches)",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
               "display": "--breg-port <BREG_PORT>",
               "description": "Registry loopback port on first start (default 8090; retained for restarts)",
               "always_required": false,
@@ -645,15 +636,6 @@
                 {
                   "display": "--clients-file <CLIENTS_FILE>",
                   "description": "Explicit local clients, profile bindings, and optional seed records",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--detach",
-                  "description": "Return when the local services are ready (the supervisor always detaches)",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
