@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use registry_breg::compiler::{module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::package::{
-    prepare_package, PackageBuildRequest, PackageFileRole, PackageMigrationPlanInput,
+    prepare_package, PackageBuildRequest, PackageError, PackageFileRole, PackageMigrationPlanInput,
     PackageModuleSource, PackageSignature, PackageSourceFile, PackageTrustAnchor, SignaturePolicy,
     TrustAnchorKey, TRUST_ANCHOR_API_VERSION,
 };
@@ -51,7 +51,43 @@ async fn tampered_package_refuses_before_database_audit_oidc_or_listener_access(
         Err(error) => error,
     };
 
-    assert_eq!(error, StartupError::PackageRefused);
+    assert_eq!(error, StartupError::PackageRefused(PackageError::Integrity));
+}
+
+#[tokio::test]
+async fn a_refused_package_keeps_the_cause_that_refused_it() {
+    // Startup discloses no value, but it must not collapse every package
+    // fault into one refusal: an operator's diagnosis names the cause, so
+    // two different faults have to arrive as two different causes.
+    let fixture = StartupFixture::new();
+    let package = PackageFixture::build(&fixture.root);
+    fs::write(
+        first_generated_path(&package.root),
+        b"tampered-before-startup",
+    )
+    .expect("test tampers package artifact");
+    let tampered = match prepare(&fixture.write_config(&package)).await {
+        Ok(_) => panic!("tampered package prepared"),
+        Err(error) => error,
+    };
+
+    let other = StartupFixture::new();
+    let mut bound = PackageFixture::build(&other.root);
+    bound.revision = format!("sha256:{}", "0".repeat(64));
+    let mismatched = match prepare(&other.write_config(&bound)).await {
+        Ok(_) => panic!("package bound to another revision prepared"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        tampered,
+        StartupError::PackageRefused(PackageError::Integrity)
+    );
+    assert_eq!(
+        mismatched,
+        StartupError::PackageRefused(PackageError::Binding)
+    );
+    assert_ne!(tampered, mismatched);
 }
 
 struct StartupFixture {
