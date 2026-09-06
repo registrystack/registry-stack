@@ -548,6 +548,7 @@ class CiChangesTest(unittest.TestCase):
             "release/requirements/maturin-1.9.6.txt",
             "release/scripts/assemble-registry-client-packages.py",
             "release/scripts/assemble-registry-client-wheel.py",
+            "release/scripts/smoke-registry-client-package.py",
         ):
             with self.subTest(path=path):
                 self.assertTrue(

@@ -1010,6 +1010,13 @@ jobs:
             find "${out_dir}" -maxdepth 1 -name '*.whl' >&2
             exit 1
           fi
+          # Prove installer metadata and native facade loading from this exact
+          # wheel. The clean-container tutorials separately exercise requests.
+          python3 -m venv "${RUNNER_TEMP}/client-install-smoke"
+          "${RUNNER_TEMP}/client-install-smoke/bin/pip" install \
+            --no-index --no-deps "${wheel}"
+          "${RUNNER_TEMP}/client-install-smoke/bin/python" -I \
+            release/scripts/smoke-registry-client-package.py
           # The gate reads it inside the container, at the mounted path.
           printf 'TUTORIAL_CLIENT_WHEEL=/work/%s\n' \
             "${wheel#"${GITHUB_WORKSPACE}/"}" >>"${GITHUB_ENV}"

@@ -139,12 +139,14 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         # The fixture modules exercise facade imports without claiming a native
         # build. Native extension loading remains covered by the package smoke.
+        import_script = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from registry_client import discovery, evidence, relay, breg; "
+            "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT)"
+        )
         imported = subprocess.run(
             [
-                sys.executable, "-I", "-c",
-                "import sys; sys.path.insert(0, sys.argv[1]); "
-                "from registry_client import discovery, evidence, relay, breg; "
-                "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT)",
+                sys.executable, "-I", "-c", import_script,
                 result.stdout.strip(),
             ],
             capture_output=True, text=True, check=False,
