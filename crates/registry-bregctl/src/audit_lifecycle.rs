@@ -21,7 +21,7 @@ use registry_breg::audit_tooling::{
 };
 use serde::Serialize;
 
-use crate::safe_path::SafeEntry;
+use crate::safe_path::{SafeEntry, SafePathError};
 
 /// Owner-only permissions for an export the operator has not yet placed.
 const EXPORT_FILE_MODE: u32 = 0o600;
@@ -31,6 +31,8 @@ static EXPORT_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuditCliError {
     Operator,
+    OutputPath(SafePathError),
+    OutputExists,
     ChainBroken,
     InvalidEnvelope,
     HeadMismatch,
@@ -75,8 +77,11 @@ pub(crate) fn export(
     runtime_config: &Path,
     output: &Path,
 ) -> Result<AuditExportOutcome, AuditCliError> {
-    if !runtime_config.is_absolute() || !output.is_absolute() || output.exists() {
+    if !runtime_config.is_absolute() || !output.is_absolute() {
         return Err(AuditCliError::Operator);
+    }
+    if output.exists() {
+        return Err(AuditCliError::OutputExists);
     }
     let runtime = operator_runtime()?;
     let mut staged = create_export_file(output)?;
@@ -121,6 +126,7 @@ async fn service(runtime_config: &Path) -> Result<AuditOperatorService, AuditCli
 ///
 /// The staging file belongs to this value: every outcome that is not a
 /// publication removes it as the value drops.
+#[derive(Debug)]
 struct StagedExport {
     destination: SafeEntry,
     temporary: OsString,
@@ -141,9 +147,9 @@ impl Drop for StagedExport {
 }
 
 fn create_export_file(output: &Path) -> Result<StagedExport, AuditCliError> {
-    let destination = SafeEntry::resolve(output).map_err(|_| AuditCliError::Operator)?;
+    let destination = SafeEntry::resolve(output).map_err(AuditCliError::OutputPath)?;
     if destination.exists().map_err(|_| AuditCliError::Operator)? {
-        return Err(AuditCliError::Operator);
+        return Err(AuditCliError::OutputExists);
     }
     for _ in 0..64 {
         let counter = EXPORT_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -323,6 +329,39 @@ mod tests {
             prune(relative, "2024-03-01T00:00:00Z", true).unwrap_err(),
             AuditCliError::Operator
         );
+    }
+
+    #[test]
+    fn create_export_file_reports_an_existing_destination_by_its_own_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let output = root.join("audit.jsonl");
+        std::fs::write(&output, b"occupied\n").unwrap();
+
+        assert_eq!(
+            create_export_file(&output).unwrap_err(),
+            AuditCliError::OutputExists
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_export_file_reports_a_symbolic_link_ancestor_by_its_own_code() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let real = root.join("real-parent");
+        let linked = root.join("linked-parent");
+        std::fs::create_dir(&real).unwrap();
+        symlink(&real, &linked).unwrap();
+        let output = linked.join("audit.jsonl");
+
+        assert!(matches!(
+            create_export_file(&output).unwrap_err(),
+            AuditCliError::OutputPath(_)
+        ));
+        assert!(!real.join("audit.jsonl").exists());
     }
 
     #[test]
