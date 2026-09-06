@@ -518,6 +518,17 @@ when their credential bytes are equal. No facts or authorization decisions are
 shared. Waiting is bounded and cancellation releases capacity. Multiple
 processes do not share a distributed concurrency budget.
 
+The bundle-only check and evaluate seams that Evidencectl drives run before a
+`runtime.yaml` exists, so they compile a connected source without those shared
+resources and give each source its own instead. The pool is built from the
+runtime document's outbound TLS settings and its captured CA bytes, which a
+bundle alone does not carry. Nothing on that path dispatches an HTTP request:
+it materializes request parts and asserts them, and executes only a statement
+source, against a fixture extract. Shared client identity, private CA trust,
+the token cache, and admission are therefore not among the facts a bundle-only
+run proves. `evidence check` and `evidence fixture` read `runtime.yaml`, build
+the resources, and refuse a connected source that cannot get them.
+
 Each subject role admits only named selector profiles from the trusted bundle.
 Each profile has one exact deployment-defined scalar field set, byte and
 aggregate bounds, permitted value origin, and fixed source placement.

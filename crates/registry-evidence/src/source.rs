@@ -784,6 +784,21 @@ impl SourceExecutor {
     /// because this executor can materialize requests but is never executed,
     /// and a statement source compiled here is given no extract for the same
     /// reason.
+    ///
+    /// A source that names a `connection` is exempt here from the shared
+    /// resources `new_with_selector_sets_and_connection_pool` requires, and
+    /// that exemption is the fixture contract rather than an oversight. The
+    /// pool is built from the runtime document's outbound TLS configuration
+    /// and its captured CA bytes, and every caller of this constructor holds a
+    /// bundle and no runtime document, so requiring the resources here would
+    /// make a connected source uncheckable before a deployment exists rather
+    /// than better checked. Each source compiled here therefore gets its own
+    /// resources, and because this path materializes requests and dispatches
+    /// none, the shared client identity, the private-CA trust, the token cache
+    /// and the admission semaphore are not among the facts a bundle-only check
+    /// or fixture run proves. `evidence check` and `evidence fixture` read the
+    /// runtime document, build the pool, and refuse a connected source that
+    /// cannot get it.
     pub fn new_for_offline_fixture(
         source: &SourceConfig,
         allowed_selector_sets: &[SourceSelectorSet],
