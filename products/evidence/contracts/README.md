@@ -52,7 +52,7 @@ The normative source set is:
   process-local runtime bindings, and their non-override boundary;
 - `supported-value-forms.yaml`: the complete closed value-form vocabulary;
 - `rhai-abi.yaml` and `primitive-library.yaml`: the closed `prepare/2`,
-  `extract/2`, `prepare_batch/2`, `extract_batch/2`, and selector-aware
+  `extract/2` or optional selector-aware `extract/3`, `prepare_batch/2`, `extract_batch/2`, and selector-aware
   `derive/3` entry points, domain-neutral
   primitive allowlist, and resource limits;
 - `source-contract.yaml`: the fixed HTTP JSON source boundary and the closed set
@@ -107,7 +107,7 @@ Evidence vocabulary.
    authority path, and every role's selector profile and value origin.
 2. A selector profile has one exact field set. Alternative sufficient sets or
    an added disambiguator are separate named profiles.
-3. The provider owns record lookup. Extraction may return only `match`,
+3. The provider owns record lookup. Optional selector-aware extraction may verify exact returned-record identity against its minimized source inputs before returning reusable facts. Extraction may return only `match`,
    `no_match`, or `ambiguous`; only `match` carries facts. A reviewed
    deterministic derivation may compare declared authorized selectors with
    complete facts from one uniquely resolved authoritative record.

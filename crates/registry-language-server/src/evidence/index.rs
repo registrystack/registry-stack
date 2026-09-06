@@ -319,7 +319,11 @@ impl IndexBuilder<'_> {
         );
 
         for subject in subjects(value) {
-            if let Some(profile) = subject.get_scalar("profile") {
+            for profile in subject
+                .get_scalar("profile")
+                .into_iter()
+                .chain(scalars(subject.get("profiles")))
+            {
                 self.add_reference(
                     SymbolQuery::global(EvidenceKind::SelectorProfile, profile.value.as_str()),
                     path,

@@ -378,6 +378,10 @@ pub struct EvidenceConfig {
     pub response_formats: Vec<ResponseFormat>,
     pub selector_profiles: OrderedMap<SelectorProfile>,
     pub sources: OrderedMap<SourceConfig>,
+    /// Optional explicit resource owners, resolved into concrete source plans
+    /// by the authoring build and checked again when the bundle starts.
+    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
+    pub source_connections: OrderedMap<SourceConnectionConfig>,
     pub authority_profiles: OrderedMap<AuthorityProfile>,
     /// Acquisition kinds this bundle opts in to beyond the single fixed call.
     /// A kind absent from this list cannot be served, so an existing bundle
@@ -522,6 +526,22 @@ impl EvidenceConfig {
         validate_named_map(&self.sources, 1, 128, |source| {
             source.validate(self.assurance_profile)
         })?;
+        validate_named_map(&self.source_connections, 0, 128, |connection| {
+            connection.validate(self.assurance_profile)
+        })?;
+        for (_, source) in self.sources.iter() {
+            if let Some(connection_id) = source.connection() {
+                let connection =
+                    self.source_connections
+                        .get(connection_id)
+                        .ok_or(ConfigError::Invalid(
+                            "source connection reference is not declared",
+                        ))?;
+                if !connection.matches_source(source) {
+                    return invalid("resolved source differs from its named connection");
+                }
+            }
+        }
         validate_named_map(&self.authority_profiles, 1, 128, |profile| {
             profile.validate()
         })?;
@@ -2147,6 +2167,80 @@ fn valid_artifact_path(value: &str) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
+/// One optional, governed owner of HTTP destination, workload credentials,
+/// TLS trust and process-local resource bounds. It never owns source facts or
+/// an authorization result. Independent names always have independent state.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceConnectionConfig {
+    pub base_url: String,
+    pub authentication: Box<SourceAuthentication>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_trust_profile: Option<String>,
+    #[serde(default = "default_connection_concurrency")]
+    pub concurrency_limit: u16,
+    #[serde(default = "default_connection_timeout")]
+    pub admission_timeout_milliseconds: u64,
+    #[serde(default = "default_connection_timeout")]
+    pub token_timeout_milliseconds: u64,
+}
+
+fn default_connection_concurrency() -> u16 {
+    4
+}
+fn default_connection_timeout() -> u64 {
+    5_000
+}
+
+impl SourceConnectionConfig {
+    fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
+        validate_source_origin(&self.base_url)?;
+        self.authentication.validate()?;
+        if self
+            .tls_trust_profile
+            .as_deref()
+            .is_some_and(|profile| !valid_local_id(profile))
+        {
+            return invalid("source connection TLS trust profile identifier is invalid");
+        }
+        if matches!(*self.authentication, SourceAuthentication::None {}) {
+            if assurance_profile != AssuranceProfile::Local {
+                return invalid("unauthenticated source connections require local assurance");
+            }
+            validate_local_unauthenticated_source_origin(&self.base_url)?;
+            if self.tls_trust_profile.is_some() {
+                return invalid(
+                    "an unauthenticated local HTTP connection cannot use a TLS trust profile",
+                );
+            }
+        }
+        validate_range(
+            u64::from(self.concurrency_limit),
+            1,
+            256,
+            "connection concurrency",
+        )?;
+        validate_range(
+            self.admission_timeout_milliseconds,
+            1,
+            30_000,
+            "connection admission timeout",
+        )?;
+        validate_range(
+            self.token_timeout_milliseconds,
+            1,
+            30_000,
+            "connection token timeout",
+        )
+    }
+
+    pub(crate) fn matches_source(&self, source: &SourceConfig) -> bool {
+        matches!(source, SourceConfig::HttpJson { base_url, authentication, tls_trust_profile, request, .. }
+            if base_url == &self.base_url && authentication == &self.authentication
+                && tls_trust_profile == &self.tls_trust_profile && request.concurrency_limit == self.concurrency_limit)
+    }
+}
+
 /// One reviewed source, closed over the transport that reaches it.
 ///
 /// The transports agree on the acquisition posture, the three artifact roles,
@@ -2170,6 +2264,14 @@ pub enum SourceConfig {
     #[serde(rename_all = "camelCase")]
     HttpJson {
         base_url: String,
+        /// Optional explicit resource owner. The resolved values stay fixed in
+        /// this bundle and must equal the named connection's governed values.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connection: Option<String>,
+        /// Digest of the provider's selected read behavior, independent of
+        /// unrelated export provenance and whole-provider package changes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        behavior_revision: Option<String>,
         posture: AcquisitionPosture,
         /// Optional exact upstream Problem Details tuple which means that the
         /// source deliberately did not resolve this lookup. The transport
@@ -2216,6 +2318,8 @@ impl SourceConfig {
         match self {
             Self::HttpJson {
                 base_url,
+                connection,
+                behavior_revision,
                 tls_trust_profile,
                 authentication,
                 request,
@@ -2224,6 +2328,22 @@ impl SourceConfig {
                 ..
             } => {
                 validate_source_origin(base_url)?;
+                if connection
+                    .as_deref()
+                    .is_some_and(|name| !valid_local_id(name))
+                {
+                    return invalid("source connection identifier is invalid");
+                }
+                if behavior_revision.as_deref().is_some_and(|revision| {
+                    !revision.strip_prefix("sha256:").is_some_and(|digest| {
+                        digest.len() == 64
+                            && digest
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    })
+                }) {
+                    return invalid("source behavior revision must be a lowercase sha256 digest");
+                }
                 if tls_trust_profile
                     .as_deref()
                     .is_some_and(|profile| !valid_local_id(profile))
@@ -2306,6 +2426,14 @@ impl SourceConfig {
             return invalid("source schema roles must be distinct artifacts");
         }
         Ok(())
+    }
+
+    /// Explicit connection identity. Inline sources never share an owner.
+    pub fn connection(&self) -> Option<&str> {
+        match self {
+            Self::HttpJson { connection, .. } => connection.as_deref(),
+            Self::SqliteExtract { .. } => None,
+        }
     }
 
     pub fn posture(&self) -> AcquisitionPosture {
@@ -5352,6 +5480,115 @@ fn invalid<T>(reason: &'static str) -> Result<T, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_source_connections_reject_retargeting_and_preserve_authentication_defaults() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("acceptance configuration parses");
+        let connection: SourceConnectionConfig = serde_json::from_value(serde_json::json!({
+            "baseUrl": "https://source.example",
+            "authentication": {
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": "https://issuer.example/token",
+                "clientIdRef": "secret:file/client-id",
+                "clientAssertionKeyRef": "secret:file/client-key",
+                "clientAssertionAudience": "https://issuer.example/client-auth",
+                "audience": "https://resource.example",
+                "maximumCacheSeconds": 60
+            },
+            "tlsTrustProfile": "private-ca"
+        }))
+        .expect("the complete authentication union parses");
+        assert_eq!(connection.concurrency_limit, 4);
+        assert_eq!(connection.admission_timeout_milliseconds, 5000);
+        assert_eq!(connection.token_timeout_milliseconds, 5000);
+        if let SourceConfig::HttpJson {
+            base_url,
+            authentication,
+            tls_trust_profile,
+            request,
+            connection: name,
+            ..
+        } = &mut config.sources.0[0].1
+        {
+            *name = Some("shared".to_owned());
+            *base_url = connection.base_url.clone();
+            *authentication = connection.authentication.clone();
+            *tls_trust_profile = connection.tls_trust_profile.clone();
+            request.concurrency_limit = connection.concurrency_limit;
+        }
+        config.source_connections = OrderedMap(vec![("shared".to_owned(), connection)]);
+        config.validate().expect("the resolved candidate validates");
+        let before = config.clone();
+        if let SourceConfig::HttpJson { base_url, .. } = &mut config.sources.0[0].1 {
+            *base_url = "https://another.example".to_owned();
+        }
+        assert!(
+            config.validate().is_err(),
+            "a copied endpoint cannot retarget a named source"
+        );
+        for field in ["authentication", "tlsTrustProfile", "concurrencyLimit"] {
+            config = before.clone();
+            if let SourceConfig::HttpJson {
+                authentication,
+                tls_trust_profile,
+                request,
+                ..
+            } = &mut config.sources.0[0].1
+            {
+                match field {
+                    "authentication" => {
+                        **authentication = SourceAuthentication::StaticAuthorization {
+                            token_ref: SecretRef::parse("secret:file/different-token").unwrap(),
+                            scheme: None,
+                        }
+                    }
+                    "tlsTrustProfile" => *tls_trust_profile = None,
+                    _ => request.concurrency_limit = 2,
+                }
+            }
+            assert!(
+                config.validate().is_err(),
+                "connection-owned fields cannot differ"
+            );
+        }
+        config = before;
+        config.source_connections.0.clear();
+        assert!(
+            config.validate().is_err(),
+            "a named source cannot lose its owner"
+        );
+    }
+
+    #[test]
+    fn source_behavior_revision_is_an_optional_strict_sha256_digest() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .unwrap();
+        for revision in [
+            "sha256:short".to_owned(),
+            format!("sha256:{}", "A".repeat(64)),
+            format!("sha512:{}", "a".repeat(64)),
+        ] {
+            if let SourceConfig::HttpJson {
+                behavior_revision, ..
+            } = &mut config.sources.0[0].1
+            {
+                *behavior_revision = Some(revision);
+            }
+            assert!(config.validate().is_err());
+        }
+        if let SourceConfig::HttpJson {
+            behavior_revision, ..
+        } = &mut config.sources.0[0].1
+        {
+            *behavior_revision = Some(format!("sha256:{}", "a".repeat(64)));
+        }
+        config.validate().expect("the versioned digest parses");
+    }
 
     #[test]
     fn public_origin_is_canonical_https_or_the_exact_local_loopback_exception() {

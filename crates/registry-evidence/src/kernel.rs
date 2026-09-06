@@ -554,6 +554,12 @@ impl OfflineKernel {
                             script_compile_cause(error),
                         )
                     })?;
+            if compiled_extraction.selector_aware() && source.batch().is_some() {
+                return Err(refuse_artifact(
+                    source.extract_script().as_str(),
+                    "selector-aware extraction requires sequential execution; omit source batch",
+                ));
+            }
             extractions.insert(source_id.to_owned(), compiled_extraction);
 
             let response_schema = bundle
@@ -852,9 +858,27 @@ impl OfflineKernel {
         source_response: &Value,
         prior_facts: &BTreeMap<String, Value>,
     ) -> Result<LookupResult, KernelError> {
+        self.extract_source_with_selectors(
+            source_id,
+            source_response,
+            &Value::Object(JsonMap::new()),
+            prior_facts,
+        )
+    }
+
+    /// Run extraction with the same authorized source selector subset used by
+    /// preparation. Only an explicitly selector-aware extract/3 receives it.
+    pub fn extract_source_with_selectors(
+        &self,
+        source_id: &str,
+        source_response: &Value,
+        selectors: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+    ) -> Result<LookupResult, KernelError> {
         self.extract_source_with_policy(
             source_id,
             source_response,
+            selectors,
             prior_facts,
             ExtractionFailurePolicy::Ordinary,
         )
@@ -864,15 +888,32 @@ impl OfflineKernel {
     /// script output or an invalid FactSet to become one item's unavailable
     /// result. Genuine `required(...)` unavailability retains that per-item
     /// collapse; protocol violations abort the atomic outer batch.
+    #[cfg(test)]
     pub(crate) fn extract_source_for_request_batch(
         &self,
         source_id: &str,
         source_response: &Value,
         prior_facts: &BTreeMap<String, Value>,
     ) -> Result<LookupResult, KernelError> {
+        self.extract_source_for_request_batch_with_selectors(
+            source_id,
+            source_response,
+            &Value::Object(JsonMap::new()),
+            prior_facts,
+        )
+    }
+
+    pub(crate) fn extract_source_for_request_batch_with_selectors(
+        &self,
+        source_id: &str,
+        source_response: &Value,
+        selectors: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+    ) -> Result<LookupResult, KernelError> {
         self.extract_source_with_policy(
             source_id,
             source_response,
+            selectors,
             prior_facts,
             ExtractionFailurePolicy::RequestBatch,
         )
@@ -882,6 +923,7 @@ impl OfflineKernel {
         &self,
         source_id: &str,
         source_response: &Value,
+        selectors: &Value,
         prior_facts: &BTreeMap<String, Value>,
         failure_policy: ExtractionFailurePolicy,
     ) -> Result<LookupResult, KernelError> {
@@ -913,7 +955,14 @@ impl OfflineKernel {
         let parameters =
             serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
         self.runtime
-            .extract_with_prior_facts(script, source_response, &parameters, prior_facts, schema)
+            .extract_with_selectors(
+                script,
+                source_response,
+                selectors,
+                &parameters,
+                prior_facts,
+                schema,
+            )
             .map_err(|error| extraction_failure(error, failure_policy))
     }
 
@@ -2112,6 +2161,31 @@ fn extract_batch(response, context) {
         make_read_only(temporary.path());
         let bundle = Arc::new(Bundle::load(temporary.path()).expect("batch bundle loads"));
         OfflineKernel::compile(bundle).expect("batch kernel compiles")
+    }
+
+    #[test]
+    fn selector_aware_extraction_cannot_be_bypassed_by_source_batching() {
+        let ordinary = batch_extraction_kernel();
+        let mut bundle = (*ordinary.bundle).clone();
+        let path = bundle
+            .config
+            .sources
+            .get("source-a")
+            .unwrap()
+            .extract_script()
+            .as_str()
+            .to_owned();
+        let script = bundle
+            .scripts
+            .get_mut(&path)
+            .expect("ordinary extractor exists");
+        script.source = "fn extract(response, selectors, context) { no_match() }".to_owned();
+        let error = OfflineKernel::compile(Arc::new(bundle))
+            .expect_err("batch may not bypass identity extraction");
+        assert_eq!(
+            error.artifact_fault().unwrap().fault().cause(),
+            "selector-aware extraction requires sequential execution; omit source batch"
+        );
     }
 
     #[test]

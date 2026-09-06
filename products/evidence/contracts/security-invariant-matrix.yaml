@@ -40,12 +40,12 @@ invariants:
   - id: V1-I08
     rule: Callers cannot choose selector fields, operators, weights, thresholds, normalization, or query plans.
     threat: Matching scope creep, oracle behavior, or broad candidate retrieval.
-    enforcement: Named profiles close exact field sets; independent source and derivation selectorInputs expose only reviewed role/profile/field subsets, while trusted preparation owns provider placement without receiving surplus selectors.
+    enforcement: Named profiles close exact field sets; independent source and derivation selectorInputs expose only reviewed role/profile/field subsets, while trusted preparation owns provider placement without receiving surplus selectors. Optional extract/3 receives the same fresh source subset, preserving explicit profile selection and exact scalar identities.
     negative_test: sec-selector-shape-not-callable
   - id: V1-I09
     rule: Source calls are fixed by trusted configuration and executed only by the core.
     threat: SSRF, credential forwarding, overbroad reads, or script-directed networking.
-    enforcement: Generic fixed HTTPS executor owns the closed source sequence the requirement's acquisition kind fixes, origin, method, fixed or tagged selector/prior-fact-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one request per configured stage. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
+    enforcement: Generic fixed HTTPS executor owns the closed source sequence the requirement's acquisition kind fixes, origin, method, fixed or tagged selector/prior-fact-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one request per configured stage. Explicit named connections share only process-local transport, admission and credential state; startup rejects differing resolved connection values and no secret-byte deduplication occurs. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
     negative_test: sec-source-request-immutable
   - id: V1-I10
     rule: Provider lookup has only match, no_match, and ambiguous; Evidence never exposes or chooses candidates, while reviewed derivation may compare only declared authorized selectors with complete facts from one unique record.
@@ -55,7 +55,7 @@ invariants:
   - id: V1-I11
     rule: Rhai returns one closed lookup result and declared typed concept values only.
     threat: Script crosses into authorization, response construction, diagnostics, or arbitrary metadata.
-    enforcement: Closed prepare/2, extract/2, and selector-aware derive/3 entry points, fresh state and input copies, capability allowlist, minimized stage inputs, and closed output decoding.
+    enforcement: Closed prepare/2, extract/2 or optional extract/3, and selector-aware derive/3 entry points, fresh state and input copies, capability allowlist, minimized stage inputs, and closed output decoding. Dual extraction arities are refused. A selector-aware extractor cannot declare optimized batching, so its source identity check runs for every evaluation.
     negative_test: sec-rhai-output-shape-closed
   - id: V1-I12
     rule: Undeclared concepts, extra fields, and values violating types, codelists, cardinality, precision, or sizes are rejected.

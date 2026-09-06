@@ -7208,6 +7208,82 @@ async fn runtime_output_gate_rejects_every_fixture_injected_derivation_without_r
 }
 
 #[tokio::test]
+async fn selector_aware_extraction_receives_only_the_authorized_source_subset() {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            let config_path = bundle_root.join("evidence.yaml");
+            let mut config: Value =
+                serde_norway::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+            config["sources"]["source-a"]["request"]["selectorInputs"][0]["alternatives"][0]
+                ["fields"] = json!(["given_name"]);
+            fs::write(config_path, serde_norway::to_string(&config).unwrap()).unwrap();
+            fs::write(
+                bundle_root.join("adapters/adult-status-prepare.rhai"),
+                r#"
+fn prepare(selectors, context) {
+    #{query: [], body: #{key: selectors.subject.values.given_name}}
+}
+"#,
+            )
+            .unwrap();
+            fs::write(bundle_root.join("adapters/adult-status-source.rhai"), r#"
+fn extract(response, selectors, context) {
+    if selectors.len() != 1 || selectors.subject.len() != 2 || selectors.subject.values.len() != 1 {
+        throw "selector scope";
+    }
+    if selectors.subject.profile != "person-demographics-v1" || !selectors.subject.values.contains("given_name") {
+        throw "selector profile";
+    }
+    if context.len() != 2 || !context.contains("parameters") || !context.contains("prior_facts") {
+        throw "context scope";
+    }
+    #{outcome: "match", facts: #{date_of_birth: response.date_of_birth}}
+}
+"#).unwrap();
+        },
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"total":1,"date_of_birth":"2000-01-01"})),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    let deployment = DeploymentInputs::load(&prepared.runtime_path)
+        .expect("selector subset deployment is valid");
+    crate::kernel::OfflineKernel::compile(Arc::new(deployment.bundle))
+        .expect("selector-aware source compiles");
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .unwrap();
+    let singular = runtime
+        .evaluate(
+            "operation-selector-extraction",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .unwrap();
+    assert_minimized_payload(&serde_json::to_vec(&singular).unwrap());
+    runtime
+        .evaluate_request_batch(
+            "operation-selector-extraction-batch",
+            &access_token(None),
+            &adult_request_batch(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn runtime_rejects_an_extra_extracted_fact_before_derivation_or_release() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
     make_writable(&prepared.bundle_root);

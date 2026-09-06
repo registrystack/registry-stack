@@ -29,6 +29,8 @@ supported.
 ```text
 prepare(selectors: map, context: {parameters: map, prior_facts: map}) -> RequestParts
 extract(response: JSON, context: {parameters: map, prior_facts: map}) -> LookupResult
+# Optional replacement for extract/2, declared as the only extract function:
+extract(response: JSON, selectors: map, context: {parameters: map, prior_facts: map}) -> LookupResult
 derive(facts: map, selectors: map, evaluation_context: map)
     -> array<DerivedConceptValue>
 prepare_batch(items: array<{slot: int, selectors: map}>, context: {parameters: map})
@@ -59,6 +61,8 @@ batch block names two additional separately compiled scripts:
 ```text
 prepare(selectors: map, context: {parameters: map, prior_facts: map}) -> RequestParts
 extract(response: JSON, context: {parameters: map, prior_facts: map}) -> LookupResult
+# Optional replacement for extract/2, declared as the only extract function:
+extract(response: JSON, selectors: map, context: {parameters: map, prior_facts: map}) -> LookupResult
 derive(facts: map, selectors: map, evaluation_context: map)
     -> array<DerivedConceptValue>
 prepare_batch(items: array<{slot: int, selectors: map}>, context: {parameters: map})
@@ -79,7 +83,11 @@ extract_batch(response: JSON, context: {parameters: map, slots: array<int>})
 - `context.parameters` is the source's closed startup-validated configuration.
   `context.prior_facts` is empty for single and search stages and is exactly the
   schema-validated search FactSet for the fixed fetch stage.
-- Extraction receives neither selectors nor prepared request parts.
+- Existing `extract/2` receives neither selectors nor prepared request parts.
+  A source may instead declare `extract(response, selectors, context)` to receive
+  the same fresh, minimized authorized source selector map as preparation.
+  No new configuration field is required. Declaring both arities is refused.
+  Extraction never receives prepared request parts.
 - Batch preparation receives one to sixteen ordered exact maps with `slot` and
   `selectors`, plus context with exactly `parameters`. Each opaque non-negative
   integer slot is Rust-issued and carries correlation only. Each selectors map
@@ -150,7 +158,7 @@ requirements:
       parameters: {matching_policy: exact-reference-v1}
 ```
 
-`request.selectorInputs` controls preparation exposure.
+`request.selectorInputs` controls preparation and optional `extract/3` exposure.
 `derivation.selectorInputs` independently controls derivation exposure. Every
 alternative must exactly match one declared requirement role, profile, and
 field set. Rust rejects a missing, surplus, unauthorized, or incompatible
@@ -174,9 +182,32 @@ source's `prepareScript`. Rust enforces only the generic one-request-per-stage,
 projection, and response bounds around it. The adapter's result limit is not a
 Rust domain rule, built-in operation, or property of any source product.
 
+A source using `extract/3` must omit `batch`. Startup refuses their combination:
+optimized `extract_batch/2` has no authorized selectors with which to enforce the
+ordinary source's identity comparison. Ordinary request batches still execute
+that source sequentially. Existing `extract/2` and `extract_batch/2` sources keep
+their current behavior.
+
+## Reusable returned-record identity
+
+Selector-aware extraction lets several questions reuse the same reviewed source
+identity check. The request explicitly selects one authorized named profile,
+including a profile with a composite key. The adapter checks each returned
+identity scalar's `type_of` and exact value against that profile's minimized
+selector values before returning `match`. For example, an integer identity must
+not silently accept a floating-point representation or a numeric-looking string.
+Overlapping alternatives remain separate named profiles; there is one lookup and
+no fallback. Returned identity fields may then be discarded so the fixed FactSet
+contains only the facts reused by question derivations. Missing, mismatched or
+uncertain identity stops evaluation without a signed negative concept.
+
+Existing adapters and question-level identity checks continue to work without
+this optional signature. Import/export and named connections are independent
+optional authoring conveniences; ordinary custom HTTP sources require neither.
+
 ## Inputs
 
-For `prepare`, `selectors` contains only roles, profiles, and fields declared
+For `prepare` and optional `extract/3`, `selectors` contains only roles, profiles, and fields declared
 by the source's closed `selectorInputs` contract. Rust has already validated
 and authorized them. Surplus request fields are not passed to preparation.
 Scripts may rely on this exact shape and should not repeat role, profile,

@@ -234,6 +234,18 @@ properties:
         a profile is not an identity type, and possession of its field values does not by
         itself grant authority.
       $ref: '#/$defs/selector-profile'
+  sourceConnections:
+    description: >-
+      Optional explicit process-local owners of HTTP destination, workload authentication,
+      TLS trust and aggregate resource limits. Authored connection references are resolved
+      at build time; startup requires every concrete source value to equal its named owner.
+      Independent connection names are never deduplicated using secret bytes.
+    type: object
+    maxProperties: 128
+    propertyNames:
+      $ref: '#/$defs/local-id'
+    additionalProperties:
+      $ref: '#/$defs/source-connection'
   sources:
     description: >-
       Complete map of fixed sources a requirement can reference by id in its `acquisition`
@@ -784,6 +796,42 @@ $defs:
     oneOf:
       - $ref: '#/$defs/http-json-source'
       - $ref: '#/$defs/sqlite-extract-source'
+  source-connection:
+    type: object
+    additionalProperties: false
+    required: [baseUrl, authentication]
+    properties:
+      baseUrl:
+        description: Fixed source origin, with the same rules as an inline HTTP source.
+        oneOf:
+          - type: string
+            pattern: ^https://[^/?#]+$
+          - type: string
+            pattern: ^http://(127(\.[0-9]{1,3}){3}|\[::1\])(:[0-9]{1,5})?$
+      authentication:
+        description: Complete existing source authentication union, including both OAuth audiences.
+        $ref: '#/$defs/source-authentication'
+      tlsTrustProfile:
+        description: Logical additive private-CA profile bound by the runtime document.
+        $ref: '#/$defs/local-id'
+      concurrencyLimit:
+        description: Aggregate occupied source calls for this explicit connection in one process.
+        type: integer
+        minimum: 1
+        maximum: 256
+        default: 4
+      admissionTimeoutMilliseconds:
+        description: Maximum bounded wait for aggregate admission or OAuth single-flight refresh.
+        type: integer
+        minimum: 1
+        maximum: 30000
+        default: 5000
+      tokenTimeoutMilliseconds:
+        description: Maximum total duration of one OAuth token request and response body.
+        type: integer
+        minimum: 1
+        maximum: 30000
+        default: 5000
   http-json-source:
     type: object
     additionalProperties: false
@@ -804,6 +852,17 @@ $defs:
           shape. The tag chooses the shape of the whole source, so a key belonging to another
           transport is an unknown key here rather than an ignored one.
         const: http-json
+      connection:
+        description: >-
+          Optional explicit sourceConnections owner. Startup rejects differing resolved
+          baseUrl, authentication, tlsTrustProfile or request.concurrencyLimit values.
+        $ref: '#/$defs/local-id'
+      behaviorRevision:
+        description: >-
+          Optional digest of the provider's selected read behavior. It is a reached source
+          dependency; unrelated export provenance stays outside requirement revisions.
+        type: string
+        pattern: '^sha256:[0-9a-f]{64}$'
       baseUrl:
         description: >-
           Fixed HTTPS origin the source's evidence-data requests target, with no path, query,

@@ -17,7 +17,7 @@ ownership:
   runtime_override: prohibited
   scripts:
     prepare: Renders only ordered query pairs and at most one JSON body from minimized authorized selectors, closed parameters, and the empty or validated prior FactSet supplied by Rust.
-    extract: Maps only the bounded projected response, already inside its declared response schema, closed parameters, and the same prior FactSet to the closed lookup union.
+    extract: Maps the bounded schema-validated projected response, closed parameters, and the same prior FactSet to the closed lookup union. Optional extract/3 additionally receives the same minimized authorized request.selectorInputs object as prepare/2 for reusable exact record-identity checks; extract/2 is unchanged. A source with extract/3 cannot declare batch, because batch extraction does not receive those selectors.
     prepare_batch: For an eligible HTTP source batch only, renders one RequestParts value from ordered opaque slots, each paired with one logical item's minimized authorized selectors, plus closed parameters.
     extract_batch: For that one physical response only, maps the bounded projected batch response and opaque slot list to an exact slot-to-ordinary-LookupResult bijection.
     prohibited: source sequence, origin, method, path binding origin, headers, authentication, credentials, TLS, proxy, redirect, retry, pagination, concurrency, or request-count authority
@@ -264,6 +264,17 @@ source_batch_block:
 neutrality:
   production_contract: Generic HTTP, generic authentication, bounded JSON, extended JSON Pointer projection, and Rhai preparation and extraction only.
   named_compatibility_profiles: Test fixtures and reference documentation only.
+named_connections:
+  optional: Existing inline HTTP sources, OpenAPI-derived sources and custom adapters retain their existing configuration and execution behavior.
+  owner: The governed sourceConnections map owns baseUrl, the complete existing authentication union, optional logical tlsTrustProfile and aggregate resource bounds. Authored sources reference connection and may not override those fields.
+  resolution: Build copies connection-owned values into the concrete source. Startup rejects missing owners and unequal copies. Runtime configuration cannot retarget a governed source.
+  operation_bounds: The source owns method, path, headers, preparation, projection, response contract and bytes, and operation timeout. There is no source override of connection-owned limits.
+  defaults: {concurrencyLimit: 4, admissionTimeoutMilliseconds: 5000, tokenTimeoutMilliseconds: 5000}
+  sharing: Only the same explicit name in one process shares an eligible HTTP client pool, aggregate admission semaphore and OAuth single-flight token cache. Independent declarations are never deduplicated by secret values.
+  exclusions: [facts, assertions, authorization decisions, distributed budgets]
+  cancellation: Waiting is bounded; cancellation and timeouts release owned admission permits and OAuth refresh locks.
+  revisions: A requirement projection retains only reached connections. Optional source behaviorRevision is a strict lowercase sha256 digest of selected provider behavior; unrelated export provenance is excluded.
+  rotation: Same-reference secret-file replacement does not invalidate an unexpired OAuth token. Provision provider overlap, replace owner-only files, drain and restart for immediate cache replacement, verify a synthetic source request, then retire the predecessor under provider token-validity policy.
 fixtures:
   postures: ../fixtures/conformance/acquisition-postures.yaml
   oauth_credential_redaction: ../fixtures/conformance/oauth-credential-redaction.yaml

@@ -88,8 +88,33 @@ pub fn validate_question(question: &Question) -> Vec<Finding> {
     let mut roles = BTreeSet::new();
     for (position, subject) in subjects.iter().enumerate() {
         let field = subject_path(question, position);
+        let named_profiles = !subject.profiles.is_empty();
+        if named_profiles
+            && (!subject.selector.is_empty()
+                || subject.profile.is_some()
+                || question.source.source_ref.is_none())
+        {
+            return one(
+                field,
+                "subject-selector-shape",
+                "subject.profiles is available only with source.ref and must replace selector and profile",
+            );
+        }
+        if subject.profiles.len() > 16
+            || subject.profiles.iter().collect::<BTreeSet<_>>().len() != subject.profiles.len()
+        {
+            return one(
+                field.key("profiles"),
+                "subject-profile-alternatives",
+                "subject.profiles must name 1..=16 unique selector profiles",
+            );
+        }
         if !valid_local_identifier(&subject.role)
-            || !valid_local_identifier(&subject.selector)
+            || (!named_profiles && !valid_local_identifier(&subject.selector))
+            || subject
+                .profiles
+                .iter()
+                .any(|profile| !valid_local_identifier(profile))
             || subject
                 .profile
                 .as_deref()

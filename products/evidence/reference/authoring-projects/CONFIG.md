@@ -35,8 +35,8 @@ and the ceiling each is read under.
 | Path | Holds | Ceiling |
 |---|---|---|
 | `evidence-project.yaml` | The project marker | 4 KiB |
-| `source.openapi.yaml` | The single OpenAPI description operations are drawn from | 16 MiB |
-| `questions/` | Authored questions, one YAML document each | 64 KiB per document, 1 to 128 per project |
+| `source.openapi.yaml` | OpenAPI description required by inline operations | 16 MiB |
+| `questions/` | Authored questions, one YAML document each | 64 KiB per document, 1 to 128 when compiled |
 | `sources/` | Source definitions a question may name instead of an inline operation | 1 MiB |
 | `selectors/` | Selector definitions | 1 MiB |
 | `derivations/` | Authored derivation programs, one Rhai file each | 64 KiB |
@@ -45,10 +45,9 @@ and the ceiling each is read under.
 | `secrets/` | Key material a project needs to run locally | n/a |
 | `access/policies/` | Access policy documents | 64 KiB |
 
-Every project retains `source.openapi.yaml`, and it is read before any question
-is, so a project whose questions all name a `source.ref` and no operation still
-carries one. It declares `openapi: 3.0.x` or `3.1.x`; any other version is
-rejected.
+An inline operation requires `source.openapi.yaml`. A project whose questions
+all name a `source.ref` may omit it. When present, it declares
+`openapi: 3.0.x` or `3.1.x`; any other version is rejected.
 
 As soon as one question names an `operation`, that description is read under a
 closed profile. Its top-level keys are `openapi`, `info`, `servers`, `paths`,
@@ -59,6 +58,15 @@ HTTP origin with an explicit non-zero port: `http://127.0.0.1:8080` or
 `http://[::1]:8080`. HTTPS, a hostname such as `localhost`, a trailing slash, a
 `description` beside the `url`, and a second server are each refused. A project
 whose questions all name a `source.ref` is held to the version alone.
+
+`evidencectl dev --detach --target <local-target>` reuses that local target's
+`sourceConnections` and outbound TLS settings in the generated local caller
+rehearsal. It requires `assuranceProfile: local`. Evidence and Mint still use
+the generated local authentication, keys, and caller governance, and source
+secret references resolve through the project's existing `secrets/` directory.
+Use `evidencectl build --target <target>` for a candidate carrying the target's
+complete governance and runtime configuration. Existing `dev --detach` needs
+no target or connection map.
 
 Only the marker and a question have a Rust type behind them, so only those two
 carry a generated schema. `crates/registry-evidence-authoring/src/schema.rs`
@@ -197,25 +205,43 @@ or `subjects` for a list of 1 to 8. Declaring both, or neither, is rejected.
 | `subject` | one of the two | A single party. |
 | `subjects` | one of the two | 1 to 8 parties. |
 | `subject.role` | yes | What this party is to the question. Unique across the question's subjects. |
-| `subject.selector` | yes | The request field carrying this party's identifier. |
+| `subject.selector` | unless `profiles` is used | The request field carrying this party's identifier. |
 | `subject.profile` | no | The selector profile the field belongs to. A question that names an `operation` must omit it, because `evidencectl` derives the profile from the operation. A question that names a `source.ref` may omit it only when exactly one alternative of that source's selector input for this role lists this field; no match and two matches are refused alike, so a field two profiles expose has to name its profile. |
+| `subject.profiles` | no | Source references only. Explicitly allow 1 to 16 unique named profiles from `selectors/`, including composite profiles. Mutually exclusive with `selector` and `profile`; each profile supplies its complete field set. |
 | `subject.source` | no | Inline `operation` only. `true` selects this role to supply a path selector and `false` excludes it. Omit it when the field names one role unambiguously. When several roles use the same path field, exactly one must be `true`. A question that names a `source.ref` must omit it. |
 | `subject.derivation` | no | Whether this party's selector value is offered to the derivation program. Defaults to `false`. |
 
-`subjects[]` carries the same five keys as `subject`.
+`subjects[]` carries the same keys as `subject`.
 
-A question that names a `source.ref` has to reach its subjects through that
-source: `compile_referenced_subjects` in
-`crates/registry-evidencectl/src/authoring.rs` rejects a subject the source
-does not use and that is not declared for derivation. Use is narrower than the
-match that settles the profile. `source_uses_subject` requires the matched
-alternative's `fields` to hold the subject's selector and nothing beside it,
-and it runs however the profile was settled, so an alternative listing a second
-field is refused and writing `subject.profile` out does not rescue it. A second
-pass then requires each source role to be selected by exactly one subject. An
-inline `operation` question is held to none of this: its subjects are compared
-with the operation's own path parameters instead, as the Source section
-describes.
+A question that names a `source.ref` has to use every subject alternative in
+that source or declare the subject for derivation. A source role must support
+every selected profile with exactly the selected fields. The existing
+`selector` shorthand retains its single-field behavior. `profiles` reads each
+named profile's complete field set, so it supports composite keys without
+repeating their field declarations in the question:
+
+```yaml
+subject:
+  role: record
+  profiles: [by-code, by-code-and-region]
+source:
+  ref: record-status
+```
+
+This compiles one question whose record role permits either explicit profile.
+Each request chooses one, makes one lookup, and has no fallback. Overlapping
+field sets never choose the profile implicitly. Local request preparation uses
+`--subject record@by-code-and-region:code=A` and
+`--subject record@by-code-and-region:region=7`, or an owner-only subjects file
+whose entries include `role`, `profile`, `field` and typed `value`. Existing
+single-profile `role:field=value` shorthand remains lexical and unchanged.
+
+Local development grants enumerate complete combinations of profiles, with the
+runtime's limit of 128 grants per authority profile. An operated target still
+supplies its own complete grants. `derivation: true` exposes the selected
+profile's declared fields to that question's derivation. An optional
+source-owned `extract/3` can check returned identity once for all questions that
+reuse the source; question derivations then consume only its fixed facts.
 
 A two-party question declares both roles and lets the source consume both
 selectors:
@@ -730,6 +756,8 @@ source.ref
 subject
 subject.derivation
 subject.profile
+subject.profiles
+subject.profiles[]
 subject.role
 subject.selector
 subject.source
@@ -737,6 +765,8 @@ subjects
 subjects[]
 subjects[].derivation
 subjects[].profile
+subjects[].profiles
+subjects[].profiles[]
 subjects[].role
 subjects[].selector
 subjects[].source

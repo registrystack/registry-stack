@@ -114,6 +114,13 @@ where
 #[derive(Clone, Debug)]
 pub struct CompiledExtraction {
     ast: AST,
+    selector_aware: bool,
+}
+
+impl CompiledExtraction {
+    pub(crate) fn selector_aware(&self) -> bool {
+        self.selector_aware
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -555,8 +562,14 @@ impl RhaiRuntime {
     }
 
     pub fn compile_extraction(&self, source: &str) -> Result<CompiledExtraction, RhaiRuntimeError> {
-        self.compile_exact(source, "extract", 2)
-            .map(|ast| CompiledExtraction { ast })
+        let ast = self.compile_arities(source, "extract", &[2, 3])?;
+        let selector_aware = ast
+            .iter_functions()
+            .any(|function| function.name == "extract" && function.params.len() == 3);
+        Ok(CompiledExtraction {
+            ast,
+            selector_aware,
+        })
     }
 
     pub fn compile_batch_preparation(
@@ -720,6 +733,30 @@ impl RhaiRuntime {
     where
         V: FactSchemaValidator + ?Sized,
     {
+        self.extract_with_selectors(
+            script,
+            source_response,
+            &Value::Object(Default::default()),
+            parameters,
+            prior_facts,
+            fact_schema,
+        )
+    }
+
+    /// Extract with the same minimized authorized source selector map passed
+    /// to preparation. Legacy extract/2 receives exactly its original inputs.
+    pub fn extract_with_selectors<V>(
+        &self,
+        script: &CompiledExtraction,
+        source_response: &Value,
+        selectors: &Value,
+        parameters: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+        fact_schema: &V,
+    ) -> Result<LookupResult, RhaiRuntimeError>
+    where
+        V: FactSchemaValidator + ?Sized,
+    {
         validate_json_bound(source_response, MAXIMUM_SOURCE_INPUT_BYTES)?;
         if !json_numbers_are_supported(source_response) {
             return Err(RhaiRuntimeError::InputBound);
@@ -728,16 +765,26 @@ impl RhaiRuntime {
         let input =
             rhai::serde::to_dynamic(source_response).map_err(|_| RhaiRuntimeError::InputBound)?;
         let context = adapter_context_to_dynamic(parameters, prior_facts)?;
-        let result = self
-            .engine
-            .call_fn_with_options::<Dynamic>(
+        let result = if script.selector_aware {
+            validate_adapter_object(selectors)?;
+            let selectors = adapter_object_to_dynamic(selectors)?;
+            self.engine.call_fn_with_options::<Dynamic>(
+                CallFnOptions::new().eval_ast(false),
+                &mut Scope::new(),
+                &script.ast,
+                "extract",
+                (input, selectors, context),
+            )
+        } else {
+            self.engine.call_fn_with_options::<Dynamic>(
                 CallFnOptions::new().eval_ast(false),
                 &mut Scope::new(),
                 &script.ast,
                 "extract",
                 (input, context),
             )
-            .map_err(|error| classify_invocation_error(error, ScriptStage::Extraction))?;
+        }
+        .map_err(|error| classify_invocation_error(error, ScriptStage::Extraction))?;
         decode_lookup_result(result, fact_schema)
     }
 
@@ -822,6 +869,15 @@ impl RhaiRuntime {
         function_name: &str,
         parameter_count: usize,
     ) -> Result<AST, RhaiRuntimeError> {
+        self.compile_arities(source, function_name, &[parameter_count])
+    }
+
+    fn compile_arities(
+        &self,
+        source: &str,
+        function_name: &str,
+        parameter_counts: &[usize],
+    ) -> Result<AST, RhaiRuntimeError> {
         if source.len() > MAXIMUM_RESULT_BYTES {
             return Err(RhaiRuntimeError::InputBound);
         }
@@ -837,7 +893,7 @@ impl RhaiRuntime {
                 return Err(RhaiRuntimeError::EntryPoint);
             }
             if function.name == function_name {
-                if function.params.len() != parameter_count
+                if !parameter_counts.contains(&function.params.len())
                     || function.access != rhai::FnAccess::Public
                 {
                     return Err(RhaiRuntimeError::EntryPoint);
@@ -3354,6 +3410,152 @@ mod tests {
                 Err(RhaiRuntimeError::ExtractionResult)
             );
         }
+    }
+
+    #[test]
+    fn selector_aware_extraction_checks_exact_alternative_identity_before_facts() {
+        let runtime = runtime();
+        let script = runtime
+            .compile_extraction(
+                r#"
+fn extract(response, selectors, context) {
+    let subject = selectors.subject;
+    let fields = ["code"];
+    if subject.profile == "by-code-and-region" {
+        fields.push("region");
+    } else if subject.profile != "by-code" {
+        return #{outcome: "no_match"};
+    }
+    for field in fields {
+        let returned = required(get_path(response, "/" + field), "required_fact_missing");
+        let expected = subject.values[field];
+        if type_of(returned) != type_of(expected) { return #{outcome: "no_match"}; }
+        if returned != expected { return #{outcome: "no_match"}; }
+    }
+    #{outcome: "match", facts: #{active: response.active}}
+}
+"#,
+            )
+            .expect("selector-aware extraction compiles");
+        let schema = jsonschema::JSONSchema::compile(&json!({
+            "type":"object", "additionalProperties":false, "required":["active"],
+            "properties":{"active":{"type":"boolean"}}
+        }))
+        .unwrap();
+        let single = json!({"subject":{"profile":"by-code","values":{"code":"A"}}});
+        let composite =
+            json!({"subject":{"profile":"by-code-and-region","values":{"code":"A","region":7}}});
+        for selectors in [&single, &composite] {
+            assert_eq!(
+                runtime.extract_with_selectors(
+                    &script,
+                    &json!({"code":"A","region":7,"active":true}),
+                    selectors,
+                    &json!({}),
+                    &BTreeMap::new(),
+                    &schema
+                ),
+                Ok(LookupResult::Match(BTreeMap::from([(
+                    "active".to_owned(),
+                    json!(true)
+                )])))
+            );
+        }
+        for response in [
+            json!({"code":"B","region":7,"active":true}),
+            json!({"code":"A","region":8,"active":true}),
+            json!({"code":"A","region":7.0,"active":true}),
+            json!({"code":"A","region":"7","active":true}),
+            json!({"code":"A","region":true,"active":true}),
+        ] {
+            assert_eq!(
+                runtime.extract_with_selectors(
+                    &script,
+                    &response,
+                    &composite,
+                    &json!({}),
+                    &BTreeMap::new(),
+                    &schema
+                ),
+                Ok(LookupResult::NoMatch)
+            );
+        }
+        assert_eq!(
+            runtime.extract_with_selectors(
+                &script,
+                &json!({"code":"A","active":true}),
+                &composite,
+                &json!({}),
+                &BTreeMap::new(),
+                &schema
+            ),
+            Err(RhaiRuntimeError::Unavailable)
+        );
+        assert_eq!(
+            runtime.extract_with_selectors(
+                &script,
+                &json!({"code":"A","active":"true"}),
+                &single,
+                &json!({}),
+                &BTreeMap::new(),
+                &schema
+            ),
+            Err(RhaiRuntimeError::FactSchema)
+        );
+    }
+
+    #[test]
+    fn selector_aware_extraction_has_fresh_inputs_and_no_ambiguous_abi() {
+        let runtime = runtime();
+        for source in [
+            "fn extract(a) { no_match() }",
+            "fn extract(a,b,c,d) { no_match() }",
+            "fn extract(a,b) { no_match() } fn extract(a,b,c) { no_match() }",
+        ] {
+            assert!(matches!(
+                runtime.compile_extraction(source),
+                Err(RhaiRuntimeError::EntryPoint)
+            ));
+        }
+        let selectors = json!({"subject":{"profile":"by-code","values":{"code":"A"}}});
+        let script = runtime
+            .compile_extraction(
+                r#"
+fn extract(response, selectors, context) {
+    if selectors.subject.values.code != "A" { return #{outcome: "ambiguous"}; }
+    if selectors.contains("other") || context.contains("selectors") { return #{outcome: "ambiguous"}; }
+    selectors.subject.values.code = "B";
+    #{outcome: "no_match"}
+}
+"#,
+            )
+            .unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                runtime.extract_with_selectors(
+                    &script,
+                    &json!({}),
+                    &selectors,
+                    &json!({}),
+                    &BTreeMap::new(),
+                    &|_: &Value| true
+                ),
+                Ok(LookupResult::NoMatch)
+            );
+        }
+        assert_eq!(selectors["subject"]["values"]["code"], "A");
+        let legacy = runtime.compile_extraction(r#"fn extract(response, context) { if context.contains("selectors") { return #{outcome: "ambiguous"}; } #{outcome: "no_match"} }"#).unwrap();
+        assert_eq!(
+            runtime.extract_with_selectors(
+                &legacy,
+                &json!({}),
+                &selectors,
+                &json!({}),
+                &BTreeMap::new(),
+                &|_: &Value| true
+            ),
+            Ok(LookupResult::NoMatch)
+        );
     }
 
     #[test]
