@@ -142,7 +142,7 @@ napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }
 p256 = { version = "0.13", features = ["ecdsa"] }
-pg_query = { version = "=6.1.1", default-features = false }
+pg_query = { version = "=6.2.0", default-features = false }
 pkcs1 = { version = "0.7", features = ["alloc"] }
 pkcs8 = { version = "0.10" }
 proptest = { version = "1" }
@@ -153,7 +153,7 @@ rand_chacha = { version = "0.9" }
 rand_core = { version = "0.6", features = ["std"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
-rhai = { version = "=1.25.1", features = ["sync", "serde"] }
+rhai = { version = "=1.26.0", features = ["sync", "serde"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 # `bundled` vendors the SQLite amalgamation, so a statement source needs no
 # system library. `hooks` carries the authorizer and the progress handler, which
