@@ -23,6 +23,13 @@ explicit seed creation succeed. Default loopback ports are BReg `8090`, Mint
 `--breg-port`, `--mint-port` and `--database-port`. A restart retains the
 original ports and clients-file location. Conflicting ports are refused.
 
+The database runs the pinned image
+`postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
+so an operator can check exactly what the supervisor pulls. Each supervised
+prerequisite command may run for 120 seconds, and the owned database and each
+started service have 45 seconds to answer as ready. A start that passes a
+deadline fails, stops what it acquired and keeps its owner-only diagnostics.
+
 `dev stop` keeps everything it created: the owned container, its named data
 volume, records, audit history, keys, credentials and the built package. Add
 `--remove` to reclaim the storage as well; it removes the owned container and
