@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -139,6 +140,34 @@ def validate_oci_config(
     return tuple(diff_ids)
 
 
+def validate_grype_database(descriptor: dict[str, Any]) -> None:
+    database = descriptor.get("db")
+    if not isinstance(database, dict):
+        raise EvidenceError("Grype report lacks database metadata")
+    status = database.get("status")
+    status = status if isinstance(status, dict) else {}
+    built = database.get("built") or status.get("built")
+    checksum = database.get("checksum")
+    if not isinstance(checksum, str) or not checksum:
+        origin = status.get("from")
+        if (
+            not isinstance(origin, str)
+            or re.search(r"checksum=sha256%3A[0-9a-fA-F]{64}", origin) is None
+        ):
+            raise EvidenceError("Grype report lacks database checksum metadata")
+    if not isinstance(built, str):
+        raise EvidenceError("Grype report lacks database build time")
+    try:
+        timestamp = datetime.fromisoformat(built.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError("database build time must include a timezone")
+        age = time.time() - timestamp.timestamp()
+    except ValueError as error:
+        raise EvidenceError("Grype database build time is invalid") from error
+    if age < 0 or age > 259200:
+        raise EvidenceError("Grype database is future-dated or older than three days")
+
+
 def validate_scan(
     path: Path, *, tool: str, target_key: str, digest: str
 ) -> tuple[str, ...]:
@@ -189,8 +218,12 @@ def validate_scan(
             raise EvidenceError(
                 f"Syft report at {path} must retain artifacts and file metadata"
             )
-    elif not isinstance(document.get("matches"), list):
-        raise EvidenceError(f"Grype report at {path} must retain vulnerability matches")
+    else:
+        if not isinstance(document.get("matches"), list):
+            raise EvidenceError(
+                f"Grype report at {path} must retain vulnerability matches"
+            )
+        validate_grype_database(descriptor)
     return layer_ids
 
 

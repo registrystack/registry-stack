@@ -6,6 +6,7 @@ import importlib.util
 import json
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import TestCase, main, mock
 
@@ -31,12 +32,21 @@ class FakeCommands:
         fail_prefix: tuple[str, ...] | None = None,
         wrong_source: bool = False,
         wrong_grype_layers: bool = False,
+        grype_db: dict | None = None,
     ):
         self.calls: list[tuple[list[str], dict]] = []
         self.fail_tool = fail_tool
         self.fail_prefix = fail_prefix
         self.wrong_source = wrong_source
         self.wrong_grype_layers = wrong_grype_layers
+        self.grype_db = (
+            grype_db
+            if grype_db is not None
+            else {
+                "built": datetime.now(timezone.utc).isoformat(),
+                "checksum": "sha256:" + "f" * 64,
+            }
+        )
 
     def image_target(self, image_ref: str) -> dict:
         return {
@@ -136,7 +146,11 @@ class FakeCommands:
             Path(stdout_path).write_text(
                 json.dumps(
                     {
-                        "descriptor": {"name": "grype", "version": "0.114.0"},
+                        "descriptor": {
+                            "name": "grype",
+                            "version": "0.114.0",
+                            "db": self.grype_db,
+                        },
                         "source": {"type": "image", "target": target},
                         "matches": [],
                     }
@@ -252,6 +266,48 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
             for _command, details in syft_calls:
                 self.assertEqual(details["env"]["SYFT_FILE_METADATA_SELECTION"], "all")
                 self.assertEqual(details["env"]["SYFT_FILE_METADATA_DIGESTS"], "sha256")
+
+    def test_current_database_status_checksum_and_age_boundary(self) -> None:
+        built = datetime(2026, 9, 6, tzinfo=timezone.utc)
+        descriptor = {
+            "db": {
+                "status": {
+                    "built": built.isoformat(),
+                    "from": "https://example.invalid/db?checksum=sha256%3A" + "A" * 64,
+                }
+            }
+        }
+        with mock.patch.object(
+            MODULE.time, "time", return_value=built.timestamp() + 259200
+        ):
+            MODULE.validate_grype_database(descriptor)
+        for age in (-1, 259201):
+            with self.subTest(age=age):
+                with mock.patch.object(
+                    MODULE.time, "time", return_value=built.timestamp() + age
+                ):
+                    with self.assertRaisesRegex(MODULE.EvidenceError, "database"):
+                        MODULE.validate_grype_database(descriptor)
+
+    def test_invalid_grype_database_never_seals_collection(self) -> None:
+        fresh = datetime.now(timezone.utc).isoformat()
+        checksum = "sha256:" + "f" * 64
+        for database in (
+            {},
+            {"built": fresh},
+            {"built": fresh, "checksum": ""},
+            {"built": "2020-01-01T00:00:00Z", "checksum": checksum},
+            {"built": "2999-01-01T00:00:00Z", "checksum": checksum},
+            {"built": "not-a-date", "checksum": checksum},
+        ):
+            with self.subTest(database=database):
+                fake = FakeCommands(grype_db=database)
+                with tempfile.TemporaryDirectory() as temporary:
+                    output = Path(temporary) / "evidence"
+                    with mock.patch.object(MODULE, "run_command", side_effect=fake):
+                        with self.assertRaisesRegex(MODULE.EvidenceError, "database"):
+                            MODULE.collect(self.arguments(output))
+                    self.assertFalse((output / "collection.json").exists())
 
     def test_command_failure_propagates_and_cleans_local_resources(self) -> None:
         fake = FakeCommands(fail_tool="syft")
