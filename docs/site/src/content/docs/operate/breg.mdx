@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-06"
 doc_type: how-to
 persona:
   - operator
@@ -31,19 +31,39 @@ activates the signed package and runs the server. One person may hold all three 
 the commands stay the same. Every command reads `--help`. Paths given to `--runtime-config`,
 `--credentials`, `--output`, and `--package` must be absolute.
 
-No path an operator command reads or writes may traverse a symbolic link. `bregctl` resolves each
-component against the directory descriptor that holds it, then opens, creates, renames, and
-publishes through those held descriptors, so a directory replaced by a symbolic link after the
-path is validated redirects the pathname without redirecting the command. Name the real
-directory: on macOS, `/tmp` and `/var` are reached through symbolic links, so pass `/private/tmp`
-and `/private/var`.
+Many operator paths are resolved through held directory descriptors rather than by name: audit
+export output, data export output and checkpoint, data import state and checkpoint, test receipt
+output and the credentials file `bregctl test` reads, package inputs and outputs, history request
+files, the reviewed migrations tree, project migrate writes, and authoring sources. `bregctl`
+resolves each component of these paths against the directory descriptor that holds it, then opens,
+creates, renames, and publishes through those held descriptors, so a directory replaced by a
+symbolic link after the path is validated cannot redirect the command. `--runtime-config` and
+`--package` are resolved by pathname in `registry-breg` instead, as is every `bregctl dev` path,
+and the local file `apply --backup <binding>=<path>` names, which `registry-breg` opens with
+`O_NOFOLLOW` on its final component only.
 
-The refusal is fail-closed. The Linux and macOS builds resolve every operator path this way. A
-build for a platform that offers no equivalent kernel-enforced resolution refuses each such path
-with `path.no_symlink_unsupported` rather than falling back to resolution by pathname.
+Name the real directory rather than a symbolic link: on macOS, `/tmp`, `/var`, `/etc`, and `/home`,
+among others, are reached through symbolic links at the root, so pass `/private/tmp` and
+`/private/var` for the descriptor-resolved paths above. The descriptor-based refusal is
+fail-closed: the Linux and macOS builds resolve every descriptor-based path this way, and a build
+for a platform that offers no equivalent kernel-enforced resolution refuses each one instead of
+falling back to resolution by pathname; the diagnostic code depends on the command, since each
+surface reports the refusal under its own code rather than one shared across all of them.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, TestArgs, PackageArgs, ApplyArgs, DoctorArgs, and path_diagnostic();
+{/* Evidence: crates/registry-bregctl/src/audit_lifecycle.rs, create_export_file();
+    crates/registry-bregctl/src/data_lifecycle.rs, resolve_write_destination();
+    crates/registry-bregctl/src/test_lifecycle.rs, preflight_output() and read_credentials();
+    crates/registry-bregctl/src/package_lifecycle.rs;
+    crates/registry-bregctl/src/history_erasure_lifecycle.rs and history_rebaseline_lifecycle.rs;
+    crates/registry-bregctl/src/reviewed_migrations.rs;
+    crates/registry-bregctl/src/lib.rs, write_project_registry(), write_migration_files_with_fault(),
+    read_bounded_source_file(), and path_diagnostic();
     crates/registry-bregctl/src/safe_path.rs, SafeDir and SafeEntry;
+    crates/registry-breg/src/runtime_config.rs, read_bounded_runtime_config();
+    crates/registry-breg/src/package.rs, reject_relative_symlinks();
+    crates/registry-breg/src/migration.rs, open_bound_backup();
+    crates/registry-bregctl/src/dev/mod.rs, project();
+    crates/registry-bregctl/src/apply_lifecycle.rs, parse_backup_arguments();
     products/breg/scripts/test-adopter-workflow.sh. */}
 
 ## Obtain the runtime
