@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-07
+
 ### Added
 
 - Documented the ordering and authority semantics of `fields[].concepts` in the
