@@ -6296,6 +6296,24 @@ mod tests {
                 format!("    baseUrl: {origin}\n    authentication: {{kind: none}}\n"),
             ));
         }
+        // The authenticated branch is no looser. The runtime refuses user
+        // information, a port outside the range a port can hold, and a
+        // loopback literal that is not the canonical spelling, so the
+        // published contract has to refuse them rather than describe a
+        // connection that only fails at startup.
+        for origin in [
+            "https://user:token@source.invalid",
+            "https://source.invalid:99999",
+            "http://127.0.0.1:99999",
+            "http://127.00.0.1:18081",
+        ] {
+            refused.push((
+                "an authenticated connection at a non-canonical origin",
+                format!(
+                    "    baseUrl: {origin}\n    authentication: {{kind: static-authorization, tokenRef: secret:file/source-a-token}}\n"
+                ),
+            ));
+        }
         for (reason, connection) in refused {
             let document = source_connection_document(&local, &connection);
             assert!(
