@@ -1519,6 +1519,70 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
 }
 
 #[tokio::test]
+async fn lookup_route_conceals_a_substituted_access_profile_selection() {
+    // The exported Evidence prepare script carries accessProfile as a query
+    // parameter, so a replaced adapter can name any profile on the lookup route.
+    // Selection is a request, never an authority: a profile the token does not
+    // satisfy and a profile that grants no lookup must both read as an unknown
+    // resource.
+    let project = format!(
+        "{LOOKUP_PATH_PROJECT}  - id: reader
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: household
+        rowBoundaries: []
+        operations: [get]
+        readableFields: [household-code]
+"
+    );
+    let harness = Harness::from_project(&project, true);
+    let claims = Some(caseworker_claims("case-management"));
+    let body = json!({"selector": "by-household-code", "values": {"householdCode": "hh-001"}});
+
+    let unknown_resource = harness
+        .send_json(
+            Method::POST,
+            "/v1/records/unknown-canary:lookup?accessProfile=operator",
+            claims.clone(),
+            body.clone(),
+        )
+        .await;
+    assert_eq!(unknown_resource.status(), StatusCode::NOT_FOUND);
+    let concealed = problem_shape(unknown_resource).await;
+    assert_eq!(concealed["code"], "resource.not_found");
+
+    let before = harness.records.calls();
+    for profile in ["viewer", "reader", "not-a-profile"] {
+        let refused = harness
+            .send_json(
+                Method::POST,
+                &format!("/v1/records/households:lookup?accessProfile={profile}"),
+                claims.clone(),
+                body.clone(),
+            )
+            .await;
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND, "{profile}");
+        assert_eq!(problem_shape(refused).await, concealed, "{profile}");
+    }
+    assert_eq!(harness.records.calls(), before);
+
+    let granted = harness
+        .send(
+            Method::GET,
+            "/v1/records/households/00000000-0000-4000-8000-000000000001?accessProfile=reader",
+            claims,
+        )
+        .await;
+    assert_eq!(
+        granted.status(),
+        StatusCode::OK,
+        "reader stays usable where it is granted; only the lookup route is closed to it"
+    );
+}
+
+#[tokio::test]
 async fn relationship_route_uses_path_grant_not_direct_target_rights() {
     let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
     let root = "00000000-0000-4000-8000-000000000001";
