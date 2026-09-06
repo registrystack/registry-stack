@@ -3318,7 +3318,12 @@ impl From<IdempotencyError> for MutationError {
         match error {
             IdempotencyError::InvalidInput => Self::InvalidRequest,
             IdempotencyError::Conflict => Self::IdempotencyConflict,
-            IdempotencyError::Unavailable => Self::Unavailable,
+            // Only maintenance erasure reads a cached response body back, so
+            // this classification names a state a mutation cannot reach. The
+            // mutation surface answers it as the outage its callers retry.
+            IdempotencyError::CachedResponseUnreadable | IdempotencyError::Unavailable => {
+                Self::Unavailable
+            }
         }
     }
 }

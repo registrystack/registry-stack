@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::history_reference::SnapshotReference;
 use crate::model::HttpMethod;
 use crate::postgres::{ActionClaimContext, ClaimContext, RowBoundaryContext};
+use crate::stored_bytes;
 
 // Every compiled effect mutates at least one field, so this also bounds the
 // number of separately named references in an immediate-action receipt.
@@ -172,6 +173,8 @@ pub enum IdempotencyError {
     InvalidInput,
     #[error("idempotency key is already bound to another request")]
     Conflict,
+    #[error("a cached mutation response holds bytes no JSON reader accepts")]
+    CachedResponseUnreadable,
     #[error("mutation state is unavailable")]
     Unavailable,
 }
@@ -721,7 +724,16 @@ pub(crate) async fn tombstone_erased_cached_responses(
             ],
         )
         .await
-        .map_err(|_| IdempotencyError::Unavailable)
+        .map_err(|error| {
+            // A cached batch body is read back as JSON here. Bytes no reader
+            // accepts are the row's own state, not an outage, and are named so
+            // rather than retried behind a transport failure.
+            if stored_bytes::unreadable(&error) {
+                IdempotencyError::CachedResponseUnreadable
+            } else {
+                IdempotencyError::Unavailable
+            }
+        })
 }
 
 async fn affected_snapshot_references(

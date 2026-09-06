@@ -610,7 +610,9 @@ async fn read_dispatch(
                     public_deployment_prefix(&service),
                 ),
                 Ok(None) => concealed(),
-                Err(ReadServiceError::Unavailable) => unavailable(),
+                Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => {
+                    unavailable()
+                }
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
             }
         }
@@ -728,7 +730,9 @@ async fn read_dispatch(
                     surface.response_entity,
                     public_deployment_prefix(&service),
                 ),
-                Err(ReadServiceError::Unavailable) => unavailable(),
+                Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => {
+                    unavailable()
+                }
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
             }
         }
@@ -903,7 +907,7 @@ async fn lookup_dispatch(
             public_deployment_prefix(&service),
         ),
         Ok(None) => lookup_unresolved(),
-        Err(ReadServiceError::Unavailable) => unavailable(),
+        Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
 }
@@ -1121,7 +1125,7 @@ async fn snapshot_dispatch(
             surface.response_entity,
             public_deployment_prefix(&service),
         ),
-        Err(ReadServiceError::Unavailable) => unavailable(),
+        Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
 }

@@ -102,6 +102,8 @@ pub enum HistoryErasureError {
     TargetUnavailable,
     #[error("history erasure cannot run while history coverage is not ready")]
     HistoryNotReady,
+    #[error("history erasure found a cached response no JSON reader accepts")]
+    CachedResponseUnreadable,
     #[error("history erasure storage is unavailable")]
     Unavailable,
 }
@@ -139,6 +141,7 @@ impl From<IdempotencyError> for HistoryErasureError {
     fn from(error: IdempotencyError) -> Self {
         match error {
             IdempotencyError::InvalidInput => Self::InvalidInput,
+            IdempotencyError::CachedResponseUnreadable => Self::CachedResponseUnreadable,
             IdempotencyError::Conflict | IdempotencyError::Unavailable => Self::Unavailable,
         }
     }

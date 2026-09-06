@@ -56,6 +56,9 @@ mod idempotency;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
+#[path = "../src/stored_bytes.rs"]
+#[allow(dead_code)]
+mod stored_bytes;
 
 use std::time::Duration;
 
@@ -694,6 +697,82 @@ async fn erasure_refuses_more_than_ten_thousand_actual_target_revisions() {
     database.cleanup().await;
 }
 
+/// A cached batch response whose stored bytes are not readable JSON refuses
+/// the erasure as the corruption it is. Reporting it as storage unavailability
+/// would hide the unreadable row behind an outage an operator would retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn erasure_reports_an_unreadable_cached_response_rather_than_an_outage() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x77; 32].into())
+        .expect("test owns a keyed audit profile");
+    let record_id = Uuid::parse_str("018feaa0-68f9-4a45-b9e3-58436df07afd").unwrap();
+
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration can begin transaction");
+    insert_revision(&transaction, record_id, 1, CURRENT_PACKAGE, "create").await;
+    transaction.commit().await.expect("target revision commits");
+
+    // The two ways stored bytes stop being readable: a sequence no UTF-8
+    // decoder accepts, and text that decodes but is not JSON.
+    for body in [
+        vec![0xf0_u8, 0x28, 0x8c, 0x28],
+        b"{\"unterminated\"".to_vec(),
+    ] {
+        let transaction = migration
+            .transaction()
+            .await
+            .expect("migration can begin transaction");
+        transaction
+            .execute("DELETE FROM registry_internal.registry_idempotency", &[])
+            .await
+            .expect("test can replace the cached response");
+        insert_idempotency_response_bytes(
+            &transaction,
+            "batch-unreadable-key",
+            "batch-unreadable-binding",
+            &body,
+        )
+        .await;
+        transaction
+            .commit()
+            .await
+            .expect("unreadable cached response commits");
+
+        let result = erase_record_history(
+            &mut migration,
+            HistoryErasureRequest {
+                expected: &expected,
+                migration_role: &database.migration_role,
+                lock_key,
+                timeouts: HistoryErasureTimeouts::new(
+                    Duration::from_secs(5),
+                    Duration::from_secs(5),
+                )
+                .unwrap(),
+                audit_profile: &audit_profile,
+                operator_reference: "operator-run-7",
+                reason: "unreadable cached response",
+                target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
+            },
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err(registry_breg::history_erasure::HistoryErasureError::CachedResponseUnreadable),
+            "an unreadable cached response is reported as corruption"
+        );
+    }
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 async fn install_ready_history_registry(
     database: &TestDatabase,
     migration: &mut tokio_postgres::Client,
@@ -889,6 +968,27 @@ async fn insert_idempotency_response(
                 &body,
                 &vec![0_u8, 0_u8],
             ],
+        )
+        .await
+        .expect("idempotency response inserts");
+}
+
+/// A cached response stored exactly as supplied, so a test can place bytes the
+/// stored-JSON reader cannot accept.
+async fn insert_idempotency_response_bytes(
+    transaction: &tokio_postgres::Transaction<'_>,
+    key_reference: &str,
+    binding_reference: &str,
+    body: &[u8],
+) {
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_idempotency
+                 (key_reference, binding_reference, result_kind, record_reference,
+                  record_revision, result_count, response_status, response_body,
+                  response_headers)
+             VALUES ($1, $2, 'batch', NULL, NULL, 1, 200, $3, $4)",
+            &[&key_reference, &binding_reference, &body, &vec![0_u8, 0_u8]],
         )
         .await
         .expect("idempotency response inserts");
