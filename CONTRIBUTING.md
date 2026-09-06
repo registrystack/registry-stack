@@ -66,6 +66,11 @@ classification, so a classifier failure cannot release downstream jobs. This
 controls dependency ordering; GitHub Actions does not guarantee runner
 scheduling priority.
 
+The required Rust workspace check and the CI result summary aggregate the same
+raw Rust job results in parallel. Both accept successful and path-skipped jobs
+and fail for failed or cancelled jobs, so the final summary does not need to
+wait for the intermediate aggregate runner.
+
 Optimize duplicate compilation and execution before adding more blocking jobs.
 Keep affected security, database/TLS, generated-contract, and basic adopter
 journeys enforced. Partitioned suites must retain their complete test inventory
