@@ -177,9 +177,18 @@ fn occupied_and_ambiguous_ports_are_refused() {
 #[test]
 fn stop_before_first_start_is_idempotent_without_docker() {
     let temporary = tempfile::tempdir().unwrap();
-    assert_eq!(stop(temporary.path(), false).unwrap()["status"], "stopped");
-    assert_eq!(stop(temporary.path(), false).unwrap()["status"], "stopped");
-    assert_eq!(stop(temporary.path(), true).unwrap()["status"], "stopped");
+    assert_eq!(
+        stop(temporary.path(), false, None).unwrap()["status"],
+        "stopped"
+    );
+    assert_eq!(
+        stop(temporary.path(), false, None).unwrap()["status"],
+        "stopped"
+    );
+    assert_eq!(
+        stop(temporary.path(), true, None).unwrap()["status"],
+        "stopped"
+    );
 }
 
 #[test]

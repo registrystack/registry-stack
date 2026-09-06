@@ -13,6 +13,7 @@ use std::{
 struct Session {
     project: PathBuf,
     path: std::ffi::OsString,
+    docker: PathBuf,
 }
 impl Session {
     fn ctl(&self, args: &[&str]) -> std::process::Output {
@@ -24,8 +25,23 @@ impl Session {
             .output()
             .expect("native ctl command launches")
     }
-    fn success(&self, args: &[&str]) -> Value {
-        let output = self.ctl(args);
+    /// Run one `dev` invocation against this session's project. Docker is
+    /// always named explicitly and never reachable through `PATH`, so every
+    /// supervised phase, including the rehearsal and `dev stop`, has to use
+    /// the resolved binary the caller chose.
+    fn dev(&self, args: &[&str]) -> std::process::Output {
+        let docker = self.docker.to_str().unwrap();
+        let mut invocation = vec!["dev"];
+        invocation.extend_from_slice(args);
+        invocation.extend([
+            "--project",
+            self.project.to_str().unwrap(),
+            "--docker-bin",
+            docker,
+        ]);
+        self.ctl(&invocation)
+    }
+    fn report(&self, output: std::process::Output) -> Value {
         if !output.status.success() {
             write(
                 &self.project.parent().unwrap().join("native-failure.json"),
@@ -39,34 +55,34 @@ impl Session {
         );
         serde_json::from_slice(&output.stdout).expect("native JSON report")
     }
+    fn success(&self, args: &[&str]) -> Value {
+        self.report(self.ctl(args))
+    }
     fn start(&self) -> Value {
-        self.success(&["dev", "--project", self.project.to_str().unwrap()])
+        self.report(self.dev(&[]))
     }
     fn stop(&self) {
-        self.success(&["dev", "stop", "--project", self.project.to_str().unwrap()]);
+        self.report(self.dev(&["stop"]));
     }
     fn remove(&self) {
-        self.success(&[
-            "dev",
-            "stop",
-            "--remove",
-            "--project",
-            self.project.to_str().unwrap(),
-        ]);
+        self.report(self.dev(&["stop", "--remove"]));
     }
 }
 impl Drop for Session {
     fn drop(&mut self) {
         // Every exit, including a panicking assertion, reclaims the container
         // and the data volume this test created.
-        let _ = self.ctl(&[
-            "dev",
-            "stop",
-            "--remove",
-            "--project",
-            self.project.to_str().unwrap(),
-        ]);
+        let _ = self.dev(&["stop", "--remove"]);
     }
+}
+
+/// The one installed command this test resolves through the ambient `PATH`.
+/// The session's own `PATH` holds only the built binaries under test.
+fn installed(name: &str) -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("{name} must be installed to run the retained lifecycle test"))
 }
 
 fn docker_line(args: &[&str]) -> String {
@@ -97,13 +113,13 @@ fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
     let parent = fs::canonicalize(temporary.keep()).unwrap();
     let project = parent.join("registry");
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
-    let mut paths = vec![binary.parent().unwrap().to_path_buf()];
-    paths.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
+    // Only the binaries built beside bregctl serve this session: an installed
+    // breg or mint from an earlier package format must not be reachable, and
+    // Docker must be named explicitly rather than found.
     let session = Session {
         project: project.clone(),
-        path: std::env::join_paths(paths).unwrap(),
+        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
+        docker: installed("docker"),
     };
     session.success(&["init", project.to_str().unwrap()]);
     let mut registry: Value =
@@ -182,11 +198,8 @@ seed:
     );
     // A service that exits before readiness causes owned child/container
     // cleanup. The same persisted keys and database can then start normally.
-    let failed = session.ctl(&[
-        "dev",
+    let failed = session.dev(&[
         "start",
-        "--project",
-        project.to_str().unwrap(),
         "--clients-file",
         clients.to_str().unwrap(),
         "--database-port",
@@ -475,10 +488,7 @@ seed:
     let mut changed = original.clone();
     changed.extend_from_slice(b"\n# reviewed authored edit\n");
     write(&project.join("registry.yaml"), &changed);
-    assert!(!session
-        .ctl(&["dev", "--project", project.to_str().unwrap()])
-        .status
-        .success());
+    assert!(!session.dev(&[]).status.success());
     assert_eq!(fs::read(project.join("registry.yaml")).unwrap(), changed);
     write(&project.join("registry.yaml"), &original);
     session.start();
@@ -576,7 +586,7 @@ seed:
     );
     // Plain `dev stop` still refuses a retained container that vanished
     // without `--remove`; that refusal protects retained data.
-    let refused = session.ctl(&["dev", "stop", "--project", project.to_str().unwrap()]);
+    let refused = session.dev(&["stop"]);
     assert!(!refused.status.success());
     let refusal: Value = serde_json::from_slice(&refused.stdout).expect("refusal JSON");
     assert!(refusal["diagnostics"][0]["message"]
