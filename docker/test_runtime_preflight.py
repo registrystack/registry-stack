@@ -394,6 +394,19 @@ class RuntimePreflightTest(unittest.TestCase):
             "public port": lambda item: item.update(
                 ports=[{"target": 8080, "published": 8080}]
             ),
+            "shell healthcheck": lambda item: item.update(
+                healthcheck={"test": ["CMD-SHELL", "curl -fsS http://localhost/health"]}
+            ),
+            "string healthcheck": lambda item: item.update(
+                healthcheck={"test": "curl -fsS http://localhost/health"}
+            ),
+            "foreign healthcheck command": lambda item: item.update(
+                healthcheck={"test": ["CMD", "/usr/bin/curl", "-fsS", "http://x"]}
+            ),
+            "healthcheck without a command": lambda item: item.update(
+                healthcheck={"test": ["CMD"]}
+            ),
+            "invalid healthcheck": lambda item: item.update(healthcheck=["CMD"]),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
@@ -417,6 +430,64 @@ class RuntimePreflightTest(unittest.TestCase):
                     )
                 self.assertEqual(1, result)
                 run.assert_called_once()
+
+    def test_a_healthcheck_may_only_run_the_official_product_command(self) -> None:
+        # Docker runs a healthcheck as the service identity on its own
+        # schedule, so it is a command lane into the container. The official
+        # images declare none, and the preflight owns readiness.
+        argv = [
+            "--compose-file",
+            "compose.yaml",
+            "--service",
+            "evidence=evidence",
+        ]
+        for accepted in (
+            None,
+            {"disable": True},
+            {"test": ["NONE"]},
+            {"test": ["CMD", "/usr/local/bin/evidence", "check"], "interval": "30s"},
+        ):
+            with self.subTest(healthcheck=accepted):
+                selected = service("evidence")
+                if accepted is not None:
+                    selected["healthcheck"] = accepted
+                result, _, stderr, _ = self.run_main(
+                    deployment({"evidence": selected}), argv=argv
+                )
+                self.assertEqual(0, result, stderr)
+
+    def test_an_unselected_registry_stack_dependency_is_refused(self) -> None:
+        # Silently ignoring the edge left Evidence checked against a Mint the
+        # preflight never checked or started. The refusal names both ends so
+        # the operator can select the service or remove the edge.
+        document = cold_deployment()
+        result, stdout, stderr, run = self.run_orchestration(
+            document,
+            [completed()],
+            ["--compose-file", "compose.yaml", "--service", "evidence=evidence"],
+        )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertIn("evidence", stderr)
+        self.assertIn("mint", stderr)
+        self.assertIn("was not selected", stderr)
+        run.assert_called_once()
+
+    def test_a_dependency_outside_the_product_set_starts_nothing(self) -> None:
+        document = deployment({"evidence": service("evidence")})
+        document["services"]["proxy"] = {"image": "example.invalid/proxy:latest"}
+        document["services"]["evidence"]["depends_on"] = ["proxy"]  # type: ignore[index]
+        result, stdout, stderr, run = self.run_orchestration(
+            document,
+            [completed()],
+            ["--compose-file", "compose.yaml", "--service", "evidence=evidence"],
+        )
+        self.assertEqual(0, result, stderr)
+        self.assertEqual(2, run.call_count)
+        native = run.call_args_list[1].args[0]
+        self.assertEqual("evidence", native[native.index("--no-deps") + 1])
+        self.assertNotIn("up", native)
+        self.assertNotIn("proxy", native)
 
     def test_secret_modes_are_exact_and_audit_must_be_writable(self) -> None:
         for mode in (0o400, 0o600, "0400", "0600"):
@@ -1050,21 +1121,6 @@ class RuntimePreflightTest(unittest.TestCase):
                 self.assertEqual({"mint"}, dependencies)
                 repeated, _ = self.module.native_check_plan(list(selected), document)
                 self.assertEqual(names, [item.service for item in repeated])
-
-    def test_an_unselected_dependency_is_never_started(self) -> None:
-        document = cold_deployment()
-        result, stdout, stderr, run = self.run_orchestration(
-            document,
-            [completed()],
-            ["--compose-file", "compose.yaml", "--service", "evidence=evidence"],
-        )
-        self.assertEqual(0, result, stderr)
-        self.assertEqual("runtime preflight passed for 1 service(s)\n", stdout)
-        self.assertEqual(2, run.call_count)
-        native = run.call_args_list[1].args[0]
-        self.assertEqual("evidence", native[native.index("--no-deps") + 1])
-        self.assertNotIn("up", native)
-        self.assertNotIn("mint", native)
 
     def test_an_unavailable_mint_fails_before_the_dependent_check(self) -> None:
         document = cold_deployment()
