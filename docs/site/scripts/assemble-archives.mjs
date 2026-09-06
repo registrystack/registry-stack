@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 
 import {
+  ARCHIVE_BUNDLE_DIGEST_MISMATCH,
   createArchiveBundle,
   localArchiveBundlePath,
   restoreArchiveBundle,
@@ -14,6 +15,7 @@ import {
 import { loadArchiveLock, validateArchiveLock } from './archive-lock.mjs';
 import { buildDocsetArchive } from './build-archives.mjs';
 import { loadDocsets } from './docsets.mjs';
+import { withRetry } from './retry.mjs';
 import { publishedArchiveDocsets } from '../src/lib/docset-retention.mjs';
 
 const defaultArchiveBaseUrl = 'https://docs.registrystack.org/_archive-bundles';
@@ -35,39 +37,77 @@ export function archiveBundleUrls(docset, {
   ];
 }
 
-async function downloadBundle(url, output, {
+// HTTP statuses and fetch-transport error codes that describe a transient
+// condition (a dropped connection, a momentary upstream/CDN failure) rather
+// than a real problem with the request or its content. A 404 is handled
+// separately by the caller (it means "try the next candidate URL") and is
+// never routed through this classifier.
+const transientDownloadHttpStatus = new Set([408, 425, 429, 500, 502, 503, 504]);
+const transientDownloadErrorCodes = new Set([
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENETUNREACH',
+  'EPIPE',
+  'ETIMEDOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+function isTransientDownloadFailure(error) {
+  if (typeof error?.status === 'number' && transientDownloadHttpStatus.has(error.status)) {
+    return true;
+  }
+  const code = error?.cause?.code ?? error?.code;
+  return typeof code === 'string' && transientDownloadErrorCodes.has(code);
+}
+
+// Downloads and writes a single candidate URL, retrying a bounded number of
+// times with backoff for a failure that looks transient. A 404 (candidate not
+// published here) and a content problem (oversized body, no body) are not
+// retried; a persistent transient failure still surfaces after the bound with
+// its HTTP status or transport error intact.
+export async function downloadBundle(url, output, {
   fetchImpl = fetch,
   maximumBytes = maximumBundleBytes,
+  wait,
+  attempts,
 } = {}) {
-  const response = await fetchImpl(url, {
-    headers: { 'user-agent': 'registry-docs-archive-assembler/1' },
-    redirect: 'follow',
-  });
-  if (response.status === 404) return false;
-  if (!response.ok) {
-    throw new Error(`archive bundle download ${url} returned HTTP ${response.status}`);
-  }
-  const declaredLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
-    throw new Error(`archive bundle download ${url} exceeds ${maximumBytes} bytes`);
-  }
-  if (!response.body) {
-    throw new Error(`archive bundle download ${url} returned no body`);
-  }
-  await mkdir(dirname(output), { recursive: true });
-  let received = 0;
-  const limit = new Transform({
-    transform(chunk, _encoding, callback) {
-      received += chunk.length;
-      if (received > maximumBytes) {
-        callback(new Error(`archive bundle download ${url} exceeds ${maximumBytes} bytes`));
-      } else {
-        callback(null, chunk);
-      }
-    },
-  });
-  await pipeline(Readable.fromWeb(response.body), limit, createWriteStream(output, { mode: 0o600 }));
-  return true;
+  return withRetry(async () => {
+    const response = await fetchImpl(url, {
+      headers: { 'user-agent': 'registry-docs-archive-assembler/1' },
+      redirect: 'follow',
+    });
+    if (response.status === 404) return false;
+    if (!response.ok) {
+      const error = new Error(`archive bundle download ${url} returned HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+      throw new Error(`archive bundle download ${url} exceeds ${maximumBytes} bytes`);
+    }
+    if (!response.body) {
+      throw new Error(`archive bundle download ${url} returned no body`);
+    }
+    await mkdir(dirname(output), { recursive: true });
+    let received = 0;
+    const limit = new Transform({
+      transform(chunk, _encoding, callback) {
+        received += chunk.length;
+        if (received > maximumBytes) {
+          callback(new Error(`archive bundle download ${url} exceeds ${maximumBytes} bytes`));
+        } else {
+          callback(null, chunk);
+        }
+      },
+    });
+    await pipeline(Readable.fromWeb(response.body), limit, createWriteStream(output, { mode: 0o600 }));
+    return true;
+  }, { isTransient: isTransientDownloadFailure, wait, attempts });
 }
 
 async function restoreDownloadedBundle({
@@ -114,15 +154,31 @@ async function restoreLocalBundle({ docsRoot, docset, lockEntry }) {
     if (error?.code === 'ENOENT') return false;
     throw error;
   }
-  await restoreArchiveBundle({
-    docsRoot,
-    bundlePath,
-    docset,
-    expectedBundleSha256: lockEntry.bundle_sha256,
-    expectedRootTreeSha256: lockEntry.root_tree_sha256,
-    expectedTreeSha256: lockEntry.tree_sha256,
-    expectedVersionTreeSha256: lockEntry.version_tree_sha256,
-  });
+  try {
+    await restoreArchiveBundle({
+      docsRoot,
+      bundlePath,
+      docset,
+      expectedBundleSha256: lockEntry.bundle_sha256,
+      expectedRootTreeSha256: lockEntry.root_tree_sha256,
+      expectedTreeSha256: lockEntry.tree_sha256,
+      expectedVersionTreeSha256: lockEntry.version_tree_sha256,
+    });
+  } catch (error) {
+    if (error?.code !== ARCHIVE_BUNDLE_DIGEST_MISMATCH) throw error;
+    // This gitignored cache is only ever written by an earlier `--bootstrap`
+    // run (see bootstrapArchive below). A digest mismatch here means that
+    // bootstrap run's working tree no longer matches the published release,
+    // not that the published archive was tampered with. Ignore the stale
+    // entry and restore from the published bundle instead. A metadata or
+    // tree-digest mismatch discovered after the outer digest check passes
+    // does not carry this code, and still fails hard below.
+    console.warn(
+      `ignoring stale local archive bundle cache: ${error.message} (${bundlePath}); ` +
+        'restoring from the published bundle instead. Delete this file to clear the warning.',
+    );
+    return false;
+  }
   return true;
 }
 

@@ -422,7 +422,18 @@ impl std::fmt::Debug for EvidenceRuntime {
 impl EvidenceRuntime {
     /// Capture and initialize the complete Version 1 deployment at one revision.
     pub async fn initialize(runtime_path: &Path) -> Result<Self, RuntimeInitializationError> {
-        Self::initialize_internal(runtime_path, None).await
+        let deployment =
+            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
+        Self::initialize_internal(deployment, None).await
+    }
+
+    /// Initialize the deployment a caller has already captured. Nothing is
+    /// read from the runtime pathname again, so a proof the caller made about
+    /// these inputs holds for the runtime this constructs.
+    pub async fn initialize_from(
+        deployment: DeploymentInputs,
+    ) -> Result<Self, RuntimeInitializationError> {
+        Self::initialize_internal(deployment, None).await
     }
 
     #[cfg(test)]
@@ -430,7 +441,9 @@ impl EvidenceRuntime {
         runtime_path: &Path,
         authenticator: Authenticator,
     ) -> Result<Self, RuntimeInitializationError> {
-        Self::initialize_internal(runtime_path, Some(Arc::new(authenticator))).await
+        let deployment =
+            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
+        Self::initialize_internal(deployment, Some(Arc::new(authenticator))).await
     }
 
     #[cfg(test)]
@@ -438,15 +451,15 @@ impl EvidenceRuntime {
         runtime_path: &Path,
         authenticator: Arc<dyn RuntimeAuthenticator>,
     ) -> Result<Self, RuntimeInitializationError> {
-        Self::initialize_internal(runtime_path, Some(authenticator)).await
+        let deployment =
+            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
+        Self::initialize_internal(deployment, Some(authenticator)).await
     }
 
     async fn initialize_internal(
-        runtime_path: &Path,
+        deployment: DeploymentInputs,
         authenticator_override: Option<Arc<dyn RuntimeAuthenticator>>,
     ) -> Result<Self, RuntimeInitializationError> {
-        let deployment =
-            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
         let runtime_document = deployment.runtime;
         let runtime_config = runtime_document.config.clone();
         let runtime_revision = runtime_document.revision().to_owned();

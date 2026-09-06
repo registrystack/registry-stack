@@ -80,7 +80,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Advisory exposure policy tests",
         "run: python3 -m unittest release/scripts/test_check_advisory_baselines.py",
     ),
-    ("Cargo metadata", "cargo metadata --locked --format-version 1"),
+    ("Cargo metadata", "cargo metadata --locked --no-deps --format-version 1"),
     (
         "Manifest profile validation",
         "run: cargo run --locked --profile ci -p registry-manifest-cli -- validate-profiles profiles",

@@ -3506,8 +3506,7 @@ fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
     if output.status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let diagnostic = stderr.trim();
+    let diagnostic = child_diagnostic(&output.stderr);
     if diagnostic.is_empty() {
         bail!("Evidence rejected the compiled local generation");
     }
@@ -3530,7 +3529,59 @@ fn render_discovery_description(evidence_bin: &Path, config_path: &Path) -> Resu
     if output.status.success() {
         return Ok(output.stdout);
     }
-    bail!("Evidence rejected provider publication compilation")
+    let diagnostic = child_diagnostic(&output.stderr);
+    if diagnostic.is_empty() {
+        bail!("Evidence rejected provider publication compilation");
+    }
+    bail!("Evidence rejected provider publication compilation: {diagnostic}")
+}
+
+/// The longest child diagnostic an operator message carries.
+///
+/// Evidence reports one classified line per refusal, so this budget holds
+/// every message the binary produces while bounding a child that says more.
+const MAX_CHILD_DIAGNOSTIC_BYTES: usize = 512;
+
+/// Reduce a child process's standard error to one bounded printable diagnostic.
+///
+/// The bytes reach an operator's terminal and their logs, so the control
+/// characters that move a cursor and the escape sequences that repaint a
+/// screen are removed before the text is spliced into a message. Newline and
+/// tab survive, because a multi-line refusal stays readable. What is left is
+/// cut to a fixed budget on a character boundary and marked when it was cut,
+/// so a child that floods standard error cannot flood the operator.
+fn child_diagnostic(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let mut printable = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            // Dropping the introducer alone would leave the parameters of a
+            // colour or cursor sequence standing as text, so a control
+            // sequence is consumed through its final byte.
+            '\u{1b}' => {
+                if characters.next_if_eq(&'[').is_some() {
+                    while characters
+                        .next_if(|candidate| !matches!(candidate, '\u{40}'..='\u{7e}'))
+                        .is_some()
+                    {}
+                    characters.next();
+                }
+            }
+            '\n' | '\t' => printable.push(character),
+            _ if character.is_control() => {}
+            _ => printable.push(character),
+        }
+    }
+    let diagnostic = printable.trim();
+    if diagnostic.len() <= MAX_CHILD_DIAGNOSTIC_BYTES {
+        return diagnostic.to_owned();
+    }
+    let mut cut = MAX_CHILD_DIAGNOSTIC_BYTES;
+    while !diagnostic.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{} [truncated]", diagnostic[..cut].trim_end())
 }
 
 fn yaml_bytes(value: &Value) -> Result<Vec<u8>> {
@@ -6325,5 +6376,143 @@ factSchema: schemas/family-facts.schema.yaml
     fn assert_mode(path: &Path, expected: u32) {
         let actual = fs::metadata(path).unwrap().permissions().mode() & 0o7777;
         assert_eq!(actual, expected, "mode of {}", path.display());
+    }
+
+    fn write_stub_evidence(path: &Path, script: &str) {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(path)
+            .expect("stub");
+        file.write_all(script.as_bytes()).expect("write stub");
+    }
+
+    #[test]
+    fn render_discovery_description_surfaces_the_evidence_compiler_stderr() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\necho 'catalog binding is missing a required field' >&2\nexit 1\n",
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains("catalog binding is missing a required field"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn render_discovery_description_keeps_the_bare_message_when_evidence_writes_nothing() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(&evidence, "#!/bin/sh\nexit 1\n");
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+        assert_eq!(
+            format!("{error:#}"),
+            "Evidence rejected provider publication compilation"
+        );
+    }
+
+    #[test]
+    fn a_long_child_diagnostic_is_cut_to_the_budget_on_a_character_boundary() {
+        let overlong = "\u{20ac}".repeat(MAX_CHILD_DIAGNOSTIC_BYTES);
+
+        let diagnostic = child_diagnostic(overlong.as_bytes());
+
+        assert!(diagnostic.ends_with(" [truncated]"), "{diagnostic}");
+        let kept = diagnostic
+            .strip_suffix(" [truncated]")
+            .expect("the marker is present");
+        assert!(kept.len() <= MAX_CHILD_DIAGNOSTIC_BYTES, "{}", kept.len());
+        assert_eq!(
+            kept.len() % "\u{20ac}".len(),
+            0,
+            "the cut must land on a character boundary"
+        );
+        assert!(kept.chars().all(|character| character == '\u{20ac}'));
+    }
+
+    #[test]
+    fn render_discovery_description_bounds_a_long_child_diagnostic() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        let flood = "publication rejected ".repeat(64);
+        write_stub_evidence(
+            &evidence,
+            &format!("#!/bin/sh\nprintf '%s' '{flood}' >&2\nexit 1\n"),
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.ends_with("[truncated]"), "{diagnostic}");
+        assert!(
+            diagnostic.len()
+                < "Evidence rejected provider publication compilation: ".len()
+                    + MAX_CHILD_DIAGNOSTIC_BYTES
+                    + " [truncated]".len()
+                    + 1,
+            "{}",
+            diagnostic.len()
+        );
+    }
+
+    #[test]
+    fn render_discovery_description_strips_child_terminal_control_sequences() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nprintf '\\033[31mcatalog binding rejected\\033[0m\\rcompleted' >&2\nexit 1\n",
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+
+        let diagnostic = format!("{error:#}");
+        assert_eq!(
+            diagnostic,
+            "Evidence rejected provider publication compilation: \
+             catalog binding rejectedcompleted"
+        );
+        assert!(!diagnostic.contains('\u{1b}'), "{diagnostic:?}");
+        assert!(!diagnostic.contains('\r'), "{diagnostic:?}");
+        assert!(!diagnostic.contains("[31m"), "{diagnostic:?}");
+    }
+
+    #[test]
+    fn check_with_evidence_strips_child_terminal_control_sequences() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nprintf '\\033[1;31mbundle compilation failed\\033[0m' >&2\nexit 1\n",
+        );
+        let runtime_path = root.path().join("runtime.yaml");
+        fs::write(&runtime_path, "version: 1\n").expect("runtime");
+
+        let error = check_with_evidence(&evidence, &runtime_path)
+            .expect_err("a rejected generation must fail");
+
+        assert_eq!(
+            format!("{error:#}"),
+            "Evidence rejected the compiled local generation: bundle compilation failed"
+        );
     }
 }

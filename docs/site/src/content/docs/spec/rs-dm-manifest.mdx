@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-manifest
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-06"
 doc_type: specification
 doc_id: RS-DM-MANIFEST
 category: normative
@@ -206,6 +206,15 @@ This specification is `verified`: every requirement describes shipped behavior a
 - [RS-PR-RELAY](../rs-pr-relay/) keeps the same governed-versus-deployment boundary inside Relay's own contract set (REQ-PR-RELAY-104), which is why a manifest and a Relay contract stay separate documents with separate owners.
 - [RS-ARC-G](../rs-arc-g/) holds the architectural invariants this document refines: the metadata layer's purity (REQ-ARC-G-001), the runtime-binding exclusion (REQ-ARC-G-002), and description without authorization (REQ-ARC-G-010).
 - The [standards register](../../reference/standards/) records the adoption mode for DCAT, BRegDCAT-AP, CPSV-AP, CCCEV, SHACL, JSON Schema, JSON-LD, ODRL, OGC API Records, and SKOS named in `standards_referenced`.
+
+{/* Evidence: crates/registry-manifest-core/src/lib.rs holds RUNTIME_ONLY_KEYS and
+    is_runtime_only_key(), the render entry points render_catalog() and render_shacl(), and
+    source_manifest_digest(), which Sections 3, 4, 8, and 9 state normatively.
+    tests/metadata_unknown_fields.rs pins that an unknown key is rejected at parse time rather than
+    ignored (REQ-DM-MANIFEST-013). */}
+{/* Evidence: crates/registry-manifest-cli/tests/cli.rs pins the validate and publish surfaces in
+    validate_prints_source_digest_and_rejects_runtime_only_keys and
+    publish_writes_stable_package_digest_and_artifact_digests (Sections 8 and 9). */}
 
 {/* Evidence: crates/registry-manifest-core/src/lib.rs holds ODRL_ENFORCEMENT_PROFILE,
     SUPPORTED_ODRL_ENFORCEMENT_TERMS, SUPPORTED_EVIDENCE_PACK_OUTPUTS, and the governed-evidence

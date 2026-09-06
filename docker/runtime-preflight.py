@@ -4,20 +4,27 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
 import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Sequence
+from typing import Any, BinaryIO, Sequence, TextIO
 
 
 MAXIMUM_COMPOSE_BYTES = 4 * 1024 * 1024
+MAXIMUM_NATIVE_CHECK_STDERR_BYTES = 4 * 1024
 MINIMUM_DEPENDENCY_TIMEOUT_SECONDS = 5
 MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS = 10 * 60
+MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 30
+MAXIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 6 * 60 * 60
+DEFAULT_NATIVE_CHECK_TIMEOUT_SECONDS = 30 * 60
 PRODUCTS = ("evidence", "mint", "relay")
 SERVICE_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?")
 IMAGE_PATTERNS = {
@@ -30,6 +37,18 @@ AUDIT_PREFIXES = {
     "relay": "/var/lib/relay/audit",
 }
 EXECUTABLE_PATHS = {product: f"/usr/local/bin/{product}" for product in PRODUCTS}
+AUDIT_CONTAINMENT_FLAG = "--require-audit-under"
+# An image whose check command predates the containment flag rejects it as an
+# unknown argument. These are the argument parsers' phrasings for that refusal.
+UNKNOWN_ARGUMENT_MARKERS = (
+    "unexpected argument",
+    "unrecognized argument",
+    "unrecognized option",
+    "unknown argument",
+    "unknown option",
+    "invalid option",
+    "wasn't expected",
+)
 IMAGE_OWNED_ROOTS = tuple(
     PurePosixPath(path)
     for path in (
@@ -62,20 +81,35 @@ KNOWN_EPHEMERAL_BIND_ROOTS = tuple(
         "/private/var/folders",
     )
 )
+# Each native check is handed the audit prefix this adapter already proved is a
+# writable persistent mount. Storage persistence is the adapter's boundary and
+# configuration resolution is the product's, so the product decides whether its
+# own configured sink resolves inside the asserted root. The adapter never reads
+# product configuration to answer that question.
 NATIVE_CHECKS = {
     "evidence": [
         "--runtime",
         "/etc/registry-evidence/runtime.yaml",
         "check",
         "--require-runtime-dependencies",
+        AUDIT_CONTAINMENT_FLAG,
+        AUDIT_PREFIXES["evidence"],
     ],
     "mint": [
         "check",
         "--config",
         "/etc/registry-mint/config.yaml",
         "--require-runtime-dependencies",
+        AUDIT_CONTAINMENT_FLAG,
+        AUDIT_PREFIXES["mint"],
     ],
-    "relay": ["check", "--runtime", "/etc/relay/runtime.yaml"],
+    "relay": [
+        "check",
+        "--runtime",
+        "/etc/relay/runtime.yaml",
+        AUDIT_CONTAINMENT_FLAG,
+        AUDIT_PREFIXES["relay"],
+    ],
 }
 DEPENDENCY_HEALTHCHECKS = {"mint": ["/usr/local/bin/mint", "healthcheck"]}
 
@@ -142,8 +176,10 @@ def run_compose(
     *,
     timeout: int | None,
     capture_output: bool = True,
+    stderr_sink: BinaryIO | None = None,
     input_text: str | None = None,
     timeout_is_failure: bool = True,
+    timeout_message: str = "Docker Compose could not complete the preflight",
 ) -> subprocess.CompletedProcess[str]:
     output_options: dict[str, Any]
     if capture_output:
@@ -151,7 +187,7 @@ def run_compose(
     else:
         output_options = {
             "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL if stderr_sink is None else stderr_sink,
         }
     try:
         return subprocess.run(
@@ -165,9 +201,7 @@ def run_compose(
     except subprocess.TimeoutExpired as error:
         if not timeout_is_failure:
             return subprocess.CompletedProcess(command, 124, "", "")
-        raise PreflightError(
-            "Docker Compose could not complete the preflight"
-        ) from error
+        raise PreflightError(timeout_message) from error
     except OSError as error:
         raise PreflightError(
             "Docker Compose could not complete the preflight"
@@ -476,29 +510,69 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     validate_ports(service)
 
 
-def native_check(
-    selection: ServiceSelection, timeout: int | None, frozen_compose: str
-) -> None:
-    result = run_compose(
-        [
-            "docker",
-            "compose",
-            "--file",
-            "-",
-            "run",
-            "--rm",
-            "--no-deps",
-            selection.service,
-            *NATIVE_CHECKS[selection.product],
-        ],
-        timeout=timeout,
-        capture_output=False,
-        input_text=frozen_compose,
+def bounded_stderr(sink: BinaryIO) -> str:
+    """The tail of a child's stderr, bounded so a chatty child cannot exhaust memory.
+
+    The child writes to a temporary file and the preflight holds only this tail.
+    The text classifies the failure and is never printed, so preflight failures
+    stay free of Compose output and configured values.
+    """
+    end = sink.seek(0, io.SEEK_END)
+    sink.seek(max(0, end - MAXIMUM_NATIVE_CHECK_STDERR_BYTES))
+    return sink.read(MAXIMUM_NATIVE_CHECK_STDERR_BYTES).decode(
+        "utf-8", errors="replace"
     )
-    if result.returncode != 0:
-        raise PreflightError(
-            f"{selection.product} service {selection.service} failed its native runtime check"
+
+
+def rejects_audit_containment_flag(diagnostic: str) -> bool:
+    lowered = diagnostic.lower()
+    return AUDIT_CONTAINMENT_FLAG in lowered and any(
+        marker in lowered for marker in UNKNOWN_ARGUMENT_MARKERS
+    )
+
+
+def native_check(
+    selection: ServiceSelection, timeout: int, frozen_compose: str
+) -> None:
+    with tempfile.TemporaryFile() as sink:
+        result = run_compose(
+            [
+                "docker",
+                "compose",
+                "--file",
+                "-",
+                "run",
+                "--rm",
+                "--no-deps",
+                selection.service,
+                *NATIVE_CHECKS[selection.product],
+            ],
+            timeout=timeout,
+            capture_output=False,
+            stderr_sink=sink,
+            input_text=frozen_compose,
+            timeout_message=(
+                f"{selection.product} service {selection.service} exceeded the "
+                "native runtime check deadline"
+            ),
         )
+        if result.returncode == 0:
+            return
+        captured = bounded_stderr(sink)
+    # The containment assertion is not optional, so an image whose check command
+    # cannot make it fails closed. Naming that image is the one distinction the
+    # generic failure cannot express, and it costs no disclosure: the captured
+    # stderr only classifies the failure.
+    if rejects_audit_containment_flag(captured):
+        raise PreflightError(
+            f"{selection.product} service {selection.service} runs an image whose "
+            f"check command does not support {AUDIT_CONTAINMENT_FLAG}. The preflight "
+            "requires an image whose check command supports it, because the "
+            "persistent audit root assertion is part of every native check"
+        )
+    raise PreflightError(
+        f"{selection.product} service {selection.service} failed its native runtime check"
+    )
 
 
 def native_check_plan(
@@ -558,7 +632,10 @@ def start_dependency(
 ) -> None:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise PreflightError("a declared dependency service did not become ready")
+        raise PreflightError(
+            f"dependency service {selection.service} did not become ready"
+        )
+    not_started = f"dependency service {selection.service} could not be started"
     result = run_compose(
         [
             "docker",
@@ -573,9 +650,10 @@ def start_dependency(
         timeout=max(1, math.ceil(remaining)),
         capture_output=False,
         input_text=frozen_compose,
+        timeout_message=not_started,
     )
     if result.returncode != 0:
-        raise PreflightError("a declared dependency service could not be started")
+        raise PreflightError(not_started)
 
 
 def wait_for_dependency(
@@ -584,10 +662,11 @@ def wait_for_dependency(
     healthcheck = DEPENDENCY_HEALTHCHECKS.get(selection.product)
     if healthcheck is None:
         raise PreflightError("only Mint can be started as a preflight dependency")
+    not_ready = f"dependency service {selection.service} did not become ready"
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise PreflightError("a declared dependency service did not become ready")
+            raise PreflightError(not_ready)
         result = run_compose(
             [
                 "docker",
@@ -608,7 +687,7 @@ def wait_for_dependency(
         if result.returncode == 0 and remaining > 0:
             return
         if remaining <= 0:
-            raise PreflightError("a declared dependency service did not become ready")
+            raise PreflightError(not_ready)
         time.sleep(min(1.0, remaining))
 
 
@@ -638,8 +717,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--native-check-timeout-seconds",
-        type=positive_integer,
-        help="optional positive deadline for each native check; unbounded by default",
+        type=lambda raw: bounded_seconds(
+            raw,
+            minimum=MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS,
+            maximum=MAXIMUM_NATIVE_CHECK_TIMEOUT_SECONDS,
+        ),
+        default=DEFAULT_NATIVE_CHECK_TIMEOUT_SECONDS,
+        help=(
+            "bounded deadline for each native check; defaults to "
+            f"{DEFAULT_NATIVE_CHECK_TIMEOUT_SECONDS} seconds"
+        ),
     )
     parser.add_argument(
         "--dependency-timeout-seconds",
@@ -671,13 +758,36 @@ def bounded_seconds(raw: str, *, minimum: int, maximum: int) -> int:
     return value
 
 
+def report_started_dependencies(
+    started: Sequence[str], prefix: Sequence[str], stream: TextIO
+) -> None:
+    """Name the services the preflight started and the command that stops them.
+
+    The preflight renders the deployment once and runs every later command
+    against that frozen configuration on stdin, so the recovery command has to
+    repeat the operator's own Compose invocation instead. Anything else targets
+    a different project and leaves the started services running.
+    """
+    if not started:
+        return
+    names = " ".join(started)
+    recovery = shlex.join([*prefix, "stop", *started])
+    print(
+        "dependency services started by the preflight remain running under the "
+        f"operator's Compose lifecycle: {names}. Stop them with the same "
+        f"Compose files: {recovery}",
+        file=stream,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    prefix = compose_prefix(args)
+    started: list[str] = []
     try:
         selections = [parse_service(raw) for raw in args.service]
         if len(selections) != len({item.service for item in selections}):
             raise PreflightError("a Compose service was selected more than once")
-        prefix = compose_prefix(args)
         document = render_compose(prefix)
         frozen_compose = json.dumps(document, separators=(",", ":"))
         for selection in selections:
@@ -691,6 +801,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if selection.service in dependency_services:
                 deadline = time.monotonic() + args.dependency_timeout_seconds
+                started.append(selection.service)
                 start_dependency(
                     selection,
                     deadline,
@@ -703,9 +814,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
     except PreflightError as error:
         print(f"runtime preflight failed: {error}", file=sys.stderr)
+        report_started_dependencies(started, prefix, sys.stderr)
         return 1
 
     print(f"runtime preflight passed for {len(selections)} service(s)")
+    report_started_dependencies(started, prefix, sys.stdout)
     return 0
 
 

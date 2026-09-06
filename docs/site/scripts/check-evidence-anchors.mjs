@@ -75,6 +75,40 @@ const SKIPPED_DIRECTORIES = new Set(['target', 'node_modules', '.git', 'dist', '
 // Where a continuation with no full path before it is read from: the site the anchor
 // itself lives in, whose own src/ tree the docs pages cite.
 const DOCS_SITE_ROOT = 'docs/site';
+// The narrative content the site itself holds. A specification that declares
+// `evidence: verified` claims its requirements describe shipped behavior (spec/RS-DOC
+// REQ-DOC-014), so at least one of its anchors has to reach an artifact outside this
+// tree: source, a test, a fixture, a generated artifact, or a released contract. A page
+// cited beside that artifact corroborates the claim; cited alone it proves nothing about
+// the code, because the page it cites is evidence of nothing but its own author.
+const NARRATIVE_CONTENT = 'docs/site/src/content/';
+// What such an anchor has to reach: an inspectable artifact of the stack itself, which
+// REQ-DOC-014 spells out as source code, a test, a fixture, a generated artifact, or a
+// released machine-readable contract. The kind is read from the file's extension. A prose
+// file outside the site, a README or a changelog, documents the stack the way a page does
+// and is evidence of its author only; a directory names no artifact, because a citation of
+// `crates/` has pointed at everything and shown nothing; and a file with no extension is
+// read as a script when a symbol is looked for in it, but its kind cannot be told from its
+// name, so it does not stand as the artifact on its own. None of the three counts.
+const ARTIFACT_EXTENSIONS = new Set([
+  'rs',
+  'mjs',
+  'js',
+  'ts',
+  'py',
+  'sh',
+  'rhai',
+  'sql',
+  'toml',
+  'yaml',
+  'yml',
+  'json',
+  'jsonld',
+  'snap',
+  'lock',
+  'sqlite',
+  'css',
+]);
 
 const ANCHOR_PATTERN = /\{\/\*\s*Evidence:([\s\S]*?)\*\/\}/g;
 // A bare sibling that names a Rust source file is one the repository owns: an adopter of
@@ -465,6 +499,11 @@ function filesUnder(directory) {
   return files;
 }
 
+function isArtifact(path) {
+  const name = path.split('/').at(-1);
+  return name.includes('.') && ARTIFACT_EXTENSIONS.has(name.split('.').at(-1));
+}
+
 function isTextFile(path) {
   // A name with no extension at all is a script the repository keeps, `registry-release` or
   // `justfile`, and reading it is how a symbol an anchor cites from one is found. The
@@ -480,6 +519,73 @@ function wholeWordPattern(symbol) {
 
 function pluralLines(count) {
   return count === 1 ? '1 line' : `${count} lines`;
+}
+
+// The page's own declaration of what it is: the `doc_type` and the `evidence` axis
+// (spec/RS-DOC Section 4). Both are plain top-level scalars, and check-doc-frontmatter.mjs
+// owns their vocabulary and the frontmatter's YAML shape, so the two lines are read where
+// they sit rather than through a parser this check would have to install: the
+// `evidence-anchors` CI job runs this script against a bare checkout with no dependencies
+// fetched. The reader strips a leading UTF-8 BOM, normalizes CRLF to LF, and accepts one
+// word, bare or single- or double-quoted, with an optional trailing `# comment`. It is not
+// a YAML grammar, so a value it cannot read (a folded or literal block, a flow sequence, a
+// value continued on the next line) is reported as unreadable rather than taken as absent:
+// a specification cannot step around REQ-DOC-014 by spelling `verified` another way. The
+// same holds for a root key written in a form the reader does not take (the root mapping
+// indented as a whole, or a space before the key's colon); a key indented deeper than the
+// root mapping's first key is nested under another key and is not the field.
+const PLAIN_WORD = /^(?:(['"])([A-Za-z0-9_-]+)\1|([A-Za-z0-9_-]+))(?:[ \t]+#.*|[ \t]*)$/;
+
+// One top-level frontmatter field: `{ present: false }`, `{ present: true, value }` for a
+// word this check reads, or `{ present: true, value: null }` for a form it does not.
+function readFrontmatterWord(block, key) {
+  const line = new RegExp(`^${key}:(.*)$`, 'm').exec(block);
+  if (line) {
+    const match = PLAIN_WORD.exec(line[1].trimStart());
+    return { present: true, value: match ? (match[2] ?? match[3]) : null };
+  }
+  // YAML takes the root mapping's indentation from its first key.
+  const indent = /^([ \t]*)[^ \t#\n]/m.exec(block)?.[1] ?? '';
+  if (new RegExp(`^${indent}${key}[ \\t]*:`, 'm').test(block)) {
+    return { present: true, value: null };
+  }
+  return { present: false };
+}
+
+// Where the page stands against REQ-DOC-014: 'verified' for a specification that declares
+// verified evidence, 'unreadable' when a field the rule depends on is written in a form this
+// check does not read, and null for every other page.
+function evidenceAxis(text) {
+  if (text.charCodeAt(0) === 0xfeff) {
+    text = text.slice(1);
+  }
+  text = text.replaceAll('\r\n', '\n');
+  if (!text.startsWith('---\n')) {
+    return null;
+  }
+  const end = text.indexOf('\n---\n', 4);
+  if (end === -1) {
+    return null;
+  }
+  const block = text.slice(4, end);
+  const docType = readFrontmatterWord(block, 'doc_type');
+  if (!docType.present) {
+    return null;
+  }
+  if (docType.value === null) {
+    return 'unreadable';
+  }
+  if (docType.value !== 'specification') {
+    return null;
+  }
+  const evidence = readFrontmatterWord(block, 'evidence');
+  if (!evidence.present) {
+    return null;
+  }
+  if (evidence.value === null) {
+    return 'unreadable';
+  }
+  return evidence.value === 'verified' ? 'verified' : null;
 }
 
 function mdxPages(directory) {
@@ -540,7 +646,18 @@ export function checkEvidenceAnchors({
 
   for (const page of mdxPages(contentRoot)) {
     const location = relative(contentRoot, page).replaceAll('\\', '/');
-    for (const anchor of extractAnchors(readFileSync(page, 'utf8'))) {
+    const text = readFileSync(page, 'utf8');
+    const axis = evidenceAxis(text);
+    if (axis === 'unreadable') {
+      errors.push(
+        `${location} writes doc_type or evidence in a form this check does not read; write ` +
+          'each as one plain word at the start of its own line so RS-DOC REQ-DOC-014 can be applied',
+      );
+    }
+    const verifiedSpecification = axis === 'verified';
+    // Whether an anchor on this page reached past the site's own content.
+    let citesArtifact = false;
+    for (const anchor of extractAnchors(text)) {
       anchors += 1;
       const { citations, symbols: cited } = parseAnchor(anchor.body);
       const at = `${location}:${anchor.line}`;
@@ -640,6 +757,13 @@ export function checkEvidenceAnchors({
           errors.push(`${at} cites ${candidates[0]}${range}, which does not exist`);
           continue;
         }
+        if (
+          !resolved.startsWith(NARRATIVE_CONTENT) &&
+          entryKind(resolve(repoRoot, resolved)) === 'file' &&
+          isArtifact(resolved)
+        ) {
+          citesArtifact = true;
+        }
         // A sibling names no directory to read the next citation against, so it leaves the
         // anchor where it is, the same rule the parse applies to the candidate chain.
         if (citation.form !== 'sibling') {
@@ -703,6 +827,15 @@ export function checkEvidenceAnchors({
           errors.push(`${at} cites ${symbol}, which no cited path contains`);
         }
       }
+    }
+
+    if (verifiedSpecification && !citesArtifact) {
+      errors.push(
+        `${location} declares evidence: verified but cites no source, test, fixture, generated ` +
+          `artifact, or released contract outside ${NARRATIVE_CONTENT}, and a directory or a prose ` +
+          'file there is not one; RS-DOC REQ-DOC-014 refuses a specification that proves itself ' +
+          'with other documents',
+      );
     }
   }
 

@@ -109,9 +109,10 @@ jobs:
         run: products/identifiers/scripts/generate.py --check-references
 
       - name: Test CI classifier
-        run: |
-          python3 .github/scripts/test_ci_changes.py
-          python3 .github/scripts/test_nightly_rust_coverage.py
+        run: python3 .github/scripts/test_ci_changes.py
+
+      - name: Test nightly coverage planning
+        run: python3 .github/scripts/test_nightly_rust_coverage.py
 
       - name: Install pinned actionlint
         shell: bash
@@ -552,7 +553,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relay_v2_contracts == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -575,6 +576,9 @@ jobs:
 
       - name: Relay V2 coequal HTTP journeys
         run: products/relay-v2/scripts/test-http.sh
+
+      - name: Relay V2 tutorial reader gate
+        run: docs/site/scripts/check-relay-tutorial.sh
 
   relay-client-contracts:
     name: Relay client contract and source neutrality
@@ -607,7 +611,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.breg_contracts == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

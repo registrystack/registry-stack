@@ -2,7 +2,8 @@
 //! Deterministic package signing-input and publication orchestration.
 
 use std::collections::BTreeMap;
-use std::fs::{self, File};
+use std::ffi::OsStr;
+use std::fs::Metadata;
 use std::io::Read;
 use std::path::Path;
 
@@ -15,6 +16,8 @@ use registry_breg::package::{
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
 
 const SIGNING_INPUT_PATH: &str = "signing-input.json";
 const TEST_RECEIPT_PATH: &str = "schema-test-receipt.json";
@@ -297,7 +300,11 @@ fn ensure_reviewer_evidence(
     expected_test_receipt: &[u8],
 ) -> Result<(), PackageLifecycleError> {
     if build_directory.exists() {
-        super::validate_directory_for(
+        // The held descriptor is what the evidence reads and the published
+        // package check below use, so replacing a component of the build path
+        // afterwards can neither substitute the evidence compared here nor hide
+        // an already published package.
+        let directory = super::validate_directory_for(
             build_directory,
             "package.output.invalid",
             "output",
@@ -305,10 +312,14 @@ fn ensure_reviewer_evidence(
             "the package build path must be a directory and must not be a symbolic link",
         )
         .map_err(|_| PackageLifecycleError::Output)?;
-        let existing_signing_input =
-            read_bounded_regular(&build_directory.join(SIGNING_INPUT_PATH))?;
-        let existing_test_receipt = read_bounded_regular_with_bound(
-            &build_directory.join(TEST_RECEIPT_PATH),
+        let existing_signing_input = read_bounded_entry(
+            &directory,
+            OsStr::new(SIGNING_INPUT_PATH),
+            MAX_SIGNATURE_DOCUMENT_BYTES,
+        )?;
+        let existing_test_receipt = read_bounded_entry(
+            &directory,
+            OsStr::new(TEST_RECEIPT_PATH),
             MAX_TEST_RECEIPT_BYTES,
         )
         .map_err(|_| PackageLifecycleError::TestReceiptEvidence {
@@ -324,7 +335,9 @@ fn ensure_reviewer_evidence(
             });
         }
         if existing_signing_input != expected_signing_input
-            || build_directory.join(PACKAGE_DIRECTORY).exists()
+            || directory
+                .entry_exists(OsStr::new(PACKAGE_DIRECTORY))
+                .map_err(|_| PackageLifecycleError::Output)?
         {
             return Err(PackageLifecycleError::Output);
         }
@@ -362,17 +375,53 @@ fn read_bounded_regular_with_bound(
     if path.as_os_str().is_empty() || super::has_parent_component(path) {
         return Err(PackageLifecycleError::Output);
     }
-    super::ensure_no_symlink_components(path, "package.input.invalid", "package")
+    let entry = SafeEntry::resolve(path).map_err(|_| PackageLifecycleError::Output)?;
+    read_bounded_entry(entry.parent(), entry.name(), bound)
+}
+
+/// Read a bounded regular file through a held directory descriptor, for callers
+/// that must read the tree they resolved rather than the pathname again.
+fn read_bounded_entry(
+    directory: &SafeDir,
+    name: &OsStr,
+    bound: u64,
+) -> Result<Vec<u8>, PackageLifecycleError> {
+    let stat = directory
+        .entry_stat(name)
         .map_err(|_| PackageLifecycleError::Output)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| PackageLifecycleError::Output)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() == 0
-        || metadata.len() > bound
-    {
+    if stat.is_symlink() || !stat.is_file() || stat.len() == 0 || stat.len() > bound {
         return Err(PackageLifecycleError::Output);
     }
-    fs::read(path).map_err(|_| PackageLifecycleError::Output)
+    // The descriptor is opened through the held directory with `O_NOFOLLOW`, so
+    // no ancestor and no symbolic link can redirect the open. The name is still
+    // resolved a second time here, so the identity check below is what rejects a
+    // name relinked between the stat above and this open.
+    let file = directory
+        .open_read(name)
+        .map_err(|_| PackageLifecycleError::Output)?;
+    let opened = file.metadata().map_err(|_| PackageLifecycleError::Output)?;
+    ensure_package_input_identity(stat, &opened)?;
+    let mut bytes = Vec::new();
+    file.take(bound.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| PackageLifecycleError::Output)?;
+    if bytes.is_empty() || bytes.len() as u64 > bound {
+        return Err(PackageLifecycleError::Output);
+    }
+    Ok(bytes)
+}
+
+/// Refuse a bounded package input whose opened descriptor is not the entry that
+/// was stat'ed. See `super::ensure_source_entry_identity` for the window a
+/// stat-then-open pair leaves open.
+fn ensure_package_input_identity(
+    stat: EntryStat,
+    opened: &Metadata,
+) -> Result<(), PackageLifecycleError> {
+    if stat.is_same_file_as(opened) {
+        return Ok(());
+    }
+    Err(PackageLifecycleError::Output)
 }
 
 fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
@@ -381,39 +430,41 @@ fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
             "the schema-test receipt path must be absolute and must not contain a parent component",
         ));
     }
-    super::ensure_no_symlink_components(path, "package.test_receipt.refused", "testReceipt")
-        .map_err(|_| {
+    let entry = SafeEntry::resolve(path).map_err(|error| {
+        if error.is_not_found() {
+            PackageLifecycleError::TestReceiptMissing
+        } else {
             receipt_refused("the schema-test receipt path must not traverse a symbolic link")
-        })?;
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+        }
+    })?;
+    let stat = match entry.stat() {
+        Ok(stat) => stat,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(PackageLifecycleError::TestReceiptMissing)
         }
         Err(_) => return Err(receipt_refused("the schema-test receipt is not readable")),
     };
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() == 0
-        || metadata.len() > MAX_TEST_RECEIPT_BYTES
+    if stat.is_symlink()
+        || !stat.is_file()
+        || stat.len() == 0
+        || stat.len() > MAX_TEST_RECEIPT_BYTES
     {
         return Err(receipt_refused(&format!(
             "the schema-test receipt must be a regular file of 1 to {MAX_TEST_RECEIPT_BYTES} bytes"
         )));
     }
-    let file =
-        File::open(path).map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
+    // The descriptor comes from the resolved parent with `O_NOFOLLOW`, so no
+    // ancestor and no symbolic link can redirect the open. The final name is
+    // still resolved a second time here, so the identity check below is what
+    // rejects a name relinked between the stat above and this open.
+    let file = entry
+        .open_read()
+        .map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
     let opened = file
         .metadata()
         .map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
-    let after = fs::symlink_metadata(path)
-        .map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
-    if after.file_type().is_symlink()
-        || !opened.is_file()
-        || !super::same_file_metadata(&metadata, &opened)
-        || !super::same_file_metadata(&opened, &after)
-        || opened.len() > MAX_TEST_RECEIPT_BYTES
-    {
+    ensure_receipt_identity(stat, &opened)?;
+    if !opened.is_file() || opened.len() > MAX_TEST_RECEIPT_BYTES {
         return Err(receipt_refused(
             "the schema-test receipt changed while it was being read",
         ));
@@ -430,6 +481,21 @@ fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
         ));
     }
     Ok(bytes)
+}
+
+/// Refuse a schema-test receipt whose opened descriptor is not the entry that
+/// was stat'ed. See `super::ensure_source_entry_identity` for the window a
+/// stat-then-open pair leaves open.
+fn ensure_receipt_identity(
+    stat: EntryStat,
+    opened: &Metadata,
+) -> Result<(), PackageLifecycleError> {
+    if stat.is_same_file_as(opened) {
+        return Ok(());
+    }
+    Err(receipt_refused(
+        "the schema-test receipt changed while it was being read",
+    ))
 }
 
 fn receipt_refused(message: &str) -> PackageLifecycleError {
@@ -461,6 +527,160 @@ mod tests {
         ] {
             let parsed = serde_json::from_slice::<SignatureDocument>(refused);
             assert!(parsed.is_err() || parsed.is_ok_and(|document| document.signatures.is_empty()));
+        }
+    }
+
+    /// Deterministic ancestor-swap regression for the schema-test receipt input
+    /// this module owns.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod ancestor_swap {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn a_reviewer_evidence_check_after_an_ancestor_swap_still_sees_the_named_package() {
+            let tree = race_tree();
+            let build = tree.named("build");
+            std::fs::create_dir_all(build.join(PACKAGE_DIRECTORY)).unwrap();
+            std::fs::write(build.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
+            std::fs::write(build.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+            // The tree the operator never named holds the same evidence without
+            // a published package directory, which is what a check made by
+            // pathname would read instead.
+            let decoy = tree.outside("build");
+            std::fs::create_dir_all(&decoy).unwrap();
+            std::fs::write(decoy.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
+            std::fs::write(decoy.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+
+            // Swap once the build directory is resolved, so only the held
+            // descriptor still names the real tree.
+            let guard = tree.arm();
+            let refused = ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+                .expect_err("an already published package directory is refused");
+            drop(guard);
+
+            assert!(matches!(refused, PackageLifecycleError::Output));
+        }
+
+        #[test]
+        fn reviewer_evidence_after_an_ancestor_swap_compares_the_named_build_directory() {
+            let tree = race_tree();
+            let build = tree.named("build");
+            std::fs::create_dir_all(&build).unwrap();
+            std::fs::write(build.join(SIGNING_INPUT_PATH), b"other signing input").unwrap();
+            std::fs::write(build.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+            // The tree the operator never named holds evidence that matches
+            // this run, which is what a comparison made by pathname would
+            // accept instead of the mismatched evidence really on disk. It is
+            // moved into place as a real directory, so resolving the pathname
+            // again would meet no symbolic link to refuse.
+            let decoy = tree.outside("build");
+            std::fs::create_dir_all(&decoy).unwrap();
+            std::fs::write(decoy.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
+            std::fs::write(decoy.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+
+            // Swap once the build directory is resolved and before its evidence
+            // is read, which is where a racing process would land.
+            let guard = tree.arm_directory_swap();
+            let refused = ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+                .expect_err("evidence from a directory the operator never named is refused");
+            drop(guard);
+
+            assert!(matches!(refused, PackageLifecycleError::Output));
+        }
+
+        #[test]
+        fn a_receipt_read_after_an_ancestor_swap_reads_only_the_named_file() {
+            let tree = race_tree();
+            let named = tree.named("schema-test-receipt.json");
+            std::fs::write(&named, b"genuine").unwrap();
+            std::fs::write(tree.outside("schema-test-receipt.json"), b"decoy").unwrap();
+
+            let guard = tree.arm();
+            let bytes = read_test_receipt(&named).unwrap();
+            drop(guard);
+
+            assert_eq!(bytes, b"genuine");
+            // The window is real: the same pathname now reaches the tree the
+            // operator never named.
+            assert_eq!(std::fs::read(&named).unwrap(), b"decoy");
+        }
+    }
+
+    /// Coverage for the identity checks the package inputs apply to the
+    /// descriptors they open. A relink landing between the stat and the open
+    /// cannot be scheduled from a test, so each check is exercised through its
+    /// own seam with the two outcomes a reader can meet.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod relinked_entry {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        /// The stat of the file the operator named, paired with the metadata of
+        /// the descriptor a reader holds once that name reaches another regular
+        /// file.
+        fn stat_and_relinked_metadata() -> (EntryStat, Metadata) {
+            let tree = race_tree();
+            let named = tree.named("input.json");
+            std::fs::write(&named, b"genuine").unwrap();
+            let relinked = tree.outside("input.json");
+            std::fs::write(&relinked, b"decoy").unwrap();
+            let stat = SafeEntry::resolve(&named).unwrap().stat().unwrap();
+            let opened = std::fs::File::open(&relinked).unwrap().metadata().unwrap();
+            (stat, opened)
+        }
+
+        /// The stat and the opened metadata of one file, which is what a read
+        /// of an untouched input holds.
+        fn stat_and_own_metadata() -> (EntryStat, Metadata) {
+            let tree = race_tree();
+            let named = tree.named("input.json");
+            std::fs::write(&named, b"genuine").unwrap();
+            let entry = SafeEntry::resolve(&named).unwrap();
+            let stat = entry.stat().unwrap();
+            let opened = entry.open_read().unwrap().metadata().unwrap();
+            (stat, opened)
+        }
+
+        #[test]
+        fn a_package_input_opened_as_another_file_is_refused() {
+            let (stat, opened) = stat_and_relinked_metadata();
+
+            let refused = ensure_package_input_identity(stat, &opened)
+                .expect_err("a descriptor that is not the stat'ed entry is refused");
+
+            assert!(matches!(refused, PackageLifecycleError::Output));
+        }
+
+        #[test]
+        fn a_package_input_opened_as_the_stat_entry_is_read() {
+            let (stat, opened) = stat_and_own_metadata();
+
+            ensure_package_input_identity(stat, &opened)
+                .expect("the entry that was stat'ed is read");
+        }
+
+        #[test]
+        fn a_schema_test_receipt_opened_as_another_file_is_refused() {
+            let (stat, opened) = stat_and_relinked_metadata();
+
+            let refused = ensure_receipt_identity(stat, &opened)
+                .expect_err("a descriptor that is not the stat'ed entry is refused");
+
+            match refused {
+                PackageLifecycleError::TestReceiptRefused { message } => assert_eq!(
+                    message,
+                    "the schema-test receipt changed while it was being read"
+                ),
+                other => panic!("unexpected refusal: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_schema_test_receipt_opened_as_the_stat_entry_is_read() {
+            let (stat, opened) = stat_and_own_metadata();
+
+            ensure_receipt_identity(stat, &opened).expect("the entry that was stat'ed is read");
         }
     }
 }

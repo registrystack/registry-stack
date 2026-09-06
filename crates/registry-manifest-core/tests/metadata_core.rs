@@ -4228,6 +4228,260 @@ fn ogc_records_items_are_link_free() {
     assert!(items["features"][0].get("links").is_none());
 }
 
+// The generated property identity of a field is `fields[].concepts[0]`, and the
+// deterministic manifest URI when the list is empty. These tests pin that rule
+// for zero, one, and many concepts so a renderer change cannot move it quietly.
+#[test]
+fn field_concept_count_selects_the_generated_property_identity() {
+    let compiled = compile_manifest(&aligned_person_concepts_fixture()).expect("compile");
+    let shape = render_entity_shacl(&compiled, "person-register", "person").expect("shape");
+
+    assert_eq!(
+        field_shape_path(&shape, "person_id"),
+        json!(
+            "https://person-register.example.gov/metadata/datasets/person-register/entities/person/fields/person_id"
+        ),
+        "a field with no concept must fall back to its deterministic manifest URI"
+    );
+    assert_eq!(
+        field_shape_path(&shape, "given_name"),
+        json!("https://publicschema.org/given_name"),
+        "a field with one concept must use that concept as sh:path"
+    );
+    assert_eq!(
+        field_shape_path(&shape, "birth_date"),
+        json!("https://publicschema.org/date_of_birth"),
+        "a field with several concepts must use the first entry as sh:path"
+    );
+
+    let schema =
+        render_entity_schema_draft_2020_12(&compiled, "person-register", "person").expect("schema");
+    assert!(
+        schema["properties"]["person_id"]
+            .get("x-concept-uri")
+            .is_none(),
+        "a field with no concept must not carry x-concept-uri"
+    );
+    assert_eq!(
+        schema["properties"]["given_name"]["x-concept-uri"],
+        json!("https://publicschema.org/given_name")
+    );
+    assert_eq!(
+        schema["properties"]["birth_date"]["x-concept-uri"],
+        json!("https://publicschema.org/date_of_birth"),
+        "the entity JSON Schema must expose the first concept, not the whole list"
+    );
+
+    let catalog = render_catalog(&compiled);
+    assert_eq!(
+        catalog_field_concepts(&catalog, "person_id"),
+        json!([]),
+        "catalog JSON must report an empty concept list, not a generated fallback"
+    );
+    assert_eq!(
+        catalog_field_concepts(&catalog, "given_name"),
+        json!(["https://publicschema.org/given_name"])
+    );
+    assert_eq!(
+        catalog_field_concepts(&catalog, "birth_date"),
+        json!([
+            "https://publicschema.org/date_of_birth",
+            "http://data.europa.eu/m8g/birthDate"
+        ]),
+        "catalog JSON must preserve every concept in author order"
+    );
+}
+
+#[test]
+fn concept_order_is_significant_and_carries_no_mapping_claim() {
+    let publicschema_first = compile_manifest(&aligned_person_concepts_fixture()).expect("compile");
+    let semic_first_source = include_str!(
+        "../../../products/manifest/fixtures/semantic-concepts/aligned-person-concepts.metadata.yaml"
+    )
+    .replace(
+        "              - https://publicschema.org/date_of_birth\n              - http://data.europa.eu/m8g/birthDate\n",
+        "              - http://data.europa.eu/m8g/birthDate\n              - https://publicschema.org/date_of_birth\n",
+    );
+    let semic_first: MetadataManifest =
+        serde_yaml_ng::from_str(&semic_first_source).expect("reordered fixture parses");
+    let semic_first = compile_manifest(&semic_first).expect("compile");
+
+    assert_eq!(
+        field_shape_path(
+            &render_entity_shacl(&semic_first, "person-register", "person").expect("shape"),
+            "birth_date"
+        ),
+        json!("http://data.europa.eu/m8g/birthDate"),
+        "reordering fields[].concepts must move the generated property identity"
+    );
+    assert_ne!(
+        field_shape_path(
+            &render_entity_shacl(&publicschema_first, "person-register", "person").expect("shape"),
+            "birth_date"
+        ),
+        field_shape_path(
+            &render_entity_shacl(&semic_first, "person-register", "person").expect("shape"),
+            "birth_date"
+        ),
+        "concept order must be observable in generated output"
+    );
+    assert_eq!(
+        catalog_field_concepts(&render_catalog(&semic_first), "birth_date"),
+        json!([
+            "http://data.europa.eu/m8g/birthDate",
+            "https://publicschema.org/date_of_birth"
+        ]),
+        "catalog JSON must publish the author order it was given"
+    );
+
+    // Listing two vocabulary terms on one field records two references. It is
+    // not a mapping assertion, so no renderer may emit an equivalence predicate.
+    for (label, document) in [
+        ("SHACL", render_shacl(&publicschema_first)),
+        ("catalog", render_catalog(&publicschema_first)),
+        ("DCAT", render_base_dcat(&publicschema_first)),
+        ("BRegDCAT-AP", render_breg_dcat_ap(&publicschema_first)),
+        (
+            "entity JSON Schema",
+            render_entity_schema_draft_2020_12(&publicschema_first, "person-register", "person")
+                .expect("schema"),
+        ),
+    ] {
+        let rendered = serde_json::to_string(&document).expect("render serializes");
+        for predicate in [
+            "skos:exactMatch",
+            "skos:closeMatch",
+            "skos:relatedMatch",
+            "skos:broadMatch",
+            "skos:narrowMatch",
+            "owl:sameAs",
+            "owl:equivalentProperty",
+        ] {
+            assert!(
+                !rendered.contains(predicate),
+                "{label} must not assert {predicate} between field concepts"
+            );
+        }
+    }
+}
+
+#[test]
+fn semic_and_publicschema_concepts_render_deterministically() {
+    let first = compile_manifest(&aligned_person_concepts_fixture()).expect("compile");
+    let second = compile_manifest(&aligned_person_concepts_fixture()).expect("recompile");
+
+    for (label, left, right) in [
+        ("SHACL", render_shacl(&first), render_shacl(&second)),
+        ("catalog", render_catalog(&first), render_catalog(&second)),
+        (
+            "entity JSON Schema",
+            render_entity_schema_draft_2020_12(&first, "person-register", "person")
+                .expect("schema"),
+            render_entity_schema_draft_2020_12(&second, "person-register", "person")
+                .expect("schema"),
+        ),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&left).expect("serializes"),
+            serde_json::to_string(&right).expect("serializes"),
+            "{label} must render byte-identically for the same manifest"
+        );
+    }
+
+    let shape = render_entity_shacl(&first, "person-register", "person").expect("shape");
+    assert_eq!(
+        shape["shape"]["sh:targetClass"],
+        json!("https://publicschema.org/Person")
+    );
+    assert_eq!(
+        field_shape(&shape, "birth_date"),
+        json!({
+            "@type": "sh:PropertyShape",
+            "sh:datatype": "xsd:date",
+            "sh:maxCount": 1,
+            "sh:minCount": 0,
+            "sh:name": "birth_date",
+            "sh:nodeKind": "sh:Literal",
+            "sh:path": "https://publicschema.org/date_of_birth",
+        }),
+        "the SEMIC and PublicSchema field must render one property shape with one sh:path"
+    );
+}
+
+#[test]
+fn vocabulary_prefix_expansion_is_string_concatenation_only() {
+    // The prefix names a namespace that does not resolve. Expansion must still
+    // succeed, which proves nothing is fetched or reasoned over at compile time.
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: prefix-expansion
+  base_url: https://registry.example.test
+  title: Prefix Expansion
+  publisher:
+    name: Publisher
+vocabularies:
+  unresolvable: https://vocabulary.invalid/terms/
+datasets:
+  - id: dataset
+    title: Dataset
+    entities:
+      - name: entity
+        identifiers:
+          - name: entity_id
+            kind: local
+        fields:
+          - name: entity_id
+            type: string
+            required: true
+            concepts:
+              - unresolvable:Entity.identifier
+codelists: []
+"#,
+    )
+    .expect("manifest parses");
+
+    let compiled = compile_manifest(&manifest).expect("compile");
+    let shape = render_entity_shacl(&compiled, "dataset", "entity").expect("shape");
+    assert_eq!(
+        field_shape_path(&shape, "entity_id"),
+        json!("https://vocabulary.invalid/terms/Entity.identifier"),
+        "prefix expansion must concatenate the declared namespace with the suffix"
+    );
+}
+
+fn aligned_person_concepts_fixture() -> MetadataManifest {
+    serde_yaml_ng::from_str(include_str!(
+        "../../../products/manifest/fixtures/semantic-concepts/aligned-person-concepts.metadata.yaml"
+    ))
+    .expect("aligned person concepts fixture parses")
+}
+
+fn field_shape(entity_shape: &Value, field_name: &str) -> Value {
+    entity_shape["shape"]["sh:property"]
+        .as_array()
+        .expect("property shapes")
+        .iter()
+        .find(|property| property["sh:name"] == field_name)
+        .unwrap_or_else(|| panic!("property shape for {field_name}"))
+        .clone()
+}
+
+fn field_shape_path(entity_shape: &Value, field_name: &str) -> Value {
+    field_shape(entity_shape, field_name)["sh:path"].clone()
+}
+
+fn catalog_field_concepts(catalog: &Value, field_name: &str) -> Value {
+    catalog["datasets"][0]["entities"][0]["fields"]
+        .as_array()
+        .expect("catalog fields")
+        .iter()
+        .find(|field| field["name"] == field_name)
+        .unwrap_or_else(|| panic!("catalog field {field_name}"))["concepts"]
+        .clone()
+}
+
 const EXAMPLE_CIVIL_REGISTRATION_FIXTURE: &str = include_str!(
     "../../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml"
 );

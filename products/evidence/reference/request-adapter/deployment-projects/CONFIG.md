@@ -928,11 +928,16 @@ Startup opens one connection for each `concurrencyLimit` permit, reads the
 metadata, and runs the statement against the real extract. A statement whose
 result columns disagree with `columns`, a parameter no binding supplies, and a
 binding the statement never names all fail before the listener binds.
-`evidence bundle-check` runs a weaker check without the extract: it settles that
-the artifact holds exactly one statement, that the statement parses, and that
-the authorizer accepts it. It cannot settle columns, parameters, metadata, or
-age, because only the extract can. That check never reports a false failure,
-only an incomplete pass.
+`evidencectl build` reaches this same statement check earlier, without a
+mounted extract, through `evidence bundle-check`: an internal Evidencectl seam
+hidden from `evidence --help`, not a command an adopter runs directly. It
+settles that the artifact holds exactly one statement, that the statement
+parses, and that the authorizer accepts it. It cannot settle columns,
+parameters, metadata, or age, because only the extract can. That check never
+reports a false failure, only an incomplete pass. `evidencectl fixtures run`
+reaches `bundle-check` the same way, but only for an editable project; run
+against a deployment project like this one, it instead runs `evidence check`
+with the runtime file's real bindings, which is the check described above.
 
 The internal `evidence bundle-check --bundle <directory> --json` tooling seam
 returns `bundleRevision` and a `requirements` array of `id` and
@@ -1216,10 +1221,11 @@ sourceExtracts:
 | `listener.maximumConcurrentRequests` | yes | 1 through 4,096. |
 | `listener.requestTimeoutMilliseconds` | yes | 1 through 30,000 milliseconds for admission, concurrency queueing, and request-body collection. Once protected evaluation starts, this timer does not cancel it; source and OIDC boundaries have their own bounds, and the runtime preserves fail-closed audit and release ordering. |
 | `listener.shutdownGraceMilliseconds` | yes | 1 through 120,000 milliseconds. |
+| `metricsListener` | no | Optional operator-only telemetry listener serving `GET /metrics`, a binding separate from the evidence listener above and absent from the public evidence contract. Absence is the default and serves no metrics endpoint. `bindHost` accepts only loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6, and `bindHost`/`port` together must not repeat the evidence listener's exact binding. |
 | `secretProviders.file.root` | yes | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, single-link files owned by the service identity with exact mode `0400` or `0600` are accepted. |
 | `signer` | yes | Closed runtime signer union. `production` and `evidence-grade` require a pinned Transit signer over a workload-local Unix socket. `local` requires `kind: local-jwk` with `privateKeyRef: secret:file/evidence-signing`. Startup validates provider controls and exact public-key agreement, then signs and verifies a challenge. |
 | `auditStorage.path` | yes | Absolute keyed-JSONL audit path on operator-owned durable storage. |
-| `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the closed bound fails audit writes and therefore fails closed. |
+| `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the bound seals the active segment under an ascending sequence number and opens a fresh empty segment at the configured path for subsequent writes; sealed segments are never deleted. A write or sync failure, not rotation itself, is what fails closed. |
 | `outboundTls.systemRoots` | yes | Literal `true`. |
 | `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids. It may be empty when no source names a private trust profile. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
@@ -1231,6 +1237,30 @@ sourceExtracts:
 absolute paths. The runtime rejects symlinks, insecure ownership/modes, missing
 required logical bindings, mutable files, and files outside the configured
 roots according to the operator contract.
+
+Every immutable deployment input this contract loads, `runtime.yaml` itself,
+the bundle directory and each artifact inside it, a named CA bundle file, and
+a bound extract, must carry no write permission for anyone. The secret root
+follows its own rule: it must carry no group or other permission at all
+(`0700` or tighter), and owner write is accepted, since the operator
+provisions and rotates the secret files inside it; those files keep their own
+exact `0400` or `0600` mode.
+`evidence check` refuses a non-conforming runtime file, bundle artifact, CA
+bundle file, or secret root before the listener binds. When the fault is
+bound to one artifact, the printed message names it, for example `evidence:
+deployment input is not immutable: artifact runtime.yaml: the runtime file is
+writable`, or, for a writable bound extract, the distinct `evidence:
+deployment artifact is invalid: artifact sourceExtracts/<profile>: the source
+extract the runtime file names is writable`. The CA bundle and secret root
+checks are not bound to an artifact, so their messages carry a bare cause
+instead, for example `evidence: deployment input is not immutable: the secret
+root directory the runtime file names is reachable by group or other`.
+Process startup (`evidence serve`) refuses the same non-conforming inputs
+before the listener binds but collapses every cause to `runtime bundle
+initialization failed`, naming neither the artifact nor the cause. Write
+`runtime.yaml`, make it non-writable (for example `chmod 400`), and run
+`evidence check` before `evidence serve` so a fault surfaces with its artifact
+and cause instead of only as `runtime bundle initialization failed`.
 
 A bundle source may name one `tlsTrustProfile`. The corresponding bounded PEM
 file is loaded and validated at startup. Hostname verification and source-origin

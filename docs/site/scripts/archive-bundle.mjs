@@ -19,6 +19,11 @@ export const ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v3';
 export const SINGLE_TREE_ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v2';
 export const LEGACY_ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v1';
 export const ARCHIVE_LOCK_SCHEMA = 'registry-docs.archive-lock.v1';
+// Error code for a bundle whose outer (tar.gz) digest does not match its
+// immutable lock entry, checked in inspectArchiveBundle before extraction.
+// Distinguishes that specific failure from a metadata or inner tree-digest
+// mismatch discovered later, which never carries this code.
+export const ARCHIVE_BUNDLE_DIGEST_MISMATCH = 'ARCHIVE_BUNDLE_DIGEST_MISMATCH';
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const archivePathPattern = /^\/v\/[a-z0-9][a-z0-9.-]*\/$/;
@@ -457,9 +462,11 @@ export async function inspectArchiveBundle({
   );
   const actualBundleDigest = sha256(bundleContents);
   if (actualBundleDigest !== expectedBundleSha256) {
-    throw new Error(
+    const error = new Error(
       `archive bundle ${docset.id} digest ${actualBundleDigest} does not match lock ${expectedBundleSha256}`,
     );
+    error.code = ARCHIVE_BUNDLE_DIGEST_MISMATCH;
+    throw error;
   }
 
   const temporary = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-extract-'));

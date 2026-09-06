@@ -70,3 +70,14 @@ verifies the sealed package, observed SQLite source, audit writer, secrets, and
 configured issuer discovery or JWKS transport. Exact token `iss` validation is
 bound to `authentication.issuer.trustedIssuer` when that explicit field is
 present, independent of the transport hostname.
+
+Adding `--require-audit-under <absolute-directory>` proves that the configured
+audit sink resolves at or below a directory the deployment declares persistent.
+Relay resolves `audit.sink` exactly as startup resolves it, against the runtime
+file's directory when the binding is relative, then canonicalizes the declared
+root and the deepest existing ancestor of the sink before comparing. A sink
+outside the root, and a symlink inside the root that leads out of it, both fail
+closed. The proof is additive: the readiness check above still has to pass.
+Storage durability belongs to the deployment that mounts the root; Relay only
+proves where its own configured sink resolves, and its diagnostics name the
+side that failed rather than any path.

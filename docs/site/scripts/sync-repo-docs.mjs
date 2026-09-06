@@ -34,6 +34,7 @@ import {
   loadDocsets,
   selectedDocsetId,
 } from './docsets.mjs';
+import { fetchRefWithRetry } from './git-fetch-retry.mjs';
 
 const run = promisify(execFile);
 
@@ -91,7 +92,7 @@ async function cloneAtRef(repoId, remote, ref, dest) {
   try {
     await run('git', ['init', '--quiet'], { cwd: dest });
     await run('git', ['remote', 'add', 'origin', remote], { cwd: dest });
-    await run('git', ['fetch', '--quiet', '--depth', '1', 'origin', ref], { cwd: dest });
+    await fetchRefWithRetry(ref, dest);
     await run('git', ['checkout', '--quiet', 'FETCH_HEAD'], { cwd: dest });
   } catch (error) {
     fail(`${repoId}: failed to clone ${remote} at ${ref}: ${error.message}`);

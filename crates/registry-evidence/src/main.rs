@@ -69,7 +69,8 @@ use registry_evidence::{
     },
 };
 use registry_platform_audit::{
-    AuditChainHasher, AuditChainProfile, AuditHashSecret, OptionalHashHex,
+    require_audit_under, AuditChainHasher, AuditChainProfile, AuditHashSecret, OptionalHashHex,
+    PersistentRootFault,
 };
 use registry_platform_crypto::{canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk};
 use serde_json::{Map as JsonMap, Value};
@@ -116,6 +117,12 @@ enum CommandError {
     /// permission bit, a chain that no longer verifies, and a second writer
     /// holding the sink lock have nothing in common but the moment they fail.
     Audit(&'static str, AuditInitializationFault),
+    /// The configured audit destination was not proven persistent.
+    ///
+    /// The fault names the side that failed and nothing else. Neither the
+    /// configured destination nor the declared root appears, which keeps the
+    /// diagnostic to the same value-free shape as the rest of `check`.
+    AuditRoot(PersistentRootFault),
     Service(String),
 }
 
@@ -131,6 +138,7 @@ impl fmt::Display for CommandError {
                 sources.join(", ")
             ),
             Self::Audit(message, fault) => write!(formatter, "{message}: {fault}"),
+            Self::AuditRoot(fault) => write!(formatter, "audit destination check failed: {fault}"),
             Self::Service(reason) => write!(formatter, "service failed: {reason}"),
         }
     }
@@ -164,10 +172,14 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
         Command::Check {
             require_runtime_dependencies,
+            require_audit_under: audit_root,
         } => {
+            // The inputs are captured once. Every proof below, and the runtime
+            // the dependency check initializes, reads this capture rather than
+            // the pathname again, so what passed is what gets opened.
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
-            let runtime = deployment.runtime;
-            let bundle = Arc::new(deployment.bundle);
+            let runtime = deployment.runtime.clone();
+            let bundle = Arc::new(deployment.bundle.clone());
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
             let source_plans = compile_source_plans(&bundle, &runtime)?;
@@ -192,7 +204,15 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 .await
                 .map_err(runtime_initialization_error)?;
             if require_runtime_dependencies {
-                let serving = EvidenceRuntime::initialize(&cli.runtime)
+                // The deployment owns storage persistence and declares the root
+                // it mounts; Evidence owns where the sink resolves. Proving
+                // containment before the chain opens keeps the two boundaries
+                // separate and never relaxes the writability proof below.
+                if let Some(root) = audit_root.as_deref() {
+                    require_audit_under(Path::new(&runtime.config.audit_storage.path), root)
+                        .map_err(CommandError::AuditRoot)?;
+                }
+                let serving = EvidenceRuntime::initialize_from(deployment)
                     .await
                     .map_err(runtime_initialization_error)?;
                 if !serving.key_source_ready().await || !serving.ready().await {
@@ -331,16 +351,19 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             Ok(ExitCode::SUCCESS)
         }
         Command::RenderDiscoveryDescription { config } => {
-            let bytes = fs::read(config)
-                .map_err(|_| CliError("Evidence discovery description rendering failed"))?;
-            let config = EvidenceConfig::parse_yaml(&bytes)
-                .map_err(|_| CliError("Evidence discovery description rendering failed"))?;
+            let bytes = fs::read(config).map_err(|_| DISCOVERY_CONFIG_UNREADABLE)?;
+            let config =
+                EvidenceConfig::parse_yaml(&bytes).map_err(|_| DISCOVERY_CONFIG_INVALID)?;
+            // Configuration validation projects the publication before it
+            // accepts the document, so a publication the shared profile
+            // refuses is already reported as an invalid configuration. This
+            // class stays the projection's own refusal.
             if let Some(rendered) = registry_evidence::discovery::render(&config)
-                .map_err(|_| CliError("Evidence discovery description rendering failed"))?
+                .map_err(|_| DISCOVERY_RENDER_FAILED)?
             {
                 std::io::stdout()
                     .write_all(&rendered)
-                    .map_err(|_| CliError("Evidence discovery description rendering failed"))?;
+                    .map_err(|_| DISCOVERY_OUTPUT_UNWRITABLE)?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -398,6 +421,21 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         Command::LocalAuditLastOperation => local_audit_last_operation_command(&cli.runtime),
     }
 }
+
+/// The four ways provider-publication compilation refuses.
+///
+/// Each stage of the compilation reports its own class, so an adopter learns
+/// whether the configuration was unreadable, refused as Evidence
+/// configuration, refused as a publication, or never reached standard output.
+/// Every class is fixed text: the configured path and the document's own keys
+/// and scalars stay out of it, exactly as they stay out of `check`.
+const DISCOVERY_CONFIG_UNREADABLE: CliError =
+    CliError("discovery description configuration could not be read");
+const DISCOVERY_CONFIG_INVALID: CliError =
+    CliError("discovery description configuration is not valid Evidence configuration");
+const DISCOVERY_RENDER_FAILED: CliError = CliError("discovery description could not be rendered");
+const DISCOVERY_OUTPUT_UNWRITABLE: CliError =
+    CliError("discovery description output could not be written");
 
 /// Report a startup failure with the artifact diagnostic it carries.
 ///
@@ -5076,6 +5114,121 @@ mod tests {
             kernel_compile_error("bundle compilation failed", KernelError::Bundle).to_string();
 
         assert_eq!(rendered, "bundle compilation failed");
+    }
+
+    fn render_discovery_description_cli(config: &Path) -> Cli {
+        Cli {
+            runtime: PathBuf::from("/nonexistent/registry-evidence/runtime.yaml"),
+            command: Command::RenderDiscoveryDescription {
+                config: config.to_path_buf(),
+            },
+        }
+    }
+
+    /// Provider-publication compilation has four stages, and each one reports
+    /// its own class, so a rejected compilation says which stage refused.
+    #[test]
+    fn discovery_description_failure_classes_are_distinct() {
+        let classes = [
+            DISCOVERY_CONFIG_UNREADABLE,
+            DISCOVERY_CONFIG_INVALID,
+            DISCOVERY_RENDER_FAILED,
+            DISCOVERY_OUTPUT_UNWRITABLE,
+        ];
+
+        let distinct = classes
+            .iter()
+            .map(|class| class.0)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(distinct.len(), classes.len(), "{classes:?}");
+    }
+
+    /// A configuration that cannot be read is its own class, and the path the
+    /// operator named stays out of the message.
+    #[tokio::test]
+    async fn render_discovery_description_reports_an_unreadable_configuration() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing = directory.path().join("absent-publication.yaml");
+
+        let error = run(render_discovery_description_cli(&missing))
+            .await
+            .expect_err("a configuration that is not there cannot be read");
+
+        assert_eq!(error, CommandError::Cli(DISCOVERY_CONFIG_UNREADABLE));
+        let rendered = error.to_string();
+        assert!(!rendered.contains("absent-publication"), "{rendered}");
+        assert!(
+            !rendered.contains(&missing.display().to_string()),
+            "{rendered}"
+        );
+    }
+
+    /// A document the runtime refuses as configuration is a second class, and
+    /// neither the file it came from nor a scalar it carries reaches the
+    /// operator message.
+    #[tokio::test]
+    async fn render_discovery_description_reports_an_invalid_configuration() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        for (name, document) in [
+            (
+                "unparsable-publication.yaml",
+                "version: 1\nservice: [parcel-owner-lookup\n",
+            ),
+            (
+                "foreign-publication.yaml",
+                "version: 1\nunknownSetting: parcel-owner-lookup\n",
+            ),
+        ] {
+            let path = directory.path().join(name);
+            fs::write(&path, document).expect("configuration is written");
+
+            let error = run(render_discovery_description_cli(&path))
+                .await
+                .expect_err("a document that is not Evidence configuration is refused");
+
+            assert_eq!(error, CommandError::Cli(DISCOVERY_CONFIG_INVALID));
+            let rendered = error.to_string();
+            for content in [name, "unknownSetting", "parcel-owner-lookup"] {
+                assert!(!rendered.contains(content), "{rendered}");
+            }
+        }
+    }
+
+    /// Configuration validation projects the publication before it accepts the
+    /// document, so a publication the shared profile refuses is reported as an
+    /// invalid configuration and never reaches the projection stage.
+    #[tokio::test]
+    async fn render_discovery_description_refuses_an_unprojectable_publication() {
+        const ACCEPTANCE: &str = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        // A non-breaking space is a URI character the configuration contract
+        // accepts and the shared public profile refuses, so this document is
+        // rejected only by the publication projection.
+        let document = ACCEPTANCE.replace(
+            "issuer: {id: urn:example:fixture:issuer:authority}",
+            "issuer: {id: \"urn:example:fixture:issuer\u{a0}authority\"}",
+        );
+        assert_ne!(document, ACCEPTANCE, "the fixture issuer must be replaced");
+        EvidenceConfig::parse_yaml(ACCEPTANCE.as_bytes())
+            .expect("the acceptance configuration is accepted as written");
+        let refusal = EvidenceConfig::parse_yaml(document.as_bytes())
+            .expect_err("an unprojectable publication is not accepted as configuration");
+        assert_eq!(
+            refusal.fault().cause(),
+            "provider publication cannot be rendered"
+        );
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("unprojectable-publication.yaml");
+        fs::write(&path, &document).expect("configuration is written");
+
+        let error = run(render_discovery_description_cli(&path))
+            .await
+            .expect_err("a publication the shared profile refuses is not compiled");
+
+        assert_eq!(error, CommandError::Cli(DISCOVERY_CONFIG_INVALID));
     }
 
     #[test]

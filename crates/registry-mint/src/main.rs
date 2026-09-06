@@ -64,9 +64,18 @@ fn run(cli: Cli) -> Result<(), String> {
         Command::Check {
             config,
             require_runtime_dependencies,
+            require_audit_under: audit_root,
         } => {
             let config = MintConfig::load(&config)
                 .map_err(|error| format!("the configuration could not be loaded: {error}"))?;
+            // The deployment owns storage persistence and declares the root it
+            // mounts; Mint owns where the sink resolves. Proving containment
+            // before the writer is claimed keeps the two boundaries separate
+            // and never relaxes the readiness proof below.
+            if let Some(root) = audit_root.as_deref() {
+                registry_platform_audit::require_audit_under(&config.audit.path, root)
+                    .map_err(|fault| format!("the audit destination check failed: {fault}"))?;
+            }
             let issuer = config.issuer.clone();
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()

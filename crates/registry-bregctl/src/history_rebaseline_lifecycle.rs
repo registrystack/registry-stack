@@ -6,7 +6,7 @@
 //! binding from the runtime configuration, and delegates all database mutation
 //! to `registry_breg::history_rebaseline`.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::Read as _;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -22,6 +22,8 @@ use registry_breg::postgres::{ExpectedRegistryIdentity, RegistryLockKey};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 use registry_platform_canonical_json::parse_json_strict;
 use serde::{Deserialize, Serialize};
+
+use crate::safe_path::SafeEntry;
 
 const MAX_REBASELINE_REQUEST_BYTES: u64 = 16 * 1024;
 
@@ -188,24 +190,13 @@ fn read_owner_only_request_file(path: &Path) -> Result<Vec<u8>, HistoryRebaselin
 }
 
 fn open_request_file(path: &Path) -> Result<File, HistoryRebaselineLifecycleError> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-
-        options.custom_flags(request_file_no_follow_flags());
-    }
-    options
-        .open(path)
+    // Descriptor-relative resolution refuses a symbolic link at every
+    // component. `O_NOFOLLOW` alone would only have covered the last one, so an
+    // ancestor swapped after any check could still redirect this open.
+    SafeEntry::resolve(path)
+        .map_err(|_| HistoryRebaselineLifecycleError::RequestFile)?
+        .open_read()
         .map_err(|_| HistoryRebaselineLifecycleError::RequestFile)
-}
-
-#[cfg(unix)]
-fn request_file_no_follow_flags() -> i32 {
-    // Do not block on a FIFO before the opened-descriptor file-type check.
-    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NONBLOCK)
-        .bits() as i32
 }
 
 #[cfg(test)]

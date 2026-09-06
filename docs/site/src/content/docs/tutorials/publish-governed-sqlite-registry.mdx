@@ -296,6 +296,8 @@ it binds to:
 ```yaml
 resources:
   - id: registered-business
+    datasetIdentifier: businesses
+    entityTypeIdentifier: business
     title: Registered business
     description: One entry in the public business register.
     semanticClass: local:RegisteredBusiness
@@ -309,9 +311,10 @@ resources:
       status: reviewed
 ```
 
-`view` names the view you wrote, never a base table. `classificationDefaults` applies to anything
-in this resource that does not classify itself, so the defaults are what you would have to
-override to publish something more sensitive.
+`datasetIdentifier` and `entityTypeIdentifier` are not inferred from `id`, so a cursor stays scoped
+to this resource even if `id` is later renamed. `view` names the view you wrote, never a base
+table. `classificationDefaults` applies to anything in this resource that does not classify
+itself, so the defaults are what you would have to override to publish something more sensitive.
 
 Then the four columns that carry record identity rather than content:
 
@@ -666,7 +669,6 @@ follows to the generated schema, vocabulary, and JSON-LD context:
     "revisionIdentifier": "3",
     "lifecycleState": "ACTIVE",
     "recordedAt": "2026-02-11T09:00:00Z",
-    "registryIdentifier": "urn:example:registry:businesses",
     "authorityIdentifier": "urn:example:authority:registrar",
     "domainData": {
       "legalName": "Aurora Freight Cooperative",
@@ -678,7 +680,10 @@ follows to the generated schema, vocabulary, and JSON-LD context:
     "disclosureProfile": "public",
     "selectedFields": ["legalName", "legalForm"],
     "contractRevision": "sha256:<contract-revision>",
-    "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"}
+    "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"},
+    "registryIdentifier": "urn:example:registry:businesses",
+    "datasetIdentifier": "businesses",
+    "entityTypeIdentifier": "business"
   }
 }
 ```

@@ -40,6 +40,22 @@ function check(root, body, options = {}) {
   return checkEvidenceAnchors({ repoRoot: root, ...options });
 }
 
+// A specification page beside a narrative one, which is what the verified-evidence rule
+// reads: the frontmatter axis it declares, and whether an anchor reaches past the site.
+function specification(root, frontmatter, body) {
+  write(
+    root,
+    'docs/site/src/content/docs/explanation/architecture.mdx',
+    '---\ntitle: Architecture\n---\n\nThe narrative page.\n',
+  );
+  write(
+    root,
+    'docs/site/src/content/docs/spec/page.mdx',
+    `---\ntitle: Page\ndoc_type: specification\n${frontmatter}\n---\n\n${body}\n`,
+  );
+  return checkEvidenceAnchors({ repoRoot: root });
+}
+
 test('extracts multi-line anchors with the line they start on', () => {
   const anchors = extractAnchors('one\ntwo\n{/* Evidence: crates/demo/src/lib.rs\n   holds it. */}\n');
   assert.equal(anchors.length, 1);
@@ -943,4 +959,255 @@ test('reads a one-word name only where the anchor spells it qualified', (t) => {
   const qualified = check(root, '{/* Evidence: crates/demo/src/rule.rs, AccessRule::Protectd. */}');
   assert.equal(qualified.errors.length, 1);
   assert.match(qualified.errors[0], /Protectd/);
+});
+
+test('reports a verified specification whose anchors resolve only documentation pages', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /^spec\/page\.mdx /);
+  assert.match(page.errors[0], /evidence: verified/);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+});
+
+test('accepts a verified specification that cites one artifact beside its pages', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}\n' +
+      '{/* Evidence: crates/demo/src/lib.rs, verify_source_shape(). */}',
+  );
+  assert.deepEqual(page.errors, []);
+});
+
+test('refuses a verified specification whose only outside citation is a prose file', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/README.md', '# Demo\n\nThe crate verifies a source shape.\n');
+  const page = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: crates/demo/README.md describes the source shape. */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+  assert.match(page.errors[0], /prose/);
+});
+
+test('refuses a verified specification whose only outside citation is a directory', (t) => {
+  const root = repository(t);
+  // The directory holds the symbol, so the anchor itself is sound; it is the specification
+  // that has pointed at a tree rather than at an artifact a reader can inspect.
+  const page = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: crates/demo/src/ holds verify_source_shape(). */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+  assert.match(page.errors[0], /directory/);
+});
+
+test('accepts a verified specification that cites a fixture or a generated artifact', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/tests/fixtures/sample.json', '{"kind": "sample"}\n');
+  const fixture = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: crates/demo/tests/fixtures/sample.json carries the sample shape. */}',
+  );
+  assert.deepEqual(fixture.errors, []);
+  write(root, 'docs/site/src/data/generated/cli-reference.json', '{"binaries": []}\n');
+  const generated = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: docs/site/src/data/generated/cli-reference.json lists the binaries. */}',
+  );
+  assert.deepEqual(generated.errors, []);
+});
+
+test('leaves a specification that does not claim verified evidence alone', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence: partial',
+    '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}',
+  );
+  assert.deepEqual(page.errors, []);
+});
+
+test('recognizes a verified evidence axis carrying a trailing comment', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence: verified # reviewed',
+    '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+});
+
+test('recognizes a verified evidence axis in single- or double-quoted form', (t) => {
+  const singleQuoted = repository(t);
+  const singlePage = specification(
+    singleQuoted,
+    "evidence: 'verified'",
+    '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}',
+  );
+  assert.equal(singlePage.errors.length, 1);
+  assert.match(singlePage.errors[0], /REQ-DOC-014/);
+
+  const doubleQuoted = repository(t);
+  const doublePage = specification(
+    doubleQuoted,
+    'evidence: "verified"',
+    '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}',
+  );
+  assert.equal(doublePage.errors.length, 1);
+  assert.match(doublePage.errors[0], /REQ-DOC-014/);
+});
+
+test('recognizes a verified evidence axis in a CRLF frontmatter block', (t) => {
+  const root = repository(t);
+  write(
+    root,
+    'docs/site/src/content/docs/explanation/architecture.mdx',
+    '---\ntitle: Architecture\n---\n\nThe narrative page.\n',
+  );
+  write(
+    root,
+    'docs/site/src/content/docs/spec/page.mdx',
+    '---\r\ntitle: Page\r\ndoc_type: specification\r\nevidence: verified\r\n---\r\n\r\n' +
+      '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}\r\n',
+  );
+  const result = checkEvidenceAnchors({ repoRoot: root });
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /REQ-DOC-014/);
+});
+
+test('recognizes a verified evidence axis behind a leading UTF-8 BOM', (t) => {
+  const root = repository(t);
+  write(
+    root,
+    'docs/site/src/content/docs/explanation/architecture.mdx',
+    '---\ntitle: Architecture\n---\n\nThe narrative page.\n',
+  );
+  write(
+    root,
+    'docs/site/src/content/docs/spec/page.mdx',
+    '﻿---\ntitle: Page\ndoc_type: specification\nevidence: verified\n---\n\n' +
+      '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}\n',
+  );
+  const result = checkEvidenceAnchors({ repoRoot: root });
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /REQ-DOC-014/);
+});
+
+test('refuses a specification whose evidence axis is a folded scalar', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence: >-\n  verified',
+    '{/* Evidence: crates/demo/src/lib.rs, verify_source_shape(). */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+  assert.match(page.errors[0], /does not read/);
+});
+
+test('refuses a specification whose evidence axis is a flow sequence', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence: [verified]',
+    '{/* Evidence: crates/demo/src/lib.rs, verify_source_shape(). */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+  assert.match(page.errors[0], /does not read/);
+});
+
+test('refuses a page whose doc_type is a folded scalar', (t) => {
+  const root = repository(t);
+  write(
+    root,
+    'docs/site/src/content/docs/spec/page.mdx',
+    '---\ntitle: Page\ndoc_type: >-\n  specification\nevidence: verified\n---\n\n' +
+      '{/* Evidence: crates/demo/src/lib.rs, verify_source_shape(). */}\n',
+  );
+  const result = checkEvidenceAnchors({ repoRoot: root });
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /REQ-DOC-014/);
+  assert.match(result.errors[0], /does not read/);
+});
+
+test('refuses a page whose frontmatter root mapping is indented', (t) => {
+  const root = repository(t);
+  write(
+    root,
+    'docs/site/src/content/docs/spec/page.mdx',
+    '---\n  title: Page\n  doc_type: specification\n  evidence: verified\n---\n\n' +
+      '{/* Evidence: crates/demo/src/lib.rs, verify_source_shape(). */}\n',
+  );
+  const result = checkEvidenceAnchors({ repoRoot: root });
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /REQ-DOC-014/);
+  assert.match(result.errors[0], /does not read/);
+});
+
+test('refuses a specification whose evidence key carries a space before its colon', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence : verified',
+    '{/* Evidence: crates/demo/src/lib.rs, verify_source_shape(). */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+  assert.match(page.errors[0], /does not read/);
+});
+
+test('leaves a readable non-specification page alone whatever form its evidence axis takes', (t) => {
+  const root = repository(t);
+  write(
+    root,
+    'docs/site/src/content/docs/explanation/page.mdx',
+    '---\ntitle: Page\ndoc_type: explanation\nevidence: >-\n  verified\n---\n\nProse.\n',
+  );
+  const result = checkEvidenceAnchors({ repoRoot: root });
+  assert.deepEqual(result.errors, []);
+});
+
+test('leaves a specification alone whose evidence value only starts with verified', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'evidence: verified-later',
+    '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}',
+  );
+  assert.deepEqual(page.errors, []);
+});
+
+test('leaves a specification alone when its evidence line is commented out', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    '# evidence: verified',
+    '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}',
+  );
+  assert.deepEqual(page.errors, []);
+});
+
+test('leaves a specification alone when evidence is nested under another key', (t) => {
+  const root = repository(t);
+  const page = specification(
+    root,
+    'axis:\n  evidence: verified',
+    '{/* Evidence: docs/site/src/content/docs/explanation/architecture.mdx describes it. */}',
+  );
+  assert.deepEqual(page.errors, []);
 });
