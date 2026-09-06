@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CI_CLASSIFIER = ROOT / ".github" / "scripts" / "ci_changes.py"
+PLATFORM_FUZZ_RUNNER = ROOT / "products" / "platform" / "scripts" / "run-fuzz-smoke.sh"
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
@@ -131,6 +132,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Gitleaks redaction", "--redact"),
     ("Platform fuzz job", "platform-fuzz:"),
     ("Platform fuzz version pin", 'CARGO_FUZZ_VERSION: "0.13.2"'),
+    (
+        "Platform fuzz runner",
+        "run: products/platform/scripts/run-fuzz-smoke.sh",
+    ),
+    (
+        "Platform fuzz runner tests",
+        "run: python3 -m unittest products/platform/scripts/test_run_fuzz_smoke.py",
+    ),
     ("Platform fuzz bounded runtime", "-max_total_time=60"),
     (
         "Platform fuzz directory",
@@ -951,10 +960,22 @@ FORBIDDEN_RELEASE_SECURITY_GATES = (
 )
 
 
-def missing_gates(workflow_text: str, classifier_text: str | None = None) -> list[str]:
+def missing_gates(
+    workflow_text: str,
+    classifier_text: str | None = None,
+    platform_fuzz_runner_text: str | None = None,
+) -> list[str]:
     if classifier_text is None:
         classifier_text = CI_CLASSIFIER.read_text(encoding="utf-8")
-    inventory_text = f"{workflow_text}\n{classifier_text}"
+    if platform_fuzz_runner_text is None:
+        platform_fuzz_runner_text = (
+            PLATFORM_FUZZ_RUNNER.read_text(encoding="utf-8")
+            if PLATFORM_FUZZ_RUNNER.is_file()
+            else ""
+        )
+    inventory_text = (
+        f"{workflow_text}\n{classifier_text}\n{platform_fuzz_runner_text}"
+    )
     return [name for name, snippet in REQUIRED_GATES if snippet not in inventory_text]
 
 
