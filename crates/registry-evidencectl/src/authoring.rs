@@ -7,10 +7,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::Read as _,
+    io::{self, Read as _},
     os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Child, Command, ExitStatus, Stdio},
+    thread,
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -3496,17 +3497,21 @@ fn set_bundle_modes(root: &Path, directory_mode: u32, file_mode: u32) -> Result<
 }
 
 fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
-    let output = Command::new(evidence_bin)
+    let mut command = Command::new(evidence_bin);
+    command
         .arg("--runtime")
         .arg(runtime_path)
         .arg("check")
-        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .output()
-        .with_context(|| format!("running {} check", evidence_bin.display()))?;
-    if output.status.success() {
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+    let run = run_bounded_evidence(
+        command,
+        StandardOutput::Discarded,
+        &format!("{} check", evidence_bin.display()),
+    )?;
+    if run.status.success() {
         return Ok(());
     }
-    let diagnostic = child_diagnostic(&output.stderr);
+    let diagnostic = child_diagnostic(&run.stderr);
     if diagnostic.is_empty() {
         bail!("Evidence rejected the compiled local generation");
     }
@@ -3514,26 +3519,143 @@ fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
 }
 
 fn render_discovery_description(evidence_bin: &Path, config_path: &Path) -> Result<Vec<u8>> {
-    let output = Command::new(evidence_bin)
+    let mut command = Command::new(evidence_bin);
+    command
         .arg("render-discovery-description")
         .arg("--config")
         .arg(config_path)
-        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .output()
-        .with_context(|| {
-            format!(
-                "running {} provider publication compiler",
-                evidence_bin.display()
-            )
-        })?;
-    if output.status.success() {
-        return Ok(output.stdout);
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+    let run = run_bounded_evidence(
+        command,
+        StandardOutput::Bounded(MAX_DISCOVERY_DESCRIPTION_BYTES),
+        &format!("{} provider publication compiler", evidence_bin.display()),
+    )?;
+    if run.status.success() {
+        if run.stdout_over_bound {
+            bail!(
+                "Evidence returned a provider publication description longer than {MAX_DISCOVERY_DESCRIPTION_BYTES} bytes, which no deployment bundle can carry"
+            );
+        }
+        return Ok(run.stdout);
     }
-    let diagnostic = child_diagnostic(&output.stderr);
+    let diagnostic = child_diagnostic(&run.stderr);
     if diagnostic.is_empty() {
         bail!("Evidence rejected provider publication compilation");
     }
     bail!("Evidence rejected provider publication compilation: {diagnostic}")
+}
+
+/// The longest provider publication description evidencectl accepts from the
+/// Evidence binary.
+///
+/// The description is written into the deployment bundle as `catalog.jsonld`,
+/// and the runtime bounds every bundle artifact of that kind at the same size
+/// when it loads one, so a longer description could never be deployed.
+const MAX_DISCOVERY_DESCRIPTION_BYTES: usize = 1024 * 1024;
+
+/// What a delegated `evidence` run does with its standard output.
+enum StandardOutput {
+    /// The caller reads nothing, so the child writes to the null device.
+    Discarded,
+    /// The caller reads at most this many bytes of it.
+    Bounded(usize),
+}
+
+/// What a delegated `evidence` run reported back.
+struct BoundedEvidenceRun {
+    status: ExitStatus,
+    /// The standard output that was kept, empty when it was discarded.
+    stdout: Vec<u8>,
+    /// Whether standard output ran past the caller's bound. What that means is
+    /// the caller's decision, so the bytes are still returned.
+    stdout_over_bound: bool,
+    /// At most one diagnostic's worth of the child's standard error.
+    stderr: Vec<u8>,
+}
+
+/// Run a delegated `evidence` command and keep only what the caller can use.
+///
+/// Both streams are read while the child runs and bounded as they are read, so
+/// a child that writes without end cannot grow this process while it waits.
+/// `child_diagnostic` stays the single place that sanitizes what an operator
+/// is shown.
+fn run_bounded_evidence(
+    mut command: Command,
+    stdout: StandardOutput,
+    what: &str,
+) -> Result<BoundedEvidenceRun> {
+    command.stdin(Stdio::null());
+    command.stdout(match stdout {
+        StandardOutput::Discarded => Stdio::null(),
+        StandardOutput::Bounded(_) => Stdio::piped(),
+    });
+    command.stderr(Stdio::piped());
+    let mut child = command.spawn().with_context(|| format!("running {what}"))?;
+    let mut stdout_pipe = child.stdout.take();
+    let stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("running {what} left no standard-error pipe to read"))?;
+
+    // The two pipes are read at the same time: draining one to its end first
+    // would leave the child blocked on the other once that one filled up.
+    let (read_stdout, read_stderr) = thread::scope(|scope| {
+        let reader = scope.spawn(|| read_bounded(stderr_pipe, MAX_CHILD_DIAGNOSTIC_BYTES));
+        let read_stdout = match (stdout_pipe.as_mut(), &stdout) {
+            (Some(pipe), StandardOutput::Bounded(bound)) => read_bounded(pipe, *bound),
+            _ => Ok((Vec::new(), false)),
+        };
+        let read_stderr = match reader.join() {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+        (read_stdout, read_stderr)
+    });
+    let read = read_stdout.and_then(|stdout| read_stderr.map(|stderr| (stdout, stderr)));
+    let ((stdout, stdout_over_bound), (stderr, _)) = match read {
+        Ok(read) => read,
+        Err(error) => {
+            // The child may still be writing into a pipe this process can no
+            // longer read, so it is stopped rather than waited for.
+            terminate_child(&mut child);
+            return Err(error).with_context(|| format!("reading the output of {what}"));
+        }
+    };
+    let status = child.wait().with_context(|| format!("running {what}"))?;
+    Ok(BoundedEvidenceRun {
+        status,
+        stdout,
+        stdout_over_bound,
+        stderr,
+    })
+}
+
+/// Read at most `bound` bytes from a child's pipe, then read the rest and
+/// throw it away.
+///
+/// One byte past the bound is read, so a caller can tell a stream that stayed
+/// inside its bound from one that ran past it. Reading the remainder away
+/// costs nothing here and keeps a child that writes more from blocking on a
+/// pipe this process stopped reading.
+fn read_bounded(reader: impl io::Read, bound: usize) -> io::Result<(Vec<u8>, bool)> {
+    let mut reader = reader;
+    let mut captured = Vec::new();
+    reader
+        .by_ref()
+        .take(bound as u64 + 1)
+        .read_to_end(&mut captured)?;
+    let over_bound = captured.len() > bound;
+    io::copy(&mut reader, &mut io::sink())?;
+    Ok((captured, over_bound))
+}
+
+/// Stop a child whose output this process can no longer read, and reap it.
+///
+/// Both calls report failure only when the child is already gone, which is the
+/// state this function exists to reach.
+fn terminate_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// The longest child diagnostic an operator message carries.
@@ -6469,6 +6591,73 @@ factSchema: schemas/family-facts.schema.yaml
             "{}",
             diagnostic.len()
         );
+    }
+
+    #[test]
+    fn a_flooding_child_is_read_within_the_diagnostic_bound() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nyes 'evidence flooded standard error' | head -c 4194304 >&2\nexit 1\n",
+        );
+
+        let run =
+            run_bounded_evidence(Command::new(&evidence), StandardOutput::Discarded, "a stub")
+                .expect("the stub runs to completion");
+
+        assert!(!run.status.success());
+        assert!(
+            run.stderr.len() <= MAX_CHILD_DIAGNOSTIC_BYTES + 1,
+            "held {} bytes of the child's standard error",
+            run.stderr.len()
+        );
+    }
+
+    #[test]
+    fn render_discovery_description_completes_when_the_child_floods_standard_error() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nyes 'evidence flooded standard error' | head -c 4194304 >&2\nexit 1\n",
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.ends_with("[truncated]"), "{diagnostic}");
+        assert!(
+            diagnostic.len()
+                <= "Evidence rejected provider publication compilation: ".len()
+                    + MAX_CHILD_DIAGNOSTIC_BYTES
+                    + " [truncated]".len(),
+            "{}",
+            diagnostic.len()
+        );
+    }
+
+    #[test]
+    fn render_discovery_description_refuses_a_description_past_the_bundle_artifact_bound() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            &format!(
+                "#!/bin/sh\nyes 'catalog' | head -c {}\nexit 0\n",
+                MAX_DISCOVERY_DESCRIPTION_BYTES + 1024
+            ),
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("an oversized description must be refused");
+
+        assert!(format!("{error:#}").contains("longer than"), "{error:#}");
     }
 
     #[test]
