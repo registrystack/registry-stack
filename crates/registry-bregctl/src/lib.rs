@@ -1830,6 +1830,11 @@ fn audit_failure(command: &'static str, error: AuditCliError) -> FailureReport {
             "output",
             "the export output must be a new path; choose a destination that does not already exist",
         ),
+        AuditCliError::OutputNotDurable => diagnostic(
+            "audit.output.not_durable",
+            "output",
+            "the export was written to its destination and the directory holding it could not be made durable, so a crash may lose it; verify the destination, or remove it and export again",
+        ),
         AuditCliError::ChainBroken => diagnostic(
             "audit.chain.broken",
             "audit",
@@ -9535,6 +9540,22 @@ mod tests {
             .as_str()
             .expect("the message renders")
             .contains("without the output"));
+    }
+
+    #[test]
+    fn an_undurable_export_is_not_reported_as_an_operation_that_did_nothing() {
+        let report = serde_json::to_value(audit_failure(
+            "audit export",
+            AuditCliError::OutputNotDurable,
+        ))
+        .expect("the failure report serializes");
+        assert_eq!(report["diagnostics"][0]["code"], "audit.output.not_durable");
+        assert_eq!(report["diagnostics"][0]["path"], "output");
+        let message = report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("the message renders");
+        assert!(message.contains("written to its destination"));
+        assert!(message.contains("durable"));
     }
 
     #[test]
