@@ -288,6 +288,31 @@ fn database_roles_have_independent_passwords_and_hmac_files_are_secret_safe() {
 }
 
 #[test]
+fn every_database_url_names_the_published_loopback_literal() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    for name in [
+        "runtime-database-url",
+        "migration-database-url",
+        "test-runtime-database-url",
+        "test-migration-database-url",
+    ] {
+        // The container publishes on 127.0.0.1 only, and a host that resolves
+        // localhost to ::1 first cannot reach it. Compare the parsed host, so
+        // a failure never prints the URL's password.
+        let url = reqwest::Url::parse(
+            &String::from_utf8(
+                private::read(&state.root().join("secrets").join(name), MAX_BYTES).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(url.host_str(), Some("127.0.0.1"), "{name}");
+        assert_eq!(url.port(), Some(state.database_port), "{name}");
+    }
+}
+
+#[test]
 fn corrupt_clients_refuse_success_reports() {
     let (_temp, state, clients, files) = fixture();
     initialize(&state.root(), &state, &clients, &files).unwrap();

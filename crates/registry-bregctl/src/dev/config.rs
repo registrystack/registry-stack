@@ -234,8 +234,11 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         } else {
             &runtime_password
         };
+        // The owned container publishes on 127.0.0.1 only. Naming the literal
+        // it publishes keeps a host that resolves localhost to ::1 first from
+        // failing to connect; the server certificate carries both names.
         let url = Zeroizing::new(format!(
-            "postgresql://{role}:{}@localhost:{}/{database}",
+            "postgresql://{role}:{}@127.0.0.1:{}/{database}",
             password.as_str(),
             state.database_port
         ));
