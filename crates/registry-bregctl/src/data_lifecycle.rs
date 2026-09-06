@@ -17,7 +17,7 @@ use registry_breg::data::{
     execute_export_page, execute_import_chunk, DataError, DataExportCheckpoint,
     DataExportOutputState, DataExportPlan, DataExportResumeState, DataHttpMethod, DataHttpRequest,
     DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan,
-    MAX_DATA_HTTP_RESPONSE_BYTES, MAX_DATA_IMPORT_INPUT_BYTES,
+    MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES, MAX_DATA_IMPORT_INPUT_BYTES,
 };
 use registry_breg::package::{inspect_package_integrity, PackageEnvelope, PackageError};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
@@ -40,9 +40,9 @@ const MAX_ATOMIC_WRITE_TEMP_ATTEMPTS: usize = 16;
 /// The longest output tail a resuming export discards. The export appends one
 /// bounded page and then publishes the checkpoint that records it, so a run
 /// stopped between the two leaves at most one page the checkpoint never
-/// recorded, and a page never exceeds the bounded HTTP response it is built
-/// from. Anything longer did not come from that window.
-const MAX_UNCOMMITTED_EXPORT_TAIL_BYTES: u64 = MAX_DATA_HTTP_RESPONSE_BYTES as u64;
+/// recorded. `registry-breg` enforces the page bound this reads. Anything
+/// longer did not come from that window.
+const MAX_UNCOMMITTED_EXPORT_TAIL_BYTES: u64 = MAX_DATA_EXPORT_PAGE_BYTES as u64;
 
 static DATA_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1955,7 +1955,7 @@ mod tests {
 
         let mut oversized = committed.committed_output.clone();
         oversized.resize(
-            committed.committed_output.len() + MAX_DATA_HTTP_RESPONSE_BYTES + 1,
+            committed.committed_output.len() + MAX_DATA_EXPORT_PAGE_BYTES + 1,
             b'x',
         );
         fs::write(&committed.output_path, &oversized).unwrap();

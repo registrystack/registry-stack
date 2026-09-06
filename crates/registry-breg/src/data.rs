@@ -40,6 +40,12 @@ const MAX_INPUT_ITEMS: usize = 1_000_000;
 const MAX_PATCH_OPERATIONS: usize = 128;
 /// Maximum response-body bytes accepted from one Registry data HTTP exchange.
 pub const MAX_DATA_HTTP_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+/// Maximum output bytes one export page appends. An export appends a page and
+/// then publishes the checkpoint that records it, so a run stopped between the
+/// two leaves at most this much output the checkpoint never recorded, and a
+/// resume measures the tail it discards against this bound. A page is built
+/// from one bounded response, so the two bounds are the same number.
+pub const MAX_DATA_EXPORT_PAGE_BYTES: usize = MAX_DATA_HTTP_RESPONSE_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DataHttpMethod {
@@ -1784,6 +1790,12 @@ where
         page_bytes
             .extend_from_slice(&canonicalize_json(record).map_err(|_| DataError::InvalidResponse)?);
         page_bytes.push(b'\n');
+    }
+    // A resume trusts that one page never appends more than this, so refuse a
+    // page that would leave an uncommitted tail longer than the resume looks
+    // for rather than publish a checkpoint no resume could recover from.
+    if page_bytes.len() > MAX_DATA_EXPORT_PAGE_BYTES {
+        return Err(DataError::InvalidResponse);
     }
     let added_record_count =
         u64::try_from(records.len()).map_err(|_| DataError::InvalidResponse)?;
