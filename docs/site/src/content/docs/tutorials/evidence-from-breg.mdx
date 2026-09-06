@@ -1,0 +1,355 @@
+---
+title: Answer questions from Base Registry Engine (BReg)
+description: Export one governed lookup, reuse it in two Evidence questions, and verify signed answers through native local commands.
+status: draft
+draft: true
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-06"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Turn a registry status into a signed answer without maintaining a second copy of
+the registry's lookup contract. You will export two permitted selectors together,
+reuse one source in two questions, and verify answers from real BReg HTTP lookups.
+
+<QuickstartMeta
+  outcome="Two locally served Evidence questions backed by one authenticated BReg source, with verified signed answers."
+  time="About 30 minutes, plus the first PostgreSQL image download"
+  level="Local development with synthetic records"
+  prerequisites={['Matching candidate breg, bregctl, evidence, evidencectl and mint binaries on PATH', 'A running Docker engine', 'A shell with curl and tar', 'An editor']}
+/>
+
+:::note[Candidate tutorial]
+This page describes commands under development. Use the matching candidate toolset
+that accompanies this page. The new export, source import, starter, target and
+BReg development commands are not available in the v0.26.1 release.
+:::
+
+## What you will configure
+
+The registry holds synthetic active and retired records. Its dedicated
+`evidence-source` access profile permits an exact lookup by code or registration
+number and reading status. A separate operator can create and update records.
+Evidence gets the source credential; it never gets the operator credential.
+
+The exported adapter asks BReg for `status` and the chosen selector's identity
+field. It checks that returned identity before exposing `status` to a derivation.
+The private `label` field is outside the source grant. A missing record or missing
+status is unavailable evidence, not an assertion that the record is inactive.
+
+Each product keeps its own authority. BReg decides which rows and fields its
+source client can read. Evidence decides which question, purpose, selector and
+answer its caller may use. Mint supplies separate local workload identities.
+
+{/* Evidence: products/breg/evidence/registry/registry.yaml; crates/registry-breg/src/evidence_source.rs export_evidence_source; products/breg/evidence/starter/questions/record-active.yaml. */}
+
+## Get the reviewed teaching files
+
+Download the [BReg and Evidence starter](../../examples/breg-evidence-starter.tar.gz)
+to an empty working directory. The archive contains an authored registry and an
+editable Evidence starter. It contains no service launcher or private key.
+
+From that directory:
+
+```sh
+tar -xzf breg-evidence-starter.tar.gz
+evidencectl new ./evidence --starter ./starter --profile local
+```
+
+Keep `registry/`, `evidence/`, future `exports/`, and future candidates as siblings.
+The create command refuses an existing destination. If you already have a project,
+keep it and import a source into it instead of creating another starter.
+
+Open `registry/registry.yaml` before starting a service. This teaching profile has
+`rowBoundaries: []`, which permits registry-wide exact lookups. For institutional
+data, author the required row boundaries and their workload claims explicitly.
+The exporter does not create or widen an access profile.
+
+Existing systems can keep their current integration path. OpenCRVS, DHIS2,
+OpenAPI, custom HTTP adapters and SQLite sources do not need this archive, a BReg
+configuration, a source export or a named connection. Use
+[Connect an institution source](../connect-an-institution-source/) for an existing
+HTTP system.
+
+{/* Evidence: crates/registry-evidencectl/src/scaffold.rs; products/evidence/reference/authoring-projects/SOURCE-EXPORT.md; products/breg/evidence/registry/registry.yaml. */}
+
+## Export both selector alternatives
+
+Run one export with both selectors:
+
+```sh
+mkdir exports
+bregctl generate evidence-source ./registry \
+  --access-profile evidence-source --entity record \
+  --selector by-code --selector by-registration-number \
+  --fields status --source-id registry-status --connection registry \
+  --output ./exports/registry-status
+```
+
+The report names the generated profiles. Both belong to the same source:
+
+| BReg selector | Evidence profile |
+| --- | --- |
+| `by-code` | `breg-8-registry-6-record-7-by-code` |
+| `by-registration-number` | `breg-8-registry-6-record-22-by-registration-number` |
+
+Each request chooses exactly one alternative. A composite selector instead
+requires every field of that selected profile. There is no retry using a different
+selector when the chosen lookup fails. For a later change, export to a new
+directory with the same stable source and connection IDs.
+
+Inspect `exports/registry-status/source-export.json` and its inventoried files.
+They contain ordinary source, selector, schema and adapter documents plus checksums.
+The manifest records the provider package and the consumed lookup's behavior
+revision. It carries no credential or caller grant. Review exports through the
+provider's trusted delivery channel; checksums detect changed bytes, not who
+approved them.
+
+{/* Evidence: crates/registry-breg/src/evidence_source.rs; crates/registry-bregctl/tests/evidence_source.rs. */}
+
+## Bind one local source connection
+
+Open `evidence/targets/local/settings.yaml`. Its `registry` connection contains
+one BReg base URL and a dedicated OAuth client-credentials binding. Both questions
+will use that same connection and source. The default BReg and Mint endpoints are
+loopback ports `8090` and `8091`.
+
+Choose ports before creating the target. If BReg's defaults are occupied, put
+unused BReg and Mint ports in these two connection URLs and use the same values
+with `bregctl dev --breg-port <port> --mint-port <port>` on its first start. Use
+`--database-port <port>` if PostgreSQL's default `55432` is occupied. A retained
+BReg session keeps its original ports.
+
+Use `pwd -P` to find your working directory's absolute path. Replace the three
+runtime path placeholders in the settings file:
+
+| Setting | Absolute path to use |
+| --- | --- |
+| `runtime.bundleDirectory` | Your working directory followed by `/candidate/bundle` |
+| `runtime.secretProviders.file.root` | Your working directory followed by `/evidence/secrets` |
+| `runtime.auditStorage.path` | Your working directory followed by `/evidence/audit/evidence.jsonl` |
+
+Create the complete target, binding the public half of the starter's generated
+local signing key:
+
+```sh
+evidencectl target new ./evidence/targets/configured \
+  --settings ./evidence/targets/local/settings.yaml \
+  --signing-public-key ./evidence/secrets/signing-p256-public.jwk.json
+evidencectl source import ./exports/registry-status --project ./evidence \
+  --target ./evidence/targets/configured
+evidencectl fixtures run --project ./evidence --target ./evidence/targets/configured
+```
+
+The fixture run evaluates 22 synthetic cases across both questions. It exercises
+both selector alternatives, legitimate negative answers, missing facts, wrong
+identity, source failures and disclosure refusals. It uses recorded responses;
+no registry service or source credential is needed yet. If a case fails, rerun
+with `--explain` and fix the named source or question before continuing.
+
+`target new` is create-only. Review and edit the resulting ordinary
+`governance.yaml` and `runtime.yaml`, or create another target directory. The
+signing flag accepts a public key and derives its governed filename. It does not
+register a caller or generate a production signing key.
+
+{/* Evidence: crates/registry-evidencectl/src/target.rs; products/breg/evidence/starter/targets/local/settings.yaml; products/breg/evidence/starter/fixtures/record-active.yaml; products/breg/evidence/starter/fixtures/record-status-pair.yaml. */}
+
+## Start the registry with a separate source identity
+
+Open `registry/clients.yaml`. Add these two fields to the `source` client, at the
+same indentation as its `accessProfiles` and `claims`. Substitute your absolute
+working directory, keeping the secret filenames exactly as shown:
+
+```yaml
+  clientIdFile: /absolute/working/directory/evidence/secrets/registry-client-id
+  assertionKeyFile: /absolute/working/directory/evidence/secrets/registry-client-key
+```
+
+The destination directory was created privately by `evidencectl new`. BReg dev
+will create this client's key and write the explicitly requested pair there.
+Existing credential output files are refused. Keep the operator client without
+these output fields so its credential stays in BReg's private development state.
+
+```sh
+bregctl dev --project ./registry --clients-file ./registry/clients.yaml --detach
+```
+
+The command returns when its owned PostgreSQL, Mint and BReg services are ready,
+the authored journeys pass, the package is activated, and the three seed records
+exist. The first run can take longer while Docker downloads PostgreSQL.
+
+If startup fails, inspect the private diagnostic directory named in the error.
+Correct the prerequisite and retry. BReg retains completed initialization phases.
+If ports are occupied, choose unused ports on the first start and change the
+local connection settings to match before creating the Evidence target. Do not
+stop an unrelated service to make room.
+
+## Start Evidence and verify an answer
+
+Start the local caller rehearsal using the configured source connection:
+
+```sh
+cd evidence
+evidencectl dev --target ./targets/configured --detach
+evidencectl request prepare record-active --purpose record-verification \
+  --subject subject@breg-8-registry-6-record-7-by-code:code=SYNTHETIC-ACTIVE \
+  --name by-code
+```
+
+Here `dev --target` uses only the local target's source connections and outbound
+TLS settings. It generates the usual disposable local Evidence caller, issuer
+and authority. It is a local integration rehearsal; it does not serve the full
+target's caller governance. Production targets are refused by this command.
+
+If Evidence's default ports `8080` and `8081` are occupied, start with
+`evidencectl dev --target ./targets/configured --detach --evidence-port 8180
+--mint-port 8181` instead. Use that Evidence port in each Curl URL below. BReg's
+two ports are separate and stay as configured in the source connection.
+
+Send the prepared request and verify its response against the expectations
+recorded before the request:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/by-code/authorization.curl \
+  --request POST --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/by-code/request.json \
+  --output by-code.jws.json
+evidencectl verify by-code.jws.json \
+  --context .evidence/requests/by-code/verification.json --output by-code.verified.json
+```
+
+Open `by-code.verified.json` only after verification succeeds. It should contain
+the boolean `active` answer and an opaque subject binding. It must not disclose
+the code, registration number or private label.
+
+The authorization file contains a short-lived credential. Keep it private. If a
+token or verification context expires, prepare a request with a fresh name.
+
+{/* Evidence: crates/registry-evidencectl/src/dev.rs; crates/registry-evidencectl/src/request.rs; crates/registry-evidencectl/src/verify.rs. */}
+
+## Ask another question through the other selector
+
+The starter's `record-status-pair` question already references `registry-status`.
+It returns two complementary booleans. It has its own meaning, disclosure rules,
+fixtures and revision, while sharing the source and connection.
+
+```sh
+evidencectl request prepare record-status-pair --purpose record-verification \
+  --subject subject@breg-8-registry-6-record-22-by-registration-number:registration-number=SYNTHETIC-REG-002 \
+  --name by-registration
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/by-registration/authorization.curl \
+  --request POST --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/by-registration/request.json \
+  --output by-registration.jws.json
+evidencectl verify by-registration.jws.json \
+  --context .evidence/requests/by-registration/verification.json \
+  --output by-registration.verified.json
+```
+
+This retired record should produce `currently_active: false` and `retired: true`. To add
+another question, author its question, derivation and fixtures and reference the
+same source. Export another source only when it needs a different fixed fact
+selection, entity or access profile.
+
+To try an unavailable answer, prepare another `record-active` request using
+`SYNTHETIC-MISSING`, then send it with that request's files. The record exists
+without a status. Evidence returns HTTP 422 with an `evidence/unavailable` problem,
+not a signed `false`. An unknown code is also unavailable. The offline fixtures prove that a response
+for the wrong identity is refused.
+
+## Stop and resume without reseeding records
+
+From `evidence/`:
+
+```sh
+evidencectl dev stop
+bregctl dev stop --project ../registry
+bregctl dev start --project ../registry --detach
+evidencectl dev --target ./targets/configured --detach
+```
+
+BReg retains its database, generated identities, audit history and seed
+checkpoints. Existing record edits survive this restart. A lost checkpoint is
+replayed through the same idempotent create request, so seeding does not overwrite
+an edited record. BReg refuses an authored package or client change against this
+retained session; restore the original inputs, or copy authored files to a fresh
+project for a separate model experiment.
+
+To edit Evidence questions or imported sources between local generations, stop
+Evidence and run `evidencectl dev clean`, then start again. Clean preserves
+authored files, project secrets and retained requests. It removes only the stopped
+local generation. Review the completed audit with `evidencectl audit show
+--last-operation` after stopping its writer.
+
+{/* Evidence: products/breg/DEV.md; crates/registry-bregctl/tests/dev_lifecycle.rs; crates/registry-evidencectl/src/dev.rs. */}
+
+## Review changes and build a candidate
+
+Record value updates use the normal BReg write API and need no new export.
+Changes to the lookup contract use a newly generated export. From the original
+working directory, generate a successor to compare. Re-exporting the unchanged
+model first is a useful no-change check; use the edited provider project when
+reviewing a real contract change:
+
+```sh
+cd ..
+bregctl generate evidence-source ./registry \
+  --access-profile evidence-source --entity record \
+  --selector by-code --selector by-registration-number \
+  --fields status --source-id registry-status --connection registry \
+  --output ./exports/registry-status-next
+```
+
+Review the proposed files before updating the authored project:
+
+```sh
+evidencectl source diff ./exports/registry-status-next --project ./evidence \
+  --target ./evidence/targets/configured
+evidencectl source update ./exports/registry-status-next --project ./evidence \
+  --target ./evidence/targets/configured
+evidencectl build --project ./evidence --target ./evidence/targets/configured \
+  --output ./candidate
+```
+
+Diff compares previous upstream files, your current files and the proposed
+export. Local customizations remain visible; conflicting local and upstream
+edits require an explicit resolution. With `--target`, the report also compares
+actual compiled question revisions. An unrelated provider field can change
+package provenance without changing a question revision. A consumed selector or
+read-authority change changes the reached question revisions.
+
+Build publishes a new candidate only after bundle and fixture validation. Choose
+a new output directory for each candidate and set its target runtime path to
+match. Authoring updates do not replace a running bundle or activate a BReg
+package. Use [Deploy Evidence with a BReg source](../deploy-evidence-from-breg/)
+for the operated export, complete production target and coordinated cutover.
+
+The local candidate above preserves the target's full authority configuration.
+Its caller issuer is a separate target dependency; `dev` has only rehearsed the
+source connection with generated local authority. Do not treat local rehearsal
+as approval of an institutional caller policy.
+
+Before leaving the exercise, stop both owned service groups:
+
+```sh
+cd evidence
+evidencectl dev stop
+cd ..
+bregctl dev stop --project ./registry
+```
+
+{/* Evidence: products/evidence/reference/authoring-projects/SOURCE-EXPORT.md; crates/registry-evidencectl/src/source_cli.rs; crates/registry-evidencectl/src/build.rs; products/breg/EVIDENCE.md. */}

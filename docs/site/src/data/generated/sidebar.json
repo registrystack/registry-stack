@@ -51,6 +51,10 @@
         "label": "How-to",
         "items": [
           {
+            "label": "Source credential rotation",
+            "slug": "products/registry-evidence/source-credential-rotation"
+          },
+          {
             "label": "First server curl",
             "slug": "products/registry-evidence/first-curl-test"
           },
@@ -70,6 +74,10 @@
           {
             "label": "Authoring form reference",
             "slug": "products/registry-evidence/authoring-form"
+          },
+          {
+            "label": "Optional source exports",
+            "slug": "products/registry-evidence/source-exports"
           },
           {
             "label": "Operator contract",

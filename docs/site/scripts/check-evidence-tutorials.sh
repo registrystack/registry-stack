@@ -125,6 +125,8 @@ EVIDENCE_TUTORIALS=(
 # check_tutorial_coverage below fails by name on a page in neither list, which
 # is the gap that let broken DHIS2 tutorial commands ship once already.
 EXCLUDED_EVIDENCE_TUTORIALS=(
+	evidence-from-breg                              # native Docker PostgreSQL journey; products/breg/evidence/tests/verify-composition.py covers offline composition, independent reader checks live steps
+	deploy-evidence-from-breg                       # operated target handoff; native composition and production build tests cover offline candidates, target-host checks need provisioned dependencies
 	build-and-deploy-evidence-project                # drift-checked by evidence-production-build-docs.test.mjs; needs a production build environment
 	connect-an-institution-source                    # how-to against the reader's own OpenAPI source; no fixed scenario this gate can replay
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here

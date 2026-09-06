@@ -110,6 +110,7 @@ BREG_TUTORIALS=(
 # not replayed here. check_tutorial_coverage below fails by name on a page in
 # neither list, so a new BReg tutorial cannot ship unreplayed and unexplained.
 EXCLUDED_BREG_TUTORIALS=(
+	tutorials/evidence-from-breg                # native composition uses its own Docker registry; maintained offline verifier plus independent archive-only live reader execution
 	tutorials/build-a-breg-production-candidate  # needs a reader-supplied signing key and a production database; product CI builds the candidate
 	tutorials/extend-a-registry-with-a-module    # authoring journey with editor steps on the quickstart project; replayable, not yet specified as a journey here
 	tutorials/query-a-spatial-registry-from-qgis # needs QGIS on a desktop; product CI runs the spatial quickstart smoke
