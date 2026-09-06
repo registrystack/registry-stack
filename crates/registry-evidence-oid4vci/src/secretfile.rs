@@ -5,8 +5,9 @@
 //! key, so this module is the whole private-material read boundary and is
 //! deliberately small.
 
-use std::{fs, os::unix::fs::MetadataExt, path::Path};
+use std::{fs, io::Read, os::unix::fs::MetadataExt, path::Path};
 
+use rustix::fs::{Mode, OFlags};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -28,16 +29,30 @@ pub enum SecretFileError {
 }
 
 /// Read a private key file that must be a regular file, owned by the running
-/// user, unreadable by group and other, and reachable without traversing a
-/// symlink.
+/// user, unreadable by group and other, and not itself a symlink.
 ///
-/// `symlink_metadata` is used rather than `metadata` so a symlink fails the
-/// regular-file check instead of being silently followed to its target. The
-/// link count is pinned to one so a hard link created by another user cannot
-/// alias the same inode under weaker permissions. No error carries any part of
-/// the file's content.
+/// Open without following a final symlink, then validate and read that same
+/// descriptor. Replacing the path after validation cannot substitute another
+/// file. The read remains bounded if the opened file grows after validation.
 pub fn read_owner_only(path: &Path) -> Result<Zeroizing<String>, SecretFileError> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| SecretFileError::Unavailable)?;
+    read_validated_file(open_owner_only(path)?)
+}
+
+fn open_owner_only(path: &Path) -> Result<fs::File, SecretFileError> {
+    let descriptor = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        if error == rustix::io::Errno::LOOP {
+            SecretFileError::Unsafe
+        } else {
+            SecretFileError::Unavailable
+        }
+    })?;
+    let file = fs::File::from(descriptor);
+    let metadata = file.metadata().map_err(|_| SecretFileError::Read)?;
     if !metadata.is_file() || metadata.nlink() != 1 {
         return Err(SecretFileError::Unsafe);
     }
@@ -50,7 +65,17 @@ pub fn read_owner_only(path: &Path) -> Result<Zeroizing<String>, SecretFileError
     if metadata.len() > MAX_SECRET_BYTES {
         return Err(SecretFileError::TooLarge);
     }
-    let bytes = Zeroizing::new(fs::read(path).map_err(|_| SecretFileError::Read)?);
+    Ok(file)
+}
+
+fn read_validated_file(file: fs::File) -> Result<Zeroizing<String>, SecretFileError> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take(MAX_SECRET_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| SecretFileError::Read)?;
+    if bytes.len() as u64 > MAX_SECRET_BYTES {
+        return Err(SecretFileError::TooLarge);
+    }
     let text = std::str::from_utf8(&bytes).map_err(|_| SecretFileError::InvalidValue)?;
     Ok(Zeroizing::new(text.trim().to_owned()))
 }
@@ -130,5 +155,86 @@ mod tests {
         let error = read_owner_only(&path).expect_err("a world-readable file is refused");
         let rendered = format!("{error} {error:?}");
         assert!(!rendered.contains("key-material"), "rendered: {rendered}");
+    }
+
+    #[test]
+    fn a_replaced_path_cannot_substitute_the_validated_file() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = write_key(directory.path(), "original.json", 0o600);
+        let file = open_owner_only(&path).expect("validate the original file");
+        fs::rename(&path, directory.path().join("held.json")).expect("move original");
+        fs::write(&path, b"replacement-material").expect("replace the path");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("set mode");
+
+        assert_eq!(
+            &*read_validated_file(file).expect("read the validated descriptor"),
+            "key-material"
+        );
+        assert_eq!(read_owner_only(&path), Err(SecretFileError::Unsafe));
+    }
+
+    #[test]
+    fn a_symlink_replacement_cannot_redirect_the_validated_read() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = write_key(directory.path(), "original.json", 0o600);
+        let file = open_owner_only(&path).expect("validate the original file");
+        fs::rename(&path, directory.path().join("held.json")).expect("move original");
+        let target = directory.path().join("replacement.json");
+        fs::write(&target, b"replacement-material").expect("write replacement");
+        std::os::unix::fs::symlink(&target, &path).expect("replace with symlink");
+
+        assert_eq!(
+            &*read_validated_file(file).expect("read the validated descriptor"),
+            "key-material"
+        );
+        assert_eq!(read_owner_only(&path), Err(SecretFileError::Unsafe));
+    }
+
+    #[test]
+    fn growth_after_validation_is_refused_by_the_bounded_read() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = write_key(directory.path(), "growing.json", 0o600);
+        let file = open_owner_only(&path).expect("validate the short file");
+        fs::write(&path, vec![b'x'; (MAX_SECRET_BYTES + 1) as usize])
+            .expect("grow the opened file");
+        assert_eq!(read_validated_file(file), Err(SecretFileError::TooLarge));
+    }
+
+    #[test]
+    fn exact_size_limit_reads_but_larger_files_are_refused() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = write_key(directory.path(), "bounded.json", 0o400);
+        // Reopen for writing only while constructing the fixture.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("set mode");
+        fs::write(&path, vec![b'x'; MAX_SECRET_BYTES as usize]).expect("write exact limit");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).expect("set mode");
+        assert_eq!(
+            read_owner_only(&path).expect("exact limit reads").len() as u64,
+            MAX_SECRET_BYTES
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("set mode");
+        fs::write(&path, vec![b'x'; (MAX_SECRET_BYTES + 1) as usize]).expect("write over limit");
+        assert_eq!(read_owner_only(&path), Err(SecretFileError::TooLarge));
+    }
+
+    #[test]
+    fn invalid_utf8_is_refused_without_the_file_contents() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = write_key(directory.path(), "invalid.json", 0o600);
+        fs::write(&path, [0xff]).expect("write invalid UTF-8");
+        assert_eq!(read_owner_only(&path), Err(SecretFileError::InvalidValue));
+    }
+
+    #[test]
+    fn a_fifo_is_refused_without_waiting_for_a_writer() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("fifo");
+        assert!(std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(&path)
+            .status()
+            .expect("run mkfifo")
+            .success());
+        assert_eq!(read_owner_only(&path), Err(SecretFileError::Unsafe));
     }
 }
