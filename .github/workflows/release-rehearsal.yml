@@ -225,7 +225,7 @@ jobs:
 
       - name: Upload advisory review evidence
         if: ${{ inputs.advisory_evidence }}
-        uses: actions/upload-artifact@78a94a974080d17ad2a7c0225a15fd61c7b3b764 # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-advisory-evidence-${{ inputs.version }}-${{ inputs.request_id }}
           path: ${{ runner.temp }}/release-advisory-evidence
