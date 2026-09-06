@@ -431,6 +431,9 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
+      # Avoid filling the runner pool with short shards while the longer
+      # product integration jobs wait. Every selected shard still runs.
+      max-parallel: 6
       matrix: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}
     env:
       CI_RUST_ALL_FEATURES: ${{ matrix.all_features }}

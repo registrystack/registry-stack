@@ -52,6 +52,8 @@ runner scheduling time. Record reruns from the original event as well as the
 latest attempt; a fast retry does not erase a failed or slow first attempt.
 Use the longest job and total job minutes to distinguish serial work from
 runner contention. The maintainers own this budget alongside the CI workflow.
+Rust test shards run at most six at a time to reduce competition with the longer
+product integration jobs; all selected shards still execute.
 
 Optimize duplicate compilation and execution before adding more blocking jobs.
 Keep affected security, database/TLS, generated-contract, and basic adopter
