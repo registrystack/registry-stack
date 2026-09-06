@@ -30,12 +30,13 @@ bregctl check ./my-registry
 check succeeded
 revision: sha256:<digest>
 finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
 ```
 
 Two people holding the same revision hold the same project.
 An error is a declaration the compiler cannot compile, printed as `error <code> at <path>: <message>`, and the command exits with status 1.
 A finding is an advisory attached to a document path: the project compiles, but a reviewer must read it.
-The project `init` wrote reports the `access.profile.unrestricted_collection` finding on purpose, because its `operator` profile lists every record.
+The project `init` wrote reports both findings on purpose: `access.profile.unrestricted_collection`, because its `operator` profile lists every record, and `access.profile.unrestricted_rows`, because its `evidence-source` profile looks up any record by code.
 
 Two flags change what counts as a failure, and a review gate wants both:
 
@@ -44,7 +45,7 @@ bregctl check ./my-registry --deny-findings
 bregctl check ./my-registry --production
 ```
 
-`--deny-findings` turns every finding into an error, so the first command prints `error access.profile.unrestricted_collection at ...` and exits with status 1 until the finding is resolved or the profile is changed.
+`--deny-findings` turns every finding into an error, so the first command prints `error access.profile.unrestricted_collection at ...` and exits with status 1 until every finding is resolved or the profiles are changed.
 `--production` applies the production closure rules: package identity, a lock entry with a pinned digest for every module, a loaded source for every lock, and a webhook for every event must all be present, and a project missing one fails with `package.identity.required`, `module.lock.missing`, `module.lock.digest_required`, `module.source.required`, or `event.delivery.required`.
 The project `init` wrote already carries all of them, so `check --production` succeeds on it.
 `explain` and `generate` accept `--production` as well; `--deny-findings` belongs to `check` alone.
@@ -102,6 +103,7 @@ These are all the findings the compiler can report, each attached to the documen
 | `access.profile.revision_history` | History can disclose values removed from the current record. | Review historical disclosure separately. |
 | `access.profile.snapshot_history` | Snapshot reads reproduce retained historical rows under current authorization. | Review stored-field projection, filters, and row boundaries separately. |
 | `access.profile.unrestricted_collection` | The profile can list every row; caller filters are not authorization. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
+| `access.profile.unrestricted_rows` | The profile's granted operations reach every row and no claim-bound boundary narrows them. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
 | `access.profile.writable_row_boundary` | `patch` can change a field a row boundary depends on, within the caller's allowed values. | Remove it from the writable fields unless moving records is intended. |
 | `manifest_projection.missing` | No Registry Manifest projection is declared. | Declare one to clear the finding. `check --production` passes without it, and `package` builds a package without one. |
 | `module.lock.digest_missing` | A module lock entry has no production digest. | Run `project lock` before a production package. |

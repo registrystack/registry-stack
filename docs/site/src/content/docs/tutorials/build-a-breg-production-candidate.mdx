@@ -75,13 +75,15 @@ bregctl check --production tutorial-work/candidate-project
 check succeeded
 revision: sha256:51370215a8cfcdecb32e91423aca4dcd599e884cb985eb66ba62d5a128d262fe
 finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
 ```
 
-The generated project ships this finding on purpose: the `operator` profile lists every record because
-one operations team runs the whole registry, and the comment that introduces that profile in
-`registry.yaml` says how to close it (a `rowBoundaries` entry, or removing `list` from the grant).
-Closing it would also change the journeys, so treat it as reviewed and see what a stricter gate does
-with it:
+The generated project ships both findings on purpose: the `operator` profile lists every record because
+one operations team runs the whole registry, and the `evidence-source` profile looks a record up by its
+code for any record in the registry. The comment that introduces each profile in `registry.yaml` says
+how to close it (a `rowBoundaries` entry, or removing `list` from the operator's grant).
+Closing them would also change the journeys, so treat them as reviewed and see what a stricter gate does
+with them:
 
 ```sh
 bregctl check --production --deny-findings tutorial-work/candidate-project
@@ -89,6 +91,7 @@ bregctl check --production --deny-findings tutorial-work/candidate-project
 
 ```text
 error access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+error access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
 ```
 
 The command exits with status 1. That is the gate for a pipeline that must never build a candidate
