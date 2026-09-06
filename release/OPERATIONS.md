@@ -203,18 +203,18 @@ Start from current protected `main`:
 ```sh
 git fetch origin main
 git switch -c release/v<version> origin/main
-
-release/scripts/registry-release prepare \
-  --version <version> \
-  --release-id <release-id>
 ```
 
-Review and commit the version, lockfile, changelog, release-note, manifest, and
-generated contract changes reported by the planner. Do not mix release-workflow
-or release-tool implementation changes into this PR. Merge after the protected
-checks pass. The merge commit is the intended candidate source. The exact
-protected-main revision accepted by `request-candidate` becomes the candidate
-source and future tag target. There is no finalization or closeout PR.
+Update and commit the version metadata, workspace package versions in current
+lockfiles, changelogs, release notes, manifest, candidate docset, and generated
+inputs.
+Prepare the documentation archive lock from those committed inputs as described
+below. `registry-release prepare` validates the prepared tree; it does not edit
+these files and cannot pass until the new archive lock exists. Do not mix
+release-workflow or release-tool implementation changes into this PR. Merge
+after the rehearsal and protected checks pass. The merge commit is the intended
+candidate source. The exact protected-main revision accepted by
+`request-candidate` becomes the candidate source and future tag target. There is no finalization or closeout PR.
 
 The unified Node client manifest and lockfile deliberately bind no platform
 package versions. Those versions name the release being prepared, which is
@@ -228,6 +228,93 @@ validate-dist` remains the exact proof that the published root package carries
 the required platform dependency set. For the unified package, that proof also
 requires each implementation package to contain all four native bindings. The
 planner rejects a prepared tree that binds those versions.
+
+### Prepare the documentation archive lock
+
+Prepare a new, unpublished candidate archive on Ubuntu 24.04, Linux x64, with
+Node 22.12.0 and `npm ci`, matching the candidate and rehearsal docs jobs.
+Pagefind's platform packages can contain different WebAssembly bytes on macOS
+and Linux. Gzip normalization does not make those payloads identical, so a
+macOS archive digest is not a substitute for the Ubuntu lock.
+
+Start from a commit containing the prepared version, candidate docset, release
+notes, and generated inputs. The new candidate must not yet have an archive
+lock entry. This procedure adds that one entry; it never replaces an existing
+entry. Run the following from the prepared repository with Docker available:
+
+```sh
+archive_version="<version>"
+archive_source="$(git rev-parse --show-toplevel)"
+archive_revision="$(git rev-parse HEAD)"
+archive_directory="$(mktemp -d "${TMPDIR:-/tmp}/registry-docs-prepare.XXXXXX")"
+
+git clone --no-local --no-checkout "${archive_source}" "${archive_directory}/source"
+git -C "${archive_directory}/source" checkout --detach "${archive_revision}"
+git -C "${archive_directory}/source" remote set-url origin \
+  https://github.com/registrystack/registry-stack.git
+git -C "${archive_directory}/source" fetch --no-tags origin main
+mkdir "${archive_directory}/output"
+
+docker run --rm --platform linux/amd64 \
+  --mount "type=bind,src=${archive_directory}/source,dst=/input,readonly" \
+  --mount "type=bind,src=${archive_directory}/output,dst=/output" \
+  --workdir /workspace \
+  --env "DOCS_DOCSET=v${archive_version}" \
+  ubuntu:24.04 bash -euc '
+set -euo pipefail
+cp -R /input/. /workspace
+apt-get update -qq
+apt-get install -y -qq ca-certificates curl git python3 xz-utils
+cd /tmp
+curl -fsSLO https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz
+curl -fsSLO https://nodejs.org/dist/v22.12.0/SHASUMS256.txt
+grep "  node-v22.12.0-linux-x64.tar.xz$" SHASUMS256.txt | sha256sum -c -
+tar -xJf node-v22.12.0-linux-x64.tar.xz
+export PATH="/tmp/node-v22.12.0-linux-x64/bin:${PATH}"
+cd /workspace/docs/site
+npm ci
+npm run build:archive
+npm run archive:snapshot -- "${DOCS_DOCSET}" --write-lock
+npm run archive:snapshot -- "${DOCS_DOCSET}" --verify-lock
+npm run check:archive-lock -- --base-ref origin/main
+cp src/data/archive-lock.yaml /output/archive-lock.yaml
+cp ".archive-bundles/${DOCS_DOCSET}.tar.gz" /output/
+'
+```
+
+The fresh clone includes committed inputs only. It excludes local dependencies,
+uncommitted edits, and ignored generated assets. Docker mounts it read-only and
+builds a container-owned copy, avoiding Git ownership mismatches on Linux hosts.
+Archive builds also stage their owned generated inputs from the docset's source
+ref, including `public/examples/breg-evidence-starter.tar.gz`. A local starter
+archive absent from that ref is omitted during the build and restored afterward.
+This also covers archive bootstrap after current-site generation. Other local
+files are not cleared, so use the fresh checkout for canonical preparation.
+
+If the command fails, resolve the failure before copying its result. On success,
+review the new lock entry and apply only that change to the prepared branch:
+
+```sh
+cp "${archive_directory}/output/archive-lock.yaml" \
+  "${archive_directory}/source/docs/site/src/data/archive-lock.yaml"
+git -C "${archive_directory}/source" diff -- \
+  docs/site/src/data/archive-lock.yaml > "${archive_directory}/archive-lock.patch"
+cat "${archive_directory}/archive-lock.patch"
+git -C "${archive_source}" apply --check "${archive_directory}/archive-lock.patch"
+git -C "${archive_source}" apply "${archive_directory}/archive-lock.patch"
+
+release/scripts/registry-release prepare \
+  --version "${archive_version}" \
+  --release-id "<release-id>"
+```
+
+Commit the validated lock change. Keep the temporary clone and its
+`output/v<version>.tar.gz` for inspection; neither is a publication artifact.
+The independent rehearsal must reproduce the lock from a clean checkout. The candidate later builds and verifies its own archive from
+the accepted protected-main source; publication promotes those candidate bytes
+without rebuilding. Historical locks and published archives remain unchanged.
+
+### Rehearse the prepared branch
 
 Before opening the release PR, push the prepared branch and run the read-only
 Ubuntu rehearsal from that branch:
