@@ -204,6 +204,61 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
             ).is_file()
         )
 
+    def test_reuses_compiler_paths_for_all_products_in_one_job(self) -> None:
+        compilers = []
+        for client in ("discovery", "evidence", "relay", "breg"):
+            self.make_client(client, "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
+            result = self.run_build(client=client)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            env = json.loads(self.napi_log.read_text())["env"]
+            compilers.append((env["HOST_CC"], env["HOST_CXX"]))
+        self.assertEqual(len(set(compilers)), 1)
+        self.assertTrue(all(Path(path).is_symlink() for path in compilers[0]))
+
+    def test_separates_job_target_toolchain_and_wrapper_revision(self) -> None:
+        self.make_client("evidence", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
+        compilers = []
+
+        def record(**kwargs) -> None:
+            result = self.run_build(**kwargs)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            compilers.append(json.loads(self.napi_log.read_text())["env"]["HOST_CC"])
+
+        record()
+        other_runner = self.root / "other-runner"
+        record(env={**self.env, "RUNNER_TEMP": str(other_runner)})
+        self.make_client("relay", "x86_64-unknown-linux-gnu", "linux-x64-gnu")
+        record(client="relay", target="x86_64-unknown-linux-gnu", platform="linux-x64-gnu")
+        other_python = self.python.with_name("other-python")
+        shutil.copy2(self.python, other_python)
+        self.python = other_python
+        record()
+        compiler = self.build.with_name(COMPILER.name)
+        compiler.write_text(compiler.read_text() + "\n# Changed compiler recipe\n")
+        record()
+        self.assertEqual(len(set(compilers)), len(compilers))
+
+    def test_refuses_an_unexpected_existing_wrapper(self) -> None:
+        self.make_client("evidence", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
+        result = self.run_build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        wrapper = Path(json.loads(self.napi_log.read_text())["env"]["HOST_CC"])
+        wrapper.unlink()
+        wrapper.symlink_to(self.python)
+        self.napi_log.unlink()
+        result = self.run_build()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unexpected compiler wrapper", result.stderr)
+        self.assertFalse(self.napi_log.exists())
+
+    def test_local_build_without_runner_temp_removes_its_wrappers(self) -> None:
+        self.make_client("evidence", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
+        env = {key: value for key, value in self.env.items() if key != "RUNNER_TEMP"}
+        result = self.run_build(env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        wrapper = Path(json.loads(self.napi_log.read_text())["env"]["HOST_CC"])
+        self.assertFalse(wrapper.parent.exists())
+
     def test_rejects_unpinned_zig_version_before_build(self) -> None:
         self.make_client("evidence", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
         result = self.run_build(env={**self.env, "ZIG_VERSION": "0.13.0"})
