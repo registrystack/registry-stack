@@ -14,6 +14,23 @@ use serde::Serialize;
 
 pub const SCHEMA_VERSION: &str = "registry.cli-reference/v2";
 
+/// Clap value names that stand for a filesystem path the operator supplies.
+const PATH_VALUE_NAMES: [&str; 7] = [
+    "ABSOLUTE_DIRECTORY",
+    "ABSOLUTE_FILE",
+    "DESTINATION",
+    "DIRECTORY",
+    "FILE",
+    "JSON_FILE",
+    "PROJECT",
+];
+
+/// The rule a command line applies when it resolves an operator path one
+/// component at a time through the directory that holds it. The generator
+/// states it for every path argument of such a command line, so each flag's own
+/// help stays about what its file or directory is for.
+const SYMBOLIC_LINK_REFUSAL: &str = "A symbolic link at any component of this path is refused.";
+
 #[derive(Debug, Serialize)]
 pub struct Catalog {
     pub schema_version: &'static str,
@@ -64,14 +81,18 @@ pub struct ConstraintReference {
 /// Build reference data for the supported Registry Stack command lines.
 pub fn catalog() -> Catalog {
     let mut binaries = vec![
-        command_reference(registry_evidence::command(), None),
-        command_reference(registry_evidence_oid4vci::command(), None),
-        command_reference(registry_evidencectl::command(), None),
-        command_reference(registry_mint::command(), None),
-        command_reference(registry_breg::command(), None),
-        command_reference(registry_bregctl::command(), None),
-        command_reference(registry_relay_v2::command(), None),
-        command_reference(registry_relayctl::command(), None),
+        command_reference(registry_evidence::command(), None, None),
+        command_reference(registry_evidence_oid4vci::command(), None, None),
+        command_reference(registry_evidencectl::command(), None, None),
+        command_reference(registry_mint::command(), None, None),
+        command_reference(registry_breg::command(), None, None),
+        command_reference(
+            registry_bregctl::command(),
+            None,
+            Some(SYMBOLIC_LINK_REFUSAL),
+        ),
+        command_reference(registry_relay_v2::command(), None, None),
+        command_reference(registry_relayctl::command(), None, None),
     ];
     binaries.sort_by(|left, right| left.name.cmp(&right.name));
     Catalog {
@@ -81,7 +102,14 @@ pub fn catalog() -> Catalog {
     }
 }
 
-fn command_reference(mut command: Command, parent: Option<&str>) -> CommandReference {
+/// Build reference data for one command tree. `path_note` is stated for every
+/// path argument the tree publishes, so a rule the whole command line applies
+/// is written once here instead of in each flag's help.
+fn command_reference(
+    mut command: Command,
+    parent: Option<&str>,
+    path_note: Option<&'static str>,
+) -> CommandReference {
     command.build();
     let name = command.get_name().to_owned();
     let invocation = parent.map_or_else(|| name.clone(), |parent| format!("{parent} {name}"));
@@ -109,7 +137,7 @@ fn command_reference(mut command: Command, parent: Option<&str>) -> CommandRefer
         .get_arguments()
         .filter(|argument| !argument.is_hide_set())
     {
-        let reference = argument_reference(&command, argument);
+        let reference = argument_reference(&command, argument, path_note);
         if argument.get_index().is_some() {
             arguments.push(reference);
         } else {
@@ -120,7 +148,7 @@ fn command_reference(mut command: Command, parent: Option<&str>) -> CommandRefer
     let subcommands = command
         .get_subcommands()
         .filter(|subcommand| !subcommand.is_hide_set() && subcommand.get_name() != "help")
-        .map(|subcommand| command_reference(subcommand.clone(), Some(&invocation)))
+        .map(|subcommand| command_reference(subcommand.clone(), Some(&invocation), path_note))
         .collect();
 
     CommandReference {
@@ -136,7 +164,11 @@ fn command_reference(mut command: Command, parent: Option<&str>) -> CommandRefer
     }
 }
 
-fn argument_reference(command: &Command, argument: &Arg) -> ArgumentReference {
+fn argument_reference(
+    command: &Command,
+    argument: &Arg,
+    path_note: Option<&'static str>,
+) -> ArgumentReference {
     let takes_values = argument.get_action().takes_values();
     let possible_values = if takes_values {
         argument
@@ -152,7 +184,7 @@ fn argument_reference(command: &Command, argument: &Arg) -> ArgumentReference {
     } else {
         Vec::new()
     };
-    let description = argument
+    let mut description = argument
         .get_long_help()
         .or_else(|| argument.get_help())
         .map(ToString::to_string)
@@ -164,6 +196,9 @@ fn argument_reference(command: &Command, argument: &Arg) -> ArgumentReference {
         command.get_name(),
         argument_display(argument)
     );
+    if let Some(note) = path_note.filter(|_| is_path_argument(argument)) {
+        description = format!("{} {note}", sentence(&description));
+    }
     ArgumentReference {
         display: argument_display(argument),
         description,
@@ -296,6 +331,24 @@ fn conflict_constraints(command: &Command) -> Vec<ConstraintReference> {
             arguments: arguments.into(),
         })
         .collect()
+}
+
+/// Report whether an argument's value is a filesystem path the operator names.
+fn is_path_argument(argument: &Arg) -> bool {
+    argument.get_value_names().is_some_and(|names| {
+        names
+            .iter()
+            .any(|name| PATH_VALUE_NAMES.contains(&name.as_str()))
+    })
+}
+
+/// End a help sentence, so an appended rule reads as its own sentence.
+fn sentence(value: &str) -> String {
+    if value.ends_with(['.', '!', '?']) {
+        value.to_owned()
+    } else {
+        format!("{value}.")
+    }
 }
 
 fn is_public_argument(argument: &Arg) -> bool {
@@ -596,6 +649,59 @@ mod tests {
     }
 
     #[test]
+    fn every_bregctl_path_argument_states_the_symbolic_link_refusal() {
+        fn is_path_display(display: &str) -> bool {
+            PATH_VALUE_NAMES
+                .iter()
+                .any(|name| display.contains(&format!("<{name}>")))
+        }
+
+        fn check(command: &CommandReference, counted: &mut usize) {
+            for argument in command.arguments.iter().chain(&command.options) {
+                let stated = argument.description.matches(SYMBOLIC_LINK_REFUSAL).count();
+                if is_path_display(&argument.display) {
+                    assert_eq!(
+                        stated, 1,
+                        "{} {} states the symbolic link refusal {stated} times: {}",
+                        command.invocation, argument.display, argument.description
+                    );
+                    *counted += 1;
+                } else {
+                    assert_eq!(
+                        stated, 0,
+                        "{} {} states the symbolic link refusal for a value that is not a path",
+                        command.invocation, argument.display
+                    );
+                }
+            }
+            for subcommand in &command.subcommands {
+                check(subcommand, counted);
+            }
+        }
+
+        let catalog = catalog();
+        let mut counted = 0;
+        check(find_command(&catalog.binaries, "bregctl"), &mut counted);
+        assert!(
+            counted > 20,
+            "the bregctl reference publishes {counted} path arguments"
+        );
+    }
+
+    #[test]
+    fn a_command_line_that_does_not_apply_the_rule_never_states_it() {
+        let catalog = catalog();
+        for name in ["breg", "evidencectl", "relayctl"] {
+            let rendered = serde_json::to_string(find_command(&catalog.binaries, name))
+                .expect("render command");
+            assert!(
+                !rendered.contains(SYMBOLIC_LINK_REFUSAL),
+                "{name} states a refusal its own paths were not checked against"
+            );
+        }
+    }
+
+    #[test]
     fn hidden_implementation_commands_never_enter_the_catalog() {
         let rendered = serde_json::to_string(&catalog()).expect("render catalog");
         for hidden in [
@@ -671,6 +777,7 @@ mod tests {
                         .args(["left", "right"]),
                 ),
             None,
+            None,
         );
 
         assert!(reference.constraints.iter().any(|constraint| {
@@ -705,6 +812,7 @@ mod tests {
                         .args(["first", "second"]),
                 ),
             None,
+            None,
         );
         assert!(multiple.constraints.iter().any(|constraint| {
             constraint.kind == ConstraintKind::RequiredOneOrMore
@@ -722,6 +830,7 @@ mod tests {
                     .env("TOOL_CONFIG")
                     .required(true),
             ),
+            None,
             None,
         );
 
@@ -758,6 +867,7 @@ mod tests {
                         .action(ArgAction::SetTrue)
                         .conflicts_with_all(["gamma", "beta"]),
                 ),
+            None,
             None,
         );
 
@@ -801,6 +911,7 @@ mod tests {
                 )
                 .group(ArgGroup::new("side").args(["left", "right"])),
             None,
+            None,
         );
 
         assert!(has_conflict(&reference, "--left", "--right"));
@@ -826,6 +937,7 @@ mod tests {
                         .action(ArgAction::SetTrue),
                 ),
             None,
+            None,
         );
 
         assert!(reference.constraints.is_empty());
@@ -844,6 +956,7 @@ mod tests {
                     .long("undocumented")
                     .action(ArgAction::SetTrue),
             ),
+            None,
             None,
         );
     }
