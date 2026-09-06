@@ -174,9 +174,12 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             require_runtime_dependencies,
             require_audit_under: audit_root,
         } => {
+            // The inputs are captured once. Every proof below, and the runtime
+            // the dependency check initializes, reads this capture rather than
+            // the pathname again, so what passed is what gets opened.
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
-            let runtime = deployment.runtime;
-            let bundle = Arc::new(deployment.bundle);
+            let runtime = deployment.runtime.clone();
+            let bundle = Arc::new(deployment.bundle.clone());
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
             let source_plans = compile_source_plans(&bundle, &runtime)?;
@@ -209,7 +212,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                     require_audit_under(Path::new(&runtime.config.audit_storage.path), root)
                         .map_err(CommandError::AuditRoot)?;
                 }
-                let serving = EvidenceRuntime::initialize(&cli.runtime)
+                let serving = EvidenceRuntime::initialize_from(deployment)
                     .await
                     .map_err(runtime_initialization_error)?;
                 if !serving.key_source_ready().await || !serving.ready().await {

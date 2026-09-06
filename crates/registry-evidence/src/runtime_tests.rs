@@ -9065,6 +9065,57 @@ async fn search_then_fetch_release_still_omits_source_arrays() {
     assert!(events[2]["record"].get("adapterIds").is_none());
 }
 
+#[tokio::test]
+async fn initialize_from_opens_the_deployment_it_was_handed_not_the_runtime_pathname() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let deployment =
+        DeploymentInputs::load(&prepared.runtime_path).expect("the immutable deployment loads");
+
+    // Between the capture and the initialization the runtime file comes to
+    // name a different audit destination. A proof made about the captured
+    // inputs holds only if initialization opens what was captured.
+    let redirected_audit = prepared.audit_path.with_file_name("elsewhere.jsonl");
+    let mut redirected =
+        fs::read_to_string(&prepared.runtime_path).expect("runtime configuration is readable");
+    replace_exact(
+        &mut redirected,
+        &format!("path: {}", prepared.audit_path.display()),
+        &format!("path: {}", redirected_audit.display()),
+        1,
+    );
+    make_file_writable(&prepared.runtime_path);
+    fs::write(&prepared.runtime_path, redirected).expect("runtime configuration is rewritten");
+    make_file_read_only(&prepared.runtime_path);
+
+    let runtime = EvidenceRuntime::initialize_from(deployment)
+        .await
+        .expect("the captured deployment initializes");
+    assert_eq!(
+        runtime.runtime_config().audit_storage.path,
+        prepared.audit_path.display().to_string()
+    );
+    assert!(
+        prepared.audit_path.exists(),
+        "audit storage opens where the captured runtime document points"
+    );
+    assert!(
+        !redirected_audit.exists(),
+        "the rewritten runtime file is not read again"
+    );
+    drop(runtime);
+
+    // The pathname route reads the file as it is now, which is the difference
+    // the captured route exists to remove.
+    let reread = EvidenceRuntime::initialize(&prepared.runtime_path)
+        .await
+        .expect("the rewritten runtime file initializes from its pathname");
+    assert_eq!(
+        reread.runtime_config().audit_storage.path,
+        redirected_audit.display().to_string()
+    );
+    assert!(redirected_audit.exists());
+}
+
 async fn prepare_acceptance(binding_secret: &str) -> PreparedAcceptance {
     let server = MockServer::start().await;
     let prepared = prepare_fixture(
