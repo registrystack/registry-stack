@@ -539,6 +539,54 @@ seed:
         ]),
         ""
     );
+    // Recreate the database, stop it normally (the container is left stopped,
+    // not removed), then take the container away by hand. Only then does the
+    // documented recovery path in `reclaim` (tolerating a manual removal) get
+    // exercised: `dev stop --remove` must reclaim the remaining volume instead
+    // of refusing on the now-absent container.
+    let recreated = session.start();
+    assert_eq!(recreated["status"], "ready");
+    session.stop();
+    assert!(Command::new("docker")
+        .args(["rm", "--force", &owned])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    assert_eq!(
+        docker_line(&[
+            "volume",
+            "ls",
+            "--filter",
+            &format!("name=^{owned}$"),
+            "--format",
+            "{{.Name}}"
+        ]),
+        owned
+    );
+    // Plain `dev stop` still refuses a retained container that vanished
+    // without `--remove`; that refusal protects retained data.
+    let refused = session.ctl(&["dev", "stop", "--project", project.to_str().unwrap()]);
+    assert!(!refused.status.success());
+    let refusal: Value = serde_json::from_slice(&refused.stdout).expect("refusal JSON");
+    assert!(refusal["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("retained database container is missing"));
+    session.remove();
+    assert_eq!(
+        docker_line(&[
+            "volume",
+            "ls",
+            "--filter",
+            &format!("name=^{owned}$"),
+            "--format",
+            "{{.Name}}"
+        ]),
+        ""
+    );
+    let reclaimed_state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
+    assert!(reclaimed_state["containerId"].is_null());
     // Reclaiming again tolerates the container and volume already taken.
     session.remove();
     // The test owns this synthetic workspace and removes it only after all

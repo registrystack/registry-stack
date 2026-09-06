@@ -582,7 +582,15 @@ fn stop(project_path: &Path, remove: bool) -> Result<Value> {
         probe(port)?;
     }
     let docker = executable("docker", None)?;
-    if let Some(container) = inspect(&docker, &state)? {
+    // Remove mode tolerates a container already taken by hand: reclaim verifies
+    // ownership of whatever is still there and forgets the rest, so skip the
+    // inspection (and the stop it guards) when nothing is listed under this name.
+    let container = if remove && !listed(&docker, &state)? {
+        None
+    } else {
+        inspect(&docker, &state)?
+    };
+    if let Some(container) = container {
         if container["State"]["Running"] == true {
             docker_command(
                 &docker,
