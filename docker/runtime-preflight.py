@@ -39,6 +39,9 @@ AUDIT_PREFIXES = {
     "relay": "/var/lib/relay/audit",
 }
 EXECUTABLE_PATHS = {product: f"/usr/local/bin/{product}" for product in PRODUCTS}
+OFFICIAL_IMAGE_REPOSITORIES = tuple(
+    f"ghcr.io/registrystack/{product}" for product in PRODUCTS
+)
 AUDIT_CONTAINMENT_FLAG = "--require-audit-under"
 # An image whose check command predates the containment flag rejects it as an
 # unknown argument. These are the argument parsers' phrasings for that refusal.
@@ -400,6 +403,49 @@ def validate_mounts(
         )
 
 
+def validate_healthcheck(service: dict[str, Any], executable: PurePosixPath) -> None:
+    """Validate the healthcheck as what it is, a command lane into the container.
+
+    Docker runs it as the service identity, on its own schedule, with nothing
+    watching. The official images declare no healthcheck and readiness is the
+    preflight's own probe, so the accepted forms are none at all, one that is
+    explicitly disabled, and the product's own executable run without a shell.
+    """
+    healthcheck = service.get("healthcheck")
+    if healthcheck is None:
+        return
+    if not isinstance(healthcheck, dict):
+        raise PreflightError("service healthcheck posture is invalid")
+    if healthcheck.get("disable") is True:
+        return
+    test = healthcheck.get("test")
+    if test is None:
+        return
+    if not isinstance(test, list) or not all(isinstance(item, str) for item in test):
+        raise PreflightError("service healthcheck must be a command, not a shell string")
+    if test == ["NONE"]:
+        return
+    if len(test) < 2 or test[0] != "CMD" or test[1] != executable.as_posix():
+        raise PreflightError(
+            "service healthcheck must run the official product executable as a "
+            "command without a shell"
+        )
+
+
+def names_official_image(image: Any) -> bool:
+    """Whether the reference names an official product image, by tag or digest.
+
+    Recognizing one is not accepting it: a service the preflight cannot check
+    is named so the operator can select it or remove the edge.
+    """
+    if not isinstance(image, str):
+        return False
+    return any(
+        image == repository or image.startswith((f"{repository}:", f"{repository}@"))
+        for repository in OFFICIAL_IMAGE_REPOSITORIES
+    )
+
+
 def validate_ports(service: dict[str, Any]) -> None:
     network_mode = service.get("network_mode")
     if network_mode is not None and not isinstance(network_mode, str):
@@ -508,6 +554,7 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     executable = PurePosixPath(EXECUTABLE_PATHS[selection.product])
     validate_secret_entries(service, executable)
     validate_config_entries(service, executable)
+    validate_healthcheck(service, executable)
     validate_mounts(selection.product, service, document)
     validate_ports(service)
 
@@ -648,6 +695,18 @@ def native_check_plan(
         else:
             raise PreflightError("service dependency posture is invalid")
         selected_dependencies = set(names) & selected_services
+        for dependency in sorted(set(names) - selected_services):
+            declared = services.get(dependency)
+            if isinstance(declared, dict) and names_official_image(
+                declared.get("image")
+            ):
+                # Ignoring the edge would check the dependent against a
+                # Registry Stack service this run never checked or started.
+                raise PreflightError(
+                    f"selected service {selection.service} depends on Registry "
+                    f"Stack service {dependency}, which was not selected. Select "
+                    "it so the preflight checks and starts it, or remove the edge"
+                )
         for dependency in selected_dependencies:
             if selected_by_service[dependency].product not in DEPENDENCY_HEALTHCHECKS:
                 raise PreflightError(

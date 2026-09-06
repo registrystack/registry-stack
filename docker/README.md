@@ -127,8 +127,9 @@ any security option other than one `no-new-privileges` entry, multiple
 replicas, lifecycle hooks, dynamic-loader overrides, inherited mounts,
 executable- or library-shadowing mounts, writable configuration or secret
 trees, anonymous audit volumes, service-level tmpfs, any long-form
-tmpfs except the required read-only mount at `/dev/shm`, and
-driver-option-backed named volumes. Docker's
+tmpfs except the required read-only mount at `/dev/shm`,
+driver-option-backed named volumes, and healthchecks that run anything but the
+product's own executable as a command. Docker's
 implicit writable `/dev/shm` would otherwise let an unused durable audit
 volume hide an ephemeral configured sink. With `/dev/shm` read-only, the fixed
 nonroot identity, and the read-only root filesystem, the audit root is the only
@@ -155,8 +156,11 @@ Selected Compose dependencies are honored. A cold Evidence check can check,
 start with `--no-deps`, and readiness-probe a declared Mint dependency before
 checking Evidence. The dependency lane is an explicit allowlist: only a
 selected service whose product is Mint may be started, because Relay's existing
-healthcheck is liveness-only and is not accepted as readiness, and a
-`depends_on` edge to a service the operator did not select starts nothing. The
+healthcheck is liveness-only and is not accepted as readiness. A `depends_on`
+edge to an official Registry Stack service the operator did not select is
+refused and names both ends, because the dependent would otherwise be checked
+against a service this run never checked or started; an edge to any other
+service starts nothing. The
 plan orders every dependency before its dependent, rejects a cycle in the
 selected services before running anything, and is otherwise the given selection
 order. `docker/compose/docker-compose.mint.yaml` is the cold Mint and Evidence
@@ -182,6 +186,11 @@ Neither image declares a Docker `HEALTHCHECK`. Mint provides a strict
 `mint healthcheck` command for its private `/ready` endpoint; Evidence serves
 `GET /health` and expects an operator-owned HTTP probe. The image itself does
 not guess which listener address is reachable from the container namespace.
+
+A Compose healthcheck is a command Docker runs inside the container as the
+service identity, so the preflight validates it: absent, explicitly disabled,
+or the product's own executable run through `CMD`. A shell form is refused,
+and the distroless images have no shell to run it with.
 
 For an approved Evidence release or candidate, use the operator-owned
 [Compose adapter](compose/README.md), pin the reviewed image digest, and run
