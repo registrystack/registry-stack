@@ -59,6 +59,22 @@ pub(crate) enum DataLifecycleError {
     Runtime,
     Transport,
     Data(DataError),
+    /// The export output file and its checkpoint file were not both present.
+    ExportPair(ExportPairState),
+}
+
+/// Which half of an export's output and checkpoint pair is missing.
+///
+/// An export reserves the empty output first and publishes its first
+/// checkpoint second, so a run stopped between the two leaves a zero-byte
+/// output with no checkpoint. Neither half carries the other's state, so the
+/// rerun refuses and names the file the operator has to deal with.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ExportPairState {
+    /// The output exists and its checkpoint does not.
+    CheckpointMissing,
+    /// The checkpoint exists and its output does not.
+    OutputMissing,
 }
 
 pub(crate) struct DataValidateRequest<'a> {
@@ -589,7 +605,12 @@ fn load_or_start_export(
             })
         }
         (true, true) => resume_existing_export(plan, inspected, destinations),
-        (false, true) | (true, false) => Err(DataLifecycleError::Checkpoint),
+        (true, false) => Err(DataLifecycleError::ExportPair(
+            ExportPairState::CheckpointMissing,
+        )),
+        (false, true) => Err(DataLifecycleError::ExportPair(
+            ExportPairState::OutputMissing,
+        )),
     }
 }
 
@@ -1985,6 +2006,40 @@ mod tests {
         );
 
         fs::remove_dir_all(committed.directory).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_a_half_reserved_pair_by_naming_the_missing_file() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let directory = test_directory("export-half-reserved");
+        let output_path = directory.join("records.jsonl");
+        let checkpoint_path = directory.join("export.checkpoint.json");
+
+        // The reservation creates the empty output and then publishes the
+        // first checkpoint, so a crash between the two leaves a zero-byte
+        // output with no checkpoint.
+        fs::write(&output_path, b"").unwrap();
+        assert!(matches!(
+            load_or_start_export(&plan, &inspected, &output_path, &checkpoint_path),
+            Err(DataLifecycleError::ExportPair(
+                ExportPairState::CheckpointMissing
+            ))
+        ));
+        assert_eq!(fs::read(&output_path).unwrap(), b"");
+
+        // The mirror image, an output removed while its checkpoint stayed, is
+        // refused by the file it names instead.
+        fs::remove_file(&output_path).unwrap();
+        fs::write(&checkpoint_path, b"{}").unwrap();
+        assert!(matches!(
+            load_or_start_export(&plan, &inspected, &output_path, &checkpoint_path),
+            Err(DataLifecycleError::ExportPair(
+                ExportPairState::OutputMissing
+            ))
+        ));
+        assert_eq!(fs::read(&checkpoint_path).unwrap(), b"{}");
+
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[cfg(unix)]
