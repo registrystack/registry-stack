@@ -985,6 +985,51 @@ test('accepts a verified specification that cites one artifact beside its pages'
   assert.deepEqual(page.errors, []);
 });
 
+test('refuses a verified specification whose only outside citation is a prose file', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/README.md', '# Demo\n\nThe crate verifies a source shape.\n');
+  const page = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: crates/demo/README.md describes the source shape. */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+  assert.match(page.errors[0], /prose/);
+});
+
+test('refuses a verified specification whose only outside citation is a directory', (t) => {
+  const root = repository(t);
+  // The directory holds the symbol, so the anchor itself is sound; it is the specification
+  // that has pointed at a tree rather than at an artifact a reader can inspect.
+  const page = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: crates/demo/src/ holds verify_source_shape(). */}',
+  );
+  assert.equal(page.errors.length, 1);
+  assert.match(page.errors[0], /REQ-DOC-014/);
+  assert.match(page.errors[0], /directory/);
+});
+
+test('accepts a verified specification that cites a fixture or a generated artifact', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/tests/fixtures/sample.json', '{"kind": "sample"}\n');
+  const fixture = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: crates/demo/tests/fixtures/sample.json carries the sample shape. */}',
+  );
+  assert.deepEqual(fixture.errors, []);
+  write(root, 'docs/site/src/data/generated/cli-reference.json', '{"binaries": []}\n');
+  const generated = specification(
+    root,
+    'evidence: verified',
+    '{/* Evidence: docs/site/src/data/generated/cli-reference.json lists the binaries. */}',
+  );
+  assert.deepEqual(generated.errors, []);
+});
+
 test('leaves a specification that does not claim verified evidence alone', (t) => {
   const root = repository(t);
   const page = specification(
