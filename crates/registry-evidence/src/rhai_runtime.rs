@@ -3504,6 +3504,82 @@ fn extract(response, selectors, context) {
         );
     }
 
+    /// The runtime owns the `extract/3` arity and its refusal to pair with an
+    /// optimized batch; the returned-identity comparison itself belongs to the
+    /// adapter, which a source exporter generates and a hand-written adapter
+    /// must carry. Pin the comparison a compliant adapter performs, so the
+    /// enforcement point the security matrix names has an executable proof: a
+    /// returned identity that is not the selected profile's exact scalar stops
+    /// the evaluation as a source-protocol failure instead of reaching facts.
+    #[test]
+    fn an_exported_adapter_refuses_a_returned_identity_that_is_not_the_selector() {
+        let runtime = runtime();
+        let script = runtime
+            .compile_extraction(
+                r#"
+fn extract(response, selectors, context) {
+    let subject = selectors["subject"];
+    let record = response["data"]["domainData"];
+    if subject["profile"] == "by-code-and-region" {
+        if is_missing(record["code"]) || type_of(record["code"]) != type_of(subject["values"]["code"]) || record["code"] != subject["values"]["code"] { throw "source_protocol_error"; }
+        if is_missing(record["region"]) || type_of(record["region"]) != type_of(subject["values"]["region"]) || record["region"] != subject["values"]["region"] { throw "source_protocol_error"; }
+    } else { throw "unsupported source selector profile"; }
+    if is_missing(record["active"]) { return #{outcome: "no_match"}; }
+    #{outcome: "match", facts: #{active: record["active"]}}
+}
+"#,
+            )
+            .expect("the exported adapter shape compiles");
+        let schema = jsonschema::JSONSchema::compile(&json!({
+            "type":"object", "additionalProperties":false, "required":["active"],
+            "properties":{"active":{"type":"boolean"}}
+        }))
+        .unwrap();
+        let selectors =
+            json!({"subject":{"profile":"by-code-and-region","values":{"code":"A","region":7}}});
+        let returned = |code: Value, region: Value| json!({"data": {"domainData": {"code": code, "region": region, "active": true}}});
+
+        assert_eq!(
+            runtime.extract_with_selectors(
+                &script,
+                &returned(json!("A"), json!(7)),
+                &selectors,
+                &json!({}),
+                &BTreeMap::new(),
+                &schema
+            ),
+            Ok(LookupResult::Match(BTreeMap::from([(
+                "active".to_owned(),
+                json!(true)
+            )])))
+        );
+
+        for (reason, response) in [
+            ("a different value", returned(json!("B"), json!(7))),
+            (
+                "the selected value as a string",
+                returned(json!("A"), json!("7")),
+            ),
+            (
+                "the selected value as a float",
+                returned(json!("A"), json!(7.0)),
+            ),
+        ] {
+            assert_eq!(
+                runtime.extract_with_selectors(
+                    &script,
+                    &response,
+                    &selectors,
+                    &json!({}),
+                    &BTreeMap::new(),
+                    &schema
+                ),
+                Err(RhaiRuntimeError::SourceProtocol),
+                "a returned identity carrying {reason} reached the facts"
+            );
+        }
+    }
+
     #[test]
     fn selector_aware_extraction_has_fresh_inputs_and_no_ambiguous_abi() {
         let runtime = runtime();

@@ -55,6 +55,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: selector_aware_extraction_receives_only_the_authorized_source_subset}
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: selector_aware_extraction_checks_exact_alternative_identity_before_facts}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: an_exported_adapter_refuses_a_returned_identity_that_is_not_the_selector}
       - {file: crates/registry-evidence/src/selector.rs, name: selector_claim_values_are_scalar_only}
       - {file: crates/registry-evidence/src/config.rs, name: active_source_role_sets_reject_unreachable_inputs_at_startup}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: failed_selector_budget_is_enforced_by_the_runtime_and_scoped_to_authority}
@@ -80,6 +81,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: selector_aware_extraction_has_fresh_inputs_and_no_ambiguous_abi}
       - {file: crates/registry-evidence/src/kernel.rs, name: selector_aware_extraction_cannot_be_bypassed_by_source_batching}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: an_exported_adapter_refuses_a_returned_identity_that_is_not_the_selector}
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: extraction_decodes_only_the_closed_union_and_validates_facts}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_rejects_an_extra_extracted_fact_before_derivation_or_release}
   - id: sec-derived-value-output-gate
