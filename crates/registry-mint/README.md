@@ -101,6 +101,14 @@ relative to the document's own directory. The secret root and Transit socket
 are absolute. Everything here is startup-only: issuer identity, signing and
 audit keys, listener, and token policy are fixed for the life of the process.
 
+`audit.path` is resolved further, at load: every component of the destination
+that exists is followed to where it really points, and Mint records that
+location as the one it opens. A destination that resolves under the
+configuration directory has to stay there, so a link component leading out of
+it is refused before startup. An absolute destination elsewhere names storage
+the operator chose, and only its links are resolved. A destination that cannot
+be resolved fails closed, and no refusal names a configured path.
+
 ```yaml
 version: 1
 issuer: https://mint.example.org
