@@ -109,6 +109,31 @@ fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
     let mut registry: Value =
         serde_norway::from_slice(&fs::read(project.join("registry.yaml")).unwrap()).unwrap();
     registry["package"]["environment"] = json!("local");
+    // The initialized project grants no lookup, so `generate evidence-source`
+    // has nothing to export. Author one exact selector and one narrow
+    // request-origin profile before the first start captures the closure.
+    registry["entities"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entity| entity["id"] == "record")
+        .unwrap()["selectorProfiles"] = json!([{"id": "by-code", "fields": ["code"]}]);
+    registry["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "evidence-source",
+            "principalClaim": "registry_principal",
+            "requiredScopes": ["registry:evidence:lookup"],
+            "requiredPurposes": ["evidence-source-read"],
+            "grants": [{
+                "entity": "record",
+                "operations": ["lookup"],
+                "readableFields": ["code", "status"],
+                "lookups": [{"selector": "by-code", "valueOrigin": "request"}],
+                "rowBoundaries": [],
+            }],
+        }));
     write(
         &project.join("registry.yaml"),
         serde_norway::to_string(&registry).unwrap().as_bytes(),
@@ -131,6 +156,12 @@ clients:
       registry_principal: generic-registry-reader
       registry_purpose: registry-reporting
       registry_record_status: active
+  - id: source
+    accessProfiles: [evidence-source]
+    scopes: [registry:evidence:lookup]
+    claims:
+      registry_principal: generic-registry-source
+      registry_purpose: evidence-source-read
 seed:
   - id: first-record
     client: operator
@@ -280,6 +311,116 @@ seed:
             .unwrap()
             .to_owned();
         (record, revision)
+    });
+    // The exported Evidence source contract must describe the running
+    // registry: its route and access profile answer the seeded identity, and
+    // an unresolved lookup answers exactly the declared problem.
+    let exports = parent.join("evidence-export");
+    session.success(&[
+        "generate",
+        "evidence-source",
+        project.to_str().unwrap(),
+        "--access-profile",
+        "evidence-source",
+        "--entity",
+        "record",
+        "--selector",
+        "by-code",
+        "--fields",
+        "status",
+        "--source-id",
+        "registry-status",
+        "--connection",
+        "registry",
+        "--output",
+        exports.to_str().unwrap(),
+    ]);
+    let exported: Value =
+        serde_norway::from_slice(&fs::read(exports.join("sources/registry-status.yaml")).unwrap())
+            .unwrap();
+    let schema: Value = serde_norway::from_slice(
+        &fs::read(exports.join("schemas/registry-status-response.yaml")).unwrap(),
+    )
+    .unwrap();
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(exports.join("source-export.json")).unwrap()).unwrap();
+    let unresolved = exported["unresolvedProblem"].clone();
+    let request = exported["request"].clone();
+    assert_eq!(request["method"], "POST");
+    // `code` names both the authored selector field and its HTTP property in
+    // this model, so the export's identity name addresses the response too.
+    let identity = request["selectorInputs"][0]["alternatives"][0]["fields"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let declared = schema["properties"]["data"]["properties"]["domainData"]["properties"]
+        [&identity]["type"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap())
+        .find(|name| *name != "null")
+        .expect("the export declares a scalar type for the identity field")
+        .to_owned();
+    let select = request["projection"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pointer| pointer.as_str().unwrap().rsplit('/').next().unwrap())
+        .collect::<Vec<_>>()
+        .join(",");
+    runtime.block_on(async {
+        let token = fs::read_to_string(project.join(".breg/dev/secrets/source-token")).unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let lookup = |value: &str| {
+            let mut sent = client
+                .post(format!(
+                    "http://127.0.0.1:8094{}",
+                    request["path"].as_str().unwrap()
+                ))
+                .bearer_auth(&token)
+                .query(&[
+                    (
+                        "accessProfile",
+                        manifest["provenance"]["accessProfile"].as_str().unwrap(),
+                    ),
+                    ("$select", select.as_str()),
+                ])
+                .json(&json!({"selector": "by-code", "values": {&identity: value}}));
+            for header in request["fixedHeaders"].as_array().unwrap() {
+                sent = sent.header(
+                    header["name"].as_str().unwrap().to_owned(),
+                    header["value"].as_str().unwrap().to_owned(),
+                );
+            }
+            sent.send()
+        };
+        let response = lookup("synthetic-dev-record").await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let found: Value = response.json().await.unwrap();
+        let echoed = &found["data"]["domainData"][&identity];
+        assert_eq!(echoed, "synthetic-dev-record");
+        assert_eq!(
+            match echoed {
+                Value::String(_) => "string",
+                Value::Bool(_) => "boolean",
+                Value::Number(_) => "integer",
+                other => panic!("the identity field is not a scalar: {other}"),
+            },
+            declared
+        );
+        let response = lookup("absent-synthetic-dev-record").await.unwrap();
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            unresolved["status"].as_u64().unwrap()
+        );
+        let problem: Value = response.json().await.unwrap();
+        assert_eq!(problem["type"], unresolved["type"]);
+        assert_eq!(problem["code"], unresolved["code"]);
     });
     session.stop();
     session.stop();
