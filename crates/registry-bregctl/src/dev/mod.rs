@@ -94,6 +94,8 @@ struct StopArgs {
     /// Also remove the owned container and its data volume, discarding records.
     #[arg(long)]
     remove: bool,
+    #[arg(long, hide = true)]
+    docker_bin: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -206,7 +208,7 @@ impl State {
 
 pub fn run(args: DevArgs) -> Result<Value> {
     match args.action {
-        Some(DevAction::Stop(args)) => stop(&args.project, args.remove),
+        Some(DevAction::Stop(args)) => stop(&args.project, args.remove, args.docker_bin.as_deref()),
         Some(DevAction::Start(args)) => start(args),
         None => start(args.start),
     }
@@ -555,7 +557,7 @@ fn verify_outputs(state: &State) -> Result<()> {
     Ok(())
 }
 
-fn stop(project_path: &Path, remove: bool) -> Result<Value> {
+fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<Value> {
     let project = project(project_path)?;
     let parent = project.join(".breg");
     if !parent.exists() {
@@ -581,7 +583,7 @@ fn stop(project_path: &Path, remove: bool) -> Result<Value> {
     for port in [state.breg_port, state.mint_port] {
         probe(port)?;
     }
-    let docker = executable("docker", None)?;
+    let docker = executable("docker", docker_bin)?;
     // Remove mode tolerates a container already taken by hand: reclaim verifies
     // ownership of whatever is still there and forgets the rest, so skip the
     // inspection (and the stop it guards) when nothing is listed under this name.
@@ -762,7 +764,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
             token(&args.mint_bin, &state, &client.id)?;
         }
         if state.package_revision.is_none() {
-            package(&mut state, &clients)?;
+            package(&args.docker_bin, &mut state, &clients)?;
         }
         ensure_active(&terminate)?;
         if !state.activated {
@@ -1545,13 +1547,12 @@ fn token(mint: &Path, state: &State, id: &str) -> Result<()> {
     )
 }
 
-fn package(state: &mut State, clients: &Clients) -> Result<()> {
+fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     let root = state.root();
     // The schema-test database is disposable. A failed rehearsal is rebuilt;
     // the retained runtime database is never dropped or reseeded here.
-    let docker = executable("docker", None)?;
     sql(
-        &docker,
+        docker,
         state,
         "postgres",
         b"DROP DATABASE IF EXISTS breg_dev_test WITH (FORCE); CREATE DATABASE breg_dev_test;",
@@ -1568,7 +1569,7 @@ fn package(state: &mut State, clients: &Clients) -> Result<()> {
         initialization.push_str(&format!("CREATE SCHEMA {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
     }
     sql(
-        &docker,
+        docker,
         state,
         "breg_dev_test",
         initialization.as_bytes(),
