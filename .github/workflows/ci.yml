@@ -1059,14 +1059,29 @@ jobs:
         working-directory: docs/site
         run: npm run check:tutorial:breg:dry-run
 
-      - name: Build the Base Registry Engine toolset under test
+      - name: Build the Base Registry Engine and Evidence toolsets under test
         shell: bash
         run: |
           set -euo pipefail
           CARGO_TARGET_DIR="target/breg-tutorial-source" \
             cargo build --locked --profile ci \
             -p registry-breg --features registry-breg/runtime \
-            -p registry-bregctl -p registry-mint --bins
+            -p registry-bregctl -p registry-mint \
+            -p registry-evidence -p registry-evidencectl --bins
+
+      - name: Verify native retained development lifecycle
+        run: |
+          CARGO_TARGET_DIR="target/breg-tutorial-source" \
+            cargo test --locked --profile ci -p registry-bregctl \
+            --test dev_lifecycle -- --ignored
+
+      - name: Verify native Evidence source composition and updates
+        run: |
+          uv run --no-project --with PyYAML==6.0.3 python \
+            products/breg/evidence/tests/verify-composition.py \
+            --bregctl "$GITHUB_WORKSPACE/target/breg-tutorial-source/ci/bregctl" \
+            --evidencectl "$GITHUB_WORKSPACE/target/breg-tutorial-source/ci/evidencectl" \
+            --evidence "$GITHUB_WORKSPACE/target/breg-tutorial-source/ci/evidence"
 
       - name: Execute the Base Registry Engine tutorial from a reader directory
         shell: bash

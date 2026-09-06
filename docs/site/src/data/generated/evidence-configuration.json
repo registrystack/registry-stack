@@ -9,7 +9,7 @@
       "marker": "evidence-bundle-key-paths",
       "status": "frozen",
       "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
-      "field_count": 277,
+      "field_count": 304,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -2990,6 +2990,459 @@
           "runtime_validation": null
         },
         {
+          "key_path": "sourceConnections",
+          "kind": "property",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxProperties: 128"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Optional explicit process-local owners of HTTP destination, workload authentication, TLS trust and aggregate resource limits. Authored connection references are resolved at build time; startup requires every concrete source value to equal its named owner. Independent connection names are never deduplicated using secret bytes.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            null
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.admissionTimeoutMilliseconds",
+          "kind": "property",
+          "type": "integer",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 30000",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Maximum bounded wait for aggregate admission or OAuth single-flight refresh.",
+          "defaults": [
+            "5000"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication",
+          "kind": "property",
+          "type": "object",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Complete existing source authentication union, including both OAuth audiences.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.assumedLifetimeSeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 86400",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Lifetime credited to an acquired token whose response omits `expires_in`, rather than inferring one from the token. Without this key such a response is a credential failure, and the cached lifetime is still clamped to `maximumCacheSeconds`.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.audience",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 512",
+              "minLength: 1",
+              "pattern: \\S"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Fixed `audience` form parameter sent with the token request, for an authorization server that keys the issued token to an audience the scope cannot express and returns an unusable token without it. Sent as it stands with no fallback, so a blank value is refused here rather than by the authorization server at readiness.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.clientAssertionAudience",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 512",
+              "minLength: 1",
+              "pattern: \\S"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Fixed `aud` claim of the signed client assertion, for an authorization server that expects an identifier it is not reached at, such as its issuer or a host in front of a proxy. Declared only beside `clientAssertionKeyRef`, and defaulting to `tokenEndpoint`. RFC 7523 section 3 has the server compare this by Simple String Comparison, so it is an opaque identifier rather than a URL and is signed byte for byte. It names who may accept the assertion, never where it is sent. A blank value is refused here rather than at the first token request, where signing rejects a whitespace-only audience as empty.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.clientAssertionKeyRef",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [],
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical file-secret reference for the private JWK the runtime signs an RFC 7523 section 2.2 client assertion with, which is the client authentication SMART on FHIR Backend Services requires. The assertion is audienced to `clientAssertionAudience`, or to `tokenEndpoint` when the bundle names none, and lives 60 seconds; no private key leaves the process.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.clientIdRef",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical file-secret reference for the client identifier the runtime presents in the client-credentials exchange at `tokenEndpoint`.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.clientSecretRef",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [],
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical file-secret reference for the client secret the runtime presents at `tokenEndpoint`; the token URL, body, response, and debug output stay redacted, so the resolved value reaches no log. Declared with `credentialPlacement` and never beside `clientAssertionKeyRef`.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.credentialPlacement",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "basic-header",
+            "form-body"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Selects whether the client identifier and secret travel in the Authorization header or the form body of the token request; Version 1 offers no query-string placement, so neither value can reach an authorization-server, proxy, or ingress URL log. Declared with `clientSecretRef` and never beside `clientAssertionKeyRef`, whose assertion always travels in the form body.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.headerName",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 64",
+              "minLength: 1",
+              "pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Names the header carrying this source's API-key value. The name is validated as an HTTP field name and rejected when it collides with authentication, routing, framing, cookie, forwarding, proxy, tracing, or hop-by-hop headers.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.kind",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "basic",
+            "none",
+            "oauth2-client-credentials",
+            "static-api-key",
+            "static-authorization"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Selects which credential the runtime presents to this source and closes the member set to that profile. `none` sends no credential and is admitted only by a `local` assurance bundle at a canonical numeric-loopback origin; production and evidence-grade bundles reject that kind.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.maximumCacheSeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 86400",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Bounds how long one acquired token is reused across evidence requests for this source; the cache lifetime is the smaller of this bound and the provider's reported expiry.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.passwordRef",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical file-secret reference for the password half of the HTTP Basic credential the runtime encodes into the Authorization header of every request to this source.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.scheme",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 32",
+              "minLength: 1",
+              "pattern: ^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Authentication scheme the token is presented under; absent, the runtime sends `Bearer`. RFC 9110 section 11.1 makes the scheme an HTTP token chosen by the origin, and `static-api-key` cannot serve a source that wants another one because it refuses the Authorization header by name.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.scope",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 512",
+              "minLength: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Fixed scope requested in the client-credentials exchange; a token response reporting a scope other than this one is a credential failure.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.tokenEndpoint",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [],
+            [
+              "pattern: ^https://[^?#]+$"
+            ],
+            [
+              "pattern: ^http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?/[^?#]*$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Fixed endpoint the runtime exchanges client credentials at before calling this source; the exchange is credential bootstrap, never an evidence-data request or a fact source.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.tokenRef",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical file-secret reference for the static token the runtime places in the Authorization header of every request to this source.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.usernameRef",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical file-secret reference for the user name half of the HTTP Basic credential the runtime presents to this source.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.authentication.valueRef",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical file-secret reference for the API-key value the runtime places in `headerName`; the resolved value is bounded and rejects control characters, CR, and LF.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.baseUrl",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^https://[^/?#]+$"
+            ],
+            [
+              "pattern: ^http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Fixed source origin, with the same rules as an inline HTTP source.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.concurrencyLimit",
+          "kind": "property",
+          "type": "integer",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 256",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Aggregate occupied source calls for this explicit connection in one process.",
+          "defaults": [
+            "4"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.tlsTrustProfile",
+          "kind": "property",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical additive private-CA profile bound by the runtime document.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceConnections.*.tokenTimeoutMilliseconds",
+          "kind": "property",
+          "type": "integer",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 30000",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Maximum total duration of one OAuth token request and response body.",
+          "defaults": [
+            "5000"
+          ],
+          "runtime_validation": null
+        },
+        {
           "key_path": "sources",
           "kind": "property",
           "type": "object",
@@ -3488,6 +3941,40 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative closed JSON Schema the batch projection must satisfy before `extract_batch/2` runs. It governs only the optional optimized response and does not replace the ordinary source responseSchema used by sequential execution.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.behaviorRevision",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^sha256:[0-9a-f]{64}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Optional digest of the provider's selected read behavior. It is a reached source dependency; unrelated export provenance stays outside requirement revisions.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.connection",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Optional explicit sourceConnections owner. Startup rejects differing resolved baseUrl, authentication, tlsTrustProfile or request.concurrencyLimit values.",
           "defaults": [],
           "runtime_validation": null
         },
@@ -5476,7 +5963,7 @@
       "marker": "evidence-authoring-question-key-paths",
       "status": "tooling",
       "reference": "products/evidence/reference/authoring-projects/CONFIG.md",
-      "field_count": 57,
+      "field_count": 61,
       "fields": [
         {
           "key_path": "answers",
@@ -6142,6 +6629,37 @@
           "runtime_validation": null
         },
         {
+          "key_path": "subject.profiles",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxItems: 16",
+              "minItems: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Explicit alternative profiles from the project's selector definitions.\nEach profile supplies its complete field set, including composite keys.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subject.profiles[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "subject.role",
           "kind": "property",
           "type": "string",
@@ -6239,6 +6757,37 @@
           "runtime_validation": null
         },
         {
+          "key_path": "subjects[].profiles",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxItems: 16",
+              "minItems: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Explicit alternative profiles from the project's selector definitions.\nEach profile supplies its complete field set, including composite keys.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjects[].profiles[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "subjects[].role",
           "kind": "property",
           "type": "string",
@@ -6255,7 +6804,7 @@
           "key_path": "subjects[].selector",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "no",
           "values": null,
           "values_conditional": false,
           "constraints": [],

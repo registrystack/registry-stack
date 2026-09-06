@@ -599,6 +599,10 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/scripts/check-breg-tutorial.sh",
             "docs/site/scripts/check-breg-tutorial.test.mjs",
             "docs/site/src/content/docs/tutorials/first-breg.mdx",
+            "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
+            "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
+            "docs/site/scripts/generate-breg-evidence-starter.mjs",
+            "products/breg/evidence/starter/fixtures/record-active.yaml",
             "docs/site/package.json",
         )
         for path in infrastructure:
@@ -641,6 +645,23 @@ class CiChangesTest(unittest.TestCase):
                 ),
             )["breg_tutorial"]
         )
+
+    def test_native_composition_routes_provider_and_evidence_changes(self) -> None:
+        for path in (
+            "crates/registry-evidence/src/source.rs",
+            "crates/registry-evidencectl/src/source_cli.rs",
+            "crates/registry-evidence-authoring/src/model.rs",
+            "products/breg/evidence/tests/verify-composition.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
+        for path in (
+            "products/breg/evidence/starter/fixtures/record-active.yaml",
+            "products/evidence/reference/authoring-projects/SOURCE-EXPORT.md",
+            "products/evidence/reference/request-adapter/deployment-projects/SOURCE-CREDENTIAL-ROTATION.md",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
 
     def test_reverse_dependencies_are_included(self) -> None:
         outputs = classify(

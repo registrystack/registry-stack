@@ -191,6 +191,11 @@ BREG_TUTORIAL_INPUTS = (
     "docs/site/scripts/check-breg-tutorial.sh",
     "docs/site/scripts/check-breg-tutorial.test.mjs",
     "docs/site/src/content/docs/tutorials/first-breg.mdx",
+    "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
+    "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
+    "docs/site/scripts/generate-breg-evidence-starter*",
+    "docs/site/public/examples/breg-evidence-starter.tar.gz",
+    "products/breg/evidence/**",
     "products/breg/quickstart/**",
 )
 
@@ -330,13 +335,11 @@ ASSEMBLED_PYTHON_CLIENT_PACKAGES = frozenset(
     package for package in NATIVE_BINDING_PACKAGES if package.endswith("-client-py")
 )
 
-# The gate builds and runs exactly these: the registry, the tool that applies
-# its package, and Registry Mint, because the launcher the tutorial starts
-# issues the operator token the reader's first authenticated call carries. The
-# clients in the Base Registry Engine shard are not on the replayed path.
-BREG_TUTORIAL_PACKAGES = frozenset({"registry-breg", "registry-bregctl"}) | frozenset(
-    SHARDS["mint"]
-)
+# This job also verifies the native BReg/Evidence source composition. Package
+# reverse-dependency routing includes their shared compiler and runtime inputs.
+BREG_TUTORIAL_PACKAGES = frozenset(
+    {"registry-breg", "registry-bregctl", "registry-evidence", "registry-evidencectl"}
+) | frozenset(SHARDS["mint"])
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
@@ -698,6 +701,9 @@ def classify(
             "crates/registry-evidencectl/schemas/authoring/*",
             "products/breg/generated/authoring/*",
             "products/breg/generated/runtime/*",
+            "products/breg/evidence/**",
+            "products/evidence/reference/authoring-projects/SOURCE-EXPORT.md",
+            "products/evidence/reference/request-adapter/deployment-projects/SOURCE-CREDENTIAL-ROTATION.md",
             # The same page names the product reference that explains each
             # schema, and the docs tests read those references to prove the
             # published key paths and the documented ones agree.

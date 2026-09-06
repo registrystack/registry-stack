@@ -418,7 +418,8 @@
                 "actions",
                 "manifest",
                 "metadata",
-                "sql"
+                "sql",
+                "evidence-source"
               ],
               "environment": null
             },
@@ -452,6 +453,60 @@
               "environment": null
             },
             {
+              "display": "--access-profile <ACCESS_PROFILE>",
+              "description": "Existing registry lookup access profile (evidence-source only)",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--entity <ENTITY>",
+              "description": "Compiled entity to export (evidence-source only)",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--selector <SELECTORS>",
+              "description": "Exact lookup alternatives; repeat to expose several selectors",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--fields <FIELDS>",
+              "description": "Explicit readable fact fields, separated by commas",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--source-id <SOURCE_ID>",
+              "description": "Stable source identity inside the Evidence authoring project",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--connection <CONNECTION>",
+              "description": "Logical connection that the Evidence operator configures separately",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -477,6 +532,235 @@
           ],
           "constraints": [],
           "subcommands": []
+        },
+        {
+          "name": "dev",
+          "invocation": "bregctl dev",
+          "about": "Start or stop this project's retained local development services",
+          "long_about": null,
+          "usage": "bregctl dev [OPTIONS]\n       bregctl dev <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Existing authored registry project. Its package environment must be local",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "."
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--clients-file <CLIENTS_FILE>",
+              "description": "Explicit local clients, profile bindings, and optional seed records",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--detach",
+              "description": "Return when the local services are ready (the supervisor always detaches)",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--breg-port <BREG_PORT>",
+              "description": "Registry loopback port on first start (default 8090; retained for restarts)",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--mint-port <MINT_PORT>",
+              "description": "Local Mint loopback port on first start (default 8091; retained for restarts)",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--database-port <DATABASE_PORT>",
+              "description": "PostgreSQL loopback port on first start (default 55432; retained for restarts)",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "start",
+              "invocation": "bregctl dev start",
+              "about": "Start or reuse the project's retained local database and services",
+              "long_about": null,
+              "usage": "bregctl dev start [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Existing authored registry project. Its package environment must be local",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--clients-file <CLIENTS_FILE>",
+                  "description": "Explicit local clients, profile bindings, and optional seed records",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--detach",
+                  "description": "Return when the local services are ready (the supervisor always detaches)",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--breg-port <BREG_PORT>",
+                  "description": "Registry loopback port on first start (default 8090; retained for restarts)",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--mint-port <MINT_PORT>",
+                  "description": "Local Mint loopback port on first start (default 8091; retained for restarts)",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--database-port <DATABASE_PORT>",
+                  "description": "PostgreSQL loopback port on first start (default 55432; retained for restarts)",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "stop",
+              "invocation": "bregctl dev stop",
+              "about": "Stop only this project's supervised services, preserving its database",
+              "long_about": null,
+              "usage": "bregctl dev stop [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Registry project whose owned services should stop while preserving records",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         },
         {
           "name": "explain",
@@ -3713,9 +3997,9 @@
         {
           "name": "new",
           "invocation": "evidencectl new",
-          "about": "Start an editable Evidence Gateway project from OpenAPI or a SQLite extract",
+          "about": "Start an editable Evidence Gateway project from OpenAPI, a starter, or a SQLite extract",
           "long_about": null,
-          "usage": "evidencectl new --profile <PROFILE> <--openapi <OPENAPI>|--transport <TRANSPORT>> <DIRECTORY>",
+          "usage": "evidencectl new --profile <PROFILE> <--openapi <OPENAPI>|--transport <TRANSPORT>|--starter <STARTER>> <DIRECTORY>",
           "arguments": [
             {
               "display": "<DIRECTORY>",
@@ -3749,6 +4033,15 @@
               "environment": null
             },
             {
+              "display": "--starter <STARTER>",
+              "description": "Reviewed local starter directory to copy without requiring an API description",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--profile <PROFILE>",
               "description": "Explicit development profile for local authoring",
               "always_required": true,
@@ -3775,7 +4068,8 @@
               "when": null,
               "arguments": [
                 "--openapi <OPENAPI>",
-                "--transport <TRANSPORT>"
+                "--transport <TRANSPORT>",
+                "--starter <STARTER>"
               ]
             },
             {
@@ -3783,6 +4077,22 @@
               "when": null,
               "arguments": [
                 "--openapi <OPENAPI>",
+                "--starter <STARTER>"
+              ]
+            },
+            {
+              "kind": "mutually_exclusive",
+              "when": null,
+              "arguments": [
+                "--openapi <OPENAPI>",
+                "--transport <TRANSPORT>"
+              ]
+            },
+            {
+              "kind": "mutually_exclusive",
+              "when": null,
+              "arguments": [
+                "--starter <STARTER>",
                 "--transport <TRANSPORT>"
               ]
             }
@@ -3881,6 +4191,15 @@
                 {
                   "display": "--evidence-bin <EVIDENCE_BIN>",
                   "description": "Path to the evidence binary; defaults to `evidence` on PATH",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--target <TARGET>",
+                  "description": "Complete deployment target to use when compiling an editable project",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -4489,6 +4808,350 @@
                   "subcommands": []
                 }
               ]
+            },
+            {
+              "name": "diff",
+              "invocation": "evidencectl source diff",
+              "about": "Compare complete local source exports with the editable project",
+              "long_about": null,
+              "usage": "evidencectl source diff [OPTIONS] <EXPORTS>...",
+              "arguments": [
+                {
+                  "display": "<EXPORTS>",
+                  "description": "Complete local export directories; pass shared owners together",
+                  "always_required": true,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resolutions <RESOLUTIONS>",
+                  "description": "Closed versioned file choosing keep, adopt, or an explicitly resolved file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--target <TARGET>",
+                  "description": "Complete target used by the compiler to compare actual question revisions",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "import",
+              "invocation": "evidencectl source import",
+              "about": "Import complete local source exports after compiler validation",
+              "long_about": null,
+              "usage": "evidencectl source import [OPTIONS] <EXPORTS>...",
+              "arguments": [
+                {
+                  "display": "<EXPORTS>",
+                  "description": "Complete local export directories; pass shared owners together",
+                  "always_required": true,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resolutions <RESOLUTIONS>",
+                  "description": "Closed versioned file choosing keep, adopt, or an explicitly resolved file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--target <TARGET>",
+                  "description": "Complete target used by the compiler to compare actual question revisions",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "update",
+              "invocation": "evidencectl source update",
+              "about": "Update previously imported source exports after compiler validation",
+              "long_about": null,
+              "usage": "evidencectl source update [OPTIONS] <EXPORTS>...",
+              "arguments": [
+                {
+                  "display": "<EXPORTS>",
+                  "description": "Complete local export directories; pass shared owners together",
+                  "always_required": true,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resolutions <RESOLUTIONS>",
+                  "description": "Closed versioned file choosing keep, adopt, or an explicitly resolved file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--target <TARGET>",
+                  "description": "Complete target used by the compiler to compare actual question revisions",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "detach",
+              "invocation": "evidencectl source detach",
+              "about": "Fork one installed source into ordinary maintained authored files",
+              "long_about": null,
+              "usage": "evidencectl source detach [OPTIONS] <SOURCE_ID>",
+              "arguments": [
+                {
+                  "display": "<SOURCE_ID>",
+                  "description": "Installed source to fork into ordinary maintained authored files",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "target",
+          "invocation": "evidencectl target",
+          "about": "Create and inspect complete deployment targets",
+          "long_about": null,
+          "usage": "evidencectl target <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "new",
+              "invocation": "evidencectl target new",
+              "about": "Create deployment target files from an explicit settings file",
+              "long_about": null,
+              "usage": "evidencectl target new [OPTIONS] --settings <SETTINGS> <DIRECTORY>",
+              "arguments": [
+                {
+                  "display": "<DIRECTORY>",
+                  "description": "New target directory to create",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--settings <SETTINGS>",
+                  "description": "Closed settings document with native governance, runtime, and public keys. This command checks target-file shape, logical secret references, and public-key identity. Project-specific bundle and runtime semantics are checked by `target explain`, `fixtures run --target`, `build --target`, and `doctor`.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--signing-public-key <SIGNING_PUBLIC_KEY>",
+                  "description": "Public signing JWK whose RFC 7638 thumbprint names activePublicJwkFile",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "explain",
+              "invocation": "evidencectl target explain",
+              "about": "Inspect the public files and logical secret references in a target",
+              "long_about": null,
+              "usage": "evidencectl target explain [OPTIONS] <TARGET>",
+              "arguments": [
+                {
+                  "display": "<TARGET>",
+                  "description": "Complete deployment target containing governance.yaml and runtime.yaml",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--json",
+                  "description": "Emit one machine-readable JSON report on standard output",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },
@@ -4578,6 +5241,15 @@
               "default_values": [
                 "8081"
               ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--target <TARGET>",
+              "description": "Reuse a local target's source connections and outbound TLS in the generated local caller rehearsal. Target service authentication is not replayed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
               "possible_values": [],
               "environment": null
             },
@@ -4704,7 +5376,7 @@
                 },
                 {
                   "display": "--subject <SUBJECT>",
-                  "description": "Subject selector. Repeat role:field=value for multiple roles. JSON booleans and integers keep their types",
+                  "description": "Subject selector. Repeat role:field=value; local alternatives require role@profile:field=value",
                   "always_required": false,
                   "repeatable": true,
                   "default_values": [],
@@ -4713,7 +5385,7 @@
                 },
                 {
                   "display": "--subjects-file <PATH>",
-                  "description": "Owner-only JSON file containing typed role, field, and value entries",
+                  "description": "Owner-only JSON file containing typed role, field, and value entries; local alternatives also require profile",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

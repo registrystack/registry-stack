@@ -1,0 +1,324 @@
+---
+title: Deploy Evidence with Base Registry Engine
+description: Review an operated registry export, build a complete Evidence target, and coordinate source and consumer changes.
+status: draft
+draft: true
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-06"
+doc_type: tutorial
+persona:
+  - assertion provider
+  - operator
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Continue from [Answer questions from Base Registry Engine (BReg)](../evidence-from-breg/).
+You will replace the teaching environment with an explicitly reviewed operated
+source and target, then hand over a validated candidate and its activation
+procedure. Keep the authored questions when their meaning still matches the
+operated registry.
+
+<QuickstartMeta
+  outcome="An offline-validated Evidence candidate and an explicit operator procedure for an authenticated BReg source."
+  time="About 45 minutes after identity, signing and registry provisioning"
+  level="Operated deployment handoff"
+  prerequisites={['The matching candidate toolset used by the local tutorial', 'A reviewed operated BReg package and its source export', 'Approved caller and source workload registrations', 'A provisioned Transit signing key and its public JWK', 'An operator responsible for HTTPS, secrets and durable audit storage']}
+/>
+
+:::note[Candidate tutorial]
+The native source and target commands on this page are under development and are
+not in v0.26.1. Offline candidate validation does not establish that an
+institution's deployed endpoints, credentials or signing service work. The
+target-host steps below must pass in that environment before traffic is enabled.
+:::
+
+## Obtain the export for the operated registry
+
+Ask the BReg operator for the exact reviewed package identity, its generated
+OpenAPI, and a source export made from the authored project matching that package.
+Keep the stable source and connection IDs agreed in the local tutorial. Matching
+OpenAPI shapes alone do not establish matching read authorization or derived
+lookup behavior.
+
+For an already activated registry, record the activated package identity. For a
+planned successor, record its candidate identity and defer activation to the
+coordinated cutover below. BReg package signing, migration and activation remain
+separate privileged operations. Follow
+[Build a BReg production candidate](../build-a-breg-production-candidate/).
+
+Place the reviewed export at `exports/registry-status-operated`. Compare and
+accept its ordinary source files before binding the new environment:
+
+```sh
+evidencectl source diff ./exports/registry-status-operated --project ./evidence
+evidencectl source update ./exports/registry-status-operated --project ./evidence
+```
+
+Without a target these commands validate the authored source graph and report
+structural impact. Resolve changes to facts, selectors or extraction explicitly.
+Update the question meaning and fixtures when necessary. If local and upstream
+files both changed, use the resolutions described in the
+[source export contract](../../products/registry-evidence/source-exports/).
+Do not overwrite a customization to make a build pass.
+
+{/* Evidence: products/breg/EVIDENCE.md; products/evidence/reference/authoring-projects/SOURCE-EXPORT.md; crates/registry-evidencectl/src/source_cli.rs. */}
+
+## Author the operated target settings
+
+Keep the reviewed Evidence project and complete environment targets in your
+deployment repository. Copy the local settings to a separate file for editing:
+
+```sh
+cp ./evidence/targets/local/settings.yaml ./production-settings.yaml
+```
+
+The settings document contains `formatVersion: 1`, the complete `governance` and
+`runtime` documents, and a `publicKeys` map. This is a packaging format for the
+existing configuration, not an overlay. Review every environment-dependent field:
+
+| Area | Operated value and owner |
+| --- | --- |
+| Assurance, service and issuer | Set production assurance and the institution's provider ID, trust domain, Evidence issuer ID and HTTPS public origin. |
+| Caller authentication | The identity administrator supplies the HTTPS issuer and JWKS endpoint, Evidence resource audiences, accepted algorithms and claim mapping. |
+| Caller authority | The authority owner approves requester tags, requirement, purpose, audience rule, exact selector alternatives and response formats. Remove the teaching grants. |
+| Question governance | The requirement owner approves requirement, concept, framework, Evidence Type and disclosure-family identifiers. Replace example identifiers consistently when using institutional meaning. |
+| Source connection | The registry administrator supplies the HTTPS BReg origin, token endpoint, source scope, applicable resource audience and dedicated credential references. |
+| Signing | The signing operator supplies the public JWK and exact non-exportable Transit key version and workload-local proxy binding. |
+| Runtime | The deployment operator supplies the absolute candidate, secret and audit paths, private listener, HTTPS reverse proxy and any private CA files. |
+
+Use an existing compatible OIDC issuer when suitable. Registry Mint is optional
+for an operated deployment. Its source registration and Evidence caller
+registration have different audiences and grants. A source credential must not
+carry BReg operator privileges.
+
+Set the source connection under `governance` using the approved values. This
+example includes optional fields for an issuer that requires both audience
+parameters; omit those fields when its registration does not require them:
+
+```yaml
+sourceConnections:
+  registry:
+    baseUrl: https://registry.example.invalid
+    authentication:
+      kind: oauth2-client-credentials
+      tokenEndpoint: https://registry-identity.example.invalid/token
+      clientIdRef: secret:file/registry-client-id
+      clientAssertionKeyRef: secret:file/registry-client-key
+      clientAssertionAudience: https://registry-identity.example.invalid/client-auth
+      audience: urn:example:resource:registry
+      scope: registry:evidence:lookup
+      maximumCacheSeconds: 60
+    concurrencyLimit: 4
+    admissionTimeoutMilliseconds: 5000
+    tokenTimeoutMilliseconds: 5000
+```
+
+`clientAssertionAudience` identifies the authorization server for the signed
+client assertion. `audience` is the resource-audience form parameter requested
+for the access token. Neither is the Evidence caller's audience.
+
+If the source or token endpoint uses a private CA, name `tlsTrustProfile` on the
+connection and bind that name to `runtime.outboundTls.trustProfiles` with an
+absolute `caBundleFile`. Keep system roots enabled. There is no certificate
+verification bypass. The [configuration reference](../../reference/evidence-configuration/)
+defines the complete authentication union and runtime bindings.
+
+{/* Evidence: crates/registry-evidence/src/config.rs SourceAuthentication SourceConnectionConfig; products/evidence/reference/request-adapter/deployment-projects/CONFIG.md. */}
+
+## Bind the production signer
+
+Complete [Configure Transit signing](../move-evidence-to-production-signing/)
+before creating the target. Save its independently obtained public JWK at
+`evidence-signing-public.jwk.json`. Never export the private Transit key or use
+the local tutorial's private key.
+
+Set `governance.assuranceProfile` to `production`. Keep ES256 signing and leave
+`publicKeys: {}` when supplying only the active public key with the flag below.
+The copied settings omit `activePublicJwkFile`; the command fills that path from
+the supplied public key's thumbprint. If you edited settings that already name an
+active key, it must match the supplied key.
+
+Replace the local signer under `runtime` with the actual proxy and key binding:
+
+```yaml
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 1
+  timeoutMilliseconds: 2000
+```
+
+Use the operator's exact selected version, which may differ from this example.
+Set `runtime.bundleDirectory` to the final deployment location, such as
+`/srv/evidence/candidates/operated-001/bundle`. The local build output may live
+elsewhere before transport. Bind production secret and audit paths separately.
+
+```sh
+evidencectl target new ./evidence/targets/production \
+  --settings ./production-settings.yaml \
+  --signing-public-key ./evidence-signing-public.jwk.json
+evidencectl target explain ./evidence/targets/production --project ./evidence --json
+evidencectl fixtures run --project ./evidence --target ./evidence/targets/production
+```
+
+The explanation compiles the project and reports its fixture and public-key files
+and logical secret references. Review the target documents themselves for exact
+origins, authority and signing configuration. It does not resolve or print secret
+values. Creation is refused when the target directory already exists; edit its
+ordinary files or choose another directory.
+
+{/* Evidence: crates/registry-evidencectl/src/target.rs; crates/registry-evidencectl/src/build.rs; products/evidence/OPERATOR-CONTRACT.md. */}
+
+## Build and hand over exact bytes
+
+```sh
+evidencectl build --project ./evidence --target ./evidence/targets/production \
+  --output ./candidate-operated-001
+evidence bundle-check --bundle ./candidate-operated-001/bundle --json
+```
+
+Build uses the matching Evidence runtime to validate the bundle and required
+fixtures before publishing. Bundle check reports the bundle revision and each
+requirement's actual configuration revision. Neither command contacts the source,
+caller issuer or Transit service.
+
+Hand over the authored revision, operated source-export baseline, complete target,
+exact candidate and revisions, required secret references, and the approved
+synthetic verification case. The candidate contains `runtime.yaml` and `bundle/`.
+Development services, credentials, tokens and live responses stay outside it.
+
+Named connections share an HTTP client, eligible OAuth token cache and bounded
+source capacity inside one Evidence process. They do not cache source facts or
+share authority across callers. Size the connection capacity for the registry's
+budget and multiply by your Evidence replica count when planning total load.
+
+For future source changes, add the production target to `source diff` before
+updating to compare actual affected requirement revisions. A data-only record
+update needs no source export. A credential rotation that preserves the governed
+identity uses the [source credential rotation procedure](../../products/registry-evidence/source-credential-rotation/).
+
+{/* Evidence: crates/registry-evidence/src/cli.rs; crates/registry-evidence/src/main.rs; crates/registry-evidence/src/source.rs; crates/registry-evidencectl/src/build.rs. */}
+
+## Provision and check the target host
+
+The operator places the exact candidate at the configured location and makes its
+runtime and bundle non-writable to the service identity. Provision owner-only
+source client files, independent audit and subject-binding HMAC secrets, durable
+audit storage, private CA files when needed, and the workload-local Transit
+proxy. Do not copy `.evidence/dev` or `.breg/dev` to the host.
+
+Under the intended service identity, after those dependencies exist:
+
+```sh
+evidencectl doctor --project /srv/evidence/candidates/operated-001
+evidence --runtime /srv/evidence/candidates/operated-001/runtime.yaml check --require-runtime-dependencies
+evidence --runtime /srv/evidence/candidates/operated-001/runtime.yaml serve
+```
+
+Use your configured candidate path. The runtime checks signer custody and exact
+public-key agreement and refuses unavailable required dependencies. Wait for
+`GET /ready` before routing an approved synthetic request through the HTTPS
+boundary. Readiness alone does not prove the intended BReg lookup grant.
+
+Follow [Request Evidence from an application](../request-evidence-from-an-application/)
+using an independently provisioned caller, approved pinned Evidence signing
+keys, the reviewed operated contract catalog, and a synthetic record. Verify the
+signature, expected identities, purpose, audience, nonce, contract revision,
+assurance and answer. Do not adopt a fetched catalog or key as trusted merely
+because the endpoint returned it. Exercise a separately ungranted caller and
+confirm that no assertion is accepted.
+
+Before enabling application traffic, check the source identity directly. Have
+the identity operator provision an owner-only `source-authorization.curl` file
+containing a short-lived authorization header for the dedicated source client.
+Keep it outside the candidate. Create `source-lookup.json` with the approved
+synthetic selector, such as this example for the tutorial registry:
+
+```json
+{"selector":"by-code","values":{"code":"SYNTHETIC-ACTIVE"}}
+```
+
+Use the operated HTTPS origin and exact route from its reviewed export:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config ./source-authorization.curl \
+  --header 'Content-Type: application/json' \
+  --data-binary @source-lookup.json \
+  'https://registry.example.invalid/v1/records/records:lookup?accessProfile=evidence-source&$select=code,status' \
+  --output source-lookup-response.json --write-out 'HTTP %{http_code}\n'
+```
+
+Read the synthetic record's UUID from `data.recordIdentifier` in the successful
+lookup response. Have the BReg operator first confirm that their own credential
+can read that exact record through the `operator` profile. They run this positive
+control in their own private workspace; their credential never enters Evidence:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config './operator-authorization.curl' \
+  'https://registry.example.invalid/v1/records/records/<recordIdentifier>?accessProfile=operator' \
+  --output operator-read-response.json --write-out 'HTTP %{http_code}\n'
+```
+
+Replace `<recordIdentifier>` with the returned UUID in both GET commands. After
+the operator confirms HTTP 200, request the same record and profile using only
+the source credential:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config ./source-authorization.curl \
+  'https://registry.example.invalid/v1/records/records/<recordIdentifier>?accessProfile=operator' \
+  --output source-refusal.json --write-out 'HTTP %{http_code}\n'
+```
+
+For this model, the source GET exits
+nonzero with HTTP 404, concealing the ungranted operator resource. It performs no
+write. If this GET succeeds with the source credential, keep traffic disabled
+and correct the source registration or profile before retrying. A collection
+request cannot replace this check: the teaching operator has no list grant, so
+it would also be refused. Keep these synthetic responses in the private verifier
+workspaces.
+
+An offline fixture pass, complete target or successful token exchange is not a
+substitute for these deployed authorization checks.
+
+{/* Evidence: products/evidence/OPERATOR-CONTRACT.md; crates/registry-evidence/src/cli.rs; crates/registry-evidencectl/src/client.rs; products/breg/evidence/registry/registry.yaml. */}
+
+## Coordinate a breaking update
+
+A source import updates authored files. It cannot atomically change a registry
+package, running Evidence bundle and consumer expectation. For a change to
+consumed lookup meaning or question semantics:
+
+1. Prepare the BReg and Evidence candidates and review the actual affected
+   requirement revisions with consumers. Test the new pair against disposable
+   provider data before touching the operated pair.
+2. Pause and drain affected Evidence traffic. Pause the whole instance when
+   per-question draining is unavailable. Retain the approved previous candidates
+   and the BReg operator's recovery plan.
+3. Activate and verify the new BReg package through its maintained procedure.
+   Check the intended synthetic lookup with the source workload identity.
+4. Start the exact new Evidence candidate, wait for readiness and verify a fresh
+   synthetic assertion using the new approved consumer expectations.
+5. Resume the coordinated consumers only after those checks pass.
+
+If a check fails, keep traffic paused. Follow the BReg recovery plan and restore
+a mutually compatible provider, Evidence candidate and consumer contract before
+resuming. Database migrations may constrain reversal; choose the migration's
+reviewed recovery path rather than assuming an old binary can undo it. Keep audit
+history and verify completed journals after their writers stop.
+
+Keeping an old consumer catalog alone does not keep old behavior available. A
+provider change can alter a lookup even when the HTTP schema stays the same, so
+compare the operated source export and consumed behavior revision as part of
+every coordinated change.
+
+{/* Evidence: products/breg/README.md; products/breg/EVIDENCE.md; products/evidence/reference/authoring-projects/SOURCE-EXPORT.md; products/evidence/OPERATOR-CONTRACT.md. */}
