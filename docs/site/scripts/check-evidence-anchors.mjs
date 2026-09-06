@@ -492,9 +492,17 @@ function pluralLines(count) {
 // The page's own declaration of what it is: the `doc_type` and the `evidence` axis
 // (spec/RS-DOC Section 4). Both are plain top-level scalars, and check-doc-frontmatter.mjs
 // owns their vocabulary and the frontmatter's YAML shape, so the two lines are read where
-// they sit rather than through a parser this check would have to install: it runs on a
-// bare checkout with no dependencies fetched.
+// they sit rather than through a parser this check would have to install: the
+// `evidence-anchors` CI job runs this script against a bare checkout with no dependencies
+// fetched. The line pattern strips a leading UTF-8 BOM, normalizes CRLF to LF, and matches a
+// bare, single-, or double-quoted scalar with an optional trailing `# comment`. It is not a
+// full YAML grammar: a folded or flow-style value, or a scalar spanning more than one line,
+// reads as absent rather than as its value.
 function declaresVerifiedSpecification(text) {
+  if (text.charCodeAt(0) === 0xfeff) {
+    text = text.slice(1);
+  }
+  text = text.replaceAll('\r\n', '\n');
   if (!text.startsWith('---\n')) {
     return false;
   }
@@ -504,8 +512,8 @@ function declaresVerifiedSpecification(text) {
   }
   const block = text.slice(4, end);
   return (
-    /^doc_type:[ \t]*(['"]?)specification\1[ \t]*$/m.test(block) &&
-    /^evidence:[ \t]*(['"]?)verified\1[ \t]*$/m.test(block)
+    /^doc_type:[ \t]*(['"]?)specification\1(?:[ \t]+#.*|[ \t]*)$/m.test(block) &&
+    /^evidence:[ \t]*(['"]?)verified\1(?:[ \t]+#.*|[ \t]*)$/m.test(block)
   );
 }
 
