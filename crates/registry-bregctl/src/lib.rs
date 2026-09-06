@@ -78,7 +78,7 @@ use request_retention::{
     RequestRetentionCliError, RequestRetentionDryRunOutcome, RequestRetentionEraseOutcome,
     RequestRetentionListOutcome,
 };
-use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError};
+use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
 use test_lifecycle::{remove_exact_file, TestLifecycleError, TestLifecycleRequest};
 use webhook_lifecycle::{
     WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome, WebhookSampleOutcome,
@@ -7489,6 +7489,17 @@ fn artifact_destination(
         }
     }
     let name = names.pop().ok_or_else(unsafe_path)?.to_owned();
+    // Create only what this tool can also take away. The staged tree is removed
+    // by `SafeDir::remove_tree`, which walks at most `MAX_REMOVE_TREE_DEPTH`
+    // levels below the staging directory, so a deeper artifact path would stage
+    // a tree that neither the failure cleanup nor a later removal could reach.
+    if names.len() >= MAX_REMOVE_TREE_DEPTH as usize {
+        return Err(diagnostic(
+            "artifact.path.invalid",
+            "artifacts",
+            "the compiler returned an artifact path deeper than this tool removes",
+        ));
+    }
     let mut directory = root.try_clone().map_err(|_| {
         diagnostic(
             "output.write.failed",
@@ -8910,6 +8921,55 @@ mod tests {
                 fs::remove_dir_all(&self.path).expect("test directory is removed");
             }
         }
+    }
+
+    fn nested_artifact_path(levels: u32, leaf: &str) -> String {
+        let mut path = String::new();
+        for level in 0..levels {
+            path.push_str(&format!("d{level}/"));
+        }
+        path.push_str(leaf);
+        path
+    }
+
+    #[test]
+    fn a_generated_artifact_tree_the_tool_could_not_remove_is_refused_before_staging() {
+        let directory = TestDirectory::create();
+        let files = BTreeMap::from([(
+            nested_artifact_path(MAX_REMOVE_TREE_DEPTH, "schema.sql"),
+            b"generated".to_vec(),
+        )]);
+
+        let refused = write_source_files(&directory.path.join("out"), &files)
+            .expect_err("an artifact tree deeper than the removal bound is refused");
+
+        assert_eq!(refused.code, "artifact.path.invalid");
+        // The refusal lands before the first artifact is created, and the
+        // staging directory the writer had already made is removed, so nothing
+        // survives that the tool could not clean up afterwards.
+        assert!(!directory.path.join("out").exists());
+        assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_generated_artifact_tree_at_the_removal_bound_publishes_and_stays_removable() {
+        let directory = TestDirectory::create();
+        let relative = nested_artifact_path(MAX_REMOVE_TREE_DEPTH - 1, "schema.sql");
+        let files = BTreeMap::from([(relative.clone(), b"generated".to_vec())]);
+
+        write_source_files(&directory.path.join("out"), &files)
+            .expect("an artifact tree within the removal bound publishes");
+
+        assert_eq!(
+            fs::read(directory.path.join("out").join(&relative)).unwrap(),
+            b"generated"
+        );
+        // What the writer accepts, the removal reaches: the deepest tree it
+        // will create is one this tool can still take away.
+        SafeDir::resolve(&directory.path)
+            .expect("the test directory resolves")
+            .remove_tree(OsStr::new("out"))
+            .expect("the published tree is within the removal bound");
     }
 
     #[test]
