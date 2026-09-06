@@ -1245,6 +1245,18 @@ follows its own rule: it must carry no group or other permission at all
 (`0700` or tighter), and owner write is accepted, since the operator
 provisions and rotates the secret files inside it; those files keep their own
 exact `0400` or `0600` mode.
+
+A read-only mount satisfies the write-permission rule on its own. When
+`statvfs` reports `ST_RDONLY` for the filesystem holding an input, that input's
+mode bits are accepted as written, because nothing can write through that mount
+whatever the bits say. The exemption covers every input the write-permission
+rule names, `runtime.yaml`, the bundle directory and each artifact inside it, a
+named CA bundle file, and a bound extract, and it covers only that rule. The
+secret root and the secret files inside it are judged on their mode bits alone,
+`0700` or tighter for the root and exactly `0400` or `0600` for each file, on a
+read-only mount as on any other, because those modes bound who may read a
+secret rather than who may write it.
+
 `evidence check` refuses a non-conforming runtime file, bundle artifact, CA
 bundle file, or secret root before the listener binds. When the fault is
 bound to one artifact, the printed message names it, for example `evidence:
