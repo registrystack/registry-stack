@@ -51,7 +51,17 @@ approved=()
 for floor in "${node_addon_floor}" "${product_floor}"; do
   approved+=("x86_64-linux-gnu.${floor}" "aarch64-linux-gnu.${floor}")
 done
-if ! printf '%s\n' "${approved[@]}" | grep -qxF -- "${zig_target}"; then
+# The check is a plain comparison rather than a pipeline into grep: under
+# pipefail a pipeline fails whenever grep matches and exits before printf has
+# written every candidate, and cc-rs runs this wrapper hundreds of times in
+# parallel.
+target_approved=0
+for candidate in "${approved[@]}"; do
+  if [[ "${zig_target}" == "${candidate}" ]]; then
+    target_approved=1
+  fi
+done
+if (( target_approved == 0 )); then
   printf 'REGISTRY_ZIG_TARGET must name an approved target, one of: %s\n' \
     "${approved[*]}" >&2
   exit 2

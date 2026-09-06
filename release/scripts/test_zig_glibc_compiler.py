@@ -126,6 +126,17 @@ class ZigGlibcCompilerTest(unittest.TestCase):
             ],
         )
 
+    def test_approves_targets_without_a_pipeline(self) -> None:
+        """cc-rs runs the wrapper hundreds of times in parallel. Under pipefail a
+        pipeline into grep -q fails whenever grep matches and exits before bash's
+        line-buffered printf has written every candidate (SIGPIPE), which rejects
+        an approved target in about one compile per hundred under CPU contention.
+        The approval check is a plain comparison, never a pipeline."""
+        text = COMPILER.read_text(encoding="utf-8")
+        self.assertIsNone(
+            re.search(r"\|\s*grep\b", text), "target approval pipes into grep"
+        )
+
     def test_rejects_unapproved_or_ambiguous_configuration(self) -> None:
         cases = (
             (COMPILER, (), self.env, "must be invoked"),
