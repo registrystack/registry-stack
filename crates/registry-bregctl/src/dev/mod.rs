@@ -829,13 +829,12 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
                 Ok((mut stream, _)) => {
                     stream.set_read_timeout(Some(Duration::from_secs(1)))?;
                     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-                    let mut bytes = [0u8; 16];
-                    let count = stream.read(&mut bytes)?;
-                    if &bytes[..count] == b"stop\n" {
+                    let bytes = read_control_command(&mut stream)?;
+                    if bytes == b"stop\n" {
                         stop_stream = Some(stream);
                         break;
                     }
-                    if &bytes[..count] == b"status\n" {
+                    if bytes == b"status\n" {
                         stream.write_all(b"ready\n")?;
                     }
                 }
@@ -871,6 +870,25 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         stream.write_all(b"stopped\n")?;
     }
     Ok(())
+}
+
+/// Read one client control command from `stream`, stopping at the first
+/// newline, at end of stream, or after 16 bytes, whichever comes first. A
+/// command that a client's write splits across the socket is read whole
+/// here; the caller compares the returned bytes against the known commands.
+fn read_control_command(stream: &mut impl Read) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut byte = [0u8; 1];
+    while bytes.len() < 16 {
+        if stream.read(&mut byte)? == 0 {
+            break;
+        }
+        bytes.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    Ok(bytes)
 }
 
 #[derive(Default)]

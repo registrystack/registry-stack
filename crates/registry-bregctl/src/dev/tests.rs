@@ -348,6 +348,59 @@ fn role_password_bytes_cannot_reach_diagnostics_or_errors() {
 }
 
 #[test]
+fn a_control_command_split_across_writes_is_read_whole() {
+    for (first, second, whole) in [
+        (&b"sto"[..], &b"p\n"[..], &b"stop\n"[..]),
+        (&b"stat"[..], &b"us\n"[..], &b"status\n"[..]),
+    ] {
+        let (mut reader, mut writer) = UnixStream::pair().expect("pair");
+        reader
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("timeout");
+        let writer_thread = thread::spawn(move || {
+            writer.write_all(first).expect("first write");
+            thread::sleep(Duration::from_millis(100));
+            writer.write_all(second).expect("second write");
+        });
+        let bytes = read_control_command(&mut reader).expect("read");
+        assert_eq!(bytes, whole);
+        writer_thread.join().expect("writer thread");
+    }
+}
+
+#[test]
+fn a_control_command_stops_at_the_newline_or_the_size_bound() {
+    {
+        let (mut reader, mut writer) = UnixStream::pair().expect("pair");
+        reader
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("timeout");
+        writer.write_all(b"status\nextra").expect("write");
+        let bytes = read_control_command(&mut reader).expect("read");
+        assert_eq!(bytes, b"status\n");
+    }
+    {
+        let (mut reader, mut writer) = UnixStream::pair().expect("pair");
+        reader
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("timeout");
+        writer.write_all(&[b'a'; 20]).expect("write");
+        let bytes = read_control_command(&mut reader).expect("read");
+        assert_eq!(bytes, vec![b'a'; 16]);
+    }
+    {
+        let (mut reader, mut writer) = UnixStream::pair().expect("pair");
+        reader
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("timeout");
+        writer.write_all(b"sto").expect("write");
+        drop(writer);
+        let bytes = read_control_command(&mut reader).expect("read");
+        assert_eq!(bytes, b"sto");
+    }
+}
+
+#[test]
 fn reclamation_forgets_the_database_and_keeps_the_reusable_identities() {
     let (_temp, mut state, _clients, _files) = fixture();
     state.container_id = Some("c".repeat(64));
