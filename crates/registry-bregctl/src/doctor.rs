@@ -3,7 +3,6 @@
 
 use std::path::Path;
 
-use registry_breg::package::PackageError;
 use registry_breg::runtime_config::RuntimeConfigError;
 use registry_breg::startup::{prepare, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
@@ -151,6 +150,7 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_breg::package::PackageError;
     use std::collections::HashSet;
 
     #[test]
