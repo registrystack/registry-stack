@@ -80,10 +80,10 @@ pub(crate) fn export(
     if !runtime_config.is_absolute() || !output.is_absolute() {
         return Err(AuditCliError::Operator);
     }
-    if output.exists() {
-        return Err(AuditCliError::OutputExists);
-    }
     let runtime = operator_runtime()?;
+    // `create_export_file` refuses a destination that is already taken through
+    // the parent descriptor it resolves, so the pathname is never reached a
+    // second time to ask the same question.
     let mut staged = create_export_file(output)?;
     let export = {
         let mut sink = BufWriter::new(&mut staged.file);
@@ -342,6 +342,24 @@ mod tests {
             create_export_file(&output).unwrap_err(),
             AuditCliError::OutputExists
         );
+    }
+
+    #[test]
+    fn export_reports_an_existing_destination_by_its_own_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let output = root.join("audit.jsonl");
+        std::fs::write(&output, b"occupied\n").unwrap();
+        // An absolute runtime configuration that does not load, so a refusal
+        // that came from anywhere but the destination would report the
+        // operator code instead.
+        let runtime_config = root.join("runtime.yaml");
+
+        assert_eq!(
+            export(&runtime_config, &output).unwrap_err(),
+            AuditCliError::OutputExists
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), b"occupied\n");
     }
 
     #[cfg(unix)]

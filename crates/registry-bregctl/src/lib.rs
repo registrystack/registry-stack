@@ -7361,10 +7361,10 @@ fn write_files_with_before_publish(
     files: &BTreeMap<String, Vec<u8>>,
     before_publish: impl FnOnce(&Path) -> Result<(), Diagnostic>,
 ) -> Result<(), Diagnostic> {
-    if output.as_os_str().is_empty()
-        || has_parent_component(output)
-        || output.file_name().is_none()
-        || output.exists()
+    // Only the shape of the path is judged here. Whether the destination is
+    // already taken is decided below, through the parent descriptor this
+    // resolves, rather than by reaching the pathname a second time.
+    if output.as_os_str().is_empty() || has_parent_component(output) || output.file_name().is_none()
     {
         return Err(diagnostic(
             "output.destination.invalid",
@@ -9991,6 +9991,24 @@ extendEntities:
                 fs::read(tree.moved("out/nested/plan.json")).unwrap(),
                 b"nested"
             );
+            assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+        }
+
+        #[test]
+        fn an_output_directory_that_is_already_taken_is_refused_through_the_held_parent() {
+            let tree = race_tree();
+            let files = BTreeMap::from([("schema.sql".to_owned(), b"generated".to_vec())]);
+            fs::create_dir(tree.named("out")).unwrap();
+            fs::write(tree.named("out/kept.txt"), b"kept").unwrap();
+            // The tree the operator never named has no `out`, so a refusal
+            // decided by pathname after the swap would not fire at all.
+            let guard = tree.arm();
+            let refused = write_source_files(&tree.named("out"), &files)
+                .expect_err("an output directory that already exists is refused");
+            drop(guard);
+
+            assert_eq!(refused.code, "output.destination.invalid");
+            assert_eq!(fs::read(tree.moved("out/kept.txt")).unwrap(), b"kept");
             assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
         }
 
