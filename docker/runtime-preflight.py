@@ -4,22 +4,24 @@
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import math
+import os
 import re
 import shlex
 import subprocess
 import sys
-import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO, Sequence, TextIO
+from typing import Any, Sequence, TextIO
 
 
 MAXIMUM_COMPOSE_BYTES = 4 * 1024 * 1024
 MAXIMUM_NATIVE_CHECK_STDERR_BYTES = 4 * 1024
+CAPTURE_CHUNK_BYTES = 64 * 1024
+CAPTURE_DRAIN_SECONDS = 5
 MINIMUM_DEPENDENCY_TIMEOUT_SECONDS = 5
 MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS = 10 * 60
 MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 30
@@ -176,7 +178,7 @@ def run_compose(
     *,
     timeout: int | None,
     capture_output: bool = True,
-    stderr_sink: BinaryIO | None = None,
+    stderr_sink: BoundedStderr | None = None,
     input_text: str | None = None,
     timeout_is_failure: bool = True,
     timeout_message: str = "Docker Compose could not complete the preflight",
@@ -510,18 +512,61 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     validate_ports(service)
 
 
-def bounded_stderr(sink: BinaryIO) -> str:
-    """The tail of a child's stderr, bounded so a chatty child cannot exhaust memory.
+class BoundedStderr:
+    """A child's stderr, read while the child runs and bounded to a byte cap.
 
-    The child writes to a temporary file and the preflight holds only this tail.
-    The text classifies the failure and is never printed, so preflight failures
+    A spool file grows to whatever the child writes, and reading it back
+    afterwards bounds only the reader. The child writes into a pipe instead and
+    a reader thread keeps the tail within the cap, discarding the rest, so a
+    chatty child neither costs unbounded storage nor blocks on a full pipe. The
+    kept text classifies the failure and is never printed, so preflight failures
     stay free of Compose output and configured values.
     """
-    end = sink.seek(0, io.SEEK_END)
-    sink.seek(max(0, end - MAXIMUM_NATIVE_CHECK_STDERR_BYTES))
-    return sink.read(MAXIMUM_NATIVE_CHECK_STDERR_BYTES).decode(
-        "utf-8", errors="replace"
-    )
+
+    def __init__(self, limit: int = MAXIMUM_NATIVE_CHECK_STDERR_BYTES) -> None:
+        read_descriptor, write_descriptor = os.pipe()
+        self._reader = open(read_descriptor, "rb", buffering=0)
+        self._writer = open(write_descriptor, "wb")
+        self._limit = limit
+        self._kept = bytearray()
+        self._reading = threading.Thread(target=self._keep_bounded, daemon=True)
+        self._reading.start()
+
+    def _keep_bounded(self) -> None:
+        while True:
+            chunk = self._reader.read(CAPTURE_CHUNK_BYTES)
+            if not chunk:
+                return
+            self._kept.extend(chunk)
+            del self._kept[: max(0, len(self._kept) - self._limit)]
+
+    def fileno(self) -> int:
+        """The descriptor the child inherits as its stderr."""
+        return self._writer.fileno()
+
+    def write(self, data: bytes) -> int:
+        """Write as the child does, for callers that hold the object directly."""
+        written = self._writer.write(data)
+        self._writer.flush()
+        return written
+
+    def captured(self) -> str:
+        return bytes(self._kept).decode("utf-8", errors="replace")
+
+    def close(self) -> None:
+        self._writer.close()
+        # Closing every write end ends the read. A grandchild that inherited the
+        # descriptor would hold the pipe open past a killed child, so the wait is
+        # bounded; the reader is a daemon thread and cannot outlive the process.
+        self._reading.join(CAPTURE_DRAIN_SECONDS)
+        if not self._reading.is_alive():
+            self._reader.close()
+
+    def __enter__(self) -> BoundedStderr:
+        return self
+
+    def __exit__(self, *exception: object) -> None:
+        self.close()
 
 
 def rejects_audit_containment_flag(diagnostic: str) -> bool:
@@ -534,7 +579,7 @@ def rejects_audit_containment_flag(diagnostic: str) -> bool:
 def native_check(
     selection: ServiceSelection, timeout: int, frozen_compose: str
 ) -> None:
-    with tempfile.TemporaryFile() as sink:
+    with BoundedStderr() as sink:
         result = run_compose(
             [
                 "docker",
@@ -558,7 +603,7 @@ def native_check(
         )
         if result.returncode == 0:
             return
-        captured = bounded_stderr(sink)
+    captured = sink.captured()
     # The containment assertion is not optional, so an image whose check command
     # cannot make it fails closed. Naming that image is the one distinction the
     # generic failure cannot express, and it costs no disclosure: the captured

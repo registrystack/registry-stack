@@ -10,7 +10,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -778,14 +777,43 @@ class RuntimePreflightTest(unittest.TestCase):
             stderr,
         )
 
-    def test_the_captured_stderr_is_bounded_and_still_classifies(self) -> None:
-        with tempfile.TemporaryFile() as sink:
-            sink.write(b"x" * (self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES * 4))
-            sink.write(b"\nerror: unexpected argument '--require-audit-under' found\n")
-            captured = self.module.bounded_stderr(sink)
-        self.assertLessEqual(
-            len(captured), self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES
+    def test_a_child_that_outwrites_the_cap_is_captured_without_blocking(
+        self,
+    ) -> None:
+        # A pipe holds about 64 KiB, so a child that keeps writing blocks once
+        # it fills unless something reads the pipe while the child runs. The
+        # capture keeps the cap and discards the rest, so this child writes a
+        # thousand times the cap and still exits on its own.
+        cap = self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES
+        program = (
+            "import sys\n"
+            "chunk = 'x' * 1024\n"
+            "for _ in range(4096):\n"
+            "    sys.stderr.write(chunk)\n"
+            "sys.stderr.write("
+            "\"\\nerror: unexpected argument '--require-audit-under' found\\n\")\n"
         )
+        with self.module.BoundedStderr() as sink:
+            result = subprocess.run(
+                [sys.executable, "-c", program],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=sink,
+                timeout=120,
+            )
+
+        self.assertEqual(0, result.returncode)
+        captured = sink.captured()
+        self.assertLessEqual(len(captured), cap)
+        self.assertTrue(self.module.rejects_audit_containment_flag(captured))
+
+    def test_the_captured_stderr_is_bounded_and_still_classifies(self) -> None:
+        cap = self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES
+        with self.module.BoundedStderr() as sink:
+            sink.write(b"x" * (cap * 4))
+            sink.write(b"\nerror: unexpected argument '--require-audit-under' found\n")
+        captured = sink.captured()
+        self.assertLessEqual(len(captured), cap)
         self.assertTrue(self.module.rejects_audit_containment_flag(captured))
 
     def test_native_check_deadline_is_bounded_and_operator_configurable(self) -> None:
