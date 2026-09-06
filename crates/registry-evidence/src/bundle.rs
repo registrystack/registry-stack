@@ -462,10 +462,23 @@ impl RuntimeDocument {
 }
 
 /// The two independently captured, closed startup inputs.
+///
+/// The fields are private and `load` is the only way to build the pair, so a
+/// value of this type is always exactly what the immutability, digest, and
+/// binding checks ran over. `EvidenceRuntime::initialize_from` accepts this
+/// type rather than a bundle and a runtime document precisely for that reason:
+/// an in-process caller that ran `check` and then edited the checked inputs
+/// before initializing would leave the runtime serving a configuration nothing
+/// validated, under a revision digest that no longer describes it, and the type
+/// makes that unwritable rather than merely discouraged.
+///
+/// `into_parts` hands the captured inputs out for callers that consume them.
+/// What it returns cannot be assembled back into a `DeploymentInputs`, so it
+/// cannot reach `initialize_from`.
 #[derive(Debug, Clone)]
 pub struct DeploymentInputs {
-    pub bundle: Bundle,
-    pub runtime: RuntimeDocument,
+    bundle: Bundle,
+    runtime: RuntimeDocument,
 }
 
 impl DeploymentInputs {
@@ -474,6 +487,19 @@ impl DeploymentInputs {
         let bundle = Bundle::load(&runtime.config.bundle_directory)?;
         validate_runtime_bindings(&bundle.config, &runtime.config)?;
         Ok(Self { bundle, runtime })
+    }
+
+    pub fn bundle(&self) -> &Bundle {
+        &self.bundle
+    }
+
+    pub fn runtime(&self) -> &RuntimeDocument {
+        &self.runtime
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (Bundle, RuntimeDocument) {
+        (self.bundle, self.runtime)
     }
 }
 

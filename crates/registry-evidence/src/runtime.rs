@@ -460,10 +460,10 @@ impl EvidenceRuntime {
         deployment: DeploymentInputs,
         authenticator_override: Option<Arc<dyn RuntimeAuthenticator>>,
     ) -> Result<Self, RuntimeInitializationError> {
-        let runtime_document = deployment.runtime;
+        let (bundle, runtime_document) = deployment.into_parts();
         let runtime_config = runtime_document.config.clone();
         let runtime_revision = runtime_document.revision().to_owned();
-        let bundle = Arc::new(deployment.bundle);
+        let bundle = Arc::new(bundle);
         let kernel = OfflineKernel::compile(Arc::clone(&bundle))
             .map_err(|_| RuntimeInitializationError::Bundle)?;
 
