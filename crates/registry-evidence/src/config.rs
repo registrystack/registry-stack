@@ -5258,10 +5258,20 @@ fn compare_decimal_text(left: &str, right: &str) -> std::cmp::Ordering {
     }
 }
 
+/// Validate a URI-typed bundle scalar against the one identifier definition
+/// this repository has.
+///
+/// `registry_discovery_profile::is_valid_identifier` already carries the
+/// character rule the publication projection enforces: an absolute URI carries
+/// no control character and no whitespace of any script, only the ASCII space
+/// family. Reading that rule from the profile instead of restating a narrower
+/// `is_ascii_whitespace` test here keeps the bundle and its projection on one
+/// definition, so no scalar can be accepted at load and then refused when the
+/// same bytes are published. The 512-byte bound stays local because the
+/// profile's own bound is the far looser public-text one.
 fn validate_uri(value: &str) -> Result<(), ConfigError> {
     validate_string(value, 1, 512, "URI")?;
-    let url = Url::parse(value).map_err(|_| ConfigError::Invalid("URI is invalid"))?;
-    if url.scheme().is_empty() || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+    if !registry_discovery_profile::is_valid_identifier(value) {
         return invalid("URI is invalid");
     }
     Ok(())
@@ -5974,6 +5984,70 @@ mod tests {
                 }
             }
         }
+    }
+    /// Every URI-typed bundle scalar refuses the same characters the shared
+    /// public profile refuses, not only the ASCII whitespace `str::is_ascii_whitespace`
+    /// names.
+    ///
+    /// A URI carries no whitespace and no control character at all. Accepting
+    /// `U+00A0` or `U+3000` inside an issuer id, a requirement id, or a concept
+    /// id lets two identifiers that render alike compare unequal, so a bundle
+    /// can name one authority twice and an operator reading the audit trail
+    /// cannot tell the two apart. `validate_uri` therefore delegates the
+    /// character rule to `registry_discovery_profile::is_valid_identifier`, the
+    /// single definition the publication projection already enforces.
+    ///
+    /// The rule covers the whitespace and control classes. A zero-width format
+    /// character such as `U+FEFF` is neither, so both definitions still accept
+    /// it; that is one gap in the shared profile, not two divergent rules here.
+    #[test]
+    fn uri_scalars_refuse_every_whitespace_and_control_character_the_public_profile_refuses() {
+        let fixture = include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        );
+        let config = EvidenceConfig::parse_yaml(fixture).expect("strict fixture validates");
+        config.validate().expect("the fixture URIs are sound");
+
+        for separator in [
+            "\u{a0}",   // no-break space
+            "\u{2007}", // figure space
+            "\u{3000}", // ideographic space
+            " ",        // ASCII space
+            "\t", "\n", "\u{7}", // a control character no URI carries
+        ] {
+            let value = format!("urn:example:fixture:issuer{separator}authority");
+            let mut candidate = config.clone();
+            candidate.issuer.id.clone_from(&value);
+            assert_eq!(
+                candidate.validate(),
+                invalid("URI is invalid"),
+                "issuer id carrying {separator:?}"
+            );
+            assert!(
+                !registry_discovery_profile::is_valid_identifier(&value),
+                "the shared public profile refuses {separator:?} as well"
+            );
+        }
+
+        for surrounded in [
+            "\u{a0}urn:example:fixture:issuer",
+            "urn:example:fixture:issuer\u{a0}",
+        ] {
+            let mut candidate = config.clone();
+            candidate.issuer.id = surrounded.to_owned();
+            assert_eq!(
+                candidate.validate(),
+                invalid("URI is invalid"),
+                "issuer id bounded by a no-break space"
+            );
+        }
+
+        let mut scheme_free = config.clone();
+        scheme_free.issuer.id = "example:fixture".to_owned();
+        assert!(
+            scheme_free.validate().is_ok(),
+            "an ordinary scheme stays acceptable"
+        );
     }
 
     /// Two authority claims naming one JWT member, or naming a member the token
