@@ -71,8 +71,15 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         // Every exit, including a panicking assertion, reclaims the container
-        // and the data volume this test created.
-        let _ = self.dev(&["stop", "--remove"]);
+        // and the data volume this test created. A failed reclaim is reported
+        // rather than dropped, unless the test is already unwinding.
+        let output = self.dev(&["stop", "--remove"]);
+        if !output.status.success() && !std::thread::panicking() {
+            panic!(
+                "dev stop --remove failed during cleanup: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }
 
