@@ -47,9 +47,10 @@
 #                   stop-background            stop the most recently started
 #                                              background fence, where the page
 #                                              says to press Ctrl-C
-#                   wait-registry:PATH         block until the launcher has
-#                                              written that origin file and the
-#                                              registry it names answers /ready
+#                   wait-launcher:<line>       block until the most recently
+#                                              started background fence has
+#                                              printed that line, the one the
+#                                              page tells the reader to wait for
 #                 The |<n> suffix is optional wherever a heading holds a single
 #                 sh fence. Skipping is implicit: a fence under no listed
 #                 heading is simply not run, and the summary names it so a
@@ -84,10 +85,10 @@ DOCS_ROOT="${BREG_TUTORIAL_DOCS_ROOT:-$SITE_ROOT/src/content/docs}"
 BUILD_PROFILE="${BREG_TUTORIAL_CARGO_PROFILE:-ci}"
 TARGET_DIR="$REPO_ROOT/target/breg-tutorial-source"
 
-# How long the launcher may take to answer. It pulls a PostgreSQL image, issues
-# TLS material and mints a token before the registry binds, so this is minutes
-# rather than seconds on a cold machine.
-WAIT_REGISTRY_ATTEMPTS=300
+# How long the launcher may take to say it is ready. It pulls a PostgreSQL
+# image, issues TLS material, mints a token and seeds a record before it prints
+# its ready line, so this is minutes rather than seconds on a cold machine.
+WAIT_LAUNCHER_ATTEMPTS=300
 
 # ---------------------------------------------------------------------------
 # Registered tutorials
@@ -199,7 +200,7 @@ load_spec() {
 		# one launcher running while the reader works in a second terminal.
 		SPEC_STEPS=(
 			"background:Start the registry"
-			"wait-registry:products/breg/quickstart/.run/breg-origin"
+			"wait-launcher:Base Registry Engine generic quickstart is ready."
 			"run:Read the first record"
 			"run:Create a record"
 			"run:Choose which fields to read"
@@ -432,7 +433,7 @@ emit_background_step() {
 	local command
 	IFS= read -r command <"$fence"
 	printf '\nprintf "==> %s fence %s (background)\\n"\n' "$slug" "$number"
-	printf '%s &\n' "$command"
+	printf '%s > >(tee "$BACKGROUND_LOG") 2>&1 &\n' "$command"
 	printf 'BACKGROUND_PIDS+=("$!")\n'
 }
 
@@ -450,21 +451,21 @@ emit_stop_background_step() {
 	printf 'unset "BACKGROUND_PIDS[$background_index]"\n'
 }
 
-# Block until the launcher has published its origin and the registry answers.
+# Block until the launcher the page leaves running has printed the line the
+# page tells the reader to wait for.
 #
-# The launcher picks its ports at start and writes the origin it chose, so this
-# gate cannot wait on a fixed URL the way a tutorial with a pinned port can,
-# and the reader's next command reads that same file.
-emit_wait_registry_step() {
-	local slug="$1" origin_file="$2"
-	printf '\nprintf "==> %s wait for the registry to answer\\n"\n' "$slug"
+# The registry answers /ready before the launcher has minted the reader's
+# token and seeded the record the page reads first, so answering is not
+# readiness; the launcher prints its ready line after both.
+emit_wait_launcher_step() {
+	local slug="$1" line="$2"
+	printf '\nprintf "==> %s wait for the launcher to say it is ready\\n"\n' "$slug"
+	printf 'if ((${#BACKGROUND_PIDS[@]} == 0)); then printf "tutorial spec error in %s: no background fence to wait for\\n" >&2; exit 2; fi\n' "$slug"
 	printf 'ready_attempt=0\n'
-	printf 'while ((ready_attempt < %d)); do\n' "$WAIT_REGISTRY_ATTEMPTS"
-	printf '  if [[ -s %q ]] && curl --noproxy "*" -fs "$(cat %q)/ready" >/dev/null 2>&1; then break; fi\n' \
-		"$origin_file" "$origin_file"
+	printf 'while ! grep -qF -- %q "$BACKGROUND_LOG"; do\n' "$line"
 	printf '  ready_attempt=$((ready_attempt + 1))\n'
 	printf '  if ((ready_attempt == %d)); then printf %q >&2; exit 1; fi\n' \
-		"$WAIT_REGISTRY_ATTEMPTS" "the quickstart registry did not become ready\n"
+		"$WAIT_LAUNCHER_ATTEMPTS" "the launcher did not print its ready line\n"
 	printf '  sleep 1\n'
 	printf 'done\n'
 }
@@ -473,9 +474,11 @@ emit_journey() {
 	local slug="$1" fence_dir="$2"
 	printf 'set -euo pipefail\n'
 	printf 'BACKGROUND_PIDS=()\n'
+	printf 'BACKGROUND_LOG="$(mktemp)"\n'
 	printf 'cleanup_journey() {\n'
 	printf '  local pid\n'
 	printf '  for pid in "${BACKGROUND_PIDS[@]}"; do kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; done\n'
+	printf '  rm -f "$BACKGROUND_LOG"\n'
 	printf '}\n'
 	printf 'trap cleanup_journey EXIT\n'
 	printf 'trap "exit 130" HUP INT TERM\n'
@@ -485,7 +488,7 @@ emit_journey() {
 		run:*) emit_run_step "$slug" "${step#run:}" "$fence_dir" ;;
 		background:*) emit_background_step "$slug" "${step#background:}" "$fence_dir" ;;
 		stop-background) emit_stop_background_step "$slug" ;;
-		wait-registry:*) emit_wait_registry_step "$slug" "${step#wait-registry:}" ;;
+		wait-launcher:*) emit_wait_launcher_step "$slug" "${step#wait-launcher:}" ;;
 		*)
 			printf 'tutorial spec error in %s: unknown step: %s\n' "$slug" "$step" >&2
 			exit 2

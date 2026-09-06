@@ -83,8 +83,72 @@ test('the registered journey starts and stops the launcher', async () => {
   const branch = source.match(/\n\ttutorials\/first-breg\)[\s\S]*?\n\t\t;;/u)?.[0];
   assert.ok(branch, 'the first Base Registry Engine replay spec must exist');
   assert.match(branch, /background:Start the registry/u);
-  assert.match(branch, /wait-registry:/u);
+  assert.match(branch, /wait-launcher:/u);
   assert.match(branch, /stop-background/u);
+});
+
+// The registry answers /ready before the launcher has minted the reader's token
+// and seeded the record the page reads first, so the journey waits for the line
+// the page tells the reader to wait for, and that line has to stay on the page.
+test('the journey waits for the ready line the page shows', async () => {
+  const source = await readFile(gate, 'utf8');
+  const branch = source.match(/\n\ttutorials\/first-breg\)[\s\S]*?\n\t\t;;/u)?.[0];
+  assert.ok(branch, 'the first Base Registry Engine replay spec must exist');
+  const line = branch.match(/"wait-launcher:([^"]+)"/u)?.[1];
+  assert.ok(line, 'the journey must wait for a launcher line');
+  const page = await readFile(firstBreg, 'utf8');
+  assert.ok(page.includes(line), `the page must still show "${line}"`);
+});
+
+// Run the emitted wait step against a stand-in launcher: a background sleep
+// whose log a writer fills, or does not.
+async function runWaitStep({ attempts, line, writer }) {
+  const source = await readFile(gate, 'utf8');
+  const root = await mkdtemp(join(tmpdir(), 'breg-wait-test-'));
+  const log = join(root, 'background.log');
+  const harness = join(root, 'wait.sh');
+  await writeFile(
+    harness,
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      `WAIT_LAUNCHER_ATTEMPTS=${attempts}`,
+      await liftFunction(source, 'emit_wait_launcher_step'),
+      `BACKGROUND_LOG='${log}'`,
+      ': >"$BACKGROUND_LOG"',
+      'BACKGROUND_PIDS=()',
+      'sleep 30 >/dev/null 2>&1 &',
+      'BACKGROUND_PIDS+=("$!")',
+      'trap \'kill "${BACKGROUND_PIDS[@]}" >/dev/null 2>&1 || true\' EXIT',
+      writer,
+      `eval "$(emit_wait_launcher_step tutorial '${line}')"`,
+      '',
+    ].join('\n'),
+  );
+  try {
+    return await runShell(`bash ${harness}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test('the wait step returns once the launcher prints its ready line', async () => {
+  const { code, output } = await runWaitStep({
+    attempts: 10,
+    line: 'launcher is ready.',
+    writer: '( sleep 1; printf "launcher is ready.\\n" >>"$BACKGROUND_LOG" ) >/dev/null 2>&1 &',
+  });
+  assert.equal(code, 0, output);
+});
+
+test('the wait step fails when the launcher never prints its ready line', async () => {
+  const { code, output } = await runWaitStep({
+    attempts: 2,
+    line: 'launcher is ready.',
+    writer: 'printf "still starting\\n" >>"$BACKGROUND_LOG"',
+  });
+  assert.notEqual(code, 0, 'a silent launcher must fail the step');
+  assert.match(output, /did not print/u);
 });
 
 // Every documented refusal on this page prints its status and exits zero, so a
