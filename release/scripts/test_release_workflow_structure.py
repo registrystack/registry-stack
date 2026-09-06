@@ -896,22 +896,35 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
 
     def test_scopes_canonical_cache_to_exact_builder_recipe(self) -> None:
         text, document = workflow("release-candidate.yml")
-        cache = next(
-            step
-            for step in document["jobs"]["build-canonical"]["steps"]
-            if step.get("name") == "Restore reusable Cargo cache"
-        )
-        self.assertEqual(
-            cache["with"]["key"],
+        recipe_prefix = (
             "registry-stack-release-${{ runner.os }}-"
-            "${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', "
+            "${{ hashFiles('rust-toolchain.toml', "
             "'release/scripts/build-release-binaries.sh', "
             "'release/docker/Dockerfile.builder', "
             "'release/requirements/ziglang-0.12.1.txt', "
             "'release/glibc-floor.env', "
-            "'release/scripts/zig-glibc-compiler') }}",
+            "'release/scripts/zig-glibc-compiler') }}-"
         )
-        self.assertNotIn("restore-keys", cache["with"])
+        for filename, job_name in (
+            ("release-candidate.yml", "build-canonical"),
+            ("release-rehearsal.yml", "canonical-linux"),
+        ):
+            with self.subTest(workflow=filename):
+                _, cache_workflow = workflow(filename)
+                job = cache_workflow["jobs"][job_name]
+                cache = next(
+                    step
+                    for step in job["steps"]
+                    if step.get("name") == "Restore reusable Cargo cache"
+                )
+                self.assertEqual(
+                    cache["with"]["key"],
+                    recipe_prefix + "${{ hashFiles('Cargo.lock') }}",
+                )
+                self.assertEqual(
+                    cache["with"]["restore-keys"].splitlines(), [recipe_prefix]
+                )
+                self.assertNotIn("cache-hit", str(job))
         self.assertIn("created_at} + 7 days", text)
         final_upload = next(
             step

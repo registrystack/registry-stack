@@ -133,7 +133,9 @@ jobs:
             .cargo-home/registry
             .cargo-home/git
             target
-          key: registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}
+          key: registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-
 
       - name: Build and smoke the canonical Linux payload
         env:
