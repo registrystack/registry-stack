@@ -42,6 +42,9 @@ const RUNTIME_ROLE: &str = "breg_dev_runtime";
 const IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const LABEL: &str = "org.registrystack.bregctl.dev-owner";
+/// Refusal for a project that never started. Reporting a stopped session
+/// would claim owned services were stopped when none were ever created.
+const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check --project, or start one with bregctl dev --clients-file";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, Args)]
@@ -561,13 +564,13 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     let project = project(project_path)?;
     let parent = project.join(".breg");
     if !parent.exists() {
-        return Ok(json!({"ok":true,"command":"dev stop","status":"stopped"}));
+        bail!(MISSING_SESSION);
     }
     private::check(&parent, true)?;
     let _lock = private::lock(&parent.join("dev.lock"))?;
     let root = parent.join("dev");
     if !root.exists() {
-        return Ok(json!({"ok":true,"command":"dev stop","status":"stopped"}));
+        bail!(MISSING_SESSION);
     }
     let mut state = read_state(&root)?;
     if !matches!(state.status, Status::Stopped)

@@ -175,20 +175,26 @@ fn occupied_and_ambiguous_ports_are_refused() {
 }
 
 #[test]
-fn stop_before_first_start_is_idempotent_without_docker() {
+fn stop_before_first_start_names_the_missing_session_without_docker() {
     let temporary = tempfile::tempdir().unwrap();
-    assert_eq!(
-        stop(temporary.path(), false, None).unwrap()["status"],
-        "stopped"
-    );
-    assert_eq!(
-        stop(temporary.path(), false, None).unwrap()["status"],
-        "stopped"
-    );
-    assert_eq!(
-        stop(temporary.path(), true, None).unwrap()["status"],
-        "stopped"
-    );
+    let project = fs::canonicalize(temporary.path()).unwrap();
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
+    let refusals = [
+        stop(&project, false, None).expect_err("a project without a session"),
+        stop(&project, true, None).expect_err("reclaiming without a session"),
+        {
+            // A private .breg directory without a dev journal is the same absence.
+            private::directory(&project.join(".breg")).unwrap();
+            stop(&project, false, None).expect_err("a project without a dev journal")
+        },
+    ];
+    for refusal in refusals {
+        let refusal = format!("{refusal:#}");
+        assert!(
+            refusal.contains("no local development session"),
+            "{refusal}"
+        );
+    }
 }
 
 #[test]
