@@ -6147,6 +6147,105 @@ mod tests {
         );
     }
 
+    /// The published bundle contract must refuse a `sourceConnections` entry
+    /// exactly where `SourceConnectionConfig::validate` refuses it. A schema
+    /// that publishes a connection shape the runtime denies describes a
+    /// deployment nobody can load, so both sides read the same document here.
+    #[test]
+    fn source_connections_are_constrained_alike_by_the_bundle_schema_and_the_runtime() {
+        let validator = bundle_contract_validator();
+
+        let owned = source_connection_document(
+            acceptance_fixture(),
+            concat!(
+                "    baseUrl: https://source.invalid\n",
+                "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n",
+                "    concurrencyLimit: 8\n",
+            ),
+        );
+        let owned = edited(
+            &owned,
+            "    transport: http-json\n",
+            "    transport: http-json\n    connection: shared\n",
+        );
+        EvidenceConfig::parse_yaml(owned.as_bytes())
+            .expect("a source resolved to its named connection validates");
+        assert!(
+            validator.is_valid(&bundle_contract_instance(owned.as_bytes())),
+            "the bundle contract rejected a resolved named connection"
+        );
+
+        let local = edited(
+            acceptance_fixture(),
+            "assuranceProfile: evidence-grade\n",
+            "assuranceProfile: local\n",
+        );
+        let loopback = source_connection_document(
+            &local,
+            "    baseUrl: http://127.0.0.1:18081\n    authentication: {kind: none}\n",
+        );
+        EvidenceConfig::parse_yaml(loopback.as_bytes())
+            .expect("an unauthenticated local loopback connection validates");
+        assert!(
+            validator.is_valid(&bundle_contract_instance(loopback.as_bytes())),
+            "the bundle contract rejected the local loopback exception"
+        );
+
+        let mut refused = vec![
+            (
+                "an unauthenticated connection at a public origin",
+                "    baseUrl: https://source.invalid\n    authentication: {kind: none}\n"
+                    .to_owned(),
+            ),
+            (
+                "an unauthenticated loopback connection carrying a private trust profile",
+                concat!(
+                    "    baseUrl: http://127.0.0.1:18081\n",
+                    "    authentication: {kind: none}\n",
+                    "    tlsTrustProfile: private-ca\n",
+                )
+                .to_owned(),
+            ),
+        ];
+        // The unauthenticated exception is one exact origin spelling, so a
+        // default port, a zero or out-of-range port, a padded port, and a
+        // padded octet all sit outside it.
+        for origin in [
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:65536",
+            "http://127.0.0.1:018081",
+            "http://127.00.0.1:18081",
+        ] {
+            refused.push((
+                "an unauthenticated connection at a non-canonical loopback origin",
+                format!("    baseUrl: {origin}\n    authentication: {{kind: none}}\n"),
+            ));
+        }
+        for (reason, connection) in refused {
+            let document = source_connection_document(&local, &connection);
+            assert!(
+                EvidenceConfig::parse_yaml(document.as_bytes()).is_err(),
+                "the runtime accepted {reason}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(document.as_bytes())),
+                "the bundle contract accepted {reason}"
+            );
+        }
+    }
+
+    /// One `sourceConnections` entry named `shared`, spliced into a whole
+    /// document so the runtime and the published contract both read the block
+    /// the way a bundle carries it.
+    fn source_connection_document(document: &str, connection: &str) -> String {
+        edited(
+            document,
+            "sources:\n",
+            &format!("sourceConnections:\n  shared:\n{connection}sources:\n"),
+        )
+    }
+
     /// The acceptance fixture's one source, restated on the statement
     /// transport, so a whole document exercises it the way a bundle would.
     const SQLITE_SOURCE: &str = r#"  source-a:
