@@ -8,9 +8,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{self, Read as _},
+    iter::Peekable,
     os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
     path::{Component, Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
+    str::Chars,
     thread,
 };
 
@@ -3678,16 +3680,18 @@ fn child_diagnostic(stderr: &[u8]) -> String {
     let mut characters = text.chars().peekable();
     while let Some(character) = characters.next() {
         match character {
-            // Dropping the introducer alone would leave the parameters of a
-            // colour or cursor sequence standing as text, so a control
-            // sequence is consumed through its final byte.
-            '\u{1b}' => {
-                if characters.next_if_eq(&'[').is_some() {
-                    while characters
-                        .next_if(|candidate| !matches!(candidate, '\u{40}'..='\u{7e}'))
-                        .is_some()
-                    {}
-                    characters.next();
+            // Dropping an introducer alone would leave the parameters of a
+            // colour or cursor sequence, or the target of a hyperlink,
+            // standing as text, so each sequence is consumed through its own
+            // terminator.
+            '\u{1b}' => consume_escape_sequences(&mut characters),
+            // The same introducers in their single-character form. A terminal
+            // reading UTF-8 acts on these too, so their payload is consumed
+            // rather than left behind by the control-character arm below.
+            '\u{9b}' => consume_control_sequence(&mut characters),
+            '\u{90}' | '\u{98}' | '\u{9d}' | '\u{9e}' | '\u{9f}' => {
+                if consume_string_sequence(&mut characters) {
+                    consume_escape_sequences(&mut characters);
                 }
             }
             '\n' | '\t' => printable.push(character),
@@ -3704,6 +3708,99 @@ fn child_diagnostic(stderr: &[u8]) -> String {
         cut -= 1;
     }
     format!("{} [truncated]", diagnostic[..cut].trim_end())
+}
+
+/// The longest run one escape sequence may consume.
+///
+/// Every sequence a terminal acts on is far shorter than this. The cap is what
+/// keeps an introducer whose terminator never arrives from swallowing the rest
+/// of a diagnostic: past it the remaining characters are read as text again.
+const MAX_ESCAPE_SEQUENCE_CHARS: usize = 128;
+
+/// Consume the escape sequence whose `ESC` was just read, and any sequence
+/// that ended it.
+///
+/// A string sequence may be closed by an `ESC` that starts the next sequence
+/// rather than by `ST`, so consumption repeats until no introducer is left.
+fn consume_escape_sequences(characters: &mut Peekable<Chars<'_>>) {
+    while consume_escape_sequence(characters) {}
+}
+
+/// Consume one ECMA-48 escape sequence, its `ESC` already read, and report
+/// whether it ended on an `ESC` the caller must still read a sequence for.
+fn consume_escape_sequence(characters: &mut Peekable<Chars<'_>>) -> bool {
+    match characters.peek() {
+        Some('[') => {
+            characters.next();
+            consume_control_sequence(characters);
+            false
+        }
+        // `OSC`, `DCS`, `SOS`, `PM` and `APC` all carry a payload closed by a
+        // terminator rather than by a final byte.
+        Some(']' | 'P' | 'X' | '^' | '_') => {
+            characters.next();
+            consume_string_sequence(characters)
+        }
+        _ => {
+            consume_two_byte_escape(characters);
+            false
+        }
+    }
+}
+
+/// Consume a control sequence's parameter and intermediate bytes and the final
+/// byte that ends it.
+///
+/// A sequence whose final byte never arrives, or one holding a character no
+/// control sequence may carry, ends where that is found: the text after it is
+/// printed rather than swallowed.
+fn consume_control_sequence(characters: &mut Peekable<Chars<'_>>) {
+    let mut consumed = 0;
+    while consumed < MAX_ESCAPE_SEQUENCE_CHARS
+        && characters
+            .next_if(|candidate| matches!(candidate, '\u{20}'..='\u{3f}'))
+            .is_some()
+    {
+        consumed += 1;
+    }
+    characters.next_if(|candidate| matches!(candidate, '\u{40}'..='\u{7e}'));
+}
+
+/// Consume the intermediate bytes of a two-byte escape and the final byte that
+/// ends it.
+///
+/// An `ESC` that ends the text, or one followed by a character no escape
+/// sequence may carry, consumes nothing further.
+fn consume_two_byte_escape(characters: &mut Peekable<Chars<'_>>) {
+    let mut consumed = 0;
+    while consumed < MAX_ESCAPE_SEQUENCE_CHARS
+        && characters
+            .next_if(|candidate| matches!(candidate, '\u{20}'..='\u{2f}'))
+            .is_some()
+    {
+        consumed += 1;
+    }
+    characters.next_if(|candidate| matches!(candidate, '\u{30}'..='\u{7e}'));
+}
+
+/// Consume a string sequence's payload and the `ST` or `BEL` that ends it, and
+/// report whether it ended on an `ESC` that starts another sequence instead.
+///
+/// The payload carries arbitrary text, a hyperlink target among it, so it is
+/// consumed rather than printed. A terminator that never arrives ends the
+/// sequence at the cap, so what follows is read as text.
+fn consume_string_sequence(characters: &mut Peekable<Chars<'_>>) -> bool {
+    let mut consumed = 0;
+    while consumed < MAX_ESCAPE_SEQUENCE_CHARS {
+        match characters.next() {
+            None | Some('\u{7}') | Some('\u{9c}') => return false,
+            // `ST` in its two-character form. Anything else after the `ESC`
+            // begins a sequence of its own, which the caller reads.
+            Some('\u{1b}') => return characters.next_if_eq(&'\\').is_none(),
+            Some(_) => consumed += 1,
+        }
+    }
+    false
 }
 
 fn yaml_bytes(value: &Value) -> Result<Vec<u8>> {
@@ -6683,6 +6780,51 @@ factSchema: schemas/family-facts.schema.yaml
         assert!(!diagnostic.contains('\u{1b}'), "{diagnostic:?}");
         assert!(!diagnostic.contains('\r'), "{diagnostic:?}");
         assert!(!diagnostic.contains("[31m"), "{diagnostic:?}");
+    }
+
+    #[test]
+    fn render_discovery_description_strips_a_child_operating_system_command() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nprintf '\\033]8;;https://example.invalid\\033\\\\click here\\033]8;;\\033\\\\ rejected' >&2\nexit 1\n",
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+
+        let diagnostic = format!("{error:#}");
+        assert_eq!(
+            diagnostic,
+            "Evidence rejected provider publication compilation: click here rejected"
+        );
+        assert!(!diagnostic.contains("example.invalid"), "{diagnostic:?}");
+    }
+
+    #[test]
+    fn a_two_byte_escape_leaves_neither_its_introducer_nor_its_final_byte() {
+        assert_eq!(child_diagnostic(b"\x1b7saved\x1b8"), "saved");
+        assert_eq!(child_diagnostic(b"\x1b(Bdesignated"), "designated");
+    }
+
+    #[test]
+    fn a_control_sequence_without_a_final_byte_swallows_no_message() {
+        assert_eq!(
+            child_diagnostic(b"\x1b[1;2;3\nbundle rejected"),
+            "bundle rejected"
+        );
+    }
+
+    #[test]
+    fn a_string_sequence_without_a_terminator_is_consumed_only_to_its_cap() {
+        let mut stderr = b"\x1b]".to_vec();
+        stderr.extend(std::iter::repeat_n(b'a', MAX_ESCAPE_SEQUENCE_CHARS));
+        stderr.extend_from_slice(b"bundle rejected");
+
+        assert_eq!(child_diagnostic(&stderr), "bundle rejected");
     }
 
     #[test]
