@@ -1436,13 +1436,25 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
             raise ReleasePlanError(
                 f"required release surface is missing: {loader_path}"
             ) from exc
-        loader_versions = set(
-            re.findall(r"bindingPackageVersion !== '([^']+)'", loader)
-        )
-        if loader_versions != {version}:
+        loader_versions = re.findall(r"bindingPackageVersion !== '([^']+)'", loader)
+        if set(loader_versions) != {version}:
             raise ReleasePlanError(
                 f"{relative_path(repo, loader_path)} generated binding loader "
-                f"must use only version {version}, found {sorted(loader_versions)!r}"
+                f"must use only version {version}, found {sorted(set(loader_versions))!r}"
+            )
+        # napi emits one expected-version diagnostic for every binding guard.
+        # A release edit must not advance the comparison but leave its error stale.
+        diagnostic_versions = re.findall(
+            r"(?:Native|WASI) binding package version mismatch, expected ([^ ]+) "
+            r"but got \$\{bindingPackageVersion\}\.",
+            loader,
+        )
+        if diagnostic_versions != [version] * len(loader_versions):
+            raise ReleasePlanError(
+                f"{relative_path(repo, loader_path)} generated binding loader "
+                f"expected-version diagnostics must name {version} for all "
+                f"{len(loader_versions)} guards, found {len(diagnostic_versions)} "
+                f"with versions {sorted(set(diagnostic_versions))!r}"
             )
         surfaces.extend((package_path, lock_path, loader_path))
         if expected_name in {

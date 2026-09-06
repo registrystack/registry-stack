@@ -65,6 +65,19 @@ def write_json(path: Path, data: object) -> None:
     write(path, json.dumps(data, indent=2) + "\n")
 
 
+def binding_loader(version: str, expected_version: str | None = None) -> str:
+    expected_version = version if expected_version is None else expected_version
+    return (
+        f"if (bindingPackageVersion !== '{version}' && "
+        "process.env.NAPI_RS_ENFORCE_VERSION_CHECK && "
+        "process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {\n"
+        "  throw new Error(`Native binding package version mismatch, "
+        f"expected {expected_version} but got ${{bindingPackageVersion}}. "
+        "You can reinstall dependencies to fix this issue.`)\n"
+        "}\n"
+    )
+
+
 def git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args], cwd=repo, text=True, capture_output=True, check=False
@@ -391,7 +404,7 @@ version = "1.1.0"
                 )
             write(
                 client_root / "index.js",
-                "if (bindingPackageVersion !== '1.1.0') throw new Error();\n",
+                binding_loader("1.1.0"),
             )
         unified_node = self.root / "crates/registry-stack-client-node"
         write_json(
@@ -690,12 +703,12 @@ class RegistryReleasePlanTest(unittest.TestCase):
 
     def test_prepare_rejects_stale_client_loader_and_excluded_fuzz_lock(self) -> None:
         loader = self.repo.root / "crates/registry-evidence-client-node/index.js"
-        write(loader, "if (bindingPackageVersion !== '1.0.0') throw new Error();\n")
+        write(loader, binding_loader("1.0.0"))
         stale_loader = self.prepare()
         self.assertEqual(1, stale_loader.returncode)
         self.assertIn("generated binding loader must use only version 1.1.0", stale_loader.stderr)
 
-        write(loader, "if (bindingPackageVersion !== '1.1.0') throw new Error();\n")
+        write(loader, binding_loader("1.1.0"))
         fuzz_lock = self.repo.root / "products/platform/fuzz/Cargo.lock"
         write(
             fuzz_lock,
@@ -712,6 +725,64 @@ version = "1.0.0"
             "products/platform/fuzz/Cargo.lock path packages must use version 1.1.0",
             stale_lock.stderr,
         )
+
+    def test_prepare_rejects_stale_loader_diagnostics_with_current_guards(self) -> None:
+        for client in ("discovery", "evidence", "relay", "breg"):
+            with self.subTest(client=client):
+                loader = self.repo.root / f"crates/registry-{client}-client-node/index.js"
+                write(
+                    loader,
+                    binding_loader("1.1.0") + binding_loader("1.1.0", "1.0.0"),
+                )
+
+                result = self.prepare()
+
+                self.assertEqual(1, result.returncode)
+                self.assertIn(str(loader.relative_to(self.repo.root)), result.stderr)
+                self.assertIn("expected-version diagnostics", result.stderr)
+                write(loader, binding_loader("1.1.0") * 2)
+                corrected = self.prepare()
+                self.assertEqual(0, corrected.returncode, corrected.stderr)
+
+    def test_prepare_requires_a_version_diagnostic_for_each_loader_guard(self) -> None:
+        loader = self.repo.root / "crates/registry-evidence-client-node/index.js"
+        write(
+            loader,
+            binding_loader("1.1.0")
+            + "if (bindingPackageVersion !== '1.1.0') throw new Error();\n",
+        )
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("expected-version diagnostics", result.stderr)
+
+    def test_prepare_accepts_the_maintained_generated_loaders(self) -> None:
+        for client in ("discovery", "evidence", "relay", "breg"):
+            relative_root = Path(f"crates/registry-{client}-client-node")
+            package = json.loads((ROOT / relative_root / "package.json").read_text())
+            loader = (ROOT / relative_root / "index.js").read_text()
+            write(
+                self.repo.root / relative_root / "index.js",
+                loader.replace(package["version"], "1.1.0"),
+            )
+
+        result = self.prepare()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+        loader_path = self.repo.root / "crates/registry-discovery-client-node/index.js"
+        loader = loader_path.read_text()
+        write(
+            loader_path,
+            loader.replace(
+                "WASI binding package version mismatch, expected 1.1.0",
+                "WASI binding package version mismatch, expected 1.0.0",
+            ),
+        )
+        stale_wasi = self.prepare()
+        self.assertEqual(1, stale_wasi.returncode)
+        self.assertIn("expected-version diagnostics", stale_wasi.stderr)
 
     def test_prepare_rejects_stale_client_platform_package_version(self) -> None:
         for client in ("evidence", "relay"):
