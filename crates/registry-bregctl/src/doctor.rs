@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use registry_breg::package::PackageError;
 use registry_breg::runtime_config::RuntimeConfigError;
 use registry_breg::startup::{prepare, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
@@ -56,13 +57,20 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     if let StartupError::RuntimeConfig(cause) = error {
         return runtime_config_diagnostic(cause);
     }
-    let (code, path, message) = match error {
-        StartupError::RuntimeConfig(_) => unreachable!("handled above"),
-        StartupError::PackageRefused => (
+    // The package refusal carries its own closed-vocabulary cause. Name it
+    // inside the one package check instead of collapsing every package fault
+    // into the same sentence; both vocabularies are value free.
+    if let StartupError::PackageRefused(cause) = error {
+        return diagnostic(
             "startup.package.refused",
             "package",
-            "the runtime package was refused",
-        ),
+            &format!("the runtime package was refused: {cause}"),
+        );
+    }
+    let (code, path, message) = match error {
+        StartupError::RuntimeConfig(_) | StartupError::PackageRefused(_) => {
+            unreachable!("handled above")
+        }
         StartupError::DatabaseConnection => (
             "startup.database.connection_refused",
             "database",
@@ -172,7 +180,7 @@ mod tests {
         //   `prepare()` performs separately from `runtimeConfig`, so counting
         //   it here would double-count that one stage under a second name.
         let distinctly_checked = [
-            StartupError::PackageRefused,
+            StartupError::PackageRefused(PackageError::Integrity),
             StartupError::DatabaseConnection,
             StartupError::DatabaseUnready,
             StartupError::Audit,
@@ -215,7 +223,7 @@ mod tests {
     fn startup_value_disclosure_threat_is_enforced_by_a_closed_negative_class_mapping() {
         let cases = [
             (
-                StartupError::PackageRefused,
+                StartupError::PackageRefused(PackageError::Integrity),
                 "startup.package.refused",
                 "package",
             ),
@@ -266,6 +274,43 @@ mod tests {
             assert_eq!(diagnostic.path, expected_path);
             assert!(!diagnostic.message.contains(&rendered_dependency_error));
         }
+    }
+
+    #[test]
+    fn package_causes_are_named_inside_the_one_package_refusal() {
+        // A stale runtime that refuses the package this project builds must be
+        // diagnosable: the supervisor's report names which package check
+        // failed. The code and path stay the ones `CHECKED_DEPENDENCIES`
+        // names, so the single package stage keeps reporting under one name.
+        let causes = [
+            PackageError::UnsafePath,
+            PackageError::Bounds,
+            PackageError::Read,
+            PackageError::CanonicalJson,
+            PackageError::Closure,
+            PackageError::Integrity,
+            PackageError::Binding,
+            PackageError::Signature,
+            PackageError::Derivation,
+            PackageError::MigrationPlan,
+            PackageError::Permissions,
+        ];
+        let mut messages = HashSet::new();
+        for cause in causes {
+            let diagnostic = startup_diagnostic(StartupError::PackageRefused(cause));
+            assert_eq!(diagnostic.code, "startup.package.refused");
+            assert_eq!(diagnostic.path, "package");
+            assert!(
+                diagnostic.message.ends_with(&cause.to_string()),
+                "{} does not name {cause}",
+                diagnostic.message
+            );
+            assert!(
+                messages.insert(diagnostic.message),
+                "two package causes report the same message"
+            );
+        }
+        assert_eq!(messages.len(), causes.len());
     }
 
     #[test]

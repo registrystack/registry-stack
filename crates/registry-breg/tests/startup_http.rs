@@ -21,6 +21,7 @@ use registry_breg::api::{
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::metrics::{self, Metrics};
+use registry_breg::package::PackageError;
 use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
 use registry_breg::startup::{
     operational_log_level, with_request_timeout_and_metrics_for_test,
@@ -484,7 +485,7 @@ fn startup_errors() -> [StartupError; 12] {
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
         // exercises the same static text, so one representative is enough here.
         StartupError::RuntimeConfig(RuntimeConfigError::Document),
-        StartupError::PackageRefused,
+        StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
         StartupError::Audit,
@@ -556,7 +557,7 @@ fn expected_operational_event(
 fn expected_startup_error(error: StartupError) -> &'static str {
     match error {
         StartupError::RuntimeConfig(_) => "the Registry runtime configuration was refused",
-        StartupError::PackageRefused => "the Registry package was refused",
+        StartupError::PackageRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection => "the Registry database connection was refused",
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
         StartupError::Audit => "the Registry audit profile was refused",
