@@ -1,6 +1,14 @@
 name: RegistryStack CI
 
 on:
+  schedule:
+    - cron: "37 22 * * *"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run every CI gate, including archive and release recipe sweeps
+        type: boolean
+        default: true
   pull_request:
     branches:
       - main
@@ -38,6 +46,8 @@ jobs:
     name: Changed paths
     runs-on: ubuntu-24.04
     outputs:
+      archive_base_ref: ${{ steps.filter.outputs.archive_base_ref }}
+      archive_comparison_required: ${{ steps.filter.outputs.archive_comparison_required }}
       rust: ${{ steps.filter.outputs.rust }}
       rust_matrix: ${{ steps.filter.outputs.rust_matrix }}
       rust_packages: ${{ steps.filter.outputs.rust_packages }}
@@ -68,48 +78,24 @@ jobs:
 
       - name: Classify changed paths
         id: filter
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
         shell: bash
         run: |
           set -euo pipefail
           metadata="${RUNNER_TEMP}/registry-stack-cargo-metadata.json"
-          changed_files="${RUNNER_TEMP}/registry-stack-changed-files"
-          # Routing needs workspace manifests and their declared dependency
-          # edges, not downloaded registry sources or resolved external crates.
+          # Routing uses declared workspace dependencies without registry downloads.
           cargo metadata --locked --no-deps --format-version 1 > "${metadata}"
-          classifier=(
-            python3 .github/scripts/ci_changes.py
-            --metadata "${metadata}"
+          python3 .github/scripts/ci_event_routing.py \
+            --metadata "${metadata}" \
             --github-output "${GITHUB_OUTPUT}"
-          )
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null &&
-               git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
-              git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" > "${changed_files}"
-              classifier+=(--changed-files "${changed_files}")
-            else
-              classifier+=(--all)
-            fi
-          elif git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null &&
-               git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
-            # Keep push and merge-queue complete matrices while preserving
-            # paths for gates that intentionally do not run on every change.
-            git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" > "${changed_files}"
-            classifier+=(--all --changed-files "${changed_files}")
-          else
-            # Runs without resolvable comparison commits use the complete
-            # matrix and leave opt-in immutable archive verification skipped.
-            classifier+=(--all)
-          fi
-          "${classifier[@]}"
 
       - name: Check repository identifier reference closure
         run: products/identifiers/scripts/generate.py --check-references
 
       - name: Test CI classifier
         run: python3 .github/scripts/test_ci_changes.py
+
+      - name: Test CI event routing
+        run: python3 .github/scripts/test_ci_event_routing.py
 
       - name: Test nightly coverage planning
         run: python3 .github/scripts/test_nightly_rust_coverage.py
@@ -1309,11 +1295,27 @@ jobs:
         working-directory: docs/site
         run: npm ci
 
-      - name: Reject changes to locked archive digests
+      - name: Validate archive lock and compare event baseline
         working-directory: docs/site
         env:
-          ARCHIVE_LOCK_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'origin/main' }}
-        run: npm run check:archive-lock -- --base-ref "${ARCHIVE_LOCK_BASE_REF}"
+          ARCHIVE_LOCK_BASE_REF: ${{ needs.changes.outputs.archive_base_ref }}
+          ARCHIVE_COMPARISON_REQUIRED: ${{ needs.changes.outputs.archive_comparison_required }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${ARCHIVE_COMPARISON_REQUIRED}" == "true" ]]; then
+            if [[ -z "${ARCHIVE_LOCK_BASE_REF}" ]]; then
+              echo "Cannot verify archive immutability: event baseline is unavailable." >&2
+              exit 1
+            fi
+            npm run check:archive-lock -- --base-ref "${ARCHIVE_LOCK_BASE_REF}"
+          elif [[ "${ARCHIVE_COMPARISON_REQUIRED}" == "false" ]]; then
+            # Scheduled reconstruction validates locked bytes without a change baseline.
+            npm run check:archive-lock
+          else
+            echo "Archive comparison policy is unavailable." >&2
+            exit 1
+          fi
 
       - name: Assemble and verify the published archive window
         working-directory: docs/site

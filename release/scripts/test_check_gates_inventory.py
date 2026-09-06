@@ -303,7 +303,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_ci_classifier_and_its_tests_are_wired(self) -> None:
         self.assertIn(
-            "python3 .github/scripts/ci_changes.py",
+            "python3 .github/scripts/ci_event_routing.py",
             self.workflow,
         )
         self.assertIn(

@@ -32,6 +32,7 @@ from ci_changes import (
     classify,
 )
 from run_cargo_packages import command_args, package_args
+from ci_event_routing import select_event, selection_outputs
 
 # products/evidence/scripts is not a package, so reaching its key-path
 # checker needs this path on sys.path, the same way that script's own test
@@ -1257,6 +1258,22 @@ class CiChangesTest(unittest.TestCase):
                 outputs = classify(self.workspace, (path,))
                 self.assertFalse(outputs["docs_archives"])
 
+    def test_full_sweep_selects_all_gates_and_owned_rust_packages(self) -> None:
+        outputs = classify(self.workspace, (), full_sweep=True)
+        for key, value in outputs.items():
+            if isinstance(value, bool):
+                with self.subTest(gate=key):
+                    self.assertTrue(value)
+        self.assertEqual(outputs["rust_packages"], sorted(self.workspace.package_names))
+        self.assertEqual(
+            {entry["name"]: entry["packages"] for entry in outputs["rust_matrix"]["include"]},
+            {name: sorted(packages) for name, packages in SHARDS.items()},
+        )
+
+    def test_event_router_changes_select_complete_rust_proof(self) -> None:
+        outputs = classify(self.workspace, (".github/scripts/ci_event_routing.py",))
+        self.assertEqual(outputs["rust_packages"], sorted(self.workspace.package_names))
+
     def test_run_all_does_not_rebuild_immutable_archives_without_changed_paths(self) -> None:
         outputs = classify(self.workspace, (), run_all=True)
         self.assertTrue(outputs["docs"])
@@ -1527,7 +1544,9 @@ on:
                 re.MULTILINE,
             )
         )
-        emitted = set(classify(self.workspace, ()))
+        emitted = set(selection_outputs(
+            self.workspace, select_event(Path.cwd(), "schedule", {}, "")
+        ))
 
         for name in sorted(referenced):
             with self.subTest(output=name):

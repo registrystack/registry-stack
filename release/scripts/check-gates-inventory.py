@@ -25,7 +25,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Merge queue trigger", "merge_group:"),
     (
         "CI classifier invocation",
-        "python3 .github/scripts/ci_changes.py",
+        "python3 .github/scripts/ci_event_routing.py",
     ),
     (
         "CI classifier tests",
