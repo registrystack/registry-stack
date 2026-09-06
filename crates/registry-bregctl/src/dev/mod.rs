@@ -952,15 +952,61 @@ fn service(binary: &Path, args: &[&str], config: &Path, root: &Path, name: &str)
     });
     Ok(child)
 }
+/// Bytes written to a child's standard input, naming the secret substring the
+/// child must never be able to echo back into a log, a report or an error.
+struct Input<'a> {
+    bytes: &'a [u8],
+    secret: Option<&'a [u8]>,
+}
+
+/// Shortest run of secret bytes that must not survive in captured output. A
+/// database client echoes a window around an error position rather than the
+/// whole statement, so partial runs are hidden as well as whole occurrences.
+const SECRET_RUN: usize = 8;
+
+/// Replace every run of bytes that also occurs in `secret` with a fixed marker,
+/// keeping the surrounding diagnostics readable.
+fn redact(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
+    let run = SECRET_RUN.min(secret.len());
+    if run == 0 || bytes.len() < run {
+        return bytes.to_vec();
+    }
+    let windows: BTreeSet<&[u8]> = secret.windows(run).collect();
+    let mut hidden = vec![false; bytes.len()];
+    for (index, window) in bytes.windows(run).enumerate() {
+        if windows.contains(window) {
+            hidden[index..index + run].fill(true);
+        }
+    }
+    let mut redacted = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if hidden[index] {
+            redacted.extend_from_slice(b"[redacted]");
+            while index < bytes.len() && hidden[index] {
+                index += 1;
+            }
+        } else {
+            redacted.push(bytes[index]);
+            index += 1;
+        }
+    }
+    redacted
+}
+
 /// Run one owned prerequisite, returning whether it succeeded together with
 /// its captured stdout. Diagnostics stay in the owner-only log directory.
 fn output(
     command: &mut Command,
     root: &Path,
     name: &str,
-    input: Option<&[u8]>,
+    input: Option<Input<'_>>,
 ) -> Result<(bool, Vec<u8>)> {
     let log = log_file(root, name)?;
+    let secret = input
+        .as_ref()
+        .and_then(|input| input.secret)
+        .map(|secret| Zeroizing::new(secret.to_vec()));
     let mut child = command
         .stdin(if input.is_some() {
             Stdio::piped()
@@ -980,13 +1026,25 @@ fn output(
         let mut bytes = Vec::new();
         pump(stdout, &mut bytes).map(|()| bytes)
     });
-    let err = thread::spawn(move || pump(stderr, log));
-    if let Some(bytes) = input {
+    // Diagnostics that could carry a secret are captured and redacted before
+    // they are persisted; otherwise they stream straight into the log.
+    let redacting = secret.clone();
+    let err = thread::spawn(move || match redacting {
+        Some(secret) => {
+            let mut captured = Zeroizing::new(Vec::new());
+            pump(stderr, &mut *captured)?;
+            let mut log = log;
+            log.write_all(&redact(&captured, &secret))?;
+            Ok(())
+        }
+        None => pump(stderr, log),
+    });
+    if let Some(input) = &input {
         child
             .stdin
             .take()
             .context("command input missing")?
-            .write_all(bytes)?;
+            .write_all(input.bytes)?;
     }
     let deadline = Instant::now() + Duration::from_secs(120);
     let status = loop {
@@ -999,11 +1057,15 @@ fn output(
         }
         thread::sleep(Duration::from_millis(50));
     };
-    let bytes = out
+    let mut bytes = out
         .join()
         .map_err(|_| anyhow::anyhow!("command output reader failed"))??;
     err.join()
         .map_err(|_| anyhow::anyhow!("command diagnostic reader failed"))??;
+    if let Some(secret) = &secret {
+        let echoed = Zeroizing::new(std::mem::take(&mut bytes));
+        bytes = redact(&echoed, secret);
+    }
     if !status.success() {
         // Native bregctl reports errors on stdout in JSON mode. Preserve them
         // privately as well; selectors and credentials never enter the report.
@@ -1016,7 +1078,7 @@ fn command(
     command: &mut Command,
     root: &Path,
     name: &str,
-    input: Option<&[u8]>,
+    input: Option<Input<'_>>,
 ) -> Result<Vec<u8>> {
     let (success, bytes) = output(command, root, name, input)?;
     if !success {
@@ -1081,7 +1143,7 @@ fn docker_command(
     state: &State,
     name: &str,
     args: &[&str],
-    input: Option<&[u8]>,
+    input: Option<Input<'_>>,
 ) -> Result<Vec<u8>> {
     command(Command::new(docker).args(args), &state.root(), name, input)
 }
@@ -1263,7 +1325,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
             ],
             None,
         )?;
-        sql(docker,state,"postgres",b"ALTER SYSTEM SET hba_file = '/tmp/breg-dev-pg_hba.conf';\nALTER SYSTEM SET ssl = 'on';\nALTER SYSTEM SET ssl_cert_file = '/tmp/breg-dev-server.pem';\nALTER SYSTEM SET ssl_key_file = '/tmp/breg-dev-server.key';\nSELECT pg_reload_conf();\n")?;
+        sql(docker,state,"postgres",b"ALTER SYSTEM SET hba_file = '/tmp/breg-dev-pg_hba.conf';\nALTER SYSTEM SET ssl = 'on';\nALTER SYSTEM SET ssl_cert_file = '/tmp/breg-dev-server.pem';\nALTER SYSTEM SET ssl_key_file = '/tmp/breg-dev-server.key';\nSELECT pg_reload_conf();\n",None)?;
         for (role, filename) in [
             (MIGRATION_ROLE, "migration-password"),
             (RUNTIME_ROLE, "runtime-password"),
@@ -1273,7 +1335,13 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 64,
             )?)?);
             let statement=Zeroizing::new(format!("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='{role}') THEN CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '{}'; END IF; END $$;",password.as_str()));
-            sql(docker, state, "postgres", statement.as_bytes())?;
+            sql(
+                docker,
+                state,
+                "postgres",
+                statement.as_bytes(),
+                Some(password.as_bytes()),
+            )?;
         }
         for database in ["breg_dev", "breg_dev_test"] {
             let exists = sql(
@@ -1281,6 +1349,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 state,
                 "postgres",
                 format!("SELECT count(*) FROM pg_database WHERE datname='{database}';").as_bytes(),
+                None,
             )?;
             if String::from_utf8_lossy(&exists).trim() == "0" {
                 sql(
@@ -1288,6 +1357,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                     state,
                     "postgres",
                     format!("CREATE DATABASE {database};").as_bytes(),
+                    None,
                 )?;
             }
             let mut statements=format!("CREATE EXTENSION IF NOT EXISTS btree_gist; REVOKE ALL ON DATABASE {database} FROM PUBLIC; GRANT CONNECT ON DATABASE {database} TO {MIGRATION_ROLE},{RUNTIME_ROLE};");
@@ -1300,14 +1370,20 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
             ] {
                 statements.push_str(&format!("CREATE SCHEMA IF NOT EXISTS {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
             }
-            sql(docker, state, database, statements.as_bytes())?;
+            sql(docker, state, database, statements.as_bytes(), None)?;
         }
         state.database_ready = true;
         state.save()?;
     }
     Ok(())
 }
-fn sql(docker: &Path, state: &State, database: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+fn sql(
+    docker: &Path,
+    state: &State,
+    database: &str,
+    bytes: &[u8],
+    secret: Option<&[u8]>,
+) -> Result<Vec<u8>> {
     docker_command(
         docker,
         state,
@@ -1327,7 +1403,7 @@ fn sql(docker: &Path, state: &State, database: &str, bytes: &[u8]) -> Result<Vec
             "-d",
             database,
         ],
-        Some(bytes),
+        Some(Input { bytes, secret }),
     )
 }
 fn stop_database(docker: &Path, state: &State) -> Result<()> {
@@ -1392,6 +1468,7 @@ fn package(state: &mut State, clients: &Clients) -> Result<()> {
         state,
         "postgres",
         b"DROP DATABASE IF EXISTS breg_dev_test WITH (FORCE); CREATE DATABASE breg_dev_test;",
+        None,
     )?;
     let mut initialization=format!("CREATE EXTENSION btree_gist; REVOKE ALL ON DATABASE breg_dev_test FROM PUBLIC; GRANT CONNECT ON DATABASE breg_dev_test TO {MIGRATION_ROLE},{RUNTIME_ROLE};");
     for schema in [
@@ -1403,7 +1480,13 @@ fn package(state: &mut State, clients: &Clients) -> Result<()> {
     ] {
         initialization.push_str(&format!("CREATE SCHEMA {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
     }
-    sql(&docker, state, "breg_dev_test", initialization.as_bytes())?;
+    sql(
+        &docker,
+        state,
+        "breg_dev_test",
+        initialization.as_bytes(),
+        None,
+    )?;
     let journeys: Value = serde_norway::from_slice(&private::read(
         &root.join("project/tests/journeys.yaml"),
         MAX_BYTES,
