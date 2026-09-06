@@ -181,13 +181,17 @@ ordinary files or choose another directory.
 ```sh
 evidencectl build --project ./evidence --target ./evidence/targets/production \
   --output ./candidate-operated-001
-evidence bundle-check --bundle ./candidate-operated-001/bundle --json
+evidence --runtime ./candidate-operated-001/runtime.yaml check
 ```
 
 Build uses the matching Evidence runtime to validate the bundle and required
-fixtures before publishing. Bundle check reports the bundle revision and each
-requirement's actual configuration revision. Neither command contacts the source,
-caller issuer or Transit service.
+fixtures before publishing. The check then validates and compiles the complete
+immutable bundle and validates the mounted secret material exactly as startup
+does, and reports the bundle revision, the runtime revision and the number of
+requirements it compiled. Run it in a context where the runtime file's absolute
+`bundleDirectory` and secret root already resolve: a build host that does not
+carry those paths fails the check until the candidate is placed. Neither command
+contacts the source, caller issuer or Transit service.
 
 Hand over the authored revision, operated source-export baseline, complete target,
 exact candidate and revisions, required secret references, and the approved
