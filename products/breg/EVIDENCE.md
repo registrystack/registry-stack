@@ -88,9 +88,12 @@ must use the representation returned by the provider.
 
 BReg's unrestricted `int64` selector range exceeds Evidence's exact
 safe-integer selector range, so the exporter refuses it instead of silently
-narrowing its advertised identity contract. Use a bounded string selector or
-maintain a reviewed custom adapter for unsupported shapes. Bounded scalar
-facts are supported; structured and spatial facts require a custom adapter.
+narrowing its advertised identity contract. A string selector field that
+accepts the empty value, an explicit or defaulted `minLength` of `0`, is
+refused for the same reason: declare a `minLength` of at least 1, or maintain
+a reviewed custom adapter. Use a bounded string selector or maintain a
+reviewed custom adapter for unsupported shapes. Bounded scalar facts are
+supported; structured and spatial facts require a custom adapter.
 
 ## Import and update ordinary files
 
