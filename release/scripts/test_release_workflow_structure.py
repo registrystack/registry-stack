@@ -881,7 +881,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "'release/scripts/build-release-binaries.sh', "
             "'release/docker/Dockerfile.builder', "
             "'release/requirements/ziglang-0.12.1.txt', "
-            "'release/glibc-floor.env') }}",
+            "'release/glibc-floor.env', "
+            "'release/scripts/zig-glibc-compiler') }}",
         )
         self.assertNotIn("restore-keys", cache["with"])
         self.assertIn("created_at} + 7 days", text)

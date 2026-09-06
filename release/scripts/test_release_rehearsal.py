@@ -77,6 +77,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             "'release/docker/Dockerfile.builder'",
             "'release/requirements/ziglang-0.12.1.txt'",
             "'release/glibc-floor.env'",
+            "'release/scripts/zig-glibc-compiler'",
         ):
             self.assertIn(recipe_input, canonical_cache["with"]["key"])
         canonical_build = next(
