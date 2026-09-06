@@ -5798,6 +5798,10 @@ enum MigrationWriteFault {
     Stage(usize),
     #[cfg(test)]
     Commit(usize),
+    /// Fail this commit after occupying the staged name inside every promoted
+    /// target's transaction, so the rollback cannot restage what it promoted.
+    #[cfg(test)]
+    CommitWithBlockedRestage(usize),
     /// Stand in for a process whose soft open file limit is this many files.
     #[cfg(test)]
     OpenFileLimit(u64),
@@ -6036,6 +6040,15 @@ fn write_migration_files_with_fault(
                 migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
             }));
         }
+        #[cfg(test)]
+        if matches!(_fault, MigrationWriteFault::CommitWithBlockedRestage(failed) if failed == index)
+        {
+            block_migration_restage(&targets[..promoted]);
+            let rollback = restore_migration_targets(&targets, backed_up, promoted);
+            return Err(rollback.unwrap_or_else(|| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            }));
+        }
         if promote_migration_target(target).is_err() {
             let rollback = restore_migration_targets(&targets, backed_up, promoted);
             return Err(rollback.unwrap_or_else(|| {
@@ -6093,6 +6106,22 @@ fn promote_migration_target(target: &MigrationWriteTarget) -> Result<(), ()> {
             target.destination.name(),
         )
         .map_err(|_| ())
+}
+
+/// Occupy the staged name inside every promoted target's transaction with a
+/// directory, so the rollback's restage rename fails and the promoted file has
+/// to be reclaimed through the identity captured while staging.
+#[cfg(test)]
+fn block_migration_restage(targets: &[MigrationWriteTarget]) {
+    for target in targets {
+        let transaction = target
+            .transaction
+            .as_ref()
+            .expect("a promoted target holds its transaction");
+        transaction
+            .create_directory(OsStr::new(MIGRATION_STAGED_NAME), 0o700)
+            .expect("fault injection occupies the staged name");
+    }
 }
 
 fn restore_migration_targets(
@@ -9596,6 +9625,35 @@ mod tests {
         )
         .expect_err("injected late commit failure rolls back");
 
+        assert_eq!(failure.code, "project.migrate.write_failed");
+        assert_eq!(
+            fs::read(directory.path.join("registry.yaml")).unwrap(),
+            b"registry: original\n"
+        );
+        assert_eq!(
+            fs::read(directory.path.join("modules/core/module.yaml")).unwrap(),
+            b"module: original\n"
+        );
+        assert_no_migration_transaction_directories(&directory);
+    }
+
+    #[test]
+    fn project_migration_rollback_reclaims_a_promoted_target_it_cannot_restage() {
+        let directory = TestDirectory::create();
+        let files = migration_transaction_fixture(&directory);
+
+        // The fault occupies the staged name inside the promoted target's
+        // transaction, so the rollback cannot move the promoted file back and
+        // has to reclaim it through the identity captured while staging.
+        let failure = write_migration_files_with_fault(
+            &directory.path,
+            &files,
+            MigrationWriteFault::CommitWithBlockedRestage(1),
+        )
+        .expect_err("injected late commit failure rolls back");
+
+        // A rollback that could not reclaim the promoted file would report
+        // project.migrate.rollback_failed instead.
         assert_eq!(failure.code, "project.migrate.write_failed");
         assert_eq!(
             fs::read(directory.path.join("registry.yaml")).unwrap(),
