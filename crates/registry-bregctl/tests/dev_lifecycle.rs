@@ -97,6 +97,36 @@ fn docker_line(args: &[&str]) -> String {
         .to_owned()
 }
 
+/// The most recent modification time of one retained record, following a
+/// directory to the newest file it holds.
+fn newest(path: &Path) -> std::time::SystemTime {
+    let metadata = fs::symlink_metadata(path).expect("the retained record exists");
+    if !metadata.is_dir() {
+        return metadata.modified().expect("a modification time");
+    }
+    fs::read_dir(path)
+        .expect("retained directory")
+        .map(|entry| newest(&entry.expect("retained entry").path()))
+        .max()
+        .unwrap_or_else(|| metadata.modified().expect("a modification time"))
+}
+
+/// The newest owner-only log one supervised phase wrote. Command logs carry a
+/// random suffix, so a phase is named by its prefix.
+fn newest_log(root: &Path, prefix: &str) -> std::time::SystemTime {
+    fs::read_dir(root.join("logs"))
+        .expect("private log directory")
+        .map(|entry| entry.expect("log entry").path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(prefix))
+        })
+        .map(|path| newest(&path))
+        .max()
+        .unwrap_or_else(|| panic!("the {prefix} phase left no private record"))
+}
+
 fn write(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
@@ -219,6 +249,28 @@ seed:
         fs::read(project.join(".breg/dev/credentials/operator/assertion-key.jwk")).unwrap();
     let first = session.start();
     assert_eq!(first["status"], "ready");
+    // A client token lives 300 seconds, less than the worst case a first
+    // start may spend on its child and readiness deadlines before it seeds.
+    // Every token must therefore be minted after the rehearsal, the built
+    // package and the activation, immediately before the seed.
+    let dev = project.join(".breg/dev");
+    let prepared = [
+        newest(&dev.join("build")),
+        newest(&dev.join("schema-test-receipt.json")),
+        newest(&dev.join("runtime.yaml")),
+        newest_log(&dev, "apply-"),
+        newest_log(&dev, "verify-"),
+    ]
+    .into_iter()
+    .max()
+    .expect("the first start left its package and activation records");
+    for client in ["operator", "reader", "source"] {
+        let token = dev.join("secrets").join(format!("{client}-token"));
+        assert!(
+            newest(&token) >= prepared,
+            "the {client} token was minted before the package and activation records"
+        );
+    }
     let again = session.start();
     assert_eq!(again["packageRevision"], first["packageRevision"]);
     let state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();

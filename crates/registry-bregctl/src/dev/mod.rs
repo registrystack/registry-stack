@@ -760,10 +760,10 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
             children.mint.as_mut().context("Mint child missing")?,
             &terminate,
         )?;
-        for client in &clients.clients {
-            token(&args.mint_bin, &state, &client.id)?;
-        }
         if state.package_revision.is_none() {
+            // The schema-test rehearsal presents these tokens to its own
+            // disposable runtime; the seed below mints its own.
+            tokens(&args.mint_bin, &state, &clients)?;
             package(&args.docker_bin, &mut state, &clients)?;
         }
         ensure_active(&terminate)?;
@@ -808,6 +808,10 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
             children.breg.as_mut().context("BReg child missing")?,
             &terminate,
         )?;
+        // A client token lives 300 seconds, which the child and readiness
+        // deadlines of a slow first start can exhaust before the seed runs.
+        // Mint the seeding tokens once the registry is ready, not before it.
+        tokens(&args.mint_bin, &state, &clients)?;
         seed(&mut state, &clients)?;
         let control_root = control_directory(&root)?;
         private::directory(&control_root)?;
@@ -1513,6 +1517,13 @@ fn stop_database(docker: &Path, state: &State) -> Result<()> {
                 None,
             )?;
         }
+    }
+    Ok(())
+}
+
+fn tokens(mint: &Path, state: &State, clients: &Clients) -> Result<()> {
+    for client in &clients.clients {
+        token(mint, state, &client.id)?;
     }
     Ok(())
 }
