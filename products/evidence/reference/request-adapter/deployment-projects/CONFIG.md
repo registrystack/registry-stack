@@ -136,6 +136,7 @@ The governed file is `bundle/evidence.yaml`.
 | `acquisitionCapabilities` | no | Gated acquisition kinds and source optimizations this bundle opts in to, at most two entries: `search-then-fetch-set` and `source-batch`. Omission and `[]` both enable nothing. |
 | `holderBoundBatchMaxSize` | no | Ceiling of 1 through 16 on how many assertions one holder-bound release may carry. Omission means 1, so a bundle written before batch release cannot serve a batch. |
 | `selectorProfiles` | yes | Closed caller/grant/context selector shapes. |
+| `sourceConnections` | no | Optional named owners of fixed HTTP endpoints, workload credentials, TLS profiles and shared per-process resource bounds. |
 | `sources` | yes | Fixed source authorities, transport policy, scripts, schemas, and bounds. |
 | `authorityProfiles` | yes | Who may request which requirement, purpose, audience, roles, profiles, and value origins. |
 | `requirements` | yes | Evidence semantics, source, derivation, concepts, fixtures, and disclosure family. |
@@ -362,8 +363,8 @@ Every source carries the same keys whichever transport it names:
 | `transport` | yes | `http-json` or `sqlite-extract`. Selects which further keys the source declares. |
 | `posture` | yes | `source-derived`, `field-projected`, or `record-transformed`, describing what crosses the source boundary. |
 | `request` | yes | One fixed request plan, shaped by the transport. |
-| `responseSchema` | yes | Bundle-relative closed JSON Schema for the projected source response. Checked before `extract/2` runs. |
-| `extractScript` | yes | Bundle-relative Rhai script implementing `extract/2`. |
+| `responseSchema` | yes | Bundle-relative closed JSON Schema for the projected source response. Checked before the declared `extract/2` or `extract/3` runs. |
+| `extractScript` | yes | Bundle-relative Rhai script implementing existing `extract/2` or optional selector-aware `extract/3`; choose exactly one signature. |
 | `factSchema` | yes | Bundle-relative closed JSON Schema for match facts. |
 
 Choosing a transport is a choice about where the authoritative data sits and
@@ -374,7 +375,7 @@ mode. `sqlite-extract` reads a published snapshot, so the deployment carries a
 file and a declared staleness tolerance and no credential at all, and the answer
 is exactly as current as the snapshot states it is. Nothing after the request
 differs: both transports run the same projection, the same response schema
-check, the same `extract/2`, and the same fact schema.
+check, the same declared extraction ABI, and the same fact schema.
 
 `responseSchema` states the shape the adapter was reviewed against, so the
 script never has to prove it by hand. A response outside that shape is a
@@ -417,6 +418,8 @@ Beyond the shared keys, an `http-json` source declares:
 
 | Key | Required | Meaning |
 |---|---|---|
+| `connection` | no | Explicit `sourceConnections` owner. Every copied endpoint, authentication, TLS and concurrency value must equal that owner at startup. |
+| `behaviorRevision` | no | Provider-selected behavior digest, exactly `sha256:` followed by 64 lowercase hexadecimal characters. This reached source dependency changes its questions’ revisions independently of export provenance. |
 | `baseUrl` | yes | Fixed HTTPS origin, except for the `kind: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
 | `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin. |
@@ -435,6 +438,66 @@ failures. The body is discarded before projection or Rhai. A singular or
 search-stage outcome becomes Evidence unavailable under the neutral audit
 decision `unresolved`; the same outcome from a fetch or member after unique
 search is a dependency failure.
+
+### Optional shared source connections
+
+Inline sources remain supported without a connection declaration. The same
+HTTP and OpenAPI adapters work unchanged. A named connection is a convenience
+for several fixed operations using one reviewed workload identity:
+
+```yaml
+sourceConnections:
+  shared-read:
+    baseUrl: https://registry.gov.example
+    tlsTrustProfile: government-internal-pki
+    authentication:
+      kind: oauth2-client-credentials
+      tokenEndpoint: https://identity.gov.example/token
+      clientIdRef: secret:file/workload-client-id
+      clientAssertionKeyRef: secret:file/workload-client-key
+      clientAssertionAudience: https://identity.gov.example/client-auth
+      audience: https://registry.gov.example
+      maximumCacheSeconds: 60
+    concurrencyLimit: 4
+    admissionTimeoutMilliseconds: 5000
+    tokenTimeoutMilliseconds: 5000
+```
+
+The authentication object is the complete existing union documented below:
+local `none`, Basic, static authorization, static API key, or OAuth client
+credentials using a shared secret or signed client assertion. Resource
+`audience` and `clientAssertionAudience` retain their distinct meanings. The
+logical `tlsTrustProfile` retains its additive runtime CA binding.
+
+| Connection key | Required | Meaning |
+|---|---|---|
+| `baseUrl`, `authentication` | yes | Sole authored owner of origin and workload identity. |
+| `tlsTrustProfile` | no | Sole authored TLS profile; omission uses system roots. |
+| `concurrencyLimit` | no | Aggregate source-call capacity for this name in one process, 1 to 256; default 4. |
+| `admissionTimeoutMilliseconds` | no | Maximum wait for capacity or an in-progress OAuth refresh, 1 to 30,000; default 5,000. |
+| `tokenTimeoutMilliseconds` | no | OAuth request and body-read timeout, 1 to 30,000; default 5,000. |
+
+In an authored source, `connection: shared-read` replaces `baseUrl`,
+`authentication`, `tlsTrustProfile` and `request.concurrencyLimit`; those keys
+must be absent, so source overrides have no precedence rule. Build resolves
+the reference into concrete values in the governed candidate and retains the
+connection identity and owner. Startup rejects missing owners and mismatched
+copies. Runtime configuration cannot retarget the source. Each question’s
+configuration revision includes only its reached connection owners.
+
+The operation still owns its method, fixed path, headers, preparation limits,
+projection, response schemas, response byte limit and
+`request.timeoutMilliseconds`. None of these has a connection override.
+Sources under one name share one eligible HTTP connection pool, one aggregate
+admission semaphore and one OAuth cache with single-flight refresh. Cancellation
+and timeout drop admission permits and refresh locks. Facts, assertions and
+authorization decisions remain request-local. Separate names and inline
+sources have independent resources even when credentials happen to be equal.
+The limit is per process; replicas and separate deployments do not share a
+distributed budget.
+
+For file-secret changes and immediate token replacement, follow
+[Source credential rotation](SOURCE-CREDENTIAL-ROTATION.md).
 
 ### Source authentication
 
@@ -628,7 +691,7 @@ request:
 | `pathTemplate` | conditional | Fixed absolute path with complete-segment placeholders resolved by Rust. |
 | `pathBindings` | with template | Closed tagged placeholder bindings from an authorized selector, or on fetch only from a scalar prior fact. |
 | `fixedHeaders` | no | Ordered non-secret constants. Names are unique after ASCII case folding. |
-| `selectorInputs` | yes | Exact minimized authorized selector alternatives visible to `prepare`; an empty array is valid only for a fetch source. |
+| `selectorInputs` | yes | Exact minimized authorized selector alternatives visible to `prepare` and optional three-argument `extract`; an empty array is valid only for a fetch source. |
 | `prepareScript` | yes | Bundle-relative Rhai script implementing `prepare/2`. |
 | `adapterParameters` | yes | Closed non-secret JSON parameters shared by preparation and extraction. `{}` is valid. |
 | `adapterParametersSchema` | yes | Closed bundle-relative JSON Schema for those parameters. |
@@ -637,7 +700,7 @@ request:
 | `redirects` | yes | Exactly `deny` in Version 1. |
 | `timeoutMilliseconds` | yes | Positive source-request timeout within the global ceiling. |
 | `maximumResponseBytes` | yes | Positive pre-projection response limit within the global ceiling. |
-| `concurrencyLimit` | yes | Positive per-source request concurrency limit. |
+| `concurrencyLimit` | yes | Positive per-source request concurrency limit for inline sources; an explicit named connection supplies its aggregate limit in a resolved candidate. |
 
 Fixed headers cannot set authentication, host/routing, cookies, body framing,
 content length/type, connection, forwarding, proxy, or tracing headers. Rust
@@ -738,6 +801,10 @@ capability gates, is a startup error. Omitting the block on a path-template,
 SQLite, or multi-stage path, or exceeding `maximumItems`, selects sequential
 execution before any source I/O. Once an optimized attempt begins, no error
 retries as sequential fanout.
+
+A source using `extract(response, selectors, context)` must omit `batch` so its
+selected identity check runs for every item. Existing two-argument extraction
+and `extract_batch(response, context)` remain compatible with this block.
 
 `prepare_batch` receives ordered exact `{slot, selectors}` maps. `slot` is an
 opaque Rust integer; `selectors` is the ordinary minimized source selector
@@ -867,6 +934,12 @@ the authorizer accepts it. It cannot settle columns, parameters, metadata, or
 age, because only the extract can. That check never reports a false failure,
 only an incomplete pass.
 
+The internal `evidence bundle-check --bundle <directory> --json` tooling seam
+returns `bundleRevision` and a `requirements` array of `id` and
+`configurationRevision` after validation. Those revisions come from the same
+bundle closure used by signed answers. The document contains identifiers and
+digests only; the default command output remains a human-readable check result.
+
 ### Statement request
 
 This is the `request` a `sqlite-extract` source declares.
@@ -875,7 +948,7 @@ This is the `request` a `sqlite-extract` source declares.
 |---|---|---|
 | `statement` | yes | Bundle-relative `queries/*.sql` artifact holding exactly one statement, hash-identified and reviewed with the bundle. |
 | `columns` | yes | 1 through 64 declared result columns in result order. Names are unique, and each `type` is `string`, `integer`, `number`, or `boolean`. |
-| `selectorInputs` | yes | Exact minimized authorized selector alternatives the bindings may draw on. `[]` is valid for a statement that binds no selector. |
+| `selectorInputs` | yes | Exact minimized authorized selector alternatives the bindings and optional three-argument `extract` may draw on. `[]` is valid for a statement that binds no selector. |
 | `parameterBindings` | no | At most 64 bindings, keyed by the parameter name the statement uses, each stating its one origin. Omission and `{}` are the same. |
 | `prepareScript` | no | Bundle-relative Rhai script implementing `prepare/2`. Declared together with `preparationLimits`, and with at least one `prepared` binding, or not at all. |
 | `adapterParameters` | no | Closed non-secret JSON constants, at most 64, read by the extraction script. |
@@ -1531,6 +1604,31 @@ signing.publishedPublicJwkFiles[]
 signing.revokedKeyIds
 signing.revokedKeyIds[]
 signing.verifierClockSkewSeconds
+sourceConnections
+sourceConnections.*
+sourceConnections.*.admissionTimeoutMilliseconds
+sourceConnections.*.authentication
+sourceConnections.*.authentication.assumedLifetimeSeconds
+sourceConnections.*.authentication.audience
+sourceConnections.*.authentication.clientAssertionAudience
+sourceConnections.*.authentication.clientAssertionKeyRef
+sourceConnections.*.authentication.clientIdRef
+sourceConnections.*.authentication.clientSecretRef
+sourceConnections.*.authentication.credentialPlacement
+sourceConnections.*.authentication.headerName
+sourceConnections.*.authentication.kind
+sourceConnections.*.authentication.maximumCacheSeconds
+sourceConnections.*.authentication.passwordRef
+sourceConnections.*.authentication.scheme
+sourceConnections.*.authentication.scope
+sourceConnections.*.authentication.tokenEndpoint
+sourceConnections.*.authentication.tokenRef
+sourceConnections.*.authentication.usernameRef
+sourceConnections.*.authentication.valueRef
+sourceConnections.*.baseUrl
+sourceConnections.*.concurrencyLimit
+sourceConnections.*.tlsTrustProfile
+sourceConnections.*.tokenTimeoutMilliseconds
 sources
 sources.*
 sources.*.authentication
@@ -1559,6 +1657,8 @@ sources.*.batch.prepareScript
 sources.*.batch.projection
 sources.*.batch.projection[]
 sources.*.batch.responseSchema
+sources.*.behaviorRevision
+sources.*.connection
 sources.*.extractProfile
 sources.*.extractScript
 sources.*.factSchema

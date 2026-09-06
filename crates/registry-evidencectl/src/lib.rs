@@ -20,8 +20,11 @@ mod jwks;
 mod keygen;
 mod request;
 mod scaffold;
+mod source_cli;
+mod source_import;
 mod source_mock;
 mod suggest;
+mod target;
 mod tooling;
 mod tooling_editor;
 mod verify;
@@ -50,7 +53,7 @@ enum Command {
     Keygen(keygen::KeygenCommand),
     /// Assemble a public JWKS document from public JWK files.
     Jwks(jwks::JwksArgs),
-    /// Start an editable Evidence Gateway project from OpenAPI or a SQLite extract.
+    /// Start an editable Evidence Gateway project from OpenAPI, a starter, or a SQLite extract.
     New(scaffold::NewArgs),
     /// Compile an editable project into a reviewed deployment candidate.
     Build(build::BuildArgs),
@@ -59,7 +62,10 @@ enum Command {
     Fixtures(fixtures::FixturesCommand),
     /// Work with a project's sources, starting from their own API documents.
     #[command(subcommand)]
-    Source(suggest::SourceCommand),
+    Source(source_cli::SourceCommand),
+    /// Create and inspect complete deployment targets.
+    #[command(subcommand)]
+    Target(target::TargetCommand),
     /// Report every project artifact whose mode or owner the runtime refuses.
     Doctor(doctor::DoctorArgs),
     /// Run the private local Registry Mint and Evidence Gateway pair.
@@ -97,7 +103,8 @@ pub fn main_entry() -> ExitCode {
         Command::New(args) => scaffold::run(args),
         Command::Build(args) => build::run(args),
         Command::Fixtures(command) => fixtures::run(command),
-        Command::Source(command) => suggest::run(command),
+        Command::Source(command) => source_cli::run(command),
+        Command::Target(command) => target::run(command),
         Command::Doctor(args) => doctor::run(args),
         Command::Dev(args) => dev::run(args),
         Command::Request(command) => request::run(command),
@@ -304,7 +311,7 @@ mod tests {
             .collect();
         assert_eq!(
             documented.len(),
-            8,
+            13,
             "every documented --project must be covered by this rule: {:?}",
             documented.iter().map(|(path, _)| path).collect::<Vec<_>>()
         );
@@ -360,6 +367,10 @@ mod tests {
                 "--output",
                 "candidate",
             ],
+            vec!["evidencectl", "source", "diff", "exports/registry"],
+            vec!["evidencectl", "source", "import", "exports/registry"],
+            vec!["evidencectl", "source", "update", "exports/registry"],
+            vec!["evidencectl", "source", "detach", "registry"],
             vec!["evidencectl", "tooling", "editor"],
         ] {
             assert!(
@@ -507,6 +518,86 @@ mod tests {
                 "client-private-jwk",
                 "--output",
                 "client-profile.json",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&arguments).is_ok(),
+                "{arguments:?} must parse"
+            );
+        }
+    }
+
+    #[test]
+    fn native_source_target_and_starter_commands_parse_without_displacing_existing_paths() {
+        for arguments in [
+            vec![
+                "evidencectl",
+                "new",
+                "starter-project",
+                "--starter",
+                "starters/local",
+                "--profile",
+                "local",
+            ],
+            vec![
+                "evidencectl",
+                "new",
+                "openapi-project",
+                "--openapi",
+                "source.openapi.yaml",
+                "--profile",
+                "local",
+            ],
+            vec![
+                "evidencectl",
+                "new",
+                "sqlite-project",
+                "--transport",
+                "sqlite-extract",
+                "--profile",
+                "local",
+            ],
+            vec![
+                "evidencectl",
+                "source",
+                "import",
+                "exports/registry",
+                "--project",
+                "project",
+                "--target",
+                "targets/local",
+            ],
+            vec![
+                "evidencectl",
+                "source",
+                "update",
+                "exports/registry",
+                "--resolutions",
+                "resolutions.json",
+            ],
+            vec!["evidencectl", "source", "diff", "exports/registry"],
+            vec!["evidencectl", "source", "detach", "registry"],
+            vec![
+                "evidencectl",
+                "target",
+                "new",
+                "targets/local-created",
+                "--settings",
+                "targets/local/settings.yaml",
+            ],
+            vec![
+                "evidencectl",
+                "target",
+                "explain",
+                "targets/local-created",
+                "--json",
+            ],
+            vec![
+                "evidencectl",
+                "fixtures",
+                "run",
+                "--target",
+                "targets/local-created",
             ],
         ] {
             assert!(

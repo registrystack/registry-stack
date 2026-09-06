@@ -1,7 +1,7 @@
-//! Minimal Evidence project authoring from OpenAPI or a SQLite extract.
+//! Minimal Evidence project authoring from OpenAPI, a local starter, or a SQLite extract.
 //!
 //! `new` retains an API description for a later question-authoring step, or
-//! creates a runnable synthetic SQLite starter around one fixed statement. The
+//! creates a runnable synthetic starter around one fixed statement. The
 //! starter is an editable example, not a deployment policy or production
 //! extract.
 
@@ -12,12 +12,28 @@ use std::{
     process::ExitCode,
 };
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context as _, Result};
 use clap::{ArgGroup, Args, ValueEnum};
 
 use crate::{keygen, suggest, tooling_editor};
 
 const RETAINED_OPENAPI_FILE: &str = "source.openapi.yaml";
+const MAX_STARTER_FILES: usize = 512;
+const MAX_STARTER_BYTES: usize = 16 * 1024 * 1024;
+const MAX_STARTER_FILE_BYTES: u64 = 1024 * 1024;
+const STARTER_TOP_LEVEL_FILES: &[&str] = &["README.md"];
+const STARTER_DIRECTORIES: &[&str] = &[
+    "selectors",
+    "sources",
+    "adapters",
+    "schemas",
+    "questions",
+    "derivations",
+    "fixtures",
+    "codelists",
+    "queries",
+    "targets",
+];
 
 #[derive(Clone, Debug, ValueEnum)]
 pub enum AuthoringProfile {
@@ -36,7 +52,7 @@ pub enum AuthoringTransport {
     ArgGroup::new("authoring_source")
         .required(true)
         .multiple(false)
-        .args(["openapi", "transport"])
+        .args(["openapi", "transport", "starter"])
 ))]
 pub struct NewArgs {
     /// New directory to create for the editable authoring project.
@@ -50,6 +66,10 @@ pub struct NewArgs {
     #[arg(long, value_enum, conflicts_with = "openapi")]
     pub transport: Option<AuthoringTransport>,
 
+    /// Reviewed local starter directory to copy without requiring an API description.
+    #[arg(long, conflicts_with_all = ["openapi", "transport"])]
+    pub starter: Option<PathBuf>,
+
     /// Explicit development profile for local authoring.
     #[arg(long, value_enum, required = true)]
     pub profile: Option<AuthoringProfile>,
@@ -60,13 +80,14 @@ pub struct NewArgs {
 }
 
 pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
-    let source = match (args.openapi.as_deref(), args.transport) {
-        (Some(openapi), None) => AuthoringSource::OpenApi(openapi),
-        (None, Some(AuthoringTransport::SqliteExtract)) => AuthoringSource::SqliteExtract,
-        (None, None) => bail!(
-            "pass --openapi <path-or-https-url> for API authoring or --transport sqlite-extract for extract authoring"
+    let source = match (args.openapi.as_deref(), args.transport, args.starter.as_deref()) {
+        (Some(openapi), None, None) => AuthoringSource::OpenApi(openapi),
+        (None, Some(AuthoringTransport::SqliteExtract), None) => AuthoringSource::SqliteExtract,
+        (None, None, Some(starter)) => AuthoringSource::Starter(starter),
+        (None, None, None) => bail!(
+            "pass --openapi <path-or-https-url> for API authoring, --transport sqlite-extract for extract authoring, or --starter <dir> for an offline starter"
         ),
-        (Some(_), Some(_)) => bail!("--openapi and --transport cannot be used together"),
+        _ => bail!("--openapi, --transport, and --starter cannot be used together"),
     };
     if args.profile.is_none() {
         bail!(
@@ -84,6 +105,11 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
             Some(document)
         }
         AuthoringSource::SqliteExtract => None,
+        AuthoringSource::Starter(_) => None,
+    };
+    let starter_files = match source {
+        AuthoringSource::Starter(starter) => collect_starter_files(starter)?,
+        AuthoringSource::OpenApi(_) | AuthoringSource::SqliteExtract => Vec::new(),
     };
 
     let staging = tempfile::Builder::new()
@@ -101,7 +127,13 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
     // comes next, and the two authoring paths leave different things standing:
     // the starter is a working example, the retained description is an empty
     // frame around one operation not yet selected.
-    write_new_file(&staged_root.join("README.md"), source.readme(), 0o644)?;
+    if !matches!(source, AuthoringSource::Starter(_))
+        || !starter_files
+            .iter()
+            .any(|file| file.relative == Path::new("README.md"))
+    {
+        write_new_file(&staged_root.join("README.md"), source.readme(), 0o644)?;
+    }
     if let Some(document) = retained_openapi.as_ref() {
         write_new_file(
             &staged_root.join(RETAINED_OPENAPI_FILE),
@@ -130,6 +162,9 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         fs::create_dir(staged_root.join("queries"))
             .context("creating the empty queries directory")?;
         write_sqlite_starter(staged_root)?;
+    }
+    for file in starter_files {
+        write_new_file(&staged_root.join(file.relative), &file.contents, 0o644)?;
     }
 
     keygen::generate_scaffold_key_material(&staged_root.join("secrets"))
@@ -166,8 +201,11 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         args.directory.join("selectors").display()
     );
     println!("  sources: {}", args.directory.join("sources").display());
-    if matches!(source, AuthoringSource::SqliteExtract) {
+    if matches!(source, AuthoringSource::SqliteExtract) || args.directory.join("queries").exists() {
         println!("  queries: {}", args.directory.join("queries").display());
+    }
+    if args.directory.join("targets").exists() {
+        println!("  targets: {}", args.directory.join("targets").display());
     }
     println!(
         "  questions: {}",
@@ -193,6 +231,10 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
                 args.directory.display()
             );
         }
+        AuthoringSource::Starter(_) => println!(
+            "Next: run `evidencectl fixtures run --project {}` to prove the copied starter before live credentials.",
+            args.directory.display()
+        ),
     }
     match source {
         AuthoringSource::OpenApi(_) => println!(
@@ -200,6 +242,10 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         ),
         AuthoringSource::SqliteExtract => println!(
             "A synthetic source, question, and fixture were generated. No runtime, target, production extract, or deployment bundle was generated."
+        ),
+        AuthoringSource::Starter(starter) => println!(
+            "Starter files were copied from {}. No OpenAPI, secret, runtime, deployment target, production extract, or deployment bundle was imported.",
+            starter.display()
         ),
     }
     Ok(ExitCode::SUCCESS)
@@ -209,6 +255,7 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
 enum AuthoringSource<'a> {
     OpenApi(&'a str),
     SqliteExtract,
+    Starter(&'a Path),
 }
 
 impl AuthoringSource<'_> {
@@ -216,6 +263,7 @@ impl AuthoringSource<'_> {
         match self {
             Self::OpenApi(_) => "OpenAPI",
             Self::SqliteExtract => "SQLite-extract",
+            Self::Starter(_) => "starter",
         }
     }
 
@@ -223,6 +271,7 @@ impl AuthoringSource<'_> {
         match self {
             Self::OpenApi(_) => include_bytes!("../templates/openapi/README.md"),
             Self::SqliteExtract => include_bytes!("../templates/sqlite-extract/README.md"),
+            Self::Starter(_) => include_bytes!("../templates/starter/README.md"),
         }
     }
 }
@@ -240,6 +289,143 @@ fn validate_new_destination(path: &Path) -> anyhow::Result<()> {
     }
 }
 
+struct StarterFile {
+    relative: PathBuf,
+    contents: Vec<u8>,
+}
+
+fn collect_starter_files(root: &Path) -> Result<Vec<StarterFile>> {
+    let root = plain_directory(root, "starter directory")?;
+    let mut files = Vec::new();
+    let mut bytes = 0usize;
+    for file in STARTER_TOP_LEVEL_FILES {
+        let path = root.join(file);
+        if path.exists() {
+            push_starter_file(&root, Path::new(file), &mut files, &mut bytes)?;
+        }
+    }
+    for directory in STARTER_DIRECTORIES {
+        let path = root.join(directory);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                collect_starter_directory(&root, Path::new(directory), 0, &mut files, &mut bytes)?;
+            }
+            Ok(_) => bail!("starter entries must be plain files or directories"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("inspecting starter directory {}", path.display()));
+            }
+        }
+    }
+    if files.is_empty() {
+        bail!("starter directory contains no ordinary Evidence starter files");
+    }
+    files.sort_by(|left, right| left.relative.cmp(&right.relative));
+    Ok(files)
+}
+
+fn collect_starter_directory(
+    root: &Path,
+    relative: &Path,
+    depth: usize,
+    files: &mut Vec<StarterFile>,
+    bytes: &mut usize,
+) -> Result<()> {
+    if depth > 16 {
+        bail!("starter file nesting is too deep");
+    }
+    for entry in fs::read_dir(root.join(relative))
+        .with_context(|| format!("reading starter directory {}", relative.display()))?
+    {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("starter file names must be UTF-8"))?;
+        if name.starts_with('.') {
+            bail!("starter files must not be hidden control files");
+        }
+        let child = relative.join(name);
+        let metadata = fs::symlink_metadata(root.join(&child))
+            .with_context(|| format!("inspecting starter file {}", child.display()))?;
+        if metadata.file_type().is_symlink() {
+            bail!("starter files must not be symbolic links");
+        }
+        if metadata.is_dir() {
+            collect_starter_directory(root, &child, depth + 1, files, bytes)?;
+        } else if metadata.is_file() {
+            push_starter_file(root, &child, files, bytes)?;
+        } else {
+            bail!("starter entries must be plain files or directories");
+        }
+    }
+    Ok(())
+}
+
+fn push_starter_file(
+    root: &Path,
+    relative: &Path,
+    files: &mut Vec<StarterFile>,
+    bytes: &mut usize,
+) -> Result<()> {
+    if !starter_relative_path(relative) {
+        bail!("starter files must stay in ordinary Evidence authoring directories");
+    }
+    if files.len() >= MAX_STARTER_FILES {
+        bail!("starter directory contains too many files");
+    }
+    let path = root.join(relative);
+    let metadata = fs::symlink_metadata(&path)
+        .with_context(|| format!("inspecting starter file {}", relative.display()))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > MAX_STARTER_FILE_BYTES
+    {
+        bail!("starter files must be bounded plain files");
+    }
+    let contents =
+        fs::read(&path).with_context(|| format!("reading starter file {}", relative.display()))?;
+    if contents.len() as u64 > MAX_STARTER_FILE_BYTES {
+        bail!("starter file exceeds its byte limit");
+    }
+    *bytes = bytes
+        .checked_add(contents.len())
+        .ok_or_else(|| anyhow::anyhow!("starter file byte count overflowed"))?;
+    if *bytes > MAX_STARTER_BYTES {
+        bail!("starter directory exceeds its byte limit");
+    }
+    files.push(StarterFile {
+        relative: relative.to_path_buf(),
+        contents,
+    });
+    Ok(())
+}
+
+fn starter_relative_path(relative: &Path) -> bool {
+    let text = relative.to_string_lossy();
+    if text.is_empty() || text.contains('\\') {
+        return false;
+    }
+    let mut components = relative.components();
+    let Some(std::path::Component::Normal(first)) = components.next() else {
+        return false;
+    };
+    let Some(first) = first.to_str() else {
+        return false;
+    };
+    if STARTER_TOP_LEVEL_FILES.contains(&first) {
+        return components.next().is_none();
+    }
+    STARTER_DIRECTORIES.contains(&first)
+        && components.all(|component| match component {
+            std::path::Component::Normal(part) => part
+                .to_str()
+                .is_some_and(|part| !part.is_empty() && part != "." && part != ".."),
+            _ => false,
+        })
+}
+
 fn destination_parent(path: &Path) -> anyhow::Result<&Path> {
     let parent = path
         .parent()
@@ -254,6 +440,15 @@ fn destination_parent(path: &Path) -> anyhow::Result<&Path> {
         );
     }
     Ok(parent)
+}
+
+fn plain_directory(path: &Path, description: &str) -> Result<PathBuf> {
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("inspecting {description}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("{description} must be an existing plain directory");
+    }
+    fs::canonicalize(path).with_context(|| format!("resolving {description}"))
 }
 
 fn write_new_file(path: &Path, contents: &[u8], mode: u32) -> anyhow::Result<()> {

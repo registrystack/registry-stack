@@ -14,7 +14,7 @@ use serde_json::Value as JsonValue;
 use serde_norway::Value as YamlValue;
 
 use crate::authoring::{compile_fixture_project, CompiledFixtureProject};
-use crate::evidence_binary;
+use crate::{build, evidence_binary, source_import::ProjectLock};
 
 #[derive(Debug, Subcommand)]
 pub enum FixturesCommand {
@@ -35,6 +35,10 @@ pub struct RunArgs {
     /// Path to the evidence binary; defaults to `evidence` on PATH.
     #[arg(long)]
     pub evidence_bin: Option<PathBuf>,
+
+    /// Complete deployment target to use when compiling an editable project.
+    #[arg(long)]
+    pub target: Option<PathBuf>,
 
     /// Run only the exact bundle-relative fixture path named here.
     #[arg(long)]
@@ -108,7 +112,11 @@ pub fn run(command: FixturesCommand) -> Result<ExitCode> {
 fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let runtime_path = args.project.join("runtime.yaml");
     let evidence_bin = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
+    let mut editable_lock = None;
     let target = if runtime_path.is_file() {
+        if args.target.is_some() {
+            bail!("--target is only used with editable projects, not deployment projects");
+        }
         let bundle_directory = resolve_bundle_directory(&runtime_path, &args.project)?;
         let bundle_config_path = bundle_directory.join("evidence.yaml");
         FixtureTarget::Deployment {
@@ -122,23 +130,35 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
                 args.project.display()
             );
         }
-        let staging = tempfile::Builder::new()
-            .prefix("evidencectl-fixtures-")
-            .tempdir()
-            .context("creating private fixture compilation staging")?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
-                .context("sealing private fixture compilation staging")?;
-        }
-        let compilation = compile_fixture_project(&args.project, staging.path(), &evidence_bin)
-            .context("compiling editable project for fixture evaluation")?;
-        FixtureTarget::Editable {
-            compilation,
-            _staging: staging,
+        editable_lock = Some(
+            ProjectLock::acquire(&args.project)
+                .with_context(|| format!("locking editable project {}", args.project.display()))?,
+        );
+        if let Some(target) = args.target.as_deref() {
+            let compilation =
+                build::compile_target_fixture_project(&args.project, target, &evidence_bin)
+                    .context("compiling editable project with deployment target")?;
+            FixtureTarget::TargetedEditable { compilation }
+        } else {
+            let staging = tempfile::Builder::new()
+                .prefix("evidencectl-fixtures-")
+                .tempdir()
+                .context("creating private fixture compilation staging")?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
+                    .context("sealing private fixture compilation staging")?;
+            }
+            let compilation = compile_fixture_project(&args.project, staging.path(), &evidence_bin)
+                .context("compiling editable project for fixture evaluation")?;
+            FixtureTarget::Editable {
+                compilation,
+                _staging: staging,
+            }
         }
     };
+    let _editable_lock = editable_lock;
     let fixture_paths = select_fixture_paths(target.fixture_paths(), args.fixture.as_deref())?;
 
     let check_outcome = target.check(&evidence_bin);
@@ -230,6 +250,9 @@ enum FixtureTarget {
         compilation: CompiledFixtureProject,
         _staging: tempfile::TempDir,
     },
+    TargetedEditable {
+        compilation: build::TargetFixtureProject,
+    },
 }
 
 impl FixtureTarget {
@@ -237,6 +260,7 @@ impl FixtureTarget {
         match self {
             Self::Deployment { fixture_paths, .. } => fixture_paths,
             Self::Editable { compilation, .. } => &compilation.fixture_paths,
+            Self::TargetedEditable { compilation } => &compilation.fixture_paths,
         }
     }
 
@@ -246,6 +270,12 @@ impl FixtureTarget {
                 run_evidence_step(evidence_bin, &["--runtime"], Some(runtime_path), &["check"])
             }
             Self::Editable { compilation, .. } => run_evidence_step(
+                evidence_bin,
+                &["bundle-check", "--bundle"],
+                Some(&compilation.bundle_path),
+                &[],
+            ),
+            Self::TargetedEditable { compilation } => run_evidence_step(
                 evidence_bin,
                 &["bundle-check", "--bundle"],
                 Some(&compilation.bundle_path),
@@ -273,6 +303,21 @@ impl FixtureTarget {
                 run_evidence_step(evidence_bin, &["--runtime"], Some(runtime_path), &args)
             }
             Self::Editable { compilation, .. } => {
+                let mut args = vec!["--fixture", fixture];
+                if let Some(case) = case {
+                    args.extend(["--case", case]);
+                }
+                if explain {
+                    args.extend(["--explain", "--explain-format", "json"]);
+                }
+                run_evidence_step(
+                    evidence_bin,
+                    &["bundle-evaluate", "--bundle"],
+                    Some(&compilation.bundle_path),
+                    &args,
+                )
+            }
+            Self::TargetedEditable { compilation } => {
                 let mut args = vec!["--fixture", fixture];
                 if let Some(case) = case {
                     args.extend(["--case", case]);

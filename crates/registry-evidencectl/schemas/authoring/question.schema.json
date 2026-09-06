@@ -255,6 +255,15 @@
             "null"
           ]
         },
+        "profiles": {
+          "description": "Explicit alternative profiles from the project's selector definitions.\nEach profile supplies its complete field set, including composite keys.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
         "role": {
           "type": "string"
         },
@@ -271,8 +280,7 @@
         }
       },
       "required": [
-        "role",
-        "selector"
+        "role"
       ],
       "type": "object"
     },
