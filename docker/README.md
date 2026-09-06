@@ -107,10 +107,11 @@ docker run --rm -v "$PWD/deploy/evidence:/etc/registry-evidence:ro" \
 `--require-audit-under ABSOLUTE_DIRECTORY` adds one further proof: the
 configured audit sink has to resolve at or below the directory the deployment
 declares persistent. Evidence resolves its own configured destination exactly
-as startup does and canonicalizes both sides, so a sink configured outside the
-declared root, and a symlink inside the root that leads out of it, both fail
-closed. The option proves containment only; the writability and chain proofs
-still have to pass.
+as startup does, canonicalizing the declared root and the deepest existing
+ancestor of the sink before comparing, so a sink configured outside the
+declared root, and an existing symlink inside the root that leads out of it,
+both fail closed. The option proves containment only; the writability and
+chain proofs still have to pass.
 
 Relay provides the equivalent `relay check --runtime
 /etc/relay/runtime.yaml`; Mint provides `mint check
@@ -138,8 +139,8 @@ native check as `--require-audit-under`, which splits the proof along the
 ownership boundary: the adapter owns storage persistence and never reads
 product configuration, while the product owns configuration resolution and
 never infers which mounts are durable. Neither a durable mount sitting unused
-beside an ephemeral configured sink nor a symlink leading out of the mount
-satisfies both halves.
+beside an ephemeral configured sink nor an existing symlink leading out of the
+mount satisfies both halves.
 
 Every native check runs under a bounded deadline. It defaults to 1800 seconds
 because validating a retained audit chain can legitimately take longer than a

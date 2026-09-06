@@ -30,9 +30,10 @@ pub enum PersistentRootFault {
 /// resolved, and the operator supplies the root that storage is declared
 /// persistent under. A destination that is not absolute is refused rather than
 /// resolved here, because only the caller knows what it resolves against.
-/// Symlinks are followed before the comparison so a link planted inside the
-/// root cannot redirect the audit chain onto ephemeral storage. Any resolution
-/// error fails closed.
+/// Existing path components are resolved through symlinks before the
+/// comparison. Components that do not yet exist are compared as written, so
+/// this is a configuration proof, not a defence against a concurrent writer
+/// inside the root. Any resolution error fails closed.
 pub fn require_audit_under(destination: &Path, root: &Path) -> Result<(), PersistentRootFault> {
     let root = canonical_root(root)?;
     let destination = canonical_destination(destination)?;
