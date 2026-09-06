@@ -82,6 +82,33 @@ const DOCS_SITE_ROOT = 'docs/site';
 // cited beside that artifact corroborates the claim; cited alone it proves nothing about
 // the code, because the page it cites is evidence of nothing but its own author.
 const NARRATIVE_CONTENT = 'docs/site/src/content/';
+// What such an anchor has to reach: an inspectable artifact of the stack itself, which
+// REQ-DOC-014 spells out as source code, a test, a fixture, a generated artifact, or a
+// released machine-readable contract. The kind is read from the file's extension. A prose
+// file outside the site, a README or a changelog, documents the stack the way a page does
+// and is evidence of its author only; a directory names no artifact, because a citation of
+// `crates/` has pointed at everything and shown nothing; and a file with no extension is
+// read as a script when a symbol is looked for in it, but its kind cannot be told from its
+// name, so it does not stand as the artifact on its own. None of the three counts.
+const ARTIFACT_EXTENSIONS = new Set([
+  'rs',
+  'mjs',
+  'js',
+  'ts',
+  'py',
+  'sh',
+  'rhai',
+  'sql',
+  'toml',
+  'yaml',
+  'yml',
+  'json',
+  'jsonld',
+  'snap',
+  'lock',
+  'sqlite',
+  'css',
+]);
 
 const ANCHOR_PATTERN = /\{\/\*\s*Evidence:([\s\S]*?)\*\/\}/g;
 // A bare sibling that names a Rust source file is one the repository owns: an adopter of
@@ -472,6 +499,11 @@ function filesUnder(directory) {
   return files;
 }
 
+function isArtifact(path) {
+  const name = path.split('/').at(-1);
+  return name.includes('.') && ARTIFACT_EXTENSIONS.has(name.split('.').at(-1));
+}
+
 function isTextFile(path) {
   // A name with no extension at all is a script the repository keeps, `registry-release` or
   // `justfile`, and reading it is how a symbol an anchor cites from one is found. The
@@ -679,7 +711,11 @@ export function checkEvidenceAnchors({
           errors.push(`${at} cites ${candidates[0]}${range}, which does not exist`);
           continue;
         }
-        if (!resolved.startsWith(NARRATIVE_CONTENT)) {
+        if (
+          !resolved.startsWith(NARRATIVE_CONTENT) &&
+          entryKind(resolve(repoRoot, resolved)) === 'file' &&
+          isArtifact(resolved)
+        ) {
           citesArtifact = true;
         }
         // A sibling names no directory to read the next citation against, so it leaves the
@@ -750,8 +786,9 @@ export function checkEvidenceAnchors({
     if (verifiedSpecification && !citesArtifact) {
       errors.push(
         `${location} declares evidence: verified but cites no source, test, fixture, generated ` +
-          `artifact, or released contract outside ${NARRATIVE_CONTENT}; RS-DOC REQ-DOC-014 refuses ` +
-          'a specification that proves itself with other pages',
+          `artifact, or released contract outside ${NARRATIVE_CONTENT}, and a directory or a prose ` +
+          'file there is not one; RS-DOC REQ-DOC-014 refuses a specification that proves itself ' +
+          'with other documents',
       );
     }
   }
