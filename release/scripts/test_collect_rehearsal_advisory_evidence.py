@@ -6,9 +6,8 @@ import importlib.util
 import json
 import subprocess
 import tempfile
-import unittest
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -162,7 +161,7 @@ class FakeCommands:
         return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
 
-class CollectRehearsalAdvisoryEvidenceTest(unittest.TestCase):
+class CollectRehearsalAdvisoryEvidenceTest(TestCase):
     def arguments(self, output: Path) -> argparse.Namespace:
         return argparse.Namespace(
             version=FakeCommands.version,
@@ -324,4 +323,4 @@ class CollectRehearsalAdvisoryEvidenceTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()
