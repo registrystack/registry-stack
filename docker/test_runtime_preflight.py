@@ -1183,6 +1183,77 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertEqual(1, result)
         self.assertIn("docker compose --file compose.yaml stop mint", stderr)
 
+    def test_a_dependency_that_failed_to_start_is_not_reported_as_running(
+        self,
+    ) -> None:
+        # Compose may have created the container before failing, or not. The
+        # hint has to say which of the two lists a service is in.
+        document = cold_deployment()
+        result, stdout, stderr, _ = self.run_orchestration(
+            document,
+            [completed(), completed(returncode=1)],
+            [
+                "--compose-file",
+                "compose.yaml",
+                "--service",
+                "evidence=evidence",
+                "--service",
+                "mint=mint",
+            ],
+        )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertIn("could not be started", stderr)
+        self.assertIn("could not confirm", stderr)
+        self.assertNotIn("remain running", stderr)
+        self.assertIn("docker compose --file compose.yaml stop mint", stderr)
+
+    def test_started_dependencies_are_named_when_an_unexpected_failure_escapes(
+        self,
+    ) -> None:
+        # A failure the preflight does not model still leaves Mint running, and
+        # the operator still has to stop it. The failure itself is not swallowed
+        # and its text is not echoed.
+        document = cold_deployment()
+        render = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(document), stderr=""
+        )
+        run = unittest.mock.Mock(
+            side_effect=emitting(
+                [
+                    render,
+                    completed(),
+                    completed(),
+                    completed(),
+                    RuntimeError("sensitive daemon detail"),
+                ]
+            )
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            unittest.mock.patch.object(self.module.subprocess, "run", run),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.module.main(
+                    [
+                        "--compose-file",
+                        "compose.yaml",
+                        "--service",
+                        "evidence=evidence",
+                        "--service",
+                        "mint=mint",
+                    ]
+                )
+
+        self.assertIn("remain running", stderr.getvalue())
+        self.assertIn(
+            "docker compose --file compose.yaml stop mint", stderr.getvalue()
+        )
+        self.assertNotIn("sensitive", stderr.getvalue())
+
     def test_the_recovery_hint_repeats_the_operator_compose_invocation(self) -> None:
         # The preflight renders with `--file -`, so the hint has to name the
         # operator's own files. Without them the operator stops services in a
@@ -1215,7 +1286,7 @@ class RuntimePreflightTest(unittest.TestCase):
     def test_the_recovery_hint_without_compose_flags_names_the_services(self) -> None:
         stream = io.StringIO()
         self.module.report_started_dependencies(
-            ["mint"], ["docker", "compose"], stream
+            ["mint"], [], ["docker", "compose"], stream
         )
         self.assertIn("docker compose stop mint", stream.getvalue())
 

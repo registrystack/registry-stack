@@ -867,31 +867,43 @@ def bounded_seconds(raw: str, *, minimum: int, maximum: int) -> int:
 
 
 def report_started_dependencies(
-    started: Sequence[str], prefix: Sequence[str], stream: TextIO
+    running: Sequence[str],
+    uncertain: Sequence[str],
+    prefix: Sequence[str],
+    stream: TextIO,
 ) -> None:
-    """Name the services the preflight started and the command that stops them.
+    """Name the dependency services the operator now owns and how to stop them.
 
     The preflight renders the deployment once and runs every later command
     against that frozen configuration on stdin, so the recovery command has to
     repeat the operator's own Compose invocation instead. Anything else targets
-    a different project and leaves the started services running.
+    a different project and leaves the started services running. A start that
+    did not return successfully is reported separately, because Compose may have
+    created the container before failing and may not have.
     """
-    if not started:
+    if not running and not uncertain:
         return
-    names = " ".join(started)
-    recovery = shlex.join([*prefix, "stop", *started])
-    print(
-        "dependency services started by the preflight remain running under the "
-        f"operator's Compose lifecycle: {names}. Stop them with the same "
-        f"Compose files: {recovery}",
-        file=stream,
-    )
+    sentences = []
+    if running:
+        sentences.append(
+            "dependency services started by the preflight remain running under "
+            f"the operator's Compose lifecycle: {' '.join(running)}."
+        )
+    if uncertain:
+        sentences.append(
+            "the preflight could not confirm the start of, and may have left a "
+            f"container for: {' '.join(uncertain)}."
+        )
+    recovery = shlex.join([*prefix, "stop", *running, *uncertain])
+    sentences.append(f"Stop them with the same Compose files: {recovery}")
+    print(" ".join(sentences), file=stream)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     prefix = compose_prefix(args)
-    started: list[str] = []
+    running: list[str] = []
+    uncertain: list[str] = []
     try:
         selections = [parse_service(raw) for raw in args.service]
         if len(selections) != len({item.service for item in selections}):
@@ -909,12 +921,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if selection.service in dependency_services:
                 deadline = time.monotonic() + args.dependency_timeout_seconds
-                started.append(selection.service)
+                uncertain.append(selection.service)
                 start_dependency(
                     selection,
                     deadline,
                     frozen_compose,
                 )
+                uncertain.remove(selection.service)
+                running.append(selection.service)
                 wait_for_dependency(
                     selection,
                     deadline,
@@ -922,11 +936,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
     except PreflightError as error:
         print(f"runtime preflight failed: {error}", file=sys.stderr)
-        report_started_dependencies(started, prefix, sys.stderr)
+        report_started_dependencies(running, uncertain, prefix, sys.stderr)
         return 1
+    except BaseException:
+        # A failure the preflight does not model, an interrupt included, leaves
+        # the same services behind. The operator gets the list, and the failure
+        # is raised on rather than swallowed or renamed.
+        report_started_dependencies(running, uncertain, prefix, sys.stderr)
+        raise
 
     print(f"runtime preflight passed for {len(selections)} service(s)")
-    report_started_dependencies(started, prefix, sys.stdout)
+    report_started_dependencies(running, uncertain, prefix, sys.stdout)
     return 0
 
 

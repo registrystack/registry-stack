@@ -168,8 +168,10 @@ fixture for that lane; it publishes no host port.
 
 Services started for dependency checking remain under the operator's Compose
 lifecycle. The preflight names them, and the command that stops them, on
-success and on failure, so a partially completed run is recoverable with the
-same Compose files. That command repeats the `--env-file` and `--compose-file`
+success and on any failure, so a partially completed run is recoverable with
+the same Compose files. A service whose start did not return successfully is
+named as one the preflight could not confirm, because Compose may have created
+its container before failing. That command repeats the `--env-file` and `--compose-file`
 arguments the preflight was given, because the preflight itself renders the
 deployment once and runs every later command against that frozen configuration
 on stdin. `--dependency-timeout-seconds` bounds both Mint startup and
