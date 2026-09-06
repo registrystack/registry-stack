@@ -122,7 +122,7 @@ pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycl
     let file = destination
         .create_new(0o666)
         .map_err(|_| TestLifecycleError::OutputPreflight)?;
-    let opened = match file.metadata() {
+    let opened = match preflight_metadata(&file) {
         Ok(metadata) => metadata,
         Err(_) => {
             // The failed call is the only source of the identity a by-name
@@ -558,6 +558,47 @@ pub(crate) fn remove_exact_file(
     destination.remove_file()
 }
 
+/// Read the identity of the receipt the preflight just created. A failure here
+/// is the only path that leaves the created file in place, so a test-only fault
+/// stands in for a platform that cannot answer.
+fn preflight_metadata(file: &File) -> std::io::Result<fs::Metadata> {
+    if preflight_metadata_faulted() {
+        return Err(std::io::Error::other("receipt identity unavailable"));
+    }
+    file.metadata()
+}
+
+#[cfg(test)]
+thread_local! {
+    static PREFLIGHT_METADATA_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn preflight_metadata_faulted() -> bool {
+    PREFLIGHT_METADATA_FAULT.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+fn preflight_metadata_faulted() -> bool {
+    false
+}
+
+#[cfg(test)]
+fn install_preflight_metadata_fault() -> PreflightMetadataFaultGuard {
+    PREFLIGHT_METADATA_FAULT.with(|faulted| faulted.set(true));
+    PreflightMetadataFaultGuard
+}
+
+#[cfg(test)]
+struct PreflightMetadataFaultGuard;
+
+#[cfg(test)]
+impl Drop for PreflightMetadataFaultGuard {
+    fn drop(&mut self) {
+        PREFLIGHT_METADATA_FAULT.with(|faulted| faulted.set(false));
+    }
+}
+
 fn cleanup_exact_file(destination: &SafeEntry, expected: &fs::Metadata) {
     let _ = remove_exact_file(destination, expected);
 }
@@ -679,6 +720,21 @@ mod tests {
         assert_eq!(
             fs::read(&output).expect("the other file remains"),
             b"operator-owned"
+        );
+    }
+
+    #[test]
+    fn preflight_leaves_the_receipt_it_created_when_its_identity_is_unknown() {
+        let directory = TestDirectory::create();
+        let output = directory.path.join("receipt.json");
+
+        let _fault = install_preflight_metadata_fault();
+        let error = preflight_output(&output).expect_err("an unidentifiable receipt is refused");
+
+        assert!(matches!(error, TestLifecycleError::OutputPreflight));
+        assert!(
+            output.exists(),
+            "the receipt whose identity the preflight never learned is left in place"
         );
     }
 
