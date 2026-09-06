@@ -7,6 +7,7 @@ import { test } from 'node:test';
 
 import { cliReferenceSidebar } from '../src/lib/cli-reference-sidebar.mjs';
 import { RETIRED_RELAY_ROUTE_TARGETS } from '../src/lib/relay-v2-retirement-redirects.mjs';
+import { flattenSidebarGroups } from '../src/lib/sidebar.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
@@ -18,6 +19,56 @@ const validationSource = readFileSync(
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
 
 assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration');
+
+// Evaluate the trusted local sidebar expression without loading Astro or
+// requiring generated artifacts. Nested product fixtures exercise the actual
+// config's flattening; the OpenAPI plugin owns its generated tag hierarchy.
+const generatedProducts = new Map(['Relay', 'Manifest', 'Evidence Gateway'].map((label) => [
+  label,
+  {
+    label,
+    items: [{
+      label: 'Guides',
+      items: [
+        { label: 'Introduction', slug: `products/${label}/intro`, badge: 'Beta' },
+        {
+          label: 'Details',
+          items: [{ label: 'Contract', link: `/products/${label}/contract/`, attrs: { class: 'contract' } }],
+        },
+      ],
+    }],
+  },
+]));
+const apiConfigSource = configSource.match(/starlightOpenAPI\((\[[\s\S]*?\])\),/)?.[1];
+assert.ok(apiConfigSource, 'could not isolate the OpenAPI plugin configuration');
+const apiSchemas = new Function(`return ${apiConfigSource};`)();
+const generatedAPI = apiSchemas.map((schema) => ({
+  ...schema.sidebar,
+  items: [{ label: 'Generated tag', items: [] }],
+}));
+const sidebar = new Function(
+  'cliReferenceSidebar',
+  'generatedProduct',
+  'optionalGeneratedProduct',
+  'openAPISidebarGroups',
+  'flattenSidebarGroups',
+  `return [${sidebarSource}];`,
+)(
+  cliReferenceSidebar,
+  (label) => {
+    assert.ok(generatedProducts.has(label), `unexpected generated product: ${label}`);
+    return generatedProducts.get(label);
+  },
+  (label) => generatedProducts.get(label) ?? null,
+  generatedAPI,
+  flattenSidebarGroups,
+);
+
+function section(label) {
+  const group = sidebar.find((item) => item.label === label);
+  assert.ok(group, `missing sidebar section: ${label}`);
+  return group;
+}
 
 function topLevelLabels(source) {
   return [...source.matchAll(/^          label: '([^']+)',$/gm)].map((match) => match[1]);
@@ -115,23 +166,80 @@ function assertOrdered(source, expectations, label) {
   }
 }
 
-// Top level is a list of tasks an adopter can name, and each task that one
-// product serves names that product, so a reader who does not yet know which
-// product they need can still pick a door and a reader who arrived with a
-// product name finds the door that holds it.
-test('uses the adopter-first top-level flow in its published order', () => {
+// Product names give readers a short, stable place to return to. Start helps
+// readers choose a product before they enter its tutorials or references.
+test('uses the product navigation in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
-    'Answer a bounded question with Evidence Gateway',
-    'Connect an existing registry with Registry Relay',
-    'Build a registry with Base Registry Engine',
-    'Consume and verify Evidence Gateway assertions',
-    'Authenticate callers with Registry Mint',
-    'Publish a Registry Discovery index',
-    'Operate and secure',
-    'Understand the design',
+    'Evidence Gateway',
+    'Registry Relay',
+    'Base Registry Engine',
+    'Registry Mint',
+    'Registry Discovery',
+    'Operations',
+    'Design',
     'Reference',
   ]);
+});
+
+test('starts with only Start expanded and all secondary groups collapsed', () => {
+  for (const group of sidebar) {
+    assert.equal(
+      group.collapsed === true,
+      group.label !== 'Start',
+      `unexpected initial expansion for ${group.label}`,
+    );
+    for (const item of group.items.filter((item) => item.items)) {
+      assert.equal(item.collapsed, true, `${group.label} / ${item.label} must start collapsed`);
+    }
+  }
+});
+
+test('requires at most two groups to reach a hand-authored page', () => {
+  function walk(items, parents = []) {
+    for (const item of items) {
+      if (generatedAPI.includes(item)) continue;
+      if (!item.items) continue;
+      const path = [...parents, item.label];
+      assert.ok(path.length <= 2, `sidebar adds a third group: ${path.join(' / ')}`);
+      walk(item.items, path);
+    }
+  }
+  walk(sidebar);
+});
+
+test('keeps consumer and wallet-provider guidance in separate Evidence groups', () => {
+  const evidence = section('Evidence Gateway');
+  const consumer = evidence.items.find((item) => item.label === 'Use from applications');
+  const wallet = evidence.items.find((item) => item.label === 'Wallet delivery');
+  assert.ok(consumer, 'Evidence must provide an application-consumer entry point');
+  assert.ok(wallet, 'Evidence must provide a separate wallet-provider entry point');
+  assert.deepEqual(consumer.items.map((item) => item.slug), [
+    'tutorials/request-evidence-from-an-application',
+    'tutorials/verify-an-assertion-as-a-consumer',
+    'tutorials/manage-evidence-verifier-trust',
+  ]);
+  assert.deepEqual(wallet.items.map((item) => item.slug), [
+    'configure/enable-sd-jwt-vc',
+    'configure/evidence-oid4vci',
+    'tutorials/run-oid4vci-interoperability-checks',
+  ]);
+  assert.equal(evidence.items[1].slug, 'tutorials/first-evidence-assertion');
+  assert.equal(evidence.items[2], consumer, 'consumer entry point must precede provider phases');
+});
+
+test('seats generated product references directly below Reference without losing leaf attributes', () => {
+  const reference = section('Reference');
+  for (const [label, product] of [
+    ['Registry Relay', 'Relay'],
+    ['Registry Manifest', 'Manifest'],
+    ['Evidence Gateway', 'Evidence Gateway'],
+  ]) {
+    const group = reference.items.find((item) => item.label === label);
+    assert.ok(group, `missing generated reference group: ${label}`);
+    const fixture = generatedProducts.get(product).items[0].items;
+    assert.deepEqual(group.items, [fixture[0], fixture[1].items[0]]);
+  }
 });
 
 // One product used to carry a different public name on every surface, and the
@@ -139,17 +247,15 @@ test('uses the adopter-first top-level flow in its published order', () => {
 // Registry Relay" scanned the navigation and found no such words. Every
 // top-level section that one product serves names that product, with the
 // formal name docs/style-guide.md prescribes.
-test('names the product each top-level task section serves', () => {
-  for (const [label, product] of [
-    ['Answer a bounded question with Evidence Gateway', 'Evidence Gateway'],
-    ['Connect an existing registry with Registry Relay', 'Registry Relay'],
-    ['Build a registry with Base Registry Engine', 'Base Registry Engine'],
-    ['Consume and verify Evidence Gateway assertions', 'Evidence Gateway'],
-    ['Authenticate callers with Registry Mint', 'Registry Mint'],
-    ['Publish a Registry Discovery index', 'Registry Discovery'],
+test('uses the formal product names for top-level sections', () => {
+  for (const product of [
+    'Evidence Gateway',
+    'Registry Relay',
+    'Base Registry Engine',
+    'Registry Mint',
+    'Registry Discovery',
   ]) {
-    assert.ok(topLevelSection(sidebarSource, label), `could not isolate ${label}`);
-    assert.ok(label.includes(product), `${label} must name ${product}`);
+    assert.ok(topLevelSection(sidebarSource, product), `could not isolate ${product}`);
   }
 
   // Short forms are what made one product look like several. `Relay`, `BReg`,
@@ -173,37 +279,29 @@ test('names the product each top-level task section serves', () => {
   }
 });
 
-test('publishes one overview route for every task-flow section that has one', () => {
+test('publishes one overview route for every section that has one', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
-    ['Answer a bounded question with Evidence Gateway', "slug: 'start/evidence-quickstart'"],
-    ['Connect an existing registry with Registry Relay', "slug: 'configure'"],
-    ['Build a registry with Base Registry Engine', "slug: 'start/breg-quickstart'"],
-    ['Operate and secure', "slug: 'operate/advanced'"],
+    ['Evidence Gateway', "slug: 'start/evidence-quickstart'"],
+    ['Registry Relay', "slug: 'configure'"],
+    ['Base Registry Engine', "slug: 'start/breg-quickstart'"],
+    ['Operations', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {
     const section = topLevelSection(sidebarSource, label);
     assert.ok(section, `could not isolate ${label}`);
     assert.match(section, new RegExp(route.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
-
-  // The relying-party section ships without an overview because no page
-  // yet addresses a relying party who has not chosen a product. The section is
-  // three tutorials that each stand alone, so it opens on the first of them
-  // rather than on a page written for a different reader.
-  const consume = topLevelSection(sidebarSource, 'Consume and verify Evidence Gateway assertions');
-  assert.ok(consume, 'could not isolate the relying-party section');
-  assert.doesNotMatch(consume, /label: 'Overview'/);
 });
 
 // A page that names one product belongs under that product while the reader is
 // still adopting it, so a reader following one adoption path never leaves it.
-// Operate and secure is the exception the operator earns: after handoff the
+// Operations is the exception the operator earns: after handoff the
 // reader is on call for a running deployment, not choosing a product, so pages
 // that name a runtime sit beside the ones that do not.
 test('files adoption-time pages under their product', () => {
-  const relay = topLevelSection(sidebarSource, 'Connect an existing registry with Registry Relay');
-  const operate = topLevelSection(sidebarSource, 'Operate and secure');
+  const relay = topLevelSection(sidebarSource, 'Registry Relay');
+  const operate = topLevelSection(sidebarSource, 'Operations');
   assert.match(
     relay,
     /slug: 'operate\/relay' \}/,
@@ -217,9 +315,9 @@ test('files adoption-time pages under their product', () => {
 
   // Evidence Gateway's security model is product-scoped, so it stays with the
   // product rather than in the cross-product security group.
-  const security = topLevelSection(sidebarSource, 'Operate and secure');
+  const security = topLevelSection(sidebarSource, 'Operations');
   assert.doesNotMatch(security, /slug: 'security\/evidence'/);
-  const evidence = topLevelSection(sidebarSource, 'Answer a bounded question with Evidence Gateway');
+  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
   assert.match(evidence, /slug: 'security\/evidence'/);
 });
 
@@ -229,7 +327,7 @@ test('publishes one Relay reader journey without the retired V1 routes', () => {
     start,
     /slug: 'tutorials\//,
   );
-  const connect = topLevelSection(sidebarSource, 'Connect an existing registry with Registry Relay');
+  const connect = topLevelSection(sidebarSource, 'Registry Relay');
   assertOrdered(
     connect,
     [
@@ -246,7 +344,7 @@ test('publishes one Relay reader journey without the retired V1 routes', () => {
   // phase they belong to.
   assertOrdered(
     connect,
-    ["label: 'Author a project'", "label: 'Call a Relay API'"],
+    ["label: 'Author a project'", "label: 'Use from applications'"],
     'Relay phase group',
   );
   // The caller's half of Relay is its own group: authoring and operating pages
@@ -284,7 +382,7 @@ test('gives Evidence Gateway a lane on both front doors without a retired Notary
 // group it belongs to. A reader who has finished one phase finds the next one
 // beside it, and a reader who has not is not shown its vocabulary yet.
 test('keeps the BReg guide and references in one adoption path', () => {
-  const breg = topLevelSection(sidebarSource, 'Build a registry with Base Registry Engine');
+  const breg = topLevelSection(sidebarSource, 'Base Registry Engine');
   assert.ok(breg, 'could not isolate the Base Registry Engine section');
   const slugs = [...breg.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(slugs, [
@@ -318,14 +416,14 @@ test('keeps the BReg guide and references in one adoption path', () => {
     breg,
     [
       "slug: 'tutorials/first-breg'",
-      "label: 'Learn locally'",
-      "label: 'Model your registry'",
-      "label: 'Prepare and deploy'",
-      "label: 'Operate a running registry'",
-      "label: 'Call a registry from an application'",
+      "label: 'Tutorials'",
+      "label: 'Model a registry'",
+      "label: 'Deploy'",
+      "label: 'Operate'",
+      "label: 'Use from applications'",
       "slug: 'reference/breg-configuration'",
     ],
-    'Build a registry with Base Registry Engine',
+    'Base Registry Engine',
   );
 
   // The homepage names the doors into the path, not every room: the overview,
@@ -385,32 +483,32 @@ test('redirects the retired Server webhook, history, and event pages to their me
 });
 
 test('organizes Evidence Gateway tasks without publishing the obsolete Relay composition', () => {
-  const evidence = topLevelSection(sidebarSource, 'Answer a bounded question with Evidence Gateway');
+  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
   assertOrdered(
     evidence,
     [
-      // The first hands-on tutorial sits beside the overview rather than inside
-      // a collapsed group, so a first-time reader reaches it without opening
-      // anything.
+      // The first hands-on tutorial sits beside the overview, so opening the
+      // product section reveals both starting points.
       "slug: 'tutorials/first-evidence-assertion'",
-      "label: 'Learn locally'",
-      "label: 'Connect your own source'",
-      "label: 'Worked examples'",
-      "label: 'Prepare and deploy'",
-      "label: 'Deliver to wallets'",
+      "label: 'Use from applications'",
+      "label: 'Tutorials'",
+      "label: 'Connect a source'",
+      "label: 'Source examples'",
+      "label: 'Deploy'",
+      "label: 'Wallet delivery'",
       // Reference a reader opens with the deployment in front of them, so it
       // ends this section instead of starting a Reference lookup.
       "slug: 'reference/evidence-configuration'",
       "slug: 'reference/evidence-problems'",
-      "label: 'HTTP API'",
+      "slug: 'reference/apis/registry-evidence'",
+      '...openAPISidebarGroups',
     ],
     'Evidence Gateway task group',
   );
   assert.doesNotMatch(evidence, /label: 'Verify and trust'/);
-  // Token issuance and relying-party verification are separate audiences that
-  // reach Evidence Gateway from outside it, so each is a section of its own
-  // rather than a group buried in the provider's path.
-  assert.doesNotMatch(evidence, /label: 'Authenticate callers with Registry Mint'/);
+  // Token issuance stays with Registry Mint. The Evidence consumer group is
+  // separate from provider authoring and wallet-delivery guidance.
+  assert.doesNotMatch(evidence, /label: 'Registry Mint'/);
   assert.doesNotMatch(evidence, /label: 'Verify as a relying party'/);
   // explanation/integration-patterns held two seats, which left Starlight
   // unable to say which one is the active page and made prev/next ambiguous.

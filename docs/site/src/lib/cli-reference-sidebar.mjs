@@ -17,7 +17,7 @@ export function cliReferenceSidebar(indexPath = generatedIndex) {
   if (/^draft:\s*true\s*$/mu.test(frontmatter)) return [];
   return [
     {
-      label: 'Command-line interfaces',
+      label: 'CLI commands',
       collapsed: true,
       items: [
         { label: 'Overview', slug: 'reference/cli' },
