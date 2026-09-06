@@ -1238,10 +1238,13 @@ absolute paths. The runtime rejects symlinks, insecure ownership/modes, missing
 required logical bindings, mutable files, and files outside the configured
 roots according to the operator contract.
 
-Every deployment input this contract loads, `runtime.yaml` itself, the bundle
-directory and each artifact inside it, a named CA bundle file, the secret
-root, and a bound extract, must carry no write permission for anyone, and the
-secret root must additionally carry no group or other permission at all.
+Every immutable deployment input this contract loads, `runtime.yaml` itself,
+the bundle directory and each artifact inside it, a named CA bundle file, and
+a bound extract, must carry no write permission for anyone. The secret root
+follows its own rule: it must carry no group or other permission at all
+(`0700` or tighter), and owner write is accepted, since the operator
+provisions and rotates the secret files inside it; those files keep their own
+exact `0400` or `0600` mode.
 `evidence check` refuses a non-conforming runtime file, bundle artifact, CA
 bundle file, or secret root before the listener binds. When the fault is
 bound to one artifact, the printed message names it, for example `evidence:
