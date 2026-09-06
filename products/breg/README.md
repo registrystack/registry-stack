@@ -81,6 +81,10 @@ profile, loopback HTTP, disposable PostgreSQL, and an unsigned local package.
 It is the first-hour learning path, not a shortcut around production package
 signing, operated database roles, TLS, migration review, or secret custody.
 
+For a retained local loop that needs no checkout, Python launcher, or shell
+script, [Native local BReg lifecycle](DEV.md) documents `bregctl dev` against
+installed binaries and Docker PostgreSQL.
+
 ## Pilot operator lifecycle
 
 For an offline permissions exercise, use [Review access configuration](examples/access-review/README.md).
