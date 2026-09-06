@@ -134,8 +134,14 @@ defines the complete authentication union and runtime bindings.
 
 Complete [Configure Transit signing](../move-evidence-to-production-signing/)
 before creating the target. Save its independently obtained public JWK at
-`evidence-signing-public.jwk.json`. Never export the private Transit key or use
-the local tutorial's private key.
+`evidence-signing-public.jwk.json`.
+
+:::danger[The private signing key never leaves the provider]
+Never export the private Transit key, and never reuse the local tutorial's
+private key for this deployment. A private key that has left provider custody
+cannot be returned to it: the only recovery is a new key, a new public JWK, and a
+fresh distribution to every verifier that pinned the old one.
+:::
 
 Set `governance.assuranceProfile` to `production`. Keep ES256 signing and leave
 `publicKeys: {}` when supplying only the active public key with the flag below.
@@ -216,7 +222,14 @@ The operator places the exact candidate at the configured location and makes its
 runtime and bundle non-writable to the service identity. Provision owner-only
 source client files, independent audit and subject-binding HMAC secrets, durable
 audit storage, private CA files when needed, and the workload-local Transit
-proxy. Do not copy `.evidence/dev` or `.breg/dev` to the host.
+proxy.
+
+:::caution[Development material stays off the operated host]
+Do not copy `.evidence/dev` or `.breg/dev` to the host. They hold the local
+exercise's session key pairs, generated database roles, local TLS material and
+credentials. Anything from them that reaches an operated host has to be treated
+as disclosed and replaced through the operator's own provisioning.
+:::
 
 Under the intended service identity, after those dependencies exist:
 
@@ -316,9 +329,15 @@ consumed lookup meaning or question semantics:
 
 If a check fails, keep traffic paused. Follow the BReg recovery plan and restore
 a mutually compatible provider, Evidence candidate and consumer contract before
-resuming. Database migrations may constrain reversal; choose the migration's
-reviewed recovery path rather than assuming an old binary can undo it. Keep audit
-history and verify completed journals after their writers stop.
+resuming. Keep audit history and verify completed journals after their writers
+stop.
+
+:::caution[A migration may not reverse]
+Database migrations may constrain reversal, so activating the new BReg package is
+the step in this cutover that reinstating the previous binary does not always
+undo. Choose the migration's reviewed recovery path rather than assuming a
+rollback restores the earlier state.
+:::
 
 Keeping an old consumer catalog alone does not keep old behavior available. A
 provider change can alter a lookup even when the HTTP schema stays the same, so
