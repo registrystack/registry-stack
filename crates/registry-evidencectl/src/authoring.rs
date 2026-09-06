@@ -324,9 +324,11 @@ pub(crate) fn compile_target_project(
         .get("assuranceProfile")
         .and_then(Value::as_str)
     {
-        Some("production") => true,
+        Some("production") | Some("evidence-grade") => true,
         Some("local") => false,
-        _ => bail!("deployment governance must declare local or production assuranceProfile"),
+        _ => bail!(
+            "deployment governance assuranceProfile must be local, production, or evidence-grade"
+        ),
     };
     validate_deployment_inputs(&project_root, &inputs, production)?;
     let plan = compile_plan(inputs, CompileProfile::Production(governed_bundle))?;
@@ -4890,6 +4892,98 @@ factSchema: schemas/source-facts.schema.yaml
             "Asia/Bangkok"
         );
         assert_eq!(compiled.fixture_paths, ["fixtures/adult-status.yaml"]);
+    }
+
+    /// Build the same referenced-people target project as
+    /// `local_target_compilation_keeps_target_governance_without_local_secrets`,
+    /// but under the given assurance profile and source authentication, and
+    /// compile it. Used to compare what the production and evidence-grade
+    /// arms of `compile_target_project` report for the same shape of input.
+    fn compile_referenced_people_target(
+        assurance_profile: &str,
+        source_authentication: &str,
+    ) -> Result<CompiledProductionProject> {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        let question = write_referenced_people_project(&fixture, source_authentication);
+        let mut question: Value = serde_norway::from_str(&question).unwrap();
+        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["governance"] = json!({
+            "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
+            "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
+            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":900,
+            "observationTimezone":"Asia/Bangkok", "fixtures":"fixtures/adult-status.yaml",
+            "disclosureFamilies":["urn:authority:disclosure-family:adult-status:v1"]
+        });
+        fs::write(
+            fixture.project.join("questions/adult-status.yaml"),
+            serde_norway::to_string(&question).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir(fixture.project.join("fixtures")).unwrap();
+        fs::write(
+            fixture.project.join("fixtures/adult-status.yaml"),
+            "version: 1\ncases: []\n",
+        )
+        .unwrap();
+        fs::remove_dir_all(fixture.project.join(SECRETS_DIRECTORY)).unwrap();
+        let target = json!({
+            "version":1, "assuranceProfile":assurance_profile, "service":{"publicOrigin":"http://127.0.0.1:9444"},
+            "authentication":{"issuer":"http://127.0.0.1:9445"},
+            "authorityProfiles":{"operator":{"kind":"explicit-request"}},
+            "signing":{}, "audit":{"hashKeyVersion":"target-version"}
+        });
+        let project = fs::canonicalize(&fixture.project).unwrap();
+        compile_target_project(
+            &project,
+            &project,
+            &fixture.staging,
+            target,
+            &fixture.evidence,
+        )
+    }
+
+    #[test]
+    fn evidence_grade_target_is_held_to_the_production_checks() {
+        let production_error =
+            compile_referenced_people_target("production", "authentication: {kind: none}\n")
+                .expect_err("an unauthenticated HTTP source is refused under production checks");
+        let evidence_grade_error =
+            compile_referenced_people_target("evidence-grade", "authentication: {kind: none}\n")
+                .expect_err("evidence-grade is held to the same production checks");
+        let production_message = format!("{production_error:#}");
+        let evidence_grade_message = format!("{evidence_grade_error:#}");
+        assert_eq!(
+            production_message, evidence_grade_message,
+            "evidence-grade must report the identical production check failure"
+        );
+        assert!(!evidence_grade_message.contains("must declare"));
+        assert!(!evidence_grade_message.contains("assuranceProfile"));
+    }
+
+    #[test]
+    fn evidence_grade_target_compiles_through_the_production_path() {
+        let compiled = compile_referenced_people_target(
+            "evidence-grade",
+            "authentication: {kind: static-authorization, tokenRef: secret:file/records-token}\n",
+        )
+        .expect("an evidence-grade target compiles through the production checks");
+        assert_eq!(compiled.bundle["assuranceProfile"], "evidence-grade");
+    }
+
+    #[test]
+    fn an_unknown_assurance_profile_is_refused_by_name() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        let target = json!({"version": 1, "assuranceProfile": "staging"});
+        let project = fs::canonicalize(&fixture.project).unwrap();
+        let error = compile_target_project(
+            &project,
+            &project,
+            &fixture.staging,
+            target,
+            &fixture.evidence,
+        )
+        .expect_err("an unrecognized assurance profile is refused");
+        assert!(format!("{error:#}").contains("evidence-grade"));
     }
 
     #[test]
