@@ -9200,6 +9200,7 @@ mod tests {
                 "check",
                 "project",
                 "generate",
+                "dev",
                 "explain",
                 "diff",
                 "package",
