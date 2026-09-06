@@ -507,6 +507,10 @@ struct AuditExportArgs {
     runtime_config: PathBuf,
 
     /// Absolute JSON Lines file the export creates.
+    ///
+    /// The export creates this file and never truncates, replaces, or appends
+    /// to an existing one, so a destination that already exists is refused.
+    /// A path holding a `..` component is refused.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     output: PathBuf,
 }
@@ -666,10 +670,23 @@ struct DataExportArgs {
     fields: Vec<String>,
 
     /// JSON Lines output file. Existing output resumes from its checkpoint.
+    ///
+    /// A resume continues after the last page the checkpoint records and
+    /// discards the output beyond it, which is at most the one page a run
+    /// stopped between appending a page and publishing its checkpoint left
+    /// behind. A longer tail is refused rather than discarded. The output and
+    /// the checkpoint are usable only as a pair: one present without the other
+    /// is refused, and removing the file that remains starts a fresh export.
+    /// A path holding a `..` component is refused.
     #[arg(long, value_name = "FILE")]
     output: PathBuf,
 
     /// Export checkpoint file written after every page.
+    ///
+    /// The checkpoint is published after the page it records reaches the
+    /// output, so it names the position a resume continues from. Keep it for
+    /// as long as the output it belongs to, and give each export its own pair.
+    /// A path holding a `..` component is refused.
     #[arg(long, value_name = "FILE")]
     checkpoint: PathBuf,
 
@@ -745,6 +762,10 @@ struct HistoryEraseArgs {
     runtime_config: PathBuf,
 
     /// Absolute owner-only JSON erasure request file.
+    ///
+    /// Read through the parent directory this path resolves to, so a `..`
+    /// component is refused. The file must carry no group or other permission
+    /// bits, because it names the records the erasure covers.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     request_file: PathBuf,
 }
@@ -756,6 +777,10 @@ struct HistoryRebaselineArgs {
     runtime_config: PathBuf,
 
     /// Absolute owner-only JSON rebaseline request file.
+    ///
+    /// Read through the parent directory this path resolves to, so a `..`
+    /// component is refused. The file must carry no group or other permission
+    /// bits, because it names the records the rebaseline covers.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     request_file: PathBuf,
 }
