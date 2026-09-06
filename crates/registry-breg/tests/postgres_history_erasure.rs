@@ -60,10 +60,14 @@ mod postgres_harness;
 #[allow(dead_code)]
 mod stored_bytes;
 
+use std::collections::BTreeSet;
+use std::io;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use registry_platform_audit::AuditProfile;
-use serde_json::json;
+use serde_json::{json, Value};
+use tracing::instrument::WithSubscriber;
 use uuid::Uuid;
 
 use history_commit::{
@@ -744,6 +748,13 @@ async fn erasure_reports_an_unreadable_cached_response_rather_than_an_outage() {
             .await
             .expect("unreadable cached response commits");
 
+        let logs = CapturedOperationalLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_current_span(false)
+            .with_span_list(false)
+            .with_writer(logs.clone())
+            .finish();
         let result = erase_record_history(
             &mut migration,
             HistoryErasureRequest {
@@ -756,21 +767,97 @@ async fn erasure_reports_an_unreadable_cached_response_rather_than_an_outage() {
                 )
                 .unwrap(),
                 audit_profile: &audit_profile,
-                operator_reference: "operator-run-7",
-                reason: "unreadable cached response",
+                operator_reference: OPERATOR_CANARY,
+                reason: REASON_CANARY,
                 target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
             },
         )
+        .with_subscriber(subscriber)
         .await;
         assert_eq!(
             result,
             Err(registry_breg::history_erasure::HistoryErasureError::CachedResponseUnreadable),
             "an unreadable cached response is reported as corruption"
         );
+
+        // The operator sees the classification, because every read surface
+        // answers the refusal it always answered. The record names the reader
+        // and nothing about the row it read.
+        let captured = logs.text();
+        let records = captured
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("operational log is JSON"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            records.len(),
+            1,
+            "the classified failure logs exactly one record"
+        );
+        assert_eq!(records[0]["level"], "WARN");
+        assert_eq!(records[0]["target"], "registry_breg::storage");
+        let fields = records[0]["fields"]
+            .as_object()
+            .expect("operational fields are an object");
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["message", "site"])
+        );
+        assert_eq!(fields["message"], "stored bytes are unreadable as JSON");
+        assert_eq!(fields["site"], "idempotency_cache");
+        for forbidden in [
+            record_id.to_string().as_str(),
+            ENTITY,
+            "batch-unreadable-key",
+            "batch-unreadable-binding",
+            "unterminated",
+            "registry_idempotency",
+            "convert_from",
+            OPERATOR_CANARY,
+            REASON_CANARY,
+        ] {
+            assert!(
+                !captured.contains(forbidden),
+                "the classification log carries nothing about the row it read"
+            );
+        }
     }
 
     migration_task.abort();
     database.cleanup().await;
+}
+
+/// Collect the operational log a call emits, so a test can assert on the
+/// rendered record instead of letting it print.
+#[derive(Clone, Default)]
+struct CapturedOperationalLogs(Arc<Mutex<Vec<u8>>>);
+
+impl CapturedOperationalLogs {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().expect("operational log buffer").clone())
+            .expect("operational logs are UTF-8")
+    }
+}
+
+impl io::Write for CapturedOperationalLogs {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| io::Error::other("operational log buffer poisoned"))?
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedOperationalLogs {
+    type Writer = Self;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        self.clone()
+    }
 }
 
 async fn install_ready_history_registry(

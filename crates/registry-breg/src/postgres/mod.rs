@@ -83,14 +83,18 @@ use thiserror::Error;
 
 use crate::api::ReadServiceError;
 
-/// Classify a failed statement that reads stored snapshot bytes as JSON.
+/// Classify a failed statement that reads stored snapshot bytes as JSON, for
+/// the reader named by `site`.
 ///
 /// The read cannot answer from a row the JSON reader will not accept. That is
 /// the row's own state, so the refusal names it. Reporting it as an outage
 /// would hide the corrupted row behind a failure callers retry.
 #[must_use]
-pub(crate) fn snapshot_read_error(error: &tokio_postgres::Error) -> ReadServiceError {
-    if crate::stored_bytes::unreadable(error) {
+pub(crate) fn snapshot_read_error(
+    error: &tokio_postgres::Error,
+    site: crate::stored_bytes::Site,
+) -> ReadServiceError {
+    if crate::stored_bytes::unreadable(error, site) {
         ReadServiceError::SnapshotUnreadable
     } else {
         ReadServiceError::Unavailable

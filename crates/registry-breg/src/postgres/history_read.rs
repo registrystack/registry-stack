@@ -44,6 +44,7 @@ use crate::model::{
 };
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
+use crate::stored_bytes;
 
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
@@ -319,7 +320,7 @@ impl PostgresSnapshotReadService {
                 transaction
                     .query_one(&count_sql, &refs)
                     .await
-                    .map_err(|error| snapshot_read_error(&error))?
+                    .map_err(|error| snapshot_read_error(&error, stored_bytes::Site::HistoryRead))?
                     .get::<_, i64>(0),
             );
         }
@@ -339,7 +340,7 @@ impl PostgresSnapshotReadService {
         let rows = transaction
             .query(&page_sql, &refs)
             .await
-            .map_err(|error| snapshot_read_error(&error))?;
+            .map_err(|error| snapshot_read_error(&error, stored_bytes::Site::HistoryRead))?;
         let page_size = usize::from(request.plan.page_size);
         let has_more = rows.len() > page_size;
         let rows = if has_more {
@@ -943,7 +944,7 @@ async fn ensure_required_snapshot_keys_present(
     let missing: bool = transaction
         .query_one(&sql, &[&entity_id, &position])
         .await
-        .map_err(|error| snapshot_read_error(&error))?
+        .map_err(|error| snapshot_read_error(&error, stored_bytes::Site::HistoryRead))?
         .get(0);
     if missing {
         return Err(ReadServiceError::Unavailable);
@@ -2005,7 +2006,8 @@ mod tests {
     use crate::postgres::stored_bytes_probe::{expression_error, UNREADABLE};
 
     use super::{
-        snapshot_key_present_predicate, snapshot_read_error, HistorySqlField, ReadServiceError,
+        snapshot_key_present_predicate, snapshot_read_error, stored_bytes, HistorySqlField,
+        ReadServiceError,
     };
 
     /// A stored snapshot the JSON reader will not accept must refuse the read
@@ -2047,7 +2049,7 @@ mod tests {
             for stored in UNREADABLE {
                 let error = expression_error(&expression, stored, &[]).await;
                 assert_eq!(
-                    snapshot_read_error(&error),
+                    snapshot_read_error(&error, stored_bytes::Site::HistoryRead),
                     ReadServiceError::SnapshotUnreadable,
                     "unreadable stored bytes refuse the read as corruption"
                 );
