@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -129,6 +130,26 @@ def completed(returncode: int = 0) -> subprocess.CompletedProcess[str]:
     )
 
 
+def emitting(effects: list[object]):
+    """Fake `subprocess.run` that writes each effect's stderr to its capture file.
+
+    The preflight captures a native check's stderr to classify the failure, so
+    the fake has to produce that stream for the value-free pins to mean anything.
+    """
+    remaining = iter(effects)
+
+    def run(*args: object, **kwargs: object) -> object:
+        effect = next(remaining)
+        if isinstance(effect, BaseException):
+            raise effect
+        sink = kwargs.get("stderr")
+        if hasattr(sink, "write") and effect.stderr:
+            sink.write(effect.stderr.encode("utf-8"))
+        return effect
+
+    return run
+
+
 def cold_deployment() -> dict[str, object]:
     document = deployment({"evidence": service("evidence"), "mint": service("mint")})
     document["services"]["evidence"]["depends_on"] = {  # type: ignore[index]
@@ -158,6 +179,7 @@ class RuntimePreflightTest(unittest.TestCase):
         document: dict[str, object],
         *,
         native_returncode: int = 0,
+        native_stderr: str = "sensitive",
         argv: list[str] | None = None,
     ) -> tuple[int, str, str, unittest.mock.Mock]:
         render = subprocess.CompletedProcess(
@@ -167,9 +189,11 @@ class RuntimePreflightTest(unittest.TestCase):
             args=[],
             returncode=native_returncode,
             stdout="sensitive",
-            stderr="sensitive",
+            stderr=native_stderr,
         )
-        run = unittest.mock.Mock(side_effect=[render, native, native, native])
+        run = unittest.mock.Mock(
+            side_effect=emitting([render, native, native, native])
+        )
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
@@ -189,7 +213,7 @@ class RuntimePreflightTest(unittest.TestCase):
         render = subprocess.CompletedProcess(
             args=[], returncode=0, stdout=json.dumps(document), stderr=""
         )
-        run = unittest.mock.Mock(side_effect=[render, *effects])
+        run = unittest.mock.Mock(side_effect=emitting([render, *effects]))
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
@@ -239,7 +263,7 @@ class RuntimePreflightTest(unittest.TestCase):
             self.assertIn("--no-deps", call.args[0])
             self.assertEqual(["docker", "compose", "--file", "-"], call.args[0][:4])
             self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stdout"])
-            self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stderr"])
+            self.assertTrue(hasattr(call.kwargs["stderr"], "write"))
             self.assertNotIn("capture_output", call.kwargs)
             self.assertEqual(
                 self.module.DEFAULT_NATIVE_CHECK_TIMEOUT_SECONDS,
@@ -675,6 +699,8 @@ class RuntimePreflightTest(unittest.TestCase):
                     )
 
     def test_native_failure_is_value_free(self) -> None:
+        # The preflight reads the failing check's stderr to classify it and
+        # holds the operator's rendered configuration. It prints neither.
         document = deployment(
             {
                 "evidence": service("evidence"),
@@ -682,11 +708,85 @@ class RuntimePreflightTest(unittest.TestCase):
                 "relay": service("relay"),
             }
         )
-        result, stdout, stderr, _ = self.run_main(document, native_returncode=1)
+        document["services"]["evidence"]["environment"] = {  # type: ignore[index]
+            "EVIDENCE_MARKER": "rendered-value"
+        }
+        result, stdout, stderr, _ = self.run_main(
+            document,
+            native_returncode=1,
+            native_stderr="sensitive child stderr naming /srv/operator/audit",
+        )
         self.assertEqual(1, result)
         self.assertEqual("", stdout)
         self.assertNotIn("sensitive", stderr)
+        self.assertNotIn("/srv/operator/audit", stderr)
+        self.assertNotIn("rendered-value", stderr)
         self.assertIn("native runtime check", stderr)
+
+    def test_an_image_without_the_containment_flag_is_named_as_the_cause(self) -> None:
+        # An image built before the flag existed cannot make the persistent
+        # audit root assertion. The preflight stays closed and says which
+        # service needs a newer image instead of reporting a generic failure.
+        document = deployment({"relay": service("relay")})
+        result, stdout, stderr, _ = self.run_main(
+            document,
+            native_returncode=2,
+            native_stderr=(
+                "error: unexpected argument '--require-audit-under' found\n"
+                "\nUsage: relay check --runtime <RUNTIME>\n"
+            ),
+            argv=[
+                "--compose-file",
+                "compose.yaml",
+                "--env-file",
+                "operator.env",
+                "--service",
+                "relay=relay",
+            ],
+        )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertIn("service relay", stderr)
+        self.assertIn("--require-audit-under", stderr)
+        self.assertIn("does not support", stderr)
+        self.assertIn("requires an image", stderr)
+        for suggestion in ("disable", "omit", "without", "skip", "Usage"):
+            self.assertNotIn(suggestion, stderr)
+
+    def test_a_chatty_native_check_still_fails_value_free(self) -> None:
+        # A child that writes far more than the captured bound is read without
+        # error and reported with the same value-free message as any other
+        # failing check.
+        noisy = "".join(f"line {index:04d} " + "x" * 200 + "\n" for index in range(500))
+        document = deployment({"relay": service("relay")})
+        result, stdout, stderr, _ = self.run_main(
+            document,
+            native_returncode=1,
+            native_stderr=noisy,
+            argv=[
+                "--compose-file",
+                "compose.yaml",
+                "--service",
+                "relay=relay",
+            ],
+        )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertEqual(
+            "runtime preflight failed: relay service relay failed its native "
+            "runtime check\n",
+            stderr,
+        )
+
+    def test_the_captured_stderr_is_bounded_and_still_classifies(self) -> None:
+        with tempfile.TemporaryFile() as sink:
+            sink.write(b"x" * (self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES * 4))
+            sink.write(b"\nerror: unexpected argument '--require-audit-under' found\n")
+            captured = self.module.bounded_stderr(sink)
+        self.assertLessEqual(
+            len(captured), self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES
+        )
+        self.assertTrue(self.module.rejects_audit_containment_flag(captured))
 
     def test_native_check_deadline_is_bounded_and_operator_configurable(self) -> None:
         document = deployment(
@@ -828,7 +928,14 @@ class RuntimePreflightTest(unittest.TestCase):
         for call in run.call_args_list[1:]:
             self.assertEqual(document, json.loads(call.kwargs["input"]))
             self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stdout"])
-            self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stderr"])
+        for index in (1, 4):
+            captured = run.call_args_list[index].kwargs["stderr"]
+            self.assertTrue(hasattr(captured, "write"))
+        for index in (2, 3):
+            self.assertEqual(
+                self.module.subprocess.DEVNULL,
+                run.call_args_list[index].kwargs["stderr"],
+            )
 
     def test_unhealthy_mint_blocks_the_dependent_native_check(self) -> None:
         document = deployment(
@@ -873,7 +980,9 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertEqual(1, result)
         self.assertEqual("", stdout.getvalue())
         self.assertIn("did not become ready", stderr.getvalue())
-        self.assertIn("docker compose stop mint", stderr.getvalue())
+        self.assertIn(
+            "docker compose --file compose.yaml stop mint", stderr.getvalue()
+        )
         self.assertEqual(4, run.call_count)
         self.assertFalse(
             any(
@@ -965,7 +1074,7 @@ class RuntimePreflightTest(unittest.TestCase):
             argv,
         )
         self.assertEqual(0, result, stderr)
-        self.assertIn("docker compose stop mint", stdout)
+        self.assertIn("docker compose --file compose.yaml stop mint", stdout)
         self.assertIn("remain running", stdout)
 
         result, stdout, stderr, _ = self.run_orchestration(
@@ -976,7 +1085,7 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertEqual(1, result)
         self.assertEqual("", stdout)
         self.assertIn("native runtime check", stderr)
-        self.assertIn("docker compose stop mint", stderr)
+        self.assertIn("docker compose --file compose.yaml stop mint", stderr)
 
         result, stdout, stderr, _ = self.run_orchestration(
             document,
@@ -984,7 +1093,43 @@ class RuntimePreflightTest(unittest.TestCase):
             argv,
         )
         self.assertEqual(1, result)
-        self.assertIn("docker compose stop mint", stderr)
+        self.assertIn("docker compose --file compose.yaml stop mint", stderr)
+
+    def test_the_recovery_hint_repeats_the_operator_compose_invocation(self) -> None:
+        # The preflight renders with `--file -`, so the hint has to name the
+        # operator's own files. Without them the operator stops services in a
+        # different project and the started dependency keeps running.
+        document = cold_deployment()
+        result, stdout, stderr, _ = self.run_orchestration(
+            document,
+            [completed(), completed(), completed(), completed()],
+            [
+                "--compose-file",
+                "compose.yaml",
+                "--compose-file",
+                "overlay compose.yaml",
+                "--env-file",
+                "operator env",
+                "--service",
+                "evidence=evidence",
+                "--service",
+                "mint=mint",
+            ],
+        )
+        self.assertEqual(0, result, stderr)
+        self.assertIn(
+            "docker compose --env-file 'operator env' --file compose.yaml "
+            "--file 'overlay compose.yaml' stop mint",
+            stdout,
+        )
+        self.assertNotIn("--file -", stdout)
+
+    def test_the_recovery_hint_without_compose_flags_names_the_services(self) -> None:
+        stream = io.StringIO()
+        self.module.report_started_dependencies(
+            ["mint"], ["docker", "compose"], stream
+        )
+        self.assertIn("docker compose stop mint", stream.getvalue())
 
     def test_the_cold_fixture_passes_without_publishing_a_host_port(self) -> None:
         if not compose_is_available():

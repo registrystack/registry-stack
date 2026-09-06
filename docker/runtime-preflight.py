@@ -4,18 +4,22 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
 import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Sequence, TextIO
+from typing import Any, BinaryIO, Sequence, TextIO
 
 
 MAXIMUM_COMPOSE_BYTES = 4 * 1024 * 1024
+MAXIMUM_NATIVE_CHECK_STDERR_BYTES = 4 * 1024
 MINIMUM_DEPENDENCY_TIMEOUT_SECONDS = 5
 MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS = 10 * 60
 MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 30
@@ -33,6 +37,18 @@ AUDIT_PREFIXES = {
     "relay": "/var/lib/relay/audit",
 }
 EXECUTABLE_PATHS = {product: f"/usr/local/bin/{product}" for product in PRODUCTS}
+AUDIT_CONTAINMENT_FLAG = "--require-audit-under"
+# An image whose check command predates the containment flag rejects it as an
+# unknown argument. These are the argument parsers' phrasings for that refusal.
+UNKNOWN_ARGUMENT_MARKERS = (
+    "unexpected argument",
+    "unrecognized argument",
+    "unrecognized option",
+    "unknown argument",
+    "unknown option",
+    "invalid option",
+    "wasn't expected",
+)
 IMAGE_OWNED_ROOTS = tuple(
     PurePosixPath(path)
     for path in (
@@ -76,7 +92,7 @@ NATIVE_CHECKS = {
         "/etc/registry-evidence/runtime.yaml",
         "check",
         "--require-runtime-dependencies",
-        "--require-audit-under",
+        AUDIT_CONTAINMENT_FLAG,
         AUDIT_PREFIXES["evidence"],
     ],
     "mint": [
@@ -84,14 +100,14 @@ NATIVE_CHECKS = {
         "--config",
         "/etc/registry-mint/config.yaml",
         "--require-runtime-dependencies",
-        "--require-audit-under",
+        AUDIT_CONTAINMENT_FLAG,
         AUDIT_PREFIXES["mint"],
     ],
     "relay": [
         "check",
         "--runtime",
         "/etc/relay/runtime.yaml",
-        "--require-audit-under",
+        AUDIT_CONTAINMENT_FLAG,
         AUDIT_PREFIXES["relay"],
     ],
 }
@@ -160,6 +176,7 @@ def run_compose(
     *,
     timeout: int | None,
     capture_output: bool = True,
+    stderr_sink: BinaryIO | None = None,
     input_text: str | None = None,
     timeout_is_failure: bool = True,
     timeout_message: str = "Docker Compose could not complete the preflight",
@@ -170,7 +187,7 @@ def run_compose(
     else:
         output_options = {
             "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL if stderr_sink is None else stderr_sink,
         }
     try:
         return subprocess.run(
@@ -493,33 +510,69 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     validate_ports(service)
 
 
+def bounded_stderr(sink: BinaryIO) -> str:
+    """The tail of a child's stderr, bounded so a chatty child cannot exhaust memory.
+
+    The child writes to a temporary file and the preflight holds only this tail.
+    The text classifies the failure and is never printed, so preflight failures
+    stay free of Compose output and configured values.
+    """
+    end = sink.seek(0, io.SEEK_END)
+    sink.seek(max(0, end - MAXIMUM_NATIVE_CHECK_STDERR_BYTES))
+    return sink.read(MAXIMUM_NATIVE_CHECK_STDERR_BYTES).decode(
+        "utf-8", errors="replace"
+    )
+
+
+def rejects_audit_containment_flag(diagnostic: str) -> bool:
+    lowered = diagnostic.lower()
+    return AUDIT_CONTAINMENT_FLAG in lowered and any(
+        marker in lowered for marker in UNKNOWN_ARGUMENT_MARKERS
+    )
+
+
 def native_check(
     selection: ServiceSelection, timeout: int, frozen_compose: str
 ) -> None:
-    result = run_compose(
-        [
-            "docker",
-            "compose",
-            "--file",
-            "-",
-            "run",
-            "--rm",
-            "--no-deps",
-            selection.service,
-            *NATIVE_CHECKS[selection.product],
-        ],
-        timeout=timeout,
-        capture_output=False,
-        input_text=frozen_compose,
-        timeout_message=(
-            f"{selection.product} service {selection.service} exceeded the "
-            "native runtime check deadline"
-        ),
-    )
-    if result.returncode != 0:
-        raise PreflightError(
-            f"{selection.product} service {selection.service} failed its native runtime check"
+    with tempfile.TemporaryFile() as sink:
+        result = run_compose(
+            [
+                "docker",
+                "compose",
+                "--file",
+                "-",
+                "run",
+                "--rm",
+                "--no-deps",
+                selection.service,
+                *NATIVE_CHECKS[selection.product],
+            ],
+            timeout=timeout,
+            capture_output=False,
+            stderr_sink=sink,
+            input_text=frozen_compose,
+            timeout_message=(
+                f"{selection.product} service {selection.service} exceeded the "
+                "native runtime check deadline"
+            ),
         )
+        if result.returncode == 0:
+            return
+        captured = bounded_stderr(sink)
+    # The containment assertion is not optional, so an image whose check command
+    # cannot make it fails closed. Naming that image is the one distinction the
+    # generic failure cannot express, and it costs no disclosure: the captured
+    # stderr only classifies the failure.
+    if rejects_audit_containment_flag(captured):
+        raise PreflightError(
+            f"{selection.product} service {selection.service} runs an image whose "
+            f"check command does not support {AUDIT_CONTAINMENT_FLAG}. The preflight "
+            "requires an image whose check command supports it, because the "
+            "persistent audit root assertion is part of every native check"
+        )
+    raise PreflightError(
+        f"{selection.product} service {selection.service} failed its native runtime check"
+    )
 
 
 def native_check_plan(
@@ -705,26 +758,36 @@ def bounded_seconds(raw: str, *, minimum: int, maximum: int) -> int:
     return value
 
 
-def report_started_dependencies(started: Sequence[str], stream: TextIO) -> None:
+def report_started_dependencies(
+    started: Sequence[str], prefix: Sequence[str], stream: TextIO
+) -> None:
+    """Name the services the preflight started and the command that stops them.
+
+    The preflight renders the deployment once and runs every later command
+    against that frozen configuration on stdin, so the recovery command has to
+    repeat the operator's own Compose invocation instead. Anything else targets
+    a different project and leaves the started services running.
+    """
     if not started:
         return
     names = " ".join(started)
+    recovery = shlex.join([*prefix, "stop", *started])
     print(
         "dependency services started by the preflight remain running under the "
         f"operator's Compose lifecycle: {names}. Stop them with the same "
-        f"Compose files: docker compose stop {names}",
+        f"Compose files: {recovery}",
         file=stream,
     )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    prefix = compose_prefix(args)
     started: list[str] = []
     try:
         selections = [parse_service(raw) for raw in args.service]
         if len(selections) != len({item.service for item in selections}):
             raise PreflightError("a Compose service was selected more than once")
-        prefix = compose_prefix(args)
         document = render_compose(prefix)
         frozen_compose = json.dumps(document, separators=(",", ":"))
         for selection in selections:
@@ -751,11 +814,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
     except PreflightError as error:
         print(f"runtime preflight failed: {error}", file=sys.stderr)
-        report_started_dependencies(started, sys.stderr)
+        report_started_dependencies(started, prefix, sys.stderr)
         return 1
 
     print(f"runtime preflight passed for {len(selections)} service(s)")
-    report_started_dependencies(started, sys.stdout)
+    report_started_dependencies(started, prefix, sys.stdout)
     return 0
 
 

@@ -91,13 +91,17 @@ shared Mint startup and readiness deadline. Set `MINT_HEALTHCHECK_URL` on the
 Mint service to its numeric private `/ready` listener when Mint does not bind
 loopback. A started Mint remains under the operator's Compose lifecycle; the
 preflight names every service it started, and the `docker compose stop` command
-that removes them, whether the run passed or failed.
+that removes them, whether the run passed or failed. That command repeats the
+`--env-file` and `--compose-file` arguments you passed, so it targets the same
+project the preflight started them in.
 The preflight accepts only Docker-managed local named audit volumes without
 driver options, or explicit bind mounts outside known ephemeral host paths. It
 rejects service-level tmpfs and every long-form tmpfs other than exactly one
 read-only `/dev/shm`. This closes the implicit ephemeral file lane, and the
 preflight then passes the audit root it validated to every native check as
-`--require-audit-under`. The preflight proves the root is durable storage and
+`--require-audit-under`. An image whose check command does not support that
+flag fails the preflight by name; the assertion is never dropped to let an
+older image pass. The preflight proves the root is durable storage and
 reads no product configuration to do it; the product proves its own configured
 sink resolves inside that root, and still has to open and lock it.
 It passes the already validated rendered Compose JSON to every native check, so

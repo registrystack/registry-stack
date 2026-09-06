@@ -140,7 +140,10 @@ ownership boundary: the adapter owns storage persistence and never reads
 product configuration, while the product owns configuration resolution and
 never infers which mounts are durable. Neither a durable mount sitting unused
 beside an ephemeral configured sink nor an existing symlink leading out of the
-mount satisfies both halves.
+mount satisfies both halves. An image whose check command does not support
+`--require-audit-under` fails the preflight, which names that service and the
+missing support instead of reporting a generic failure. The preflight never
+drops the assertion to accommodate such an image.
 
 Every native check runs under a bounded deadline. It defaults to 1800 seconds
 because validating a retained audit chain can legitimately take longer than a
@@ -162,7 +165,10 @@ fixture for that lane; it publishes no host port.
 Services started for dependency checking remain under the operator's Compose
 lifecycle. The preflight names them, and the command that stops them, on
 success and on failure, so a partially completed run is recoverable with the
-same Compose files. `--dependency-timeout-seconds` bounds both Mint startup and
+same Compose files. That command repeats the `--env-file` and `--compose-file`
+arguments the preflight was given, because the preflight itself renders the
+deployment once and runs every later command against that frozen configuration
+on stdin. `--dependency-timeout-seconds` bounds both Mint startup and
 readiness polling under one shared deadline. Mint's `MINT_HEALTHCHECK_URL`
 selects a numeric private `/ready` listener when loopback is not the configured
 bind. Native checks consume the exact rendered Compose JSON already
