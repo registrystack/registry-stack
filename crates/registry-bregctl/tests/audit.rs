@@ -28,19 +28,24 @@ where
     )
 }
 
-fn assert_value_free_refusal(stdout: &str, stderr: &str) {
+fn assert_value_free_diagnostic(stdout: &str, stderr: &str, code: &str, path: &str) -> Value {
     assert!(stderr.is_empty());
     assert!(!stdout.contains(PATH_VALUE_CANARY));
     assert!(!stdout.contains(OUTPUT_VALUE_CANARY));
     assert!(!stdout.contains(BOUNDARY_VALUE_CANARY));
     let report: Value = serde_json::from_str(stdout).expect("failure is JSON");
-    assert_eq!(report["diagnostics"][0]["code"], "audit.operation.refused");
-    assert_eq!(report["diagnostics"][0]["path"], "audit");
+    assert_eq!(report["diagnostics"][0]["code"], code);
+    assert_eq!(report["diagnostics"][0]["path"], path);
     assert_eq!(report["diagnostics"][0]["artifact"], "audit_journal");
     assert_eq!(
         report["diagnostics"][0]["suggestedAction"],
         "verify_audit_journal"
     );
+    report
+}
+
+fn assert_value_free_refusal(stdout: &str, stderr: &str) {
+    assert_value_free_diagnostic(stdout, stderr, "audit.operation.refused", "audit");
 }
 
 #[test]
@@ -139,12 +144,50 @@ fn export_refuses_a_destination_that_already_holds_a_file() {
     ]);
 
     assert_eq!(status, 1);
-    assert_value_free_refusal(&stdout, &stderr);
+    assert_value_free_diagnostic(&stdout, &stderr, "audit.output.exists", "output");
     assert!(!stdout.contains(&display(&output)));
     assert_eq!(
         std::fs::read(&output).expect("destination is readable"),
         b"occupied\n"
     );
+
+    std::fs::remove_dir_all(&root).expect("test directory is removed");
+}
+
+#[cfg(unix)]
+#[test]
+fn export_reports_a_symbolic_link_ancestor_by_its_own_code() {
+    use std::os::unix::fs::symlink;
+
+    let root = std::env::temp_dir().join(format!("bregctl-audit-symlink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir(&root).expect("test directory is created");
+    let root = root.canonicalize().expect("test directory canonicalizes");
+    let real = root.join("real-parent");
+    let linked = root.join("linked-parent");
+    std::fs::create_dir(&real).expect("real parent creates");
+    symlink(&real, &linked).expect("symlink parent creates");
+    let output = linked.join("audit.jsonl");
+
+    let (status, stdout, stderr) = run([
+        OsStr::new("bregctl"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+        OsStr::new("audit"),
+        OsStr::new("export"),
+        OsStr::new("--runtime-config"),
+        OsStr::new("/registry/audit-runtime-that-does-not-exist.yaml"),
+        OsStr::new("--output"),
+        output.as_os_str(),
+    ]);
+
+    assert_eq!(status, 1);
+    let report = assert_value_free_diagnostic(&stdout, &stderr, "audit.output.invalid", "output");
+    assert!(report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("message is a string")
+        .contains("output"));
+    assert!(!real.join("audit.jsonl").exists());
 
     std::fs::remove_dir_all(&root).expect("test directory is removed");
 }

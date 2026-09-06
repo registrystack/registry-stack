@@ -1812,29 +1812,47 @@ fn audit_prune(args: &AuditPruneArgs) -> Result<AuditPruneSuccessReport, Failure
 }
 
 fn audit_failure(command: &'static str, error: AuditCliError) -> FailureReport {
-    let (code, message) = match error {
-        AuditCliError::Operator => (
+    let failure_diagnostic = match error {
+        AuditCliError::Operator => diagnostic(
             "audit.operation.refused",
+            "audit",
             "the audit journal operation was refused",
         ),
-        AuditCliError::ChainBroken => (
+        AuditCliError::OutputPath(error) => path_diagnostic(
+            error,
+            "audit.output.invalid",
+            "output",
+            "the export output parent directory is not available; create it, or give a destination inside a directory that exists",
+            "the export output parent must be a directory and must not be a symbolic link",
+        ),
+        AuditCliError::OutputExists => diagnostic(
+            "audit.output.exists",
+            "output",
+            "the export output must be a new path; choose a destination that does not already exist",
+        ),
+        AuditCliError::ChainBroken => diagnostic(
             "audit.chain.broken",
+            "audit",
             "the audit chain does not link every reachable record",
         ),
-        AuditCliError::InvalidEnvelope => (
+        AuditCliError::InvalidEnvelope => diagnostic(
             "audit.envelope.invalid",
+            "audit",
             "the audit journal holds an unreadable envelope",
         ),
-        AuditCliError::HeadMismatch => (
+        AuditCliError::HeadMismatch => diagnostic(
             "audit.head.mismatch",
+            "audit",
             "the audit head does not name the newest reachable record",
         ),
-        AuditCliError::Unreachable => (
+        AuditCliError::Unreachable => diagnostic(
             "audit.records.unreachable",
+            "audit",
             "the audit journal holds records the head cannot reach",
         ),
-        AuditCliError::BoundaryInFuture => (
+        AuditCliError::BoundaryInFuture => diagnostic(
             "audit.boundary.future",
+            "audit",
             "the audit retention boundary is later than the database transaction time",
         ),
     };
@@ -1842,7 +1860,7 @@ fn audit_failure(command: &'static str, error: AuditCliError) -> FailureReport {
         ok: false,
         command,
         diagnostics: vec![tool_diagnostic(
-            diagnostic(code, "audit", message),
+            failure_diagnostic,
             DiagnosticArtifact::AuditJournal,
             SuggestedAction::VerifyAuditJournal,
         )],
