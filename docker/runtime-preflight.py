@@ -336,6 +336,26 @@ def is_one_or_absent(value: Any) -> bool:
     )
 
 
+def audit_root(product: str) -> PurePosixPath:
+    """The container directory this deployment must mount as audit storage.
+
+    Containment proves where a configured sink resolves, not that the storage
+    behind the mount survives. A root that every absolute path resolves under
+    proves neither, so it is refused here instead of reaching a native check as
+    an assertion that cannot fail.
+    """
+    root = PurePosixPath(AUDIT_PREFIXES[product])
+    if not root.is_absolute() or root == PurePosixPath("/"):
+        raise PreflightError(
+            "the required audit root must be an absolute directory below /"
+        )
+    if any(part in (".", "..") for part in root.parts):
+        raise PreflightError(
+            "the required audit root must name a directory without traversal"
+        )
+    return root
+
+
 def validate_mounts(
     product: str, service: dict[str, Any], document: dict[str, Any]
 ) -> None:
@@ -348,7 +368,7 @@ def validate_mounts(
     service_tmpfs = service.get("tmpfs", [])
     if not isinstance(service_tmpfs, list) or service_tmpfs:
         raise PreflightError("service must not use service-level tmpfs mounts")
-    audit_prefix = PurePosixPath(AUDIT_PREFIXES[product])
+    audit_prefix = audit_root(product)
     executable = PurePosixPath(EXECUTABLE_PATHS[product])
     audit_mounts = 0
     read_only_shm_mounts = 0
@@ -946,6 +966,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise
 
     print(f"runtime preflight passed for {len(selections)} service(s)")
+    print(
+        "each configured audit sink resolves inside the declared persistent "
+        "mount; that the storage behind that mount survives is not proven"
+    )
     report_started_dependencies(running, uncertain, prefix, sys.stdout)
     return 0
 

@@ -111,9 +111,11 @@ read-only `/dev/shm`. This closes the implicit ephemeral file lane, and the
 preflight then passes the audit root it validated to every native check as
 `--require-audit-under`. An image whose check command does not support that
 flag fails the preflight by name; the assertion is never dropped to let an
-older image pass. The preflight proves the root is durable storage and
-reads no product configuration to do it; the product proves its own configured
-sink resolves inside that root, and still has to open and lock it.
+older image pass. The preflight proves the root is a declared persistent mount
+and reads no product configuration to do it; the product proves its own
+configured sink resolves inside that root, and still has to open and lock it.
+A passing run prints that limit rather than implying more: containment says
+where each sink resolves, not that the storage behind the mount survives.
 It passes the already validated rendered Compose JSON to every native check, so
 changes to the source Compose or environment files cannot change the checked
 containers between phases. Host storage durability, daemon state, and changes

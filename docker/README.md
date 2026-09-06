@@ -141,7 +141,11 @@ ownership boundary: the adapter owns storage persistence and never reads
 product configuration, while the product owns configuration resolution and
 never infers which mounts are durable. Neither a durable mount sitting unused
 beside an ephemeral configured sink nor an existing symlink leading out of the
-mount satisfies both halves. An image whose check command does not support
+mount satisfies both halves. The root handed over must be an absolute directory
+below `/`, since `/` would be a containment assertion no configured sink can
+fail. A passing run states the limit of that proof: each sink resolves inside
+the declared mount, and whether the storage behind the mount survives is not
+proven. An image whose check command does not support
 `--require-audit-under` fails the preflight, which names that service and the
 missing support instead of reporting a generic failure. The preflight never
 drops the assertion to accommodate such an image.

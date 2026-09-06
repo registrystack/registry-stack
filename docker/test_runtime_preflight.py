@@ -235,7 +235,9 @@ class RuntimePreflightTest(unittest.TestCase):
         )
         result, stdout, stderr, run = self.run_main(document)
         self.assertEqual(0, result, stderr)
-        self.assertEqual("runtime preflight passed for 3 service(s)\n", stdout)
+        self.assertEqual(
+            "runtime preflight passed for 3 service(s)", stdout.splitlines()[0]
+        )
         self.assertEqual(4, run.call_count)
         calls = [call.args[0] for call in run.call_args_list]
         self.assertEqual(
@@ -455,6 +457,32 @@ class RuntimePreflightTest(unittest.TestCase):
                     deployment({"evidence": selected}), argv=argv
                 )
                 self.assertEqual(0, result, stderr)
+
+    def test_an_audit_root_that_proves_nothing_is_refused(self) -> None:
+        # Containment proves where a configured sink resolves, so a root every
+        # path resolves under asserts nothing. Such a root is refused before
+        # any native check receives it, rather than passed on as a proof that
+        # cannot fail.
+        document = deployment({"mint": service("mint")})
+        for root in ("/", "", "var/lib/registry-mint", "/var/lib/registry-mint/.."):
+            with self.subTest(root=root):
+                with unittest.mock.patch.dict(
+                    self.module.AUDIT_PREFIXES, {"mint": root}
+                ):
+                    with self.assertRaises(self.module.PreflightError) as raised:
+                        self.module.validate_service(
+                            self.module.ServiceSelection("mint", "mint"), document
+                        )
+                self.assertIn("audit root", str(raised.exception))
+
+    def test_a_passing_run_states_that_persistence_is_not_proven(self) -> None:
+        document = deployment({"mint": service("mint")})
+        result, stdout, stderr, _ = self.run_main(
+            document,
+            argv=["--compose-file", "compose.yaml", "--service", "mint=mint"],
+        )
+        self.assertEqual(0, result, stderr)
+        self.assertIn("not proven", stdout)
 
     def test_an_unselected_registry_stack_dependency_is_refused(self) -> None:
         # Silently ignoring the edge left Evidence checked against a Mint the
