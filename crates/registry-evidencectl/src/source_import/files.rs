@@ -9,12 +9,25 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
+use registry_evidence_authoring::layout::{MAX_OPENAPI_BYTES, OPENAPI_FILE};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 pub(super) const MAX_FILE_BYTES: u64 = 1024 * 1024;
 pub(super) const MAX_PROJECT_BYTES: usize = 64 * 1024 * 1024;
 pub(super) const MAX_PROJECT_FILES: usize = 4096;
+/// The largest source-import baseline document.
+///
+/// The baseline holds the accepted local content of the project once and the
+/// last upstream bytes of every installed source beside it, so it is sized as
+/// a small multiple of the project it describes rather than as one file.
+pub(super) const MAX_STATE_BYTES: u64 = (MAX_PROJECT_BYTES * 4) as u64;
+/// The largest source-import transaction journal.
+///
+/// A journal records the content before and after every operation it applies,
+/// and the baseline document is one of them, so it is sized as twice the
+/// baseline.
+pub(super) const MAX_JOURNAL_BYTES: u64 = MAX_STATE_BYTES * 2;
 pub(super) const STATE_PATH: &str = ".evidence/source-imports/state.json";
 pub(super) const JOURNAL_PATH: &str = ".evidence/source-imports/transaction.json";
 const AUTHORED_DIRECTORIES: &[&str] = &[
@@ -80,6 +93,22 @@ impl ProjectLock {
         let guard = Self { root, _file: file };
         super::recover(&guard)?;
         Ok(guard)
+    }
+}
+
+/// The largest the content at a project-relative path may legitimately be.
+///
+/// The authoring form gives each part of a project its own ceiling. The
+/// retained OpenAPI description is the one authored file that may be far larger
+/// than an artifact, and the baseline and journal are this tool's own state
+/// documents rather than authored files. Reading any of them under a bound
+/// meant for another would let a file grow far past what its own kind allows.
+pub(super) fn authored_bound(relative: &str) -> u64 {
+    match relative {
+        OPENAPI_FILE => MAX_OPENAPI_BYTES,
+        STATE_PATH => MAX_STATE_BYTES,
+        JOURNAL_PATH => MAX_JOURNAL_BYTES,
+        _ => MAX_FILE_BYTES,
     }
 }
 
@@ -276,7 +305,7 @@ pub(super) fn snapshot(root: &Path) -> Result<BTreeMap<String, Contents>> {
     let mut result = BTreeMap::new();
     let mut bytes = 0;
     for relative in AUTHORED_FILES {
-        if let Some(content) = read(root, relative, MAX_PROJECT_BYTES as u64)? {
+        if let Some(content) = read(root, relative, authored_bound(relative))? {
             bytes += content.text.len();
             result.insert((*relative).to_owned(), content);
         }
@@ -317,7 +346,7 @@ fn collect(
         if entry.file_type()?.is_dir() {
             collect(root, &relative, depth + 1, result, bytes)?;
         } else {
-            let content = read(root, &relative, MAX_PROJECT_BYTES as u64)?
+            let content = read(root, &relative, authored_bound(&relative))?
                 .ok_or_else(|| anyhow!("authoring artifact changed while taking its snapshot"))?;
             *bytes += content.text.len();
             if *bytes > MAX_PROJECT_BYTES || result.len() >= MAX_PROJECT_FILES {
@@ -332,7 +361,7 @@ fn collect(
 pub(super) fn write(root: &Path, relative: &str, content: Option<&Contents>) -> Result<()> {
     // Reading first checks every existing parent and refuses links and special
     // files before either replacement or deletion.
-    read(root, relative, (MAX_PROJECT_BYTES * 8) as u64)?;
+    read(root, relative, authored_bound(relative))?;
     let destination = root.join(relative);
     if let Some(content) = content {
         let parent = destination
@@ -361,4 +390,76 @@ pub(super) fn sync_directory(path: &Path) -> Result<()> {
     File::open(path)?
         .sync_all()
         .context("persisting local directory")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project(root: &Path) {
+        fs::create_dir_all(root.join("questions")).expect("question directory");
+    }
+
+    fn oversized(bytes: u64) -> String {
+        "y".repeat(bytes as usize + 1)
+    }
+
+    #[test]
+    fn authored_bound_sizes_each_path_by_its_own_kind() {
+        assert_eq!(authored_bound("questions/one.yaml"), MAX_FILE_BYTES);
+        assert_eq!(authored_bound("evidence-project.yaml"), MAX_FILE_BYTES);
+        assert_eq!(authored_bound(OPENAPI_FILE), MAX_OPENAPI_BYTES);
+        assert_eq!(authored_bound(STATE_PATH), MAX_STATE_BYTES);
+        assert_eq!(authored_bound(JOURNAL_PATH), MAX_JOURNAL_BYTES);
+    }
+
+    #[test]
+    fn snapshot_refuses_an_artifact_past_the_single_file_bound() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let root = directory.path();
+        project(root);
+        fs::write(root.join("questions/one.yaml"), oversized(MAX_FILE_BYTES))
+            .expect("oversized question");
+        let Err(error) = snapshot(root) else {
+            panic!("an oversized question is refused");
+        };
+        assert!(
+            error.to_string().contains("bounded plain file"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn snapshot_accepts_a_description_past_the_single_file_bound() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let root = directory.path();
+        project(root);
+        let description = oversized(MAX_FILE_BYTES);
+        fs::write(root.join(OPENAPI_FILE), &description).expect("large description");
+        let taken = snapshot(root).expect("the description keeps its own bound");
+        assert_eq!(
+            taken.get(OPENAPI_FILE).map(|content| content.text.len()),
+            Some(description.len())
+        );
+    }
+
+    #[test]
+    fn write_refuses_a_destination_past_the_single_file_bound() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let root = directory.path();
+        project(root);
+        fs::write(root.join("questions/one.yaml"), oversized(MAX_FILE_BYTES))
+            .expect("oversized question");
+        let replacement = Contents {
+            text: "id: one\n".to_owned(),
+            mode: 0o600,
+        };
+        let Err(error) = write(root, "questions/one.yaml", Some(&replacement)) else {
+            panic!("an oversized destination is refused");
+        };
+        assert!(
+            error.to_string().contains("bounded plain file"),
+            "unexpected error: {error}"
+        );
+    }
 }
