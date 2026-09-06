@@ -297,7 +297,7 @@
   "$id": "https://registrystack.example/schemas/evidence-authoring/question.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "One authored question: what is asked, of which subjects, from which source,\nand which governed concepts the answer carries.",
+  "description": "One authored question: what is asked, of which subjects, from which source,\nand which governed concepts the answer carries. The schema derived from this\ntype describes shape alone: which keys exist, which are required, and which\nvalues are one of a closed set. Rules that hold between fields, such as a\nsubject naming `selector` or `profiles` and never both, stay with the\nauthoring checks the compiler and the language server both run, so a\ndocument this schema accepts may still be one those checks turn away.",
   "properties": {
     "answers": {
       "items": {
