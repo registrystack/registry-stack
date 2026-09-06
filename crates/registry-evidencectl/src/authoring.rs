@@ -11,7 +11,7 @@ use std::{
     iter::Peekable,
     os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
     path::{Component, Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Command, ExitStatus, Stdio},
     str::Chars,
     thread,
 };
@@ -3619,7 +3619,7 @@ fn run_bounded_evidence(
         Err(error) => {
             // The child may still be writing into a pipe this process can no
             // longer read, so it is stopped rather than waited for.
-            terminate_child(&mut child);
+            crate::evidence_binary::terminate_child(&mut child);
             return Err(error).with_context(|| format!("reading the output of {what}"));
         }
     };
@@ -3649,15 +3649,6 @@ fn read_bounded(reader: impl io::Read, bound: usize) -> io::Result<(Vec<u8>, boo
     let over_bound = captured.len() > bound;
     io::copy(&mut reader, &mut io::sink())?;
     Ok((captured, over_bound))
-}
-
-/// Stop a child whose output this process can no longer read, and reap it.
-///
-/// Both calls report failure only when the child is already gone, which is the
-/// state this function exists to reach.
-fn terminate_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// The longest child diagnostic an operator message carries.
