@@ -1957,6 +1957,13 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
+            registry_breg::history_erasure::HistoryErasureError::CachedResponseUnreadable => (
+                "history.erase.cached_response.invalid",
+                "history",
+                "history erasure found a cached response no JSON reader accepts",
+                DiagnosticArtifact::HistoryErasure,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
             registry_breg::history_erasure::HistoryErasureError::HistoryNotReady
             | registry_breg::history_erasure::HistoryErasureError::Unavailable => (
                 "history.erase.unavailable",
