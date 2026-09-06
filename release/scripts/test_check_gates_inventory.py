@@ -1049,12 +1049,12 @@ class GateInventoryTest(unittest.TestCase):
     def test_missing_actionlint_pin_or_checksum_is_reported(self) -> None:
         for snippet, replacement, gate in (
             (
-                'ACTIONLINT_VERSION: "1.7.7"',
+                'ACTIONLINT_VERSION: "1.7.12"',
                 'ACTIONLINT_VERSION: "latest"',
                 "actionlint version pin",
             ),
             (
-                'ACTIONLINT_LINUX_X64_SHA256: "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"',
+                'ACTIONLINT_LINUX_X64_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"',
                 'ACTIONLINT_LINUX_X64_SHA256: "unverified"',
                 "actionlint archive checksum",
             ),

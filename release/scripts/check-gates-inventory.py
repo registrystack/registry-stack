@@ -60,10 +60,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Release rehearsal workflow change classification",
         '".github/workflows/release-rehearsal.yml": frozenset(',
     ),
-    ("actionlint version pin", 'ACTIONLINT_VERSION: "1.7.7"'),
+    ("actionlint version pin", 'ACTIONLINT_VERSION: "1.7.12"'),
     (
         "actionlint archive checksum",
-        'ACTIONLINT_LINUX_X64_SHA256: "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"',
+        'ACTIONLINT_LINUX_X64_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"',
     ),
     (
         "actionlint workflow lint",

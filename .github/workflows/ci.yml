@@ -36,8 +36,8 @@ env:
   CARGO_LLVM_COV_VERSION: "0.8.7"
   GITLEAKS_VERSION: "8.30.1"
   GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
-  ACTIONLINT_VERSION: "1.7.7"
-  ACTIONLINT_LINUX_X64_SHA256: "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_LINUX_X64_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
   OASDIFF_VERSION: "1.23.0"
   OASDIFF_LINUX_X64_SHA256: "972b10535c3db4366b9dc3ebc11ca021279af3095267c3cffdca854a3a3c4f89"
 
@@ -746,7 +746,7 @@ jobs:
       - relay-client-contracts
       - breg-contracts
       - identifiers
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     env:
       RUST_JOB_RESULTS: ${{ toJSON(needs) }}
     steps:
@@ -866,7 +866,7 @@ jobs:
       - changes
       - release-tool
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     steps:
       - name: Report path-gated result
         env:
@@ -913,7 +913,7 @@ jobs:
       - changes
       - release-source-proof
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     steps:
       - name: Report path-gated result
         env:
@@ -1271,7 +1271,7 @@ jobs:
       - docs
       - docs-archives
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     steps:
       - name: Report path-gated result
         env:
@@ -1577,7 +1577,7 @@ jobs:
       - editor-extensions
       - client-bindings
       - release-linux-node-clients
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     env:
       CI_JOB_RESULTS: ${{ toJSON(needs) }}
     steps:

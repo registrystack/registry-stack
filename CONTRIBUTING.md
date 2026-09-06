@@ -71,6 +71,12 @@ raw Rust job results in parallel. Both accept successful and path-skipped jobs
 and fail for failed or cancelled jobs, so the final summary does not need to
 wait for the intermediate aggregate runner.
 
+Reporter-only jobs that read dependency results and run one bounded Bash or
+Python step use `ubuntu-slim`. Jobs needing actions, services, installs,
+network access, builds, or tests remain on full runners. Slim jobs run in an
+unprivileged container and share the plan's standard concurrency limits;
+GitHub does not guarantee faster scheduling.
+
 Optimize duplicate compilation and execution before adding more blocking jobs.
 Keep affected security, database/TLS, generated-contract, and basic adopter
 journeys enforced. Partitioned suites must retain their complete test inventory
