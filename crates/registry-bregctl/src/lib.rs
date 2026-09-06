@@ -5809,7 +5809,11 @@ fn write_migration_files_with_fault(
                 "the project directory must be a directory and must not be a symbolic link",
             )
         })?;
-        let current = read_bounded_source_entry(
+        // The recorded identity comes from the descriptor these bytes are read
+        // through, so it names the file whose content was compared and the file
+        // the renames further down will move, with no second open of the name
+        // to relink in between.
+        let (current, metadata) = read_bounded_source_entry_with_identity(
             &destination,
             "project.migrate.source_missing",
             relative_path,
@@ -5818,14 +5822,6 @@ fn write_migration_files_with_fault(
         if current != *original {
             return Err(migration_concurrent_change_diagnostic(relative_path));
         }
-        // Take the recorded identity from a descriptor opened through the
-        // resolved parent, so it names the file the renames below will move.
-        let metadata = destination
-            .open_read()
-            .and_then(|file| file.metadata())
-            .map_err(|_| {
-                migration_write_diagnostic("project.migrate.write_failed", relative_path)
-            })?;
         if !migration_target_permissions_are_safe(&metadata) {
             return Err(migration_write_diagnostic(
                 "project.migrate.permissions_invalid",
@@ -7225,6 +7221,19 @@ fn read_bounded_source_entry(
     report_path: &str,
     bound: u64,
 ) -> Result<Vec<u8>, Diagnostic> {
+    read_bounded_source_entry_with_identity(entry, missing_code, report_path, bound)
+        .map(|(bytes, _)| bytes)
+}
+
+/// Read a bounded regular file through an already-resolved entry and report the
+/// identity of the descriptor the bytes came from, for callers that must record
+/// which file they read instead of opening the name again to ask.
+fn read_bounded_source_entry_with_identity(
+    entry: &SafeEntry,
+    missing_code: &str,
+    report_path: &str,
+    bound: u64,
+) -> Result<(Vec<u8>, fs::Metadata), Diagnostic> {
     let invalid = || {
         diagnostic(
             "source.file.invalid",
@@ -7303,7 +7312,7 @@ fn read_bounded_source_entry(
             "an authoring source exceeds its fixed size bound",
         ));
     }
-    Ok(bytes)
+    Ok((bytes, opened))
 }
 
 /// Refuse an authoring source whose opened descriptor is not the entry that was
@@ -10024,6 +10033,33 @@ extendEntities:
 
             assert_eq!(fs::read(tree.moved("registry.yaml")).unwrap(), b"locked\n");
             assert_eq!(fs::read(tree.outside("registry.yaml")).unwrap(), b"decoy\n");
+        }
+
+        #[test]
+        fn a_bounded_source_read_records_the_identity_of_the_file_it_read() {
+            let tree = race_tree();
+            let named = tree.named("registry.yaml");
+            fs::write(&named, b"original\n").unwrap();
+            fs::write(tree.named("decoy.yaml"), b"decoy\n").unwrap();
+
+            let entry = SafeEntry::resolve(&named).unwrap();
+            let (bytes, metadata) = read_bounded_source_entry_with_identity(
+                &entry,
+                "project.migrate.source_missing",
+                "registry.yaml",
+                AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
+            )
+            .unwrap();
+
+            // Relinking the name after the read leaves the reported identity
+            // alone, so a caller that records it holds the file whose bytes it
+            // compared rather than whatever the name reaches next.
+            fs::rename(tree.named("decoy.yaml"), &named).unwrap();
+            let relinked = SafeEntry::resolve(&named).unwrap().stat().unwrap();
+
+            assert_eq!(bytes, b"original\n");
+            assert_eq!(metadata.len(), bytes.len() as u64);
+            assert!(!relinked.is_same_file_as(&metadata));
         }
 
         #[test]
