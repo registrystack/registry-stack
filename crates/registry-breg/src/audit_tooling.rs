@@ -64,6 +64,13 @@ const CHAIN_FETCH_BATCH: usize = 1000;
 /// The order this recovers proves nothing on its own. The walk re-derives the
 /// chain from the parsed envelopes and counts what the head reaches, so a link
 /// taken from bytes no envelope reader accepts fails there rather than passing.
+///
+/// `$1` is the number of records the journal holds, which bounds the recursion:
+/// links that loop cannot run it forever, because a step past that bound is a
+/// record the walk has already visited. The reader flags that step and reports
+/// it as a broken chain. Comparing each step against the path already walked
+/// would classify the same links, and would cost one comparison per record
+/// already visited, which grows the walk's cost with the length of the journal.
 const CHAIN_CTE: &str = "WITH RECURSIVE chain AS (
          SELECT record.envelope_id,
                 record.record_hash,
@@ -85,7 +92,8 @@ const CHAIN_CTE: &str = "WITH RECURSIVE chain AS (
              ON previous.record_hash = decode(
                     substring(encode(step.envelope, 'escape')
                               from '\"prev_hash\":\"([0-9a-fA-F]{64})\"'), 'hex')
-     ) CYCLE record_hash SET cycle_detected USING chain_path";
+          WHERE step.depth <= $1::bigint
+     )";
 
 /// Number every chain position from the oldest reachable record, then name the
 /// first position the boundary retains. A boundary no record reaches keeps the
@@ -100,7 +108,7 @@ const CHAIN_PRUNE_PLAN_CTE: &str = "ordered AS (
      boundary AS (
          SELECT COALESCE(min(position), (SELECT count(*) FROM ordered) + 1) AS first_retained
            FROM ordered
-          WHERE created_at >= $1::text::timestamptz
+          WHERE created_at >= $2::text::timestamptz
      )";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -369,7 +377,8 @@ impl AuditOperatorService {
             .await
             .map_err(|_| AuditToolingError::Unavailable)?;
 
-        verify_chain_snapshot(&transaction, &self.audit_profile.chain_hasher(), None).await?;
+        let (_, _, total) =
+            verify_chain_snapshot(&transaction, &self.audit_profile.chain_hasher(), None).await?;
 
         let future = transaction
             .query_one(
@@ -400,7 +409,7 @@ impl AuditOperatorService {
                                 AS first_retained_envelope_id
                        FROM boundary"
                 ),
-                &[&before],
+                &[&total, &before],
             )
             .await
             .map_err(|_| AuditToolingError::Unavailable)?;
@@ -424,7 +433,7 @@ impl AuditOperatorService {
                           WHERE target.envelope_id = ordered.envelope_id
                             AND ordered.position < boundary.first_retained"
                     ),
-                    &[&before],
+                    &[&total, &before],
                 )
                 .await
                 .map_err(|_| AuditToolingError::Unavailable)?;
@@ -548,7 +557,7 @@ impl AuditOperatorService {
         .await
         .map_err(|_| AuditToolingError::Unavailable)?;
 
-        let (walk, head_hash) =
+        let (walk, head_hash, _) =
             verify_chain_snapshot(&transaction, &self.audit_profile.chain_hasher(), sink).await?;
         transaction
             .commit()
@@ -558,26 +567,36 @@ impl AuditOperatorService {
     }
 }
 
+/// Verify the reachable chain and report what the journal holds, so a caller
+/// that plans over the same snapshot bounds its walk the same way.
 async fn verify_chain_snapshot(
     transaction: &tokio_postgres::Transaction<'_>,
     hasher: &AuditChainHasher,
     sink: Option<&mut dyn Write>,
-) -> Result<(ChainWalk, Option<[u8; 32]>)> {
+) -> Result<(ChainWalk, Option<[u8; 32]>, i64)> {
     let head_hash = read_head_hash(transaction).await?;
-    let walk = walk_chain(transaction, hasher, sink).await?;
+    // The walk is bounded by the records the journal holds, read from the same
+    // snapshot, so looping links stop one step past the last record they could
+    // legitimately reach.
+    let total = read_record_count(transaction).await?;
+    let walk = walk_chain(transaction, hasher, sink, total).await?;
     if walk.last_hash != head_hash {
         return Err(AuditToolingError::HeadMismatch);
     }
-    let total = transaction
-        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
-        .await
-        .map_err(|_| AuditToolingError::Unavailable)?;
-    if walk.records != count_from(&total, 0)? {
+    if walk.records != u64::try_from(total).map_err(|_| AuditToolingError::Unavailable)? {
         return Err(AuditToolingError::Unreachable {
             records: walk.records,
         });
     }
-    Ok((walk, head_hash))
+    Ok((walk, head_hash, total))
+}
+
+async fn read_record_count(transaction: &tokio_postgres::Transaction<'_>) -> Result<i64> {
+    let total = transaction
+        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
+        .await
+        .map_err(|_| AuditToolingError::Unavailable)?;
+    Ok(total.get::<_, i64>(0))
 }
 
 async fn read_head_hash(transaction: &tokio_postgres::Transaction<'_>) -> Result<Option<[u8; 32]>> {
@@ -601,17 +620,18 @@ async fn walk_chain(
     transaction: &tokio_postgres::Transaction<'_>,
     hasher: &AuditChainHasher,
     mut sink: Option<&mut dyn Write>,
+    bound: i64,
 ) -> Result<ChainWalk> {
     transaction
         .execute(
             &format!(
                 "DECLARE {CHAIN_CURSOR} NO SCROLL CURSOR FOR
                  {CHAIN_CTE}
-                 SELECT envelope_id, record_hash, envelope, cycle_detected
+                 SELECT envelope_id, record_hash, envelope, depth > $1::bigint
                    FROM chain
                   ORDER BY depth DESC"
             ),
-            &[],
+            &[&bound],
         )
         .await
         .map_err(|_| AuditToolingError::Unavailable)?;
@@ -636,6 +656,8 @@ async fn walk_chain(
             let envelope_id: String = row.get(0);
             let record_hash: Vec<u8> = row.get(1);
             let stored: Vec<u8> = row.get(2);
+            // A record past the bound is one the walk has already visited, so
+            // the links loop rather than end at a genesis record.
             if row.get::<_, bool>(3) {
                 return Err(AuditToolingError::ChainBroken { position });
             }
