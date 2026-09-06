@@ -52,7 +52,7 @@ pub struct BuildArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct TargetGovernance {
+pub(crate) struct TargetGovernance {
     version: u32,
     assurance_profile: String,
     service: Value,
@@ -72,7 +72,7 @@ struct TargetGovernance {
 }
 
 impl TargetGovernance {
-    fn into_bundle(self) -> Result<Value> {
+    pub(crate) fn into_bundle(self) -> Result<Value> {
         if self.version != 1 {
             bail!("deployment governance version must be 1");
         }

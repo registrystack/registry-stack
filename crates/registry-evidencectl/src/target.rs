@@ -195,16 +195,14 @@ fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()
     let runtime = runtime
         .as_object()
         .ok_or_else(|| anyhow!("target settings runtime must be a mapping"))?;
-    if governance.get("version").and_then(Value::as_u64) != Some(1) {
-        bail!("target settings governance.version must be 1");
-    }
-    if !governance
-        .get("assuranceProfile")
-        .and_then(Value::as_str)
-        .is_some_and(|profile| !profile.is_empty())
-    {
-        bail!("target settings governance.assuranceProfile must be a string");
-    }
+    // Validate governance through the same closed type the consumers deserialize
+    // it with (build::TargetGovernance), so `target new` refuses exactly what
+    // `target explain`, `build --target`, and `fixtures run --target` refuse and
+    // never leaves behind a create-only directory those commands cannot open.
+    serde_json::from_value::<build::TargetGovernance>(Value::Object(governance.clone()))
+        .context("target settings governance is not the closed deployment governance shape")?
+        .into_bundle()
+        .context("target settings governance is not the closed deployment governance shape")?;
     if runtime.get("version").and_then(Value::as_u64) != Some(1) {
         bail!("target settings runtime.version must be 1");
     }
@@ -220,10 +218,10 @@ fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()
     ] {
         require_nonempty_mapping(governance, section, "target settings governance")?;
     }
-    if !runtime
+    if runtime
         .get("bundleDirectory")
         .and_then(Value::as_str)
-        .is_some_and(|path| !path.is_empty())
+        .is_none_or(str::is_empty)
     {
         bail!("target settings runtime.bundleDirectory must be a string");
     }
@@ -830,6 +828,140 @@ publicKeys:
             !target.exists(),
             "failed target creation must be create-only"
         );
+    }
+
+    #[test]
+    fn target_new_rejects_unknown_governance_field() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let settings_path = temporary.path().join("settings.yaml");
+        let target = temporary.path().join("target");
+        fs::write(
+            &settings_path,
+            r#"formatVersion: 1
+governance:
+  version: 1
+  assuranceProfile: local
+  service:
+    publicOrigin: http://127.0.0.1:8080
+  issuer:
+    id: urn:example:issuer
+  authentication:
+    kind: oidc-access-token
+  audit:
+    format: keyed-jsonl
+  subjectBinding:
+    secretRef: secret:file/subject-binding-hmac-key
+  rateLimits:
+    requestsPerPrincipalPerMinute: 60
+  signing:
+    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+    publishedPublicJwkFiles: []
+  authorityProfiles:
+    local:
+      kind: explicit-request
+  unexpectedField: true
+runtime:
+  version: 1
+"#,
+        )
+        .expect("settings");
+
+        // The consumers (target explain, build --target, fixtures run --target)
+        // deserialize governance.yaml through the same closed TargetGovernance
+        // type, which denies unknown fields. `target new` must refuse this file
+        // too instead of creating a target those commands then refuse to open.
+        assert!(new(NewArgs {
+            directory: target.clone(),
+            settings: settings_path,
+            signing_public_key: None,
+        })
+        .is_err());
+        assert!(
+            !target.exists(),
+            "failed target creation must be create-only"
+        );
+    }
+
+    #[test]
+    fn target_new_rejects_assurance_profile_outside_enum() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let settings_path = temporary.path().join("settings.yaml");
+        let target = temporary.path().join("target");
+        fs::write(
+            &settings_path,
+            r#"formatVersion: 1
+governance:
+  version: 1
+  assuranceProfile: enterprise
+  service:
+    publicOrigin: http://127.0.0.1:8080
+  issuer:
+    id: urn:example:issuer
+  authentication:
+    kind: oidc-access-token
+  audit:
+    format: keyed-jsonl
+  subjectBinding:
+    secretRef: secret:file/subject-binding-hmac-key
+  rateLimits:
+    requestsPerPrincipalPerMinute: 60
+  signing:
+    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+    publishedPublicJwkFiles: []
+  authorityProfiles:
+    local:
+      kind: explicit-request
+runtime:
+  version: 1
+"#,
+        )
+        .expect("settings");
+
+        // "enterprise" is a nonempty string, which the previous hand-rolled
+        // check accepted; only the closed TargetGovernance type restricts
+        // assuranceProfile to local, production, or evidence-grade.
+        assert!(new(NewArgs {
+            directory: target.clone(),
+            settings: settings_path,
+            signing_public_key: None,
+        })
+        .is_err());
+        assert!(
+            !target.exists(),
+            "failed target creation must be create-only"
+        );
+    }
+
+    #[test]
+    fn target_new_accepts_a_valid_settings_file() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let key_path = temporary.path().join("active.jwk.json");
+        let settings_path = temporary.path().join("settings.yaml");
+        let target = temporary.path().join("target");
+        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
+        fs::write(
+            &settings_path,
+            target_settings(
+                "    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json\n    publishedPublicJwkFiles: []",
+                "publicKeys:\n  _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: active.jwk.json\n",
+            ),
+        )
+        .expect("settings");
+
+        new(NewArgs {
+            directory: target.clone(),
+            settings: settings_path,
+            signing_public_key: None,
+        })
+        .expect("a settings file matching the closed governance shape is accepted");
+
+        assert!(target.join("governance.yaml").is_file());
+        assert!(target.join("runtime.yaml").is_file());
+        let governance: Value = serde_norway::from_slice(
+            &fs::read(target.join("governance.yaml")).expect("governance"),
+        )
+        .expect("governance parses");
+        assert_eq!(governance["assuranceProfile"], "local");
     }
 
     #[test]
