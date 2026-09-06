@@ -6,9 +6,12 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
+#[path = "support/performance.rs"]
+mod performance;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, Response, StatusCode};
@@ -49,6 +52,70 @@ const TEMPORAL_OPEN_RECORD: &str = "22222222-2222-4222-8222-222222222222";
 const TEMPORAL_OTHER_BOUNDARY_RECORD: &str = "33333333-3333-4333-8333-333333333333";
 const MISMATCH_RECORD: &str = "ffffffff-ffff-4fff-8fff-ffffffffffff";
 const TOMBSTONED_RECORD: &str = "00000000-0000-4000-8000-999999999999";
+
+/// Real router, PostgreSQL RLS, and durable attempt/terminal audit. JWT
+/// verification and network transport are outside this focused measurement.
+/// Run with `cargo test --locked --release -p registry-breg --features postgres-test
+/// --test postgres_read benchmark_audited_record_get -- --ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "opt-in PostgreSQL performance measurement"]
+async fn benchmark_audited_record_get() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .execute("CREATE EXTENSION btree_gist", &[])
+        .await
+        .expect("benchmark prerequisite installs");
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compiled_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("benchmark schema installs");
+    let identity = initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(&compiled),
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            environment: "local",
+            instance_id: INSTANCE_ID,
+            database_id: DATABASE_ID,
+            package_revision: "package-read-1",
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("benchmark identity initializes");
+    migration_task.abort();
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    seed_records(&database, &pool, lock_key, &identity, &compiled, false).await;
+    let profile = AuditProfile::production_from_secret_bytes(vec![0x7a; 32].into())
+        .expect("benchmark audit profile is keyed");
+    let app = read_router(pool.clone(), compiled, identity, lock_key, profile, None);
+    let uri = format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label");
+    let expected_body = format!(
+        "{{\"data\":{{\"domainData\":{{\"label\":\"label-001\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"entityTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
+    );
+    for sample in 0..=5 {
+        let count = if sample == 0 { 100 } else { 500 };
+        let mut durations = Vec::with_capacity(count);
+        for _ in 0..count {
+            let started = Instant::now();
+            let response = send(&app, &uri, Some(read_claims(["zone-a"]))).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = body_bytes(response).await;
+            durations.push(started.elapsed());
+            assert_eq!(bytes, expected_body.as_bytes());
+        }
+        if sample != 0 {
+            performance::report_latency("audited_record_get", sample, &durations);
+        }
+    }
+    drop(app);
+    drop(pool);
+    database.cleanup().await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
@@ -406,6 +473,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     );
 
     assert_read_audit_is_ordered_chained_and_minimized(&database, &profile, &compiled).await;
+    assert_audit_insert_failure_is_closed_and_recovers(&database, &app, &profile).await;
     database.cleanup().await;
 }
 
@@ -1332,6 +1400,71 @@ async fn audit_count(database: &TestDatabase) -> i64 {
         .await
         .expect("administrator can inspect audit count")
         .get(0)
+}
+
+async fn audit_head(database: &TestDatabase) -> Option<Vec<u8>> {
+    database
+        .admin
+        .query_one(
+            "SELECT last_hash FROM registry_internal.registry_audit_head WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("administrator can inspect the audit head")
+        .get(0)
+}
+
+async fn assert_audit_insert_failure_is_closed_and_recovers(
+    database: &TestDatabase,
+    app: &axum::Router,
+    profile: &AuditProfile,
+) {
+    let before_count = audit_count(database).await;
+    let before_head = audit_head(database).await;
+    database
+        .admin
+        .batch_execute(&format!(
+            "REVOKE INSERT ON registry_internal.registry_audit FROM \"{}\"",
+            database.runtime_role.as_str(),
+        ))
+        .await
+        .expect("administrator injects a real audit insert failure");
+    let uri = format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label");
+    let refused = send(app, &uri, Some(read_claims(["zone-a"]))).await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = body_json(refused).await;
+    assert_eq!(body["code"], "source.unavailable");
+    assert!(!body.to_string().contains("label-001"));
+    assert_eq!(audit_count(database).await, before_count);
+    assert_eq!(audit_head(database).await, before_head);
+
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT INSERT ON registry_internal.registry_audit TO \"{}\"",
+            database.runtime_role.as_str(),
+        ))
+        .await
+        .expect("administrator restores audit insert authority");
+    let recovered = send(app, &uri, Some(read_claims(["zone-a"]))).await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(recovered).await["data"]["domainData"]["label"],
+        "label-001"
+    );
+    assert_eq!(audit_count(database).await, before_count + 2);
+    let envelopes = ordered_audit_envelopes(database, profile).await;
+    assert_eq!(
+        audit_head(database).await,
+        Some(
+            envelopes
+                .last()
+                .expect("recovered audit exists")
+                .record_hash
+                .to_vec()
+        ),
+        "recovery extends the verified chain from the unchanged head"
+    );
 }
 
 async fn assert_read_audit_is_ordered_chained_and_minimized(

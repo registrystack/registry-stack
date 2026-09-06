@@ -8,7 +8,7 @@ use deadpool_postgres::Client;
 use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditKeyHasher, AuditProfile};
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{json, Value};
-use tokio_postgres::Transaction;
+use tokio_postgres::{types::Type, Transaction};
 use uuid::Uuid;
 
 use crate::correlation::RequestCorrelation;
@@ -687,8 +687,10 @@ pub(crate) async fn append_envelope(
     profile: &AuditProfile,
     record: Value,
 ) -> Result<(), RegistryAuditError> {
+    // Keep the same serialized chain transaction while sending each fixed
+    // statement with its known parameter types in one protocol exchange.
     transaction
-        .execute(
+        .execute_typed(
             "INSERT INTO registry_internal.registry_audit_head (singleton, last_hash)
              VALUES (true, NULL)
              ON CONFLICT (singleton) DO NOTHING",
@@ -697,7 +699,7 @@ pub(crate) async fn append_envelope(
         .await
         .map_err(|_| RegistryAuditError::Unavailable)?;
     let row = transaction
-        .query_one(
+        .query_typed_one(
             "SELECT last_hash
              FROM registry_internal.registry_audit_head
              WHERE singleton
@@ -717,14 +719,14 @@ pub(crate) async fn append_envelope(
     let envelope_bytes =
         canonicalize_json(&envelope_value).map_err(|_| RegistryAuditError::Unavailable)?;
     let changed = transaction
-        .execute(
+        .execute_typed(
             "INSERT INTO registry_internal.registry_audit
                  (envelope_id, record_hash, envelope)
              VALUES ($1, $2, $3)",
             &[
-                &envelope.envelope_id,
-                &envelope.record_hash.as_slice(),
-                &envelope_bytes,
+                (&envelope.envelope_id, Type::TEXT),
+                (&envelope.record_hash.as_slice(), Type::BYTEA),
+                (&envelope_bytes, Type::BYTEA),
             ],
         )
         .await
@@ -733,11 +735,11 @@ pub(crate) async fn append_envelope(
         return Err(RegistryAuditError::Unavailable);
     }
     let changed = transaction
-        .execute(
+        .execute_typed(
             "UPDATE registry_internal.registry_audit_head
              SET last_hash = $1
              WHERE singleton",
-            &[&envelope.record_hash.as_slice()],
+            &[(&envelope.record_hash.as_slice(), Type::BYTEA)],
         )
         .await
         .map_err(|_| RegistryAuditError::Unavailable)?;

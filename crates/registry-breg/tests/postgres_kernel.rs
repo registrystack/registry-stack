@@ -5,7 +5,10 @@
 #[path = "support/postgres_harness.rs"]
 mod postgres_harness;
 
-use std::time::Duration;
+#[path = "support/performance.rs"]
+mod performance;
+
+use std::time::{Duration, Instant};
 
 use postgres_harness::TestDatabase;
 use registry_breg::postgres::{
@@ -19,6 +22,73 @@ const RECORD_ALPHA: &str = "00000000-0000-0000-0000-000000000001";
 const PACKAGE_ID: &str = "kernel-registry";
 const INSTANCE_ID: &str = "kernel-instance";
 const DATABASE_ID: &str = "kernel-database";
+
+/// Run with `cargo test --locked --release -p registry-breg --features postgres-test
+/// --test postgres_kernel benchmark_record_transaction -- --ignored --nocapture`.
+/// Requires the same disposable PostgreSQL administrator as the kernel tests.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "opt-in PostgreSQL performance measurement"]
+async fn benchmark_record_transaction() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .execute("CREATE EXTENSION btree_gist", &[])
+        .await
+        .expect("benchmark prerequisite installs");
+    let (migration, migration_task) = database.connect_migration().await;
+    install_kernel_schema(&migration, &database.runtime_role)
+        .await
+        .expect("benchmark kernel installs");
+    let identity = initialize_kernel_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            environment: "local",
+            instance_id: INSTANCE_ID,
+            database_id: DATABASE_ID,
+            package_revision: "package-1",
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("benchmark identity initializes");
+    migration_task.abort();
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let contexts = [claims("alpha"), claims("beta")];
+    // Include pool checkout and alternate authority on the same connection.
+    // Setup and the first 100 transactions are excluded from the measurements.
+    for sample in 0..=5 {
+        let count = if sample == 0 { 100 } else { 1000 };
+        let mut durations = Vec::with_capacity(count);
+        for index in 0..count {
+            let started = Instant::now();
+            let mut client = pool.get_for_test().await.expect("pool checkout succeeds");
+            let transaction = begin_record_transaction(
+                &mut client,
+                lock_key,
+                Duration::from_secs(1),
+                &identity,
+                &contexts[index % contexts.len()],
+            )
+            .await
+            .expect("guarded transaction begins");
+            transaction
+                .rollback()
+                .await
+                .expect("transaction rolls back");
+            drop(client);
+            durations.push(started.elapsed());
+        }
+        if sample != 0 {
+            performance::report_latency("record_transaction", sample, &durations);
+        }
+    }
+    assert_pool_context_clean(&pool).await;
+    drop(pool);
+    database.cleanup().await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {

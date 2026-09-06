@@ -787,14 +787,12 @@ impl OfflineKernel {
             .batch_response_schemas
             .get(&prepared.source_id)
             .ok_or(KernelError::Bundle)?;
-        if let Err(errors) = response_schema.validate(source_response) {
-            report_response_shape_rejection(
-                &prepared.source_id,
-                batch.response_schema.as_str(),
-                errors,
-            );
-            return Err(KernelError::SourceProtocol);
-        }
+        validate_source_response(
+            response_schema,
+            source_response,
+            &prepared.source_id,
+            batch.response_schema.as_str(),
+        )?;
         let script = self
             .batch_extractions
             .get(&prepared.source_id)
@@ -906,10 +904,12 @@ impl OfflineKernel {
             .response_schemas
             .get(source_id)
             .ok_or(KernelError::Bundle)?;
-        if let Err(errors) = response_schema.validate(source_response) {
-            report_response_shape_rejection(source_id, source.response_schema().as_str(), errors);
-            return Err(KernelError::SourceProtocol);
-        }
+        validate_source_response(
+            response_schema,
+            source_response,
+            source_id,
+            source.response_schema().as_str(),
+        )?;
         let parameters =
             serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
         self.runtime
@@ -1109,6 +1109,19 @@ fn map_context_error(_: RhaiRuntimeError) -> KernelError {
 /// which member disagrees with which rule. An unbounded list would let a source
 /// decide how much an operator log holds.
 const REPORTED_SHAPE_VIOLATIONS: usize = 5;
+
+fn validate_source_response(
+    schema: &JSONSchema,
+    response: &Value,
+    source_id: &str,
+    schema_artifact: &str,
+) -> Result<(), KernelError> {
+    if let Err(errors) = schema.validate(response) {
+        report_response_shape_rejection(source_id, schema_artifact, errors);
+        return Err(KernelError::SourceProtocol);
+    }
+    Ok(())
+}
 
 /// Record which member of a projected response failed which schema rule.
 ///
@@ -1749,6 +1762,103 @@ mod tests {
     const SUPPORTED_VALUE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
     /// A value a diagnostic must never echo, in the shape a script scalar has.
     const SCRIPT_CANARY: &str = "0451-mrs-hunt-was-born-in-caracas";
+
+    /// Opt-in CPU measurement with startup and source I/O outside the clock.
+    /// Run with `cargo test --locked --release -p registry-evidence --lib
+    /// source_response_validation_performance -- --ignored --nocapture`.
+    /// Reports batch-average samples without a host-dependent assertion.
+    #[test]
+    #[ignore = "opt-in source response validation CPU benchmark"]
+    fn source_response_validation_performance() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        fn measure(label: &str, iterations: u32, mut operation: impl FnMut()) {
+            for _ in 0..1_000 {
+                operation();
+            }
+            let mut samples = Vec::new();
+            for _ in 0..7 {
+                let started = Instant::now();
+                for _ in 0..iterations {
+                    operation();
+                }
+                samples.push(started.elapsed().as_nanos() / u128::from(iterations));
+            }
+            println!("{label}: iterations={iterations} ns_per_op={samples:?}");
+        }
+
+        let copied = immutable_fixture("adult-status");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let requirement = &bundle.config.requirements[0];
+        let source_id = requirement.acquisition.initial_source();
+        let schema = &kernel.response_schemas[source_id];
+        let response = json!({"total": 1, "date_of_birth": "1970-01-01"});
+        measure("narrow-schema", 50_000, || {
+            assert!(black_box(validate_source_response(
+                black_box(schema),
+                black_box(&response),
+                "source",
+                "schemas/response.yaml",
+            ))
+            .is_ok());
+        });
+        measure("narrow-extraction", 20_000, || {
+            assert!(matches!(
+                black_box(kernel.extract(black_box(&requirement.id), black_box(&response))),
+                Ok(LookupResult::Match(_))
+            ));
+        });
+
+        // A bounded projected batch shape, with a late invalid value to expose
+        // the cost of checking a mostly valid document before its refusal.
+        let schema = compile_schema(
+            "schemas/response.yaml",
+            &json!({
+                "type": "object", "additionalProperties": false, "required": ["results"],
+                "properties": {"results": {
+                    "type": "array", "minItems": 1, "maxItems": 16,
+                    "items": {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["slot", "active", "code", "observed"],
+                        "properties": {
+                            "slot": {"type": "integer", "minimum": 0, "maximum": 15},
+                            "active": {"type": "boolean"},
+                            "code": {"type": ["string", "null"], "maxLength": 32},
+                            "observed": {"type": "string", "format": "date"}
+                        }
+                    }
+                }}
+            }),
+        )
+        .expect("bounded response schema compiles");
+        let response = json!({"results": (0..16).map(|slot| json!({
+            "slot": slot, "active": true, "code": "synthetic", "observed": "2026-08-02"
+        })).collect::<Vec<_>>()});
+        let mut early_invalid = response.clone();
+        early_invalid["results"][0]["slot"] = json!(-1);
+        let mut late_invalid = response.clone();
+        late_invalid["results"][15]["slot"] = json!(-1);
+        for (label, input, valid) in [
+            ("batch-schema-valid", &response, true),
+            ("batch-schema-invalid-first", &early_invalid, false),
+            ("batch-schema-invalid-last", &late_invalid, false),
+        ] {
+            measure(label, 20_000, || {
+                assert_eq!(
+                    black_box(validate_source_response(
+                        black_box(&schema),
+                        black_box(input),
+                        "source",
+                        "schemas/response.yaml",
+                    ))
+                    .is_ok(),
+                    valid
+                );
+            });
+        }
+    }
     /// A function the loader's permissive engine accepts and the hardened
     /// kernel grammar refuses, so the kernel is the pass that has to report it.
     fn refused_by_the_hardened_grammar() -> String {
@@ -1863,6 +1973,50 @@ mod tests {
                 "{label} could collapse into a per-item unavailable outcome"
             );
         }
+    }
+
+    #[test]
+    fn batch_response_shape_validation_precedes_an_accepting_extraction_script() {
+        let mut kernel = batch_extraction_kernel();
+        let extraction = kernel
+            .runtime
+            .compile_batch_extraction(
+                r#"fn extract_batch(response, context) {
+                    [
+                        #{slot: 0, result: #{outcome: "no_match"}},
+                        #{slot: 1, result: #{outcome: "no_match"}}
+                    ]
+                }"#,
+            )
+            .expect("accepting batch extraction compiles");
+        kernel
+            .batch_extractions
+            .insert("source-a".to_owned(), extraction);
+        let prepared = PreparedSourceBatch {
+            source_id: "source-a".to_owned(),
+            adapter_id: "extract-batch".to_owned(),
+            slots: vec![0, 1],
+            request: PreparedSourceBatchRequest::new(RequestParts {
+                query: Vec::new(),
+                body: None,
+            }),
+        };
+        for response in [
+            json!({}),
+            json!({"kind": 1}),
+            json!({"kind": "undeclared"}),
+            json!({"kind": "missing", "unexpected": true}),
+        ] {
+            assert_eq!(
+                kernel.extract_source_batch(&prepared, &response),
+                Err(KernelError::SourceProtocol),
+                "invalid batch response reached an accepting script"
+            );
+        }
+        assert_eq!(
+            kernel.extract_source_batch(&prepared, &json!({"kind": "missing"})),
+            Ok(vec![LookupResult::NoMatch, LookupResult::NoMatch])
+        );
     }
 
     fn batch_extraction_kernel() -> OfflineKernel {
@@ -2154,6 +2308,33 @@ fn extract_batch(response, context) {
                 json!("1970-01-01")
             )])))
         );
+    }
+
+    #[test]
+    fn response_shape_validation_precedes_an_accepting_extraction_script() {
+        // A reviewed script may rely entirely on its response schema. Even
+        // one that returns valid facts unconditionally must never turn an
+        // invalid provider response into a match.
+        let kernel = kernel_with_adult_extraction(
+            "fn extract(response, context) { #{outcome: \"match\", facts: #{date_of_birth: \"1970-01-01\"}} }",
+        );
+        let requirement = &kernel.bundle.config.requirements[0];
+        for response in [
+            json!({}),
+            json!({"total": "1"}),
+            json!({"total": 1, "date_of_birth": "1970-13-01"}),
+            json!({"total": 1, "unexpected": true}),
+        ] {
+            assert_eq!(
+                kernel.extract(&requirement.id, &response),
+                Err(KernelError::SourceProtocol),
+                "invalid response reached an accepting script"
+            );
+        }
+        assert!(matches!(
+            kernel.extract(&requirement.id, &json!({"total": 1})),
+            Ok(LookupResult::Match(_))
+        ));
     }
 
     /// A shape rejection reaches the requester as `source.unavailable`,
