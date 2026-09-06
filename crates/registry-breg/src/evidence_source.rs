@@ -128,6 +128,7 @@ fn selector_schema(kind: &FieldTypeSource) -> Result<(Value, u64), Diagnostic> {
         ))
     };
     match kind {
+        FieldTypeSource::String { min_length: 0, .. } => Err(refusal("selectors", "the selector field accepts an empty value that Evidence's selector profile cannot express; declare minLength of at least 1 on the field or use a custom adapter")),
         FieldTypeSource::String { max_length, .. } => string(u64::from(*max_length) * 4),
         FieldTypeSource::Date => Ok((json!({"type":"date"}),10)),
         FieldTypeSource::Boolean => Ok((json!({"type":"boolean"}),5)),

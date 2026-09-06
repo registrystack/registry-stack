@@ -211,6 +211,24 @@ fn refuses_ungiven_authority_and_incompatible_selector_semantics() {
 }
 
 #[test]
+fn refuses_a_string_selector_field_that_accepts_the_empty_value() {
+    assert!(selector_schema(&FieldTypeSource::String {
+        min_length: 0,
+        max_length: 32
+    })
+    .is_err());
+    let mut empty_allowed = project();
+    // Omitting `minLength` defaults it to 0, so `code` accepts the empty value.
+    empty_allowed["entities"][0]["fields"][0] = json!({"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"});
+    let diagnostic = refused(&compiled(&empty_allowed, SQL), &options());
+    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert!(diagnostic.message.contains("minLength"));
+    // `alternatives_keep_one_route_and_selected_identity_with_stable_inventories`
+    // exports the same fixture with `code` declared at `minLength: 1`, so an
+    // exact selector field that excludes the empty value still exports.
+}
+
+#[test]
 fn reached_source_select_authority_is_part_of_consumed_behavior() {
     let mut original = project();
     original["entities"].as_array_mut().unwrap().push(json!({"id":"flag","primaryDataset":"test-dataset","route":"flags","mutationMode":"mutable","fields":[
