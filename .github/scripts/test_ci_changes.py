@@ -372,7 +372,15 @@ class CiChangesTest(unittest.TestCase):
                 "platform-coverage-upload",
                 "platform-hygiene",
                 "platform-fuzz",
-                "rust-result",
+                "rust-policy",
+                "rust-quality",
+                "rust-tests",
+                "discovery-contracts",
+                "evidence-contracts",
+                "relay-v2-contracts",
+                "relay-client-contracts",
+                "breg-contracts",
+                "identifiers",
                 "release-tool",
                 "release-source-proof",
                 "evidence-tutorials",
@@ -388,6 +396,95 @@ class CiChangesTest(unittest.TestCase):
         for name, expected in aggregate_needs.items():
             with self.subTest(aggregate=name):
                 self.assertEqual(expected, self.normalized_needs(self.workflow_jobs[name]))
+
+    def test_final_aggregate_flattens_rust_results_with_equivalent_outcomes(
+        self,
+    ) -> None:
+        rust_job = self.workflow_jobs["rust-result"]
+        final_job = self.workflow_jobs["ci-result"]
+        rust_needs = set(self.normalized_needs(rust_job))
+        final_needs = set(self.normalized_needs(final_job))
+
+        self.assertEqual("Rust workspace", rust_job["name"])
+        self.assertEqual("CI result", final_job["name"])
+        self.assertEqual("always()", rust_job["if"])
+        self.assertEqual("always()", final_job["if"])
+        self.assertNotIn("rust-result", final_needs)
+        previous_final_needs = {
+            "changes",
+            "secrets",
+            "platform-quality",
+            "platform-coverage",
+            "platform-coverage-upload",
+            "platform-hygiene",
+            "platform-fuzz",
+            "rust-result",
+            "release-tool",
+            "release-source-proof",
+            "evidence-tutorials",
+            "breg-tutorial",
+            "breg-evidence-composition",
+            "evidence-anchors",
+            "docs",
+            "editor-extensions",
+            "client-bindings",
+            "release-linux-node-clients",
+        }
+        self.assertEqual(
+            final_needs,
+            previous_final_needs.difference({"rust-result"}).union(rust_needs),
+        )
+        self.assertEqual(26, len(final_needs))
+
+        def embedded_python(job: dict[str, Any]) -> str:
+            run = job["steps"][0]["run"]
+            prefix = "python3 - <<'PY'\n"
+            self.assertTrue(run.startswith(prefix))
+            return run.removeprefix(prefix).rsplit("\nPY", 1)[0]
+
+        rust_script = embedded_python(rust_job)
+        final_script = embedded_python(final_job)
+
+        def run_aggregate(script: str, variable: str, results: dict[str, str]) -> int:
+            completed = subprocess.run(
+                (sys.executable, "-c", script),
+                env={
+                    variable: json.dumps(
+                        {name: {"result": result} for name, result in results.items()}
+                    )
+                },
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            return completed.returncode
+
+        for raw_job in sorted(rust_needs):
+            for raw_result, accepted in (
+                ("success", True),
+                ("skipped", True),
+                ("failure", False),
+                ("cancelled", False),
+            ):
+                with self.subTest(raw_job=raw_job, raw_result=raw_result):
+                    rust_results = {name: "success" for name in rust_needs}
+                    rust_results[raw_job] = raw_result
+                    final_results = {name: "success" for name in final_needs}
+                    final_results.update(rust_results)
+
+                    rust_status = run_aggregate(
+                        rust_script,
+                        "RUST_JOB_RESULTS",
+                        rust_results,
+                    )
+                    final_status = run_aggregate(
+                        final_script,
+                        "CI_JOB_RESULTS",
+                        final_results,
+                    )
+                    expected_status = 0 if accepted else 1
+                    self.assertEqual(expected_status, rust_status)
+                    self.assertEqual(rust_status, final_status)
 
     def test_shards_cover_every_workspace_package_once(self) -> None:
         assigned = [package for packages in SHARDS.values() for package in packages]

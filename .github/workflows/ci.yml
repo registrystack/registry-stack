@@ -1558,7 +1558,15 @@ jobs:
       - platform-coverage-upload
       - platform-hygiene
       - platform-fuzz
-      - rust-result
+      - rust-policy
+      - rust-quality
+      - rust-tests
+      - discovery-contracts
+      - evidence-contracts
+      - relay-v2-contracts
+      - relay-client-contracts
+      - breg-contracts
+      - identifiers
       - release-tool
       - release-source-proof
       - evidence-tutorials
