@@ -306,8 +306,8 @@ fn role_password_bytes_cannot_reach_diagnostics_or_errors() {
     let (_temp, state, clients, files) = fixture();
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let root = state.root();
-    let password = "6f0a1b2c3d4e5f60718293a4b5c6d7e8";
-    let statement = format!("DO $$ BEGIN CREATE ROLE r LOGIN PASSWORD '{password}'; END $$;");
+    let canary = "6f0a1b2c3d4e5f60718293a4b5c6d7e8";
+    let statement = format!("DO $$ BEGIN CREATE ROLE r LOGIN PASSWORD '{canary}'; END $$;");
     // A refused psql echoes the statement it could not run, both whole and as
     // the truncated window a client reports around an error position.
     let mut echo = Command::new("/bin/sh");
@@ -324,19 +324,19 @@ fn role_password_bytes_cannot_reach_diagnostics_or_errors() {
         "secret-echo",
         Some(Input {
             bytes: statement.as_bytes(),
-            secret: Some(password.as_bytes()),
+            secret: Some(canary.as_bytes()),
         }),
     )
     .expect_err("a refused prerequisite fails");
     let error = format!("{error:#}");
-    assert!(!error.contains(password), "{error}");
-    assert!(!error.contains(&password[2..30]), "{error}");
+    assert!(!error.contains(canary), "{error}");
+    assert!(!error.contains(&canary[2..30]), "{error}");
     let mut echoed = 0;
     for entry in fs::read_dir(root.join("logs")).unwrap() {
         let bytes = fs::read(entry.unwrap().path()).unwrap();
         let rendered = String::from_utf8(bytes).unwrap();
-        assert!(!rendered.contains(password), "{rendered}");
-        assert!(!rendered.contains(&password[2..30]), "{rendered}");
+        assert!(!rendered.contains(canary), "{rendered}");
+        assert!(!rendered.contains(&canary[2..30]), "{rendered}");
         if rendered.contains("[redacted]") {
             echoed += 1;
             assert!(rendered.contains("syntax error") || rendered.contains("\"ok\":false"));
