@@ -337,7 +337,6 @@ jobs:
           set -euo pipefail
           mkdir -p candidate-canonical/dist
           cp -R dist/bin candidate-canonical/dist/bin
-          cp -R dist/image-bin candidate-canonical/dist/image-bin
           cp -R dist/images candidate-canonical/dist/images
           cp \
             "${RUNNER_TEMP}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
@@ -855,6 +854,7 @@ jobs:
           path: candidate-client-package
           if-no-files-found: error
           retention-days: 2
+          compression-level: 0
 
   assemble:
     name: Smoke, scan, and assemble one candidate bundle

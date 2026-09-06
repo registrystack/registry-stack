@@ -16,6 +16,11 @@ on:
         description: Unique operator-generated identity used to correlate this rehearsal
         required: true
         type: string
+      advisory_evidence:
+        description: Collect review-only image advisory evidence
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -102,6 +107,17 @@ jobs:
       contents: read
     env:
       RELEASE_BUILDER_IMAGE: rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3
+      RELEASE_BUILDX_VERSION: v0.33.0
+      RELEASE_BUILDKIT_IMAGE: moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+      REHEARSAL_REGISTRY_IMAGE: registry:3.1.1@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33
+      SYFT_VERSION: v1.45.1
+      SYFT_LINUX_AMD64_SHA256: 20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716
+      GRYPE_VERSION: v0.114.0
+      GRYPE_LINUX_AMD64_SHA256: edda0968d8827daab01d32b3cd7de192ae0915005e7bbfcfef9e68e79bc43343
+      CRANE_VERSION: v0.21.2
+      CRANE_LINUX_AMD64_SHA256: 897e7c342db072ba76531246fc18fbf3e8e298688b6ecf98916770984b263866
+      ORAS_VERSION: v1.3.2
+      ORAS_LINUX_AMD64_SHA256: 9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf
     steps:
       - name: Checkout prepared branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,6 +146,89 @@ jobs:
             "breg ${REHEARSAL_VERSION}"
           test "$("dist/bin/bregctl-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
             "bregctl ${REHEARSAL_VERSION}"
+
+      - name: Set up Docker Buildx for advisory evidence
+        if: ${{ inputs.advisory_evidence }}
+        id: advisory-buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: ${{ env.RELEASE_BUILDX_VERSION }}
+          driver-opts: image=${{ env.RELEASE_BUILDKIT_IMAGE }}
+
+      - name: Install pinned advisory evidence tools
+        if: ${{ inputs.advisory_evidence }}
+        env:
+          STEP_CRANE_SHA256: ${{ env.CRANE_LINUX_AMD64_SHA256 }}
+          STEP_CRANE_VERSION: ${{ env.CRANE_VERSION }}
+          STEP_GRYPE_SHA256: ${{ env.GRYPE_LINUX_AMD64_SHA256 }}
+          STEP_GRYPE_VERSION: ${{ env.GRYPE_VERSION }}
+          STEP_ORAS_SHA256: ${{ env.ORAS_LINUX_AMD64_SHA256 }}
+          STEP_ORAS_VERSION: ${{ env.ORAS_VERSION }}
+          STEP_SYFT_SHA256: ${{ env.SYFT_LINUX_AMD64_SHA256 }}
+          STEP_SYFT_VERSION: ${{ env.SYFT_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.local/bin" "${RUNNER_TEMP}/tools"
+          syft_version="${STEP_SYFT_VERSION#v}"
+          grype_version="${STEP_GRYPE_VERSION#v}"
+          oras_version="${STEP_ORAS_VERSION#v}"
+          curl -sSfL \
+            "https://github.com/anchore/syft/releases/download/${STEP_SYFT_VERSION}/syft_${syft_version}_linux_amd64.tar.gz" \
+            -o "${RUNNER_TEMP}/tools/syft.tar.gz"
+          echo "${STEP_SYFT_SHA256}  ${RUNNER_TEMP}/tools/syft.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/tools/syft.tar.gz" \
+            -C "${HOME}/.local/bin" syft
+          curl -sSfL \
+            "https://github.com/anchore/grype/releases/download/${STEP_GRYPE_VERSION}/grype_${grype_version}_linux_amd64.tar.gz" \
+            -o "${RUNNER_TEMP}/tools/grype.tar.gz"
+          echo "${STEP_GRYPE_SHA256}  ${RUNNER_TEMP}/tools/grype.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/tools/grype.tar.gz" \
+            -C "${HOME}/.local/bin" grype
+          curl -sSfL \
+            "https://github.com/google/go-containerregistry/releases/download/${STEP_CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            -o "${RUNNER_TEMP}/tools/crane.tar.gz"
+          echo "${STEP_CRANE_SHA256}  ${RUNNER_TEMP}/tools/crane.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/tools/crane.tar.gz" \
+            -C "${HOME}/.local/bin" crane
+          curl -sSfL \
+            "https://github.com/oras-project/oras/releases/download/${STEP_ORAS_VERSION}/oras_${oras_version}_linux_amd64.tar.gz" \
+            -o "${RUNNER_TEMP}/tools/oras.tar.gz"
+          echo "${STEP_ORAS_SHA256}  ${RUNNER_TEMP}/tools/oras.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/tools/oras.tar.gz" \
+            -C "${HOME}/.local/bin" oras
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Collect exact advisory review evidence
+        if: ${{ inputs.advisory_evidence }}
+        env:
+          REHEARSAL_VERSION: ${{ inputs.version }}
+          REHEARSAL_SOURCE: https://github.com/${{ github.repository }}
+          REHEARSAL_REVISION: ${{ github.sha }}
+          REHEARSAL_BUILDX_BUILDER: ${{ steps.advisory-buildx.outputs.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release/scripts/collect-rehearsal-advisory-evidence.py \
+            --version "${REHEARSAL_VERSION}" \
+            --source "${REHEARSAL_SOURCE}" \
+            --revision "${REHEARSAL_REVISION}" \
+            --buildx-builder "${REHEARSAL_BUILDX_BUILDER}" \
+            --registry-image "${REHEARSAL_REGISTRY_IMAGE}" \
+            --output "${RUNNER_TEMP}/release-advisory-evidence"
+
+      - name: Upload advisory review evidence
+        if: ${{ inputs.advisory_evidence }}
+        uses: actions/upload-artifact@78a94a974080d17ad2a7c0225a15fd61c7b3b764 # v7.0.0
+        with:
+          name: release-advisory-evidence-${{ inputs.version }}-${{ inputs.request_id }}
+          path: ${{ runner.temp }}/release-advisory-evidence
+          if-no-files-found: error
+          retention-days: 8
 
   node-clients:
     name: Prove Linux Node clients for ${{ matrix.asset }}

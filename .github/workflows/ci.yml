@@ -816,6 +816,9 @@ jobs:
       - name: Test release rehearsal workflow
         run: python3 -m unittest release/scripts/test_release_rehearsal.py
 
+      - name: Test rehearsal advisory evidence collector
+        run: python3 -m unittest release/scripts/test_collect_rehearsal_advisory_evidence.py
+
       - name: Test Linux Node client release build helper
         run: python3 -m unittest release/scripts/test_build_linux_node_client.py
 
