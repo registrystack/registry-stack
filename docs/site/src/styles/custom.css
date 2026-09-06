@@ -462,54 +462,54 @@ pre,
 
 .sidebar-content {
   padding-block-start: 16px !important;
-  /* No right gutter: the 16px scrollbar gutter already insets the text, and
-     dropping the padding lets the longest spec labels run a line wider. */
-  padding-inline-end: 0 !important;
+  padding-inline-end: 8px !important;
 }
 
 .sidebar-content .top-level > li + li {
-  margin-top: 28px;
+  margin-top: 12px;
 }
 
 .sidebar-content details > summary {
   /* The mark sits beside the label, not adrift at the pane edge: it belongs to
      the word it opens. */
   justify-content: flex-start;
-  gap: 5px;
-  padding: 0;
+  gap: 6px;
+  padding: 6px 0;
+  font-size: 14px;
+  line-height: 1.35;
 }
 
-/* Top-level groups read as ledger column headings: a strong ink rule above
-   each label (the marketing site tops its proof columns the same way). */
+/* Hairlines separate product sections without competing with the labels. */
 .sidebar-content .top-level > li > details > summary {
-  border-top: 2px solid var(--registry-ink-rule);
-  padding: 10px 0 0;
+  border-top: 1px solid var(--registry-rule);
+  padding-block-start: 10px;
 }
 
-/* Collapsing is how this sidebar carries its depth, and four of the top-level
-   groups are collapsed too, so every group keeps its disclosure mark. Sized to
-   the uppercase label rather than to Starlight's default, which dwarfs it. */
+/* Every group keeps its native disclosure mark beside the readable label. */
 .sidebar-content details > summary .caret {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
   color: var(--registry-muted);
   flex: none;
 }
 
 .sidebar-content .large {
-  color: var(--registry-muted);
-  font-family: var(--__sl-font-mono);
-  font-size: 11px;
-  font-weight: 400;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-transform: uppercase;
+  color: var(--registry-ink);
+  font-family: var(--__sl-font);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.35;
+  text-transform: none;
+}
+
+.sidebar-content .top-level > li > details > summary .large {
+  font-weight: 700;
 }
 
 .sidebar-content a {
   position: relative;
-  /* Bleed left to the pane edge for the full-width active highlight; on the
-     right the content padding is 0, so only a small text inset is needed. */
+  /* Bleed left to the pane edge for the full-width active highlight. */
   margin-inline: calc(-1 * var(--sl-sidebar-pad-x)) 0;
   padding: 6px 8px 6px var(--sl-sidebar-pad-x);
   border-inline-start: 2px solid transparent;
