@@ -402,6 +402,55 @@ fn governed_public_keys_are_owned_by_the_complete_deployment_target() {
 }
 
 #[test]
+fn a_missing_target_public_key_is_reported_by_explain_before_compilation() {
+    let fixture = Fixture::new();
+    let relative = "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
+    fs::remove_file(fixture.target.join(relative)).expect("remove target public key");
+
+    let output = fixture.explain();
+
+    assert_failed(&output, "a missing target public key must fail explain");
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("explain JSON report");
+    assert_eq!(
+        report["missingPublicKeyFiles"],
+        serde_json::json!([relative])
+    );
+    assert!(
+        report["publicKeyFiles"]
+            .as_array()
+            .expect("publicKeyFiles array")
+            .iter()
+            .any(|value| value == relative),
+        "publicKeyFiles still reports the missing key: {report}"
+    );
+    assert_eq!(report["fixturePaths"], serde_json::json!([]));
+    assert!(
+        fixture.invocations().is_empty(),
+        "a missing target public key reached Evidence delegation"
+    );
+}
+
+#[test]
+fn explain_reports_the_fixture_paths_when_every_public_key_is_present() {
+    let fixture = Fixture::new();
+
+    let output = fixture.explain();
+
+    assert_success(&output, "explain with every governed public key present");
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("explain JSON report");
+    assert_eq!(report["missingPublicKeyFiles"], serde_json::json!([]));
+    assert!(
+        !report["fixturePaths"]
+            .as_array()
+            .expect("fixturePaths array")
+            .is_empty(),
+        "fixturePaths reports the compiled fixture: {report}"
+    );
+}
+
+#[test]
 fn production_metadata_and_fixture_completeness_fail_before_runtime_delegation() {
     for label in [
         "missing-governance",
@@ -753,6 +802,24 @@ impl Fixture {
         self.command(project, target, output)
             .output()
             .expect("evidencectl build starts")
+    }
+
+    fn explain(&self) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .arg("target")
+            .arg("explain")
+            .arg(&self.target)
+            .arg("--project")
+            .arg(&self.project)
+            .arg("--json")
+            .env("EVIDENCE_BIN", &self.evidence)
+            .env("FAKE_EVIDENCE_LOG", &self.log)
+            .env(
+                "FAKE_EVIDENCE_VERSION",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )
+            .output()
+            .expect("evidencectl target explain starts")
     }
 
     fn command(&self, project: &Path, target: &Path, output: &Path) -> Command {
