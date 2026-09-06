@@ -1471,12 +1471,7 @@ where
     let result = match cli.command {
         Command::Dev(args) => {
             return match dev::run(args) {
-                Ok(report) => write_result(
-                    serde_json::to_writer_pretty(&mut *stdout, &report)
-                        .map_err(io::Error::other)
-                        .and_then(|()| writeln!(stdout)),
-                    stderr,
-                ),
+                Ok(report) => write_dev_success(&report, format, stdout, stderr),
                 Err(error) => write_failure(
                     &source_failure(
                         "dev",
@@ -7694,6 +7689,59 @@ fn write_access_profile(profile: &Value, stdout: &mut dyn Write) -> io::Result<(
     Ok(())
 }
 
+fn write_dev_success(
+    report: &Value,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(
+            stdout,
+            "{} succeeded",
+            report["command"].as_str().unwrap_or("dev")
+        )
+        .and_then(|()| {
+            for (label, field) in [
+                ("status", "status"),
+                ("project", "project"),
+                ("breg url", "bregUrl"),
+                ("token endpoint", "tokenEndpoint"),
+                ("audience", "audience"),
+                ("package revision", "packageRevision"),
+                ("state file", "stateFile"),
+                ("runtime config", "runtimeConfig"),
+            ] {
+                if let Some(value) = report[field].as_str() {
+                    writeln!(stdout, "{label}: {value}")?;
+                }
+            }
+            // Credential file references, never credential bytes.
+            for client in report["clients"].as_array().into_iter().flatten() {
+                writeln!(
+                    stdout,
+                    "client {}",
+                    client["id"].as_str().unwrap_or_default()
+                )?;
+                for (label, field) in [
+                    ("client id file", "clientIdFile"),
+                    ("assertion key file", "assertionKeyFile"),
+                ] {
+                    if let Some(path) = client[field].as_str() {
+                        writeln!(stdout, "    {label}: {path}")?;
+                    }
+                }
+            }
+            Ok(())
+        })
+    };
+    write_result(result, stderr)
+}
+
 fn write_doctor_success(
     format: OutputFormat,
     stdout: &mut dyn Write,
@@ -9216,6 +9264,84 @@ mod tests {
                 "audit"
             ]
         );
+    }
+
+    #[test]
+    fn dev_reports_honour_the_requested_output_format() {
+        let report = json!({
+            "ok": true,
+            "command": "dev",
+            "status": "ready",
+            "project": "/local/registry",
+            "stateFile": "/local/registry/.breg/dev/state.json",
+            "runtimeConfig": "/local/registry/.breg/dev/runtime.yaml",
+            "bregUrl": "http://127.0.0.1:8090",
+            "tokenEndpoint": "http://127.0.0.1:8091/token",
+            "audience": "urn:breg:dev:local",
+            "packageRevision": "revision-1",
+            "clients": [{
+                "id": "operator",
+                "accessProfiles": ["operator"],
+                "clientIdFile": "/local/registry/.breg/dev/credentials/operator/client-id",
+                "assertionKeyFile":
+                    "/local/registry/.breg/dev/credentials/operator/assertion-key.jwk"
+            }]
+        });
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_dev_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            String::from_utf8(stdout).expect("output is UTF-8"),
+            "dev succeeded\n\
+             status: ready\n\
+             project: /local/registry\n\
+             breg url: http://127.0.0.1:8090\n\
+             token endpoint: http://127.0.0.1:8091/token\n\
+             audience: urn:breg:dev:local\n\
+             package revision: revision-1\n\
+             state file: /local/registry/.breg/dev/state.json\n\
+             runtime config: /local/registry/.breg/dev/runtime.yaml\n\
+             client operator\n\
+             \x20   client id file: \
+             /local/registry/.breg/dev/credentials/operator/client-id\n\
+             \x20   assertion key file: \
+             /local/registry/.breg/dev/credentials/operator/assertion-key.jwk\n"
+        );
+        assert!(stderr.is_empty());
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_dev_success(&report, OutputFormat::Json, &mut stdout, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        let rendered = String::from_utf8(stdout).expect("output is UTF-8");
+        assert_eq!(
+            serde_json::from_str::<Value>(&rendered).expect("report is JSON"),
+            report
+        );
+        assert!(rendered.ends_with("\n}\n"));
+        assert!(stderr.is_empty());
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_dev_success(
+                &json!({"ok": true, "command": "dev stop", "status": "stopped"}),
+                OutputFormat::Human,
+                &mut stdout,
+                &mut stderr
+            ),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            String::from_utf8(stdout).expect("output is UTF-8"),
+            "dev stop succeeded\nstatus: stopped\n"
+        );
+        assert!(stderr.is_empty());
     }
 
     #[test]
