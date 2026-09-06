@@ -451,7 +451,11 @@ fn the_dependency_check_refuses_an_audit_sink_outside_the_required_root() {
 fn the_dependency_check_refuses_an_audit_directory_symlinked_out_of_the_required_root() {
     // The decoy: durable storage really is mounted at the declared root, and
     // the configured path really does sit inside it, but the chain lands on
-    // storage that disappears with the container.
+    // storage that disappears with the container. The configured destination
+    // resolves under the configuration directory here, so Mint's own
+    // configuration contract refuses it before the declared root is compared;
+    // the containment flag's own lane is
+    // `the_dependency_check_refuses_an_audit_sink_outside_the_required_root`.
     let ephemeral = tempfile::tempdir().expect("temp dir");
     let server = stopped_server();
     fs::remove_dir_all(server.root.join("audit")).expect("remove the staged audit directory");
@@ -469,8 +473,8 @@ fn the_dependency_check_refuses_an_audit_directory_symlinked_out_of_the_required
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(diagnostics
-        .contains("the configured audit destination resolves outside the declared audit root"));
+    assert!(diagnostics.contains("audit path must resolve inside the configuration directory"));
+    assert!(!diagnostics.contains(&ephemeral.path().display().to_string()));
 }
 
 #[test]
