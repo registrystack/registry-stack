@@ -438,6 +438,21 @@ mod descriptor {
             self.parent.publish(temporary, &self.name)
         }
 
+        /// Publish `temporary`, a sibling in the same resolved directory, onto
+        /// this entry with a hard link, refusing an existing destination. A
+        /// hard link followed by removing the temporary name is the portable
+        /// no-clobber publication: `RENAME_NOREPLACE`, the alternative,
+        /// returns `EINVAL`, `ENOSYS`, `ENOTSUP`, or `EOPNOTSUPP` on some
+        /// filesystems (older kernels, some overlayfs and NFS configurations,
+        /// several FUSE filesystems). The temporary is removed whether or not
+        /// the link succeeds, since a caller with the temporary's own file
+        /// descriptor still open has no other use for its staging name.
+        pub(crate) fn publish_new_from(&self, temporary: &OsStr) -> io::Result<()> {
+            let linked = self.parent.link(temporary, &self.name);
+            let _ = self.parent.remove_file(temporary);
+            linked
+        }
+
         /// Rename `temporary`, a sibling in the same resolved directory, onto
         /// this entry, replacing an existing destination.
         pub(crate) fn replace_from(&self, temporary: &OsStr) -> io::Result<()> {
@@ -722,6 +737,10 @@ mod descriptor {
         }
 
         pub(crate) fn publish_from(&self, _temporary: &OsStr) -> io::Result<()> {
+            match self.0 {}
+        }
+
+        pub(crate) fn publish_new_from(&self, _temporary: &OsStr) -> io::Result<()> {
             match self.0 {}
         }
 

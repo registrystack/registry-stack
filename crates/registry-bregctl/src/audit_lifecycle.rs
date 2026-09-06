@@ -169,10 +169,9 @@ fn publish_export_file(staged: StagedExport) -> Result<(), AuditCliError> {
         file,
     } = staged;
     drop(file);
-    if destination.publish_from(&temporary).is_err() {
-        let _ = destination.parent().remove_file(&temporary);
-        return Err(AuditCliError::Operator);
-    }
+    destination
+        .publish_new_from(&temporary)
+        .map_err(|_| AuditCliError::Operator)?;
     destination
         .parent()
         .sync()
@@ -232,6 +231,35 @@ mod tests {
             std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn publish_refuses_a_destination_that_appears_after_staging_and_removes_the_temporary() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let output = root.join("audit.jsonl");
+        let mut staged = create_export_file(&output).unwrap();
+
+        {
+            let mut sink = BufWriter::new(&mut staged.file);
+            sink.write_all(b"verified\n").unwrap();
+            finish_export_file(sink).unwrap();
+        }
+
+        // Another writer claims the destination after this export staged its
+        // temporary file but before it publishes.
+        std::fs::write(&output, b"raced\n").unwrap();
+
+        assert_eq!(
+            publish_export_file(staged).unwrap_err(),
+            AuditCliError::Operator
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), b"raced\n");
+        assert!(!std::fs::read_dir(&root).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".bregctl-audit-export-")));
     }
 
     #[test]
