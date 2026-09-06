@@ -358,6 +358,17 @@ allOf:
                   properties:
                     kind:
                       const: none
+        sourceConnections:
+          additionalProperties:
+            properties:
+              authentication:
+                not:
+                  type: object
+                  required:
+                    - kind
+                  properties:
+                    kind:
+                      const: none
   - if:
       properties:
         assuranceProfile:
