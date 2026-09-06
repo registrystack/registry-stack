@@ -177,8 +177,9 @@ fn occupied_and_ambiguous_ports_are_refused() {
 #[test]
 fn stop_before_first_start_is_idempotent_without_docker() {
     let temporary = tempfile::tempdir().unwrap();
-    assert_eq!(stop(temporary.path()).unwrap()["status"], "stopped");
-    assert_eq!(stop(temporary.path()).unwrap()["status"], "stopped");
+    assert_eq!(stop(temporary.path(), false).unwrap()["status"], "stopped");
+    assert_eq!(stop(temporary.path(), false).unwrap()["status"], "stopped");
+    assert_eq!(stop(temporary.path(), true).unwrap()["status"], "stopped");
 }
 
 #[test]
@@ -344,4 +345,32 @@ fn role_password_bytes_cannot_reach_diagnostics_or_errors() {
     // Both the captured diagnostics and the preserved failure report keep
     // their surrounding text, so the redaction is not an empty assertion.
     assert_eq!(echoed, 2);
+}
+
+#[test]
+fn reclamation_forgets_the_database_and_keeps_the_reusable_identities() {
+    let (_temp, mut state, _clients, _files) = fixture();
+    state.container_id = Some("c".repeat(64));
+    state.tls_files_copied = true;
+    state.database_ready = true;
+    state.activated = true;
+    state.package_revision = Some("revision-1".into());
+    state.seeded.insert("first-record".into());
+    state.status = Status::Ready;
+    let owner = state.owner.clone();
+    let clients_file = state.clients_file.clone();
+    reclaimed(&mut state);
+    assert!(state.container_id.is_none());
+    assert!(!state.tls_files_copied);
+    assert!(!state.database_ready);
+    assert!(!state.activated);
+    assert!(state.seeded.is_empty());
+    assert!(matches!(state.status, Status::Stopped));
+    // The next start recreates an empty database with the same identities,
+    // ports, credentials and already built package.
+    assert_eq!(state.owner, owner);
+    assert_eq!(state.clients_file, clients_file);
+    assert_eq!(state.package_revision.as_deref(), Some("revision-1"));
+    assert_eq!(state.database_port, 55448);
+    assert_eq!(state.volume_name(), format!("breg-dev-{owner}"));
 }

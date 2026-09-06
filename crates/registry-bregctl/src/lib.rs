@@ -9357,6 +9357,20 @@ mod tests {
     }
 
     #[test]
+    fn dev_stop_reclaims_only_when_removal_is_explicit() {
+        assert!(Cli::try_parse_from(["bregctl", "dev", "stop", "--project", "."]).is_ok());
+        assert!(
+            Cli::try_parse_from(["bregctl", "dev", "stop", "--project", ".", "--remove"]).is_ok()
+        );
+        for arguments in [
+            vec!["bregctl", "dev", "--remove"],
+            vec!["bregctl", "dev", "start", "--remove"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
+    }
+
+    #[test]
     fn global_format_is_accepted_before_or_after_the_subcommand() {
         for arguments in [
             vec!["bregctl", "--format", "json", "check", "project"],
