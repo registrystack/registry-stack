@@ -244,3 +244,39 @@ fn control_path_is_short_and_bound_to_the_owned_journal() {
         .unwrap()
         .ends_with(&state.owner));
 }
+
+fn doctor_refusal(code: &str, message: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({"ok":false,"command":"doctor","diagnostics":[
+        {"severity":"error","code":code,"artifact":"startupDependencies","path":"database",
+         "message":message,"suggestedAction":"verifyStartupDependencies"}]}))
+    .unwrap()
+}
+
+#[test]
+fn only_an_unready_database_classifies_a_doctor_refusal_as_not_activated() {
+    assert_eq!(activation(true, b"{}").unwrap(), Activation::Activated);
+    assert_eq!(
+        activation(
+            false,
+            &doctor_refusal(
+                "startup.database.unready",
+                "the database is not ready for the runtime package"
+            )
+        )
+        .unwrap(),
+        Activation::NotActivated
+    );
+    let refused = activation(
+        false,
+        &doctor_refusal("startup.package.refused", "the runtime package was refused"),
+    )
+    .expect_err("an unrelated doctor refusal aborts the start");
+    let refused = format!("{refused:#}");
+    assert!(refused.contains("startup.package.refused"), "{refused}");
+    assert!(
+        refused.contains("the runtime package was refused"),
+        "{refused}"
+    );
+    assert!(activation(false, b"not a report").is_err());
+    assert!(activation(false, br#"{"ok":false,"diagnostics":[]}"#).is_err());
+}
