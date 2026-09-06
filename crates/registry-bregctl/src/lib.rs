@@ -7085,8 +7085,10 @@ fn read_bounded_source_entry(
             "an authoring source exceeds its fixed size bound",
         ));
     }
-    // The descriptor comes from the resolved parent with `O_NOFOLLOW`, so it is
-    // provably the entry just stat'ed and needs no re-verification by pathname.
+    // The descriptor comes from the resolved parent with `O_NOFOLLOW`, so no
+    // ancestor and no symbolic link can redirect the open. The final name is
+    // still resolved a second time here, so the identity check below is what
+    // rejects a name relinked between the stat above and this open.
     let file = entry.open_read().map_err(|_| {
         diagnostic(
             "source.file.unreadable",
@@ -7104,6 +7106,7 @@ fn read_bounded_source_entry(
     if !opened.is_file() {
         return Err(invalid());
     }
+    ensure_source_entry_identity(stat, &opened, report_path)?;
     if opened.len() > bound {
         return Err(diagnostic(
             "source.file.bounds",
@@ -7136,6 +7139,30 @@ fn read_bounded_source_entry(
         ));
     }
     Ok(bytes)
+}
+
+/// Refuse an authoring source whose opened descriptor is not the entry that was
+/// stat'ed.
+///
+/// Stat and open are two calls on the same name. `O_NOFOLLOW` and a held parent
+/// descriptor keep both of them inside the resolved directory, but a writer with
+/// access to that directory can still relink the name to a different regular
+/// file in between, and the bytes read would then belong to a file whose kind,
+/// size, and content the caller never inspected. Device and inode identify the
+/// file behind the descriptor, so comparing them refuses the substitution.
+fn ensure_source_entry_identity(
+    stat: EntryStat,
+    opened: &fs::Metadata,
+    report_path: &str,
+) -> Result<(), Diagnostic> {
+    if stat.is_same_file_as(opened) {
+        return Ok(());
+    }
+    Err(diagnostic(
+        "source.file.invalid",
+        report_path,
+        "an authoring source changed while it was being read",
+    ))
 }
 
 fn write_source_files(output: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<(), Diagnostic> {
@@ -9738,6 +9765,61 @@ accessProfiles:
                 b"module\n"
             );
             assert_eq!(fs::read(tree.outside("registry.yaml")).unwrap(), b"decoy\n");
+        }
+    }
+
+    /// Coverage for the identity check the authoring source reader applies to
+    /// the descriptor it opens. A relink landing between the stat and the open
+    /// cannot be scheduled from a test, so the check is exercised through its
+    /// own seam with the two outcomes a reader can meet.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod relinked_entry {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        /// The stat of the file the operator named, paired with the metadata of
+        /// the descriptor a reader holds once that name reaches another regular
+        /// file.
+        fn stat_and_relinked_metadata() -> (EntryStat, fs::Metadata) {
+            let tree = race_tree();
+            let named = tree.named("registry.yaml");
+            fs::write(&named, b"genuine\n").unwrap();
+            let relinked = tree.outside("registry.yaml");
+            fs::write(&relinked, b"decoy\n").unwrap();
+            let stat = SafeEntry::resolve(&named).unwrap().stat().unwrap();
+            let opened = fs::File::open(&relinked).unwrap().metadata().unwrap();
+            (stat, opened)
+        }
+
+        /// The stat and the opened metadata of one file, which is what a read
+        /// of an untouched source holds.
+        fn stat_and_own_metadata() -> (EntryStat, fs::Metadata) {
+            let tree = race_tree();
+            let named = tree.named("registry.yaml");
+            fs::write(&named, b"genuine\n").unwrap();
+            let entry = SafeEntry::resolve(&named).unwrap();
+            let stat = entry.stat().unwrap();
+            let opened = entry.open_read().unwrap().metadata().unwrap();
+            (stat, opened)
+        }
+
+        #[test]
+        fn an_authoring_source_opened_as_another_file_is_refused() {
+            let (stat, opened) = stat_and_relinked_metadata();
+
+            let refused = ensure_source_entry_identity(stat, &opened, "registry.yaml")
+                .expect_err("a descriptor that is not the stat'ed entry is refused");
+
+            assert_eq!(refused.code, "source.file.invalid");
+            assert_eq!(refused.path, "registry.yaml");
+        }
+
+        #[test]
+        fn an_authoring_source_opened_as_the_stat_entry_is_read() {
+            let (stat, opened) = stat_and_own_metadata();
+
+            ensure_source_entry_identity(stat, &opened, "registry.yaml")
+                .expect("the entry that was stat'ed is read");
         }
     }
 }

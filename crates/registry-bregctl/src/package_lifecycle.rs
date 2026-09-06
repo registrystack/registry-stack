@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
+use std::fs::Metadata;
 use std::io::Read;
 use std::path::Path;
 
@@ -16,7 +17,7 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::safe_path::{SafeDir, SafeEntry};
+use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
 
 const SIGNING_INPUT_PATH: &str = "signing-input.json";
 const TEST_RECEIPT_PATH: &str = "schema-test-receipt.json";
@@ -391,11 +392,15 @@ fn read_bounded_entry(
     if stat.is_symlink() || !stat.is_file() || stat.len() == 0 || stat.len() > bound {
         return Err(PackageLifecycleError::Output);
     }
-    // The descriptor is opened through the held directory with `O_NOFOLLOW`,
-    // so the bytes read below are the entry just inspected.
+    // The descriptor is opened through the held directory with `O_NOFOLLOW`, so
+    // no ancestor and no symbolic link can redirect the open. The name is still
+    // resolved a second time here, so the identity check below is what rejects a
+    // name relinked between the stat above and this open.
     let file = directory
         .open_read(name)
         .map_err(|_| PackageLifecycleError::Output)?;
+    let opened = file.metadata().map_err(|_| PackageLifecycleError::Output)?;
+    ensure_package_input_identity(stat, &opened)?;
     let mut bytes = Vec::new();
     file.take(bound.saturating_add(1))
         .read_to_end(&mut bytes)
@@ -404,6 +409,19 @@ fn read_bounded_entry(
         return Err(PackageLifecycleError::Output);
     }
     Ok(bytes)
+}
+
+/// Refuse a bounded package input whose opened descriptor is not the entry that
+/// was stat'ed. See `super::ensure_source_entry_identity` for the window a
+/// stat-then-open pair leaves open.
+fn ensure_package_input_identity(
+    stat: EntryStat,
+    opened: &Metadata,
+) -> Result<(), PackageLifecycleError> {
+    if stat.is_same_file_as(opened) {
+        return Ok(());
+    }
+    Err(PackageLifecycleError::Output)
 }
 
 fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
@@ -435,14 +453,17 @@ fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
             "the schema-test receipt must be a regular file of 1 to {MAX_TEST_RECEIPT_BYTES} bytes"
         )));
     }
-    // The descriptor comes from the resolved parent with `O_NOFOLLOW`, so it is
-    // the entry just inspected and needs no re-verification by pathname.
+    // The descriptor comes from the resolved parent with `O_NOFOLLOW`, so no
+    // ancestor and no symbolic link can redirect the open. The final name is
+    // still resolved a second time here, so the identity check below is what
+    // rejects a name relinked between the stat above and this open.
     let file = entry
         .open_read()
         .map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
     let opened = file
         .metadata()
         .map_err(|_| receipt_refused("the schema-test receipt is not readable"))?;
+    ensure_receipt_identity(stat, &opened)?;
     if !opened.is_file() || opened.len() > MAX_TEST_RECEIPT_BYTES {
         return Err(receipt_refused(
             "the schema-test receipt changed while it was being read",
@@ -460,6 +481,21 @@ fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
         ));
     }
     Ok(bytes)
+}
+
+/// Refuse a schema-test receipt whose opened descriptor is not the entry that
+/// was stat'ed. See `super::ensure_source_entry_identity` for the window a
+/// stat-then-open pair leaves open.
+fn ensure_receipt_identity(
+    stat: EntryStat,
+    opened: &Metadata,
+) -> Result<(), PackageLifecycleError> {
+    if stat.is_same_file_as(opened) {
+        return Ok(());
+    }
+    Err(receipt_refused(
+        "the schema-test receipt changed while it was being read",
+    ))
 }
 
 fn receipt_refused(message: &str) -> PackageLifecycleError {
@@ -568,6 +604,83 @@ mod tests {
             // The window is real: the same pathname now reaches the tree the
             // operator never named.
             assert_eq!(std::fs::read(&named).unwrap(), b"decoy");
+        }
+    }
+
+    /// Coverage for the identity checks the package inputs apply to the
+    /// descriptors they open. A relink landing between the stat and the open
+    /// cannot be scheduled from a test, so each check is exercised through its
+    /// own seam with the two outcomes a reader can meet.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod relinked_entry {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        /// The stat of the file the operator named, paired with the metadata of
+        /// the descriptor a reader holds once that name reaches another regular
+        /// file.
+        fn stat_and_relinked_metadata() -> (EntryStat, Metadata) {
+            let tree = race_tree();
+            let named = tree.named("input.json");
+            std::fs::write(&named, b"genuine").unwrap();
+            let relinked = tree.outside("input.json");
+            std::fs::write(&relinked, b"decoy").unwrap();
+            let stat = SafeEntry::resolve(&named).unwrap().stat().unwrap();
+            let opened = std::fs::File::open(&relinked).unwrap().metadata().unwrap();
+            (stat, opened)
+        }
+
+        /// The stat and the opened metadata of one file, which is what a read
+        /// of an untouched input holds.
+        fn stat_and_own_metadata() -> (EntryStat, Metadata) {
+            let tree = race_tree();
+            let named = tree.named("input.json");
+            std::fs::write(&named, b"genuine").unwrap();
+            let entry = SafeEntry::resolve(&named).unwrap();
+            let stat = entry.stat().unwrap();
+            let opened = entry.open_read().unwrap().metadata().unwrap();
+            (stat, opened)
+        }
+
+        #[test]
+        fn a_package_input_opened_as_another_file_is_refused() {
+            let (stat, opened) = stat_and_relinked_metadata();
+
+            let refused = ensure_package_input_identity(stat, &opened)
+                .expect_err("a descriptor that is not the stat'ed entry is refused");
+
+            assert!(matches!(refused, PackageLifecycleError::Output));
+        }
+
+        #[test]
+        fn a_package_input_opened_as_the_stat_entry_is_read() {
+            let (stat, opened) = stat_and_own_metadata();
+
+            ensure_package_input_identity(stat, &opened)
+                .expect("the entry that was stat'ed is read");
+        }
+
+        #[test]
+        fn a_schema_test_receipt_opened_as_another_file_is_refused() {
+            let (stat, opened) = stat_and_relinked_metadata();
+
+            let refused = ensure_receipt_identity(stat, &opened)
+                .expect_err("a descriptor that is not the stat'ed entry is refused");
+
+            match refused {
+                PackageLifecycleError::TestReceiptRefused { message } => assert_eq!(
+                    message,
+                    "the schema-test receipt changed while it was being read"
+                ),
+                other => panic!("unexpected refusal: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_schema_test_receipt_opened_as_the_stat_entry_is_read() {
+            let (stat, opened) = stat_and_own_metadata();
+
+            ensure_receipt_identity(stat, &opened).expect("the entry that was stat'ed is read");
         }
     }
 }

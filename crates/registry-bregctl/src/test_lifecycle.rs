@@ -18,7 +18,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::safe_path::{SafeDir, SafeEntry};
+use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
 use crate::CapturedPackageCandidate;
 
 const CREDENTIALS_API_VERSION: &str = "registry.registrystack.org/breg-schema-test-credentials/v1";
@@ -369,6 +369,26 @@ fn credentials_refusal(path: impl Into<String>, message: impl Into<String>) -> T
     }
 }
 
+fn credentials_changed() -> TestLifecycleError {
+    credentials_refusal(
+        "credentials",
+        "the credentials file changed while it was read",
+    )
+}
+
+/// Refuse a credentials file whose opened descriptor is not the entry that was
+/// stat'ed. See `super::ensure_source_entry_identity` for the window a
+/// stat-then-open pair leaves open.
+fn ensure_credentials_identity(
+    stat: EntryStat,
+    opened: &fs::Metadata,
+) -> Result<(), TestLifecycleError> {
+    if stat.is_same_file_as(opened) {
+        return Ok(());
+    }
+    Err(credentials_changed())
+}
+
 fn read_credentials(path: &Path) -> Result<Vec<u8>, TestLifecycleError> {
     let unavailable = || {
         credentials_refusal(
@@ -377,12 +397,7 @@ fn read_credentials(path: &Path) -> Result<Vec<u8>, TestLifecycleError> {
         )
     };
     let unreadable = || credentials_refusal("credentials", "the credentials file cannot be read");
-    let changed = || {
-        credentials_refusal(
-            "credentials",
-            "the credentials file changed while it was read",
-        )
-    };
+    let changed = credentials_changed;
     let bounds = || {
         credentials_refusal(
             "credentials",
@@ -413,13 +428,16 @@ fn read_credentials(path: &Path) -> Result<Vec<u8>, TestLifecycleError> {
     if stat.len() == 0 || stat.len() > MAX_CREDENTIAL_DOCUMENT_BYTES {
         return Err(bounds());
     }
-    // The descriptor is opened through the resolved parent with `O_NOFOLLOW`,
-    // so it is the entry just inspected.
+    // The descriptor is opened through the resolved parent with `O_NOFOLLOW`, so
+    // no ancestor and no symbolic link can redirect the open. The final name is
+    // still resolved a second time here, so the identity check below is what
+    // rejects a name relinked between the stat above and this open.
     let file = entry.open_read().map_err(|_| unreadable())?;
     let opened = file.metadata().map_err(|_| unreadable())?;
     if !opened.is_file() {
         return Err(changed());
     }
+    ensure_credentials_identity(stat, &opened)?;
     if opened.len() > MAX_CREDENTIAL_DOCUMENT_BYTES {
         return Err(bounds());
     }
@@ -722,6 +740,65 @@ journeys:
             // The window is real: the same pathname now reaches the tree the
             // operator never named.
             assert_eq!(fs::read(&named).unwrap(), b"decoy");
+        }
+    }
+
+    /// Coverage for the identity check the credentials reader applies to the
+    /// descriptor it opens. A relink landing between the stat and the open
+    /// cannot be scheduled from a test, so the check is exercised through its
+    /// own seam with the two outcomes a reader can meet.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod relinked_entry {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        /// The stat of the file the operator named, paired with the metadata of
+        /// the descriptor a reader holds once that name reaches another regular
+        /// file.
+        fn stat_and_relinked_metadata() -> (EntryStat, fs::Metadata) {
+            let tree = race_tree();
+            let named = tree.named("credentials.yaml");
+            fs::write(&named, b"genuine").unwrap();
+            let relinked = tree.outside("credentials.yaml");
+            fs::write(&relinked, b"decoy").unwrap();
+            let stat = SafeEntry::resolve(&named).unwrap().stat().unwrap();
+            let opened = File::open(&relinked).unwrap().metadata().unwrap();
+            (stat, opened)
+        }
+
+        /// The stat and the opened metadata of one file, which is what a read
+        /// of an untouched credentials file holds.
+        fn stat_and_own_metadata() -> (EntryStat, fs::Metadata) {
+            let tree = race_tree();
+            let named = tree.named("credentials.yaml");
+            fs::write(&named, b"genuine").unwrap();
+            let entry = SafeEntry::resolve(&named).unwrap();
+            let stat = entry.stat().unwrap();
+            let opened = entry.open_read().unwrap().metadata().unwrap();
+            (stat, opened)
+        }
+
+        #[test]
+        fn a_credentials_file_opened_as_another_file_is_refused() {
+            let (stat, opened) = stat_and_relinked_metadata();
+
+            let refused = ensure_credentials_identity(stat, &opened)
+                .expect_err("a descriptor that is not the stat'ed entry is refused");
+
+            match refused {
+                TestLifecycleError::Credentials { path, message } => {
+                    assert_eq!(path, "credentials");
+                    assert_eq!(message, "the credentials file changed while it was read");
+                }
+                other => panic!("unexpected refusal: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_credentials_file_opened_as_the_stat_entry_is_read() {
+            let (stat, opened) = stat_and_own_metadata();
+
+            ensure_credentials_identity(stat, &opened).expect("the entry that was stat'ed is read");
         }
     }
 }
