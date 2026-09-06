@@ -39,6 +39,10 @@ pub(crate) struct ImportArgs {
     #[arg(long)]
     pub resolutions: Option<PathBuf>,
     /// Complete target used by the compiler to compare actual question revisions.
+    ///
+    /// Comparing revisions compiles the exports named on the command line, so
+    /// the adapter of an export that has not been accepted yet runs against its
+    /// fixtures during the comparison.
     #[arg(long)]
     pub target: Option<PathBuf>,
 }
