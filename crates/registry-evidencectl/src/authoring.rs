@@ -131,8 +131,21 @@ pub(crate) struct CompiledFixtureProject {
 
 impl Drop for CompiledFixtureProject {
     fn drop(&mut self) {
-        let _ = set_bundle_modes(&self.bundle_path, 0o700, 0o600);
+        if let Err(error) = set_bundle_modes(&self.bundle_path, 0o700, 0o600) {
+            eprintln!("{}", cleanup_failure_line(&self.bundle_path, &error));
+        }
     }
+}
+
+/// The single line a cleanup failure a `Drop` cannot return is reported on.
+///
+/// A sealed artifact left behind is the operator's to remove, so the path and
+/// the cause both have to reach them.
+fn cleanup_failure_line(path: &Path, error: &anyhow::Error) -> String {
+    format!(
+        "evidencectl: failed to restore owner write on {}: {error:#}",
+        path.display()
+    )
 }
 
 enum CompileProfile {
@@ -269,8 +282,13 @@ pub(crate) fn compile_local_project_with_target_inputs(
     if let Err(error) = check_with_evidence(evidence_bin, &compilation.runtime_path) {
         // A rejected unpublished generation should remain removable by its
         // owner. No path outside the caller-supplied staging root is changed.
-        let _ = set_bundle_modes(&staging_root.join("bundle"), 0o700, 0o600);
-        let _ = fs::set_permissions(&compilation.runtime_path, fs::Permissions::from_mode(0o600));
+        set_bundle_modes(&staging_root.join("bundle"), 0o700, 0o600).with_context(|| {
+            format!("restoring owner write on the rejected generation after {error:#}")
+        })?;
+        fs::set_permissions(&compilation.runtime_path, fs::Permissions::from_mode(0o600))
+            .with_context(|| {
+                format!("restoring owner write on the rejected runtime settings after {error:#}")
+            })?;
         return Err(error);
     }
 
@@ -6444,6 +6462,58 @@ factSchema: schemas/family-facts.schema.yaml
             .expect("real Evidence loader accepts multiple role-bound subjects");
     }
 
+    #[test]
+    fn a_failed_unseal_after_a_rejection_reports_the_rejection_and_the_cleanup() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, false);
+        fs::write(
+            &fixture.evidence,
+            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nbundle=\"$(dirname \"$2\")/bundle\"\nchmod -R u+rwX \"$bundle\"\nrm -rf \"$bundle\"\necho 'script rejected' >&2\nexit 1\n",
+        )
+        .expect("stub that removes the generation it rejects");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a rejected generation fails");
+
+        let reported = format!("{error:#}");
+        assert!(reported.contains("script rejected"), "{reported}");
+        assert!(
+            reported.contains("restoring owner write on the rejected generation"),
+            "{reported}"
+        );
+    }
+
+    #[test]
+    fn a_failed_runtime_unseal_after_a_rejection_reports_the_rejection_and_the_cleanup() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, false);
+        fs::write(
+            &fixture.evidence,
+            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nrm -f \"$2\"\necho 'script rejected' >&2\nexit 1\n",
+        )
+        .expect("stub that removes the settings it rejects");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a rejected generation fails");
+
+        let reported = format!("{error:#}");
+        assert!(reported.contains("script rejected"), "{reported}");
+        assert!(
+            reported.contains("restoring owner write on the rejected runtime settings"),
+            "{reported}"
+        );
+    }
+
+    #[test]
+    fn a_cleanup_failure_line_names_the_path_and_the_cause() {
+        let line = cleanup_failure_line(
+            Path::new("/staging/bundle"),
+            &anyhow!("reading /staging/bundle").context("sealed generation"),
+        );
+        assert_eq!(
+            line,
+            "evidencectl: failed to restore owner write on /staging/bundle: sealed generation: reading /staging/bundle"
+        );
+    }
+
     fn punctuated_inputs() -> (String, String, String) {
         let openapi = OPENAPI
             .replace("person_id", "person-id.v1")
@@ -6548,16 +6618,29 @@ factSchema: schemas/family-facts.schema.yaml
 
     impl Drop for Fixture {
         fn drop(&mut self) {
-            if self.staging.join("bundle").is_dir() {
-                let _ = set_bundle_modes(&self.staging.join("bundle"), 0o700, 0o600);
+            let bundle = self.staging.join("bundle");
+            if bundle.is_dir() {
+                if let Err(error) = set_bundle_modes(&bundle, 0o700, 0o600) {
+                    report_fixture_cleanup(&bundle, &error);
+                }
             }
-            if self.staging.join("runtime.yaml").is_file() {
-                let _ = fs::set_permissions(
-                    self.staging.join("runtime.yaml"),
-                    fs::Permissions::from_mode(0o600),
-                );
+            let runtime = self.staging.join("runtime.yaml");
+            if runtime.is_file() {
+                if let Err(error) = fs::set_permissions(&runtime, fs::Permissions::from_mode(0o600))
+                {
+                    report_fixture_cleanup(&runtime, &anyhow::Error::from(error));
+                }
             }
         }
+    }
+
+    /// Fails the test a fixture cleanup failure belongs to, unless the test is
+    /// already unwinding and would lose its own failure to this one.
+    fn report_fixture_cleanup(path: &Path, error: &anyhow::Error) {
+        if thread::panicking() {
+            return;
+        }
+        panic!("{}", cleanup_failure_line(path, error));
     }
 
     fn tree(root: &Path) -> Vec<String> {
