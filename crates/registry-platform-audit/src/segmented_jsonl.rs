@@ -1066,6 +1066,10 @@ fn validate_directory(path: &Path, policy: DirectoryPolicy) -> Result<(), AuditE
 
 fn validate_owner_only_active_file(file: &File) -> Result<(), AuditError> {
     let metadata = file.metadata().map_err(AuditError::Io)?;
+    validate_owner_only_active_metadata(&metadata)
+}
+
+fn validate_owner_only_active_metadata(metadata: &fs::Metadata) -> Result<(), AuditError> {
     if !metadata.is_file()
         || metadata.nlink() != 1
         || metadata.uid() != rustix::process::geteuid().as_raw()
@@ -1095,7 +1099,11 @@ fn validate_owner_only_sealed_file(file: &File) -> Result<(), AuditError> {
 
 fn file_fingerprint(file: &File) -> Result<FileFingerprint, AuditError> {
     let metadata = file.metadata().map_err(AuditError::Io)?;
-    Ok(FileFingerprint {
+    Ok(metadata_fingerprint(&metadata))
+}
+
+fn metadata_fingerprint(metadata: &fs::Metadata) -> FileFingerprint {
+    FileFingerprint {
         device: metadata.dev(),
         inode: metadata.ino(),
         length: metadata.len(),
@@ -1103,7 +1111,7 @@ fn file_fingerprint(file: &File) -> Result<FileFingerprint, AuditError> {
         modified_nanoseconds: metadata.mtime_nsec(),
         changed_seconds: metadata.ctime(),
         changed_nanoseconds: metadata.ctime_nsec(),
-    })
+    }
 }
 
 fn validate_pinned_file(
@@ -1111,10 +1119,14 @@ fn validate_pinned_file(
     pinned: &File,
     expected: FileFingerprint,
 ) -> Result<(), AuditError> {
-    validate_owner_only_active_file(pinned)?;
+    let pinned_metadata = pinned.metadata().map_err(AuditError::Io)?;
+    validate_owner_only_active_metadata(&pinned_metadata)?;
     let candidate = open_read(path)?;
-    validate_owner_only_active_file(&candidate)?;
-    if file_fingerprint(pinned)? != expected || file_fingerprint(&candidate)? != expected {
+    let candidate_metadata = candidate.metadata().map_err(AuditError::Io)?;
+    validate_owner_only_active_metadata(&candidate_metadata)?;
+    if metadata_fingerprint(&pinned_metadata) != expected
+        || metadata_fingerprint(&candidate_metadata) != expected
+    {
         return Err(AuditError::Io(io::Error::other(
             "audit file changed outside the initialized writer",
         )));
@@ -1187,6 +1199,99 @@ mod tests {
         let secret =
             AuditHashSecret::new(b"0123456789abcdef0123456789abcdef".to_vec()).expect("secret");
         (directory, path, AuditChainHasher::keyed(secret))
+    }
+
+    fn assert_pinned_metadata_refused(path: &Path, pinned: &File) {
+        // A fresh fingerprint ensures the policy check itself refuses the file,
+        // rather than detecting a change from an earlier fingerprint.
+        let expected = file_fingerprint(pinned).expect("current fingerprint");
+        let error = validate_pinned_file(path, pinned, expected)
+            .expect_err("unsafe pinned metadata is refused");
+        assert!(
+            matches!(error, AuditError::Io(error) if error.kind() == ErrorKind::PermissionDenied)
+        );
+
+        // Also reach the reopened descriptor's policy check with a valid pinned
+        // file. Skipping that check would report an identity mismatch instead.
+        let valid_path = path.with_extension("valid");
+        let valid = open_append(&valid_path).expect("valid pinned file opens");
+        let expected = file_fingerprint(&valid).expect("valid pinned fingerprint");
+        let error = validate_pinned_file(path, &valid, expected)
+            .expect_err("unsafe reopened metadata is refused");
+        assert!(
+            matches!(error, AuditError::Io(error) if error.kind() == ErrorKind::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn pinned_file_validation_rejects_group_or_other_read_permissions() {
+        let (_directory, path, _hasher) = fixture();
+        let pinned = open_append(&path).expect("active file opens");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("widen active file permissions");
+        assert_pinned_metadata_refused(&path, &pinned);
+    }
+
+    #[test]
+    fn pinned_file_validation_rejects_additional_hard_links() {
+        let (_directory, path, _hasher) = fixture();
+        let pinned = open_append(&path).expect("active file opens");
+        fs::hard_link(&path, path.with_extension("linked")).expect("add an active file link");
+        assert_pinned_metadata_refused(&path, &pinned);
+    }
+
+    #[test]
+    fn pinned_file_validation_rejects_directory_descriptors() {
+        let (directory, _path, _hasher) = fixture();
+        let path = directory.path().join("directory");
+        fs::create_dir(&path).expect("directory creates");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+            .expect("restrict directory permissions");
+        let pinned = File::open(&path).expect("directory descriptor opens");
+        assert_pinned_metadata_refused(&path, &pinned);
+    }
+
+    /// Opt-in component measurement; this excludes writes and durability work.
+    /// Run with `cargo test --release -p registry-platform-audit --lib
+    /// benchmark_pinned_file_validation -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "performance measurement with real local file metadata"]
+    fn benchmark_pinned_file_validation() {
+        use std::{hint::black_box, time::Instant};
+
+        const WARMUP: usize = 1_000;
+        const ITERATIONS: usize = 10_000;
+        const SAMPLES: usize = 5;
+        let (_directory, path, _hasher) = fixture();
+        let pinned = open_append(&path).expect("active file opens");
+        let expected = file_fingerprint(&pinned).expect("active fingerprint");
+        let lock_path = lock_path(&path);
+        let lock = open_lock(&lock_path).expect("lock file opens");
+        let lock_expected = file_fingerprint(&lock).expect("lock fingerprint");
+        let validate = || {
+            validate_pinned_file(black_box(&path), black_box(&pinned), black_box(expected))
+                .expect("active file remains pinned");
+            validate_pinned_file(
+                black_box(&lock_path),
+                black_box(&lock),
+                black_box(lock_expected),
+            )
+            .expect("lock file remains pinned");
+        };
+        for _ in 0..WARMUP {
+            validate();
+        }
+        for sample in 1..=SAMPLES {
+            let started = Instant::now();
+            for _ in 0..ITERATIONS {
+                validate();
+            }
+            let checks = ITERATIONS * 2;
+            let mean_ns = started.elapsed().as_nanos() / checks as u128;
+            println!(
+                "audit/pinned_file_validation sample={sample} checks={checks} mean_ns={mean_ns}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1319,6 +1424,38 @@ mod tests {
         assert_eq!(
             verify_segmented_audit_chain(&path, &hasher)
                 .expect("chain verifies")
+                .records,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn inexact_integer_records_are_rejected_before_the_direct_sink_writes() {
+        let (_directory, path, hasher) = fixture();
+        let sink = DurableSegmentedJsonlSink::open(&path, 1_048_576).expect("sink opens");
+        let chain = ChainState::bootstrap_or_start_empty(&sink, hasher.clone())
+            .await
+            .expect("chain starts");
+        // Retain the strict JSON boundary even for an internally serialized
+        // envelope: accepting this integer would make restart reject the log.
+        let error = chain
+            .append(&sink, json!({"count": 9_007_199_254_740_993_u64}))
+            .await
+            .expect_err("an inexact binary64 integer is refused");
+        assert!(matches!(error, AuditError::Io(error) if error.kind() == ErrorKind::InvalidData));
+        assert_eq!(fs::metadata(&path).expect("active metadata").len(), 0);
+        assert_eq!(chain.last_hash().await, None);
+        assert!(sink.healthy());
+
+        chain
+            .append(&sink, json!({"count": 9_007_199_254_740_992_u64}))
+            .await
+            .expect("an exactly representable integer still appends");
+        drop(chain);
+        drop(sink);
+        assert_eq!(
+            verify_segmented_audit_chain(&path, &hasher)
+                .expect("the accepted chain verifies")
                 .records,
             1
         );

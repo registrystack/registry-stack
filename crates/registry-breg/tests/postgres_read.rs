@@ -60,6 +60,32 @@ const TOMBSTONED_RECORD: &str = "00000000-0000-4000-8000-999999999999";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "opt-in PostgreSQL performance measurement"]
 async fn benchmark_audited_record_get() {
+    benchmark_audited_record_read(ReadBenchmark::Get).await;
+}
+
+/// Count the full authorized result while reading the final three-row page of
+/// a filtered, ordered list. Cursor creation is outside the measurement.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "opt-in PostgreSQL performance measurement"]
+async fn benchmark_audited_record_list_count_continuation() {
+    benchmark_audited_record_read(ReadBenchmark::ListCountContinuation).await;
+}
+
+/// Resolve an exact decimal selector through the real router and audit gates.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "opt-in PostgreSQL performance measurement"]
+async fn benchmark_audited_record_lookup() {
+    benchmark_audited_record_read(ReadBenchmark::Lookup).await;
+}
+
+#[derive(Clone, Copy)]
+enum ReadBenchmark {
+    Get,
+    ListCountContinuation,
+    Lookup,
+}
+
+async fn benchmark_audited_record_read(workload: ReadBenchmark) {
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -93,23 +119,94 @@ async fn benchmark_audited_record_get() {
     let profile = AuditProfile::production_from_secret_bytes(vec![0x7a; 32].into())
         .expect("benchmark audit profile is keyed");
     let app = read_router(pool.clone(), compiled, identity, lock_key, profile, None);
-    let uri = format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label");
-    let expected_body = format!(
+    let expected_record = format!(
         "{{\"data\":{{\"domainData\":{{\"label\":\"label-001\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"entityTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
     );
+    let (name, uri, expected_body) = match workload {
+        ReadBenchmark::Get => (
+            "audited_record_get",
+            format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label"),
+            expected_record.into_bytes(),
+        ),
+        ReadBenchmark::Lookup => (
+            "audited_record_lookup",
+            "/v1/records/widgets:lookup?$select=label".to_owned(),
+            expected_record.into_bytes(),
+        ),
+        ReadBenchmark::ListCountContinuation => {
+            let first = send(
+                &app,
+                "/v1/records/widgets?$select=label&$filter=jurisdiction%20in%20('zone-b','zone-a')&$orderby=ordinal&$top=100&$count=true",
+                Some(read_claims(["zone-a"])),
+            )
+            .await;
+            assert_eq!(first.status(), StatusCode::OK);
+            let first = body_json(first).await;
+            assert_eq!(first["count"], 103);
+            assert_eq!(
+                first["items"].as_array().expect("first page items").len(),
+                100
+            );
+            assert_eq!(
+                first["items"][99]["recordIdentifier"],
+                "00000000-0000-4000-8000-000000000099"
+            );
+            let cursor = first["pageInfo"]["nextCursor"]
+                .as_str()
+                .expect("first page has a continuation");
+            let items = [
+                ("00000000-0000-4000-8000-000000000100", "label-100"),
+                (ALPHA_RECORD, "alpha-label"),
+                (WILDCARD_RECORD, "literal%_\\value"),
+            ]
+            .map(|(record_id, label)| {
+                json!({
+                    "domainData": {"label": label},
+                    "recordIdentifier": record_id,
+                    "revisionIdentifier": "1",
+                })
+            });
+            let expected = json!({
+                "count": 103,
+                "items": items,
+                "meta": {
+                    "datasetIdentifier": "test-dataset",
+                    "entityTypeIdentifier": "widget",
+                    "registryIdentifier": "read-registry",
+                },
+                "pageInfo": {"nextCursor": null},
+            });
+            (
+                "audited_record_list_count_continuation",
+                format!("/v1/records/widgets?$skiptoken={cursor}"),
+                serde_json::to_vec(&expected).expect("expected list response serializes"),
+            )
+        }
+    };
     for sample in 0..=5 {
         let count = if sample == 0 { 100 } else { 500 };
         let mut durations = Vec::with_capacity(count);
         for _ in 0..count {
             let started = Instant::now();
-            let response = send(&app, &uri, Some(read_claims(["zone-a"]))).await;
+            let response = match workload {
+                ReadBenchmark::Lookup => {
+                    send_lookup(
+                        &app,
+                        &uri,
+                        Some(read_claims(["zone-a"])),
+                        json!({"selector": "by-amount", "values": {"amount": "1.20"}}),
+                    )
+                    .await
+                }
+                _ => send(&app, &uri, Some(read_claims(["zone-a"]))).await,
+            };
             assert_eq!(response.status(), StatusCode::OK);
             let bytes = body_bytes(response).await;
             durations.push(started.elapsed());
-            assert_eq!(bytes, expected_body.as_bytes());
+            assert_eq!(bytes, expected_body);
         }
         if sample != 0 {
-            performance::report_latency("audited_record_get", sample, &durations);
+            performance::report_latency(name, sample, &durations);
         }
     }
     drop(app);
@@ -126,7 +223,7 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
         .await
         .expect("administrator installs btree_gist for temporal exclusion constraints");
     let (migration, migration_task) = database.connect_migration().await;
-    let compiled = Arc::new(compiled_registry());
+    let compiled = Arc::new(compiled_registry_with_composite_lookup());
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs the complete compiled PostgreSQL schema");
@@ -474,6 +571,27 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     assert_read_audit_is_ordered_chained_and_minimized(&database, &profile, &compiled).await;
     assert_audit_insert_failure_is_closed_and_recovers(&database, &app, &profile).await;
+
+    let composite = send_lookup(
+        &app,
+        "/v1/records/widgets:lookup?$select=label",
+        Some(read_claims(["zone-a"])),
+        json!({"selector": "by-amount-and-label", "values": {"amount": "1.20", "label": "label-001"}}),
+    )
+    .await;
+    assert_eq!(composite.status(), StatusCode::OK);
+    assert_eq!(body_bytes(composite).await, get_bytes);
+    let mismatched = send_lookup(
+        &app,
+        "/v1/records/widgets:lookup?$select=label",
+        Some(read_claims(["zone-a"])),
+        json!({"selector": "by-amount-and-label", "values": {"amount": "1.20", "label": "label-002"}}),
+    )
+    .await;
+    assert_eq!(mismatched.status(), StatusCode::NOT_FOUND);
+    let mismatched = body_json(mismatched).await;
+    assert_eq!(mismatched["code"], "lookup.unresolved");
+    assert!(!mismatched.to_string().contains("label-002"));
     database.cleanup().await;
 }
 
@@ -517,13 +635,17 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
 
     let profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
         .expect("test owns a strongly keyed audit profile");
-    let app = read_router(
+    let query_plan = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = read_router_with_cursor_codec(
         pool.clone(),
         compiled.clone(),
         identity.clone(),
         lock_key,
         profile.clone(),
         None,
+        cursor_codec(),
+        None,
+        Some(Arc::clone(&query_plan)),
     );
 
     assert_ids(
@@ -620,6 +742,10 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     .await;
     assert_eq!(counted_first.status(), StatusCode::OK);
     let counted_first = body_json(counted_first).await;
+    assert_ids(
+        counted_first.clone(),
+        &[SORT_DUP_A_RECORD, SORT_DUP_B_RECORD],
+    );
     assert_eq!(
         counted_first["count"], 5,
         "the first page counts the whole authorized result"
@@ -636,9 +762,20 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     .await;
     assert_eq!(counted_second.status(), StatusCode::OK);
     let counted_second = body_json(counted_second).await;
+    assert_ids(
+        counted_second.clone(),
+        &[SORT_NEXT_RECORD, SORT_NULL_A_RECORD],
+    );
     assert_eq!(
         counted_second["count"], 5,
         "a continuation counts the same result, not only the rows after its boundary"
+    );
+    assert!(
+        !query_plan
+            .lock()
+            .expect("query plan probe is available")
+            .is_empty(),
+        "the typed EXPLAIN path executes with ordinary list parameters"
     );
 
     let replay_cursor = next_cursor(
@@ -684,6 +821,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
             package_revision: "package-read-2".to_owned(),
             schema_fingerprint: identity.schema_fingerprint.clone(),
         }),
+        None,
     );
     assert_cursor_invalid(
         &package_changed_app,
@@ -707,6 +845,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         None,
         cursor_codec(),
         None,
+        None,
     );
     assert_cursor_invalid(
         &projection_changed_app,
@@ -728,6 +867,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
             None,
             cursor_codec(),
             None,
+            None,
         );
         assert_cursor_invalid(
             &changed_app,
@@ -745,6 +885,7 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
         profile,
         None,
         immediately_expiring_cursor_codec(),
+        None,
         None,
     );
     let expired_cursor = next_cursor(
@@ -863,6 +1004,7 @@ fn read_router(
         fault,
         cursor_codec(),
         None,
+        None,
     )
 }
 
@@ -876,6 +1018,7 @@ fn read_router_with_cursor_codec(
     fault: Option<ReadFaultPoint>,
     cursors: Arc<CursorCodec>,
     http_identity: Option<ReadRuntimeIdentity>,
+    query_plan: Option<Arc<std::sync::Mutex<Vec<Value>>>>,
 ) -> axum::Router {
     let read_identity = http_identity.unwrap_or_else(|| ReadRuntimeIdentity {
         package_revision: identity.package_revision.clone(),
@@ -892,6 +1035,10 @@ fn read_router_with_cursor_codec(
     );
     let records = match fault {
         Some(fault) => records.with_fault_for_test(fault),
+        None => records,
+    };
+    let records = match query_plan {
+        Some(query_plan) => records.with_query_plan_for_test(query_plan),
         None => records,
     };
     router(Arc::new(HttpService::new(
@@ -1615,6 +1762,19 @@ fn quote_identifier(value: &str) -> String {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     compile_registry_source(&registry_source())
+}
+
+fn compiled_registry_with_composite_lookup() -> registry_breg::CompiledRegistry {
+    let mut source: Value = serde_json::from_str(&registry_source()).expect("read fixture is JSON");
+    source["entities"][0]["selectorProfiles"]
+        .as_array_mut()
+        .expect("widget has selector profiles")
+        .push(json!({"id": "by-amount-and-label", "fields": ["amount", "label"]}));
+    source["accessProfiles"][0]["grants"][0]["lookups"]
+        .as_array_mut()
+        .expect("operator has widget lookups")
+        .push(json!({"selector": "by-amount-and-label", "valueOrigin": "request"}));
+    compile_registry_source(&source.to_string())
 }
 
 fn compiled_registry_without_amount_projection() -> registry_breg::CompiledRegistry {
