@@ -606,7 +606,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.breg_contracts == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       postgres:
         # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
