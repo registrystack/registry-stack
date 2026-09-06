@@ -109,6 +109,7 @@ identifiable and reclaimable once the container is gone.
 | First start | Capture the authored closure, prepare private identities, create the owned database, run normal schema-test/package/apply/verify commands, then seed through authenticated HTTP. |
 | Already running | Return the existing ready session and credential references. |
 | Stop, including repeated stop | Gracefully stop owned BReg and Mint children and stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and audit history. |
+| Stop where no start ever ran | Refuse and name the absent session. Nothing is created, changed or removed, so a mistyped `--project` cannot read as a stopped session. |
 | Start after stop | Reuse the same container, database, credentials and package. Obtain fresh short-lived tokens. Preserve record edits. |
 | Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
 | Start after `--remove` | Create an empty container and volume under the same ownership identifier, activate the retained package again and replay the authored seeds. |
