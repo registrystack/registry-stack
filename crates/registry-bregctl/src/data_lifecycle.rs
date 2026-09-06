@@ -934,7 +934,8 @@ fn write_atomic_entry(destination: &SafeEntry, bytes: &[u8]) -> Result<(), DataL
     destination.replace_from(&temporary).map_err(|_| {
         let _ = destination.parent().remove_file(&temporary);
         DataLifecycleError::Output
-    })
+    })?;
+    sync_publication_parent(destination.parent())
 }
 
 /// Create a destination through its held parent descriptor, refusing to replace
@@ -949,7 +950,8 @@ fn write_atomic_create_new_entry(
     // keeps the winner's bytes.
     destination
         .publish_new_from(&temporary)
-        .map_err(|_| DataLifecycleError::Output)
+        .map_err(|_| DataLifecycleError::Output)?;
+    sync_publication_parent(destination.parent())
 }
 
 /// Resolve an output path to its held parent directory descriptor. Every later
@@ -1000,6 +1002,55 @@ fn write_atomic_temporary(parent: &SafeDir, bytes: &[u8]) -> Result<OsString, Da
         return Ok(temporary);
     }
     Err(DataLifecycleError::Output)
+}
+
+/// Report a published entry only once the directory that names it is durable.
+/// A rename or link that survives in the page cache alone can be lost by a
+/// crash, which would leave an output whose checkpoint reverted to an earlier
+/// page and a tail no resume could account for.
+fn sync_publication_parent(parent: &SafeDir) -> Result<(), DataLifecycleError> {
+    if publication_sync_faulted() {
+        return Err(DataLifecycleError::Output);
+    }
+    parent.sync().map_err(|_| DataLifecycleError::Output)
+}
+
+// Test-only seam that stands in for a directory the filesystem could not make
+// durable. It fires where a published entry would be reported as written,
+// which is the window a lost rename opens.
+#[cfg(test)]
+thread_local! {
+    static PUBLICATION_SYNC_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn publication_sync_faulted() -> bool {
+    PUBLICATION_SYNC_FAULT.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+fn publication_sync_faulted() -> bool {
+    false
+}
+
+/// Make every publication in this thread fail its parent directory sync until
+/// the returned guard drops.
+#[cfg(test)]
+fn install_publication_sync_fault() -> PublicationSyncFaultGuard {
+    PUBLICATION_SYNC_FAULT.with(|faulted| faulted.set(true));
+    PublicationSyncFaultGuard
+}
+
+/// Clears the fault, so one test cannot leak it into the next test on the same
+/// thread.
+#[cfg(test)]
+struct PublicationSyncFaultGuard;
+
+#[cfg(test)]
+impl Drop for PublicationSyncFaultGuard {
+    fn drop(&mut self) {
+        PUBLICATION_SYNC_FAULT.with(|faulted| faulted.set(false));
+    }
 }
 
 fn atomic_write_temporary_name(sequence: u64) -> OsString {
@@ -1300,6 +1351,37 @@ mod tests {
             Err(DataLifecycleError::Output)
         ));
         assert_eq!(fs::read(&canary).unwrap(), b"unchanged");
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_publication_that_cannot_sync_its_directory_is_not_reported_as_written() {
+        let directory = test_directory("publication-sync");
+        let checkpoint = directory.join("export.checkpoint.json");
+        let reserved = directory.join("records.jsonl");
+        let checkpoint_entry = resolve_write_destination(&checkpoint).unwrap();
+        let reserved_entry = resolve_write_destination(&reserved).unwrap();
+        write_atomic_entry(&checkpoint_entry, b"first").unwrap();
+
+        let guard = install_publication_sync_fault();
+        assert!(matches!(
+            write_atomic_entry(&checkpoint_entry, b"second"),
+            Err(DataLifecycleError::Output)
+        ));
+        // The rename runs before the sync, so the bytes are already in place.
+        // The refusal reports that the directory entry naming them is not
+        // durable, which is the only honest thing to say once the rename ran.
+        assert_eq!(fs::read(&checkpoint).unwrap(), b"second");
+        assert!(matches!(
+            write_atomic_create_new_entry(&reserved_entry, b"reserved"),
+            Err(DataLifecycleError::Output)
+        ));
+        assert_eq!(fs::read(&reserved).unwrap(), b"reserved");
+
+        drop(guard);
+        write_atomic_entry(&checkpoint_entry, b"third").unwrap();
+        assert_eq!(fs::read(&checkpoint).unwrap(), b"third");
 
         fs::remove_dir_all(directory).unwrap();
     }
