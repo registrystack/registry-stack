@@ -535,6 +535,18 @@ fn cleanup_temporary_file(parent: &SafeDir, name: &OsStr) {
 
 /// Remove an entry only when it is still the exact file this process created,
 /// so a name swapped underneath the held parent descriptor is left alone.
+///
+/// The stat and the unlink are two calls against one name, and POSIX offers no
+/// identity-bound removal, so the check narrows the window between them rather
+/// than closing it: a name relinked in that gap is unlinked as though it were
+/// the entry the stat approved. That bound is accepted here rather than worked
+/// around. Every name this guards is one this process itself created or
+/// promoted through the resolved parent descriptor, and its expected identity
+/// comes from the descriptor this process wrote, so a name that changes in the
+/// gap can only have been changed by a writer who already holds write access to
+/// the resolved parent directory. Quarantining the name first would rename by
+/// the same name and add a call to the same window, so it would move the gap
+/// rather than remove it.
 pub(crate) fn remove_exact_file(
     destination: &SafeEntry,
     expected: &fs::Metadata,
@@ -644,6 +656,29 @@ mod tests {
                     .to_string_lossy()
                     .starts_with(".bregctl-test-receipt-")),
             "temporary receipt files are cleaned up"
+        );
+    }
+
+    #[test]
+    fn an_exact_removal_refuses_a_name_that_holds_another_file() {
+        let directory = TestDirectory::create();
+        let output = directory.path.join("receipt.json");
+        let created = fs::File::create(&output).expect("the guarded file creates");
+        let identity = created.metadata().expect("the created identity reads");
+        drop(created);
+        let destination = SafeEntry::resolve(&output).expect("the destination resolves");
+
+        // The name now holds a file this process never created, which is what
+        // the identity comparison exists to refuse.
+        fs::remove_file(&output).expect("the guarded file removes");
+        fs::write(&output, b"operator-owned").expect("another writer takes the name");
+        let refused = remove_exact_file(&destination, &identity)
+            .expect_err("a name holding another file is refused");
+
+        assert_eq!(refused.to_string(), "output identity changed");
+        assert_eq!(
+            fs::read(&output).expect("the other file remains"),
+            b"operator-owned"
         );
     }
 
