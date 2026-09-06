@@ -56,7 +56,7 @@ mod webhook_lifecycle;
 use apply_lifecycle::{ApplyLifecycleError, ApplyLifecycleRequest};
 use audit_lifecycle::{AuditCliError, AuditExportOutcome, AuditPruneOutcome, AuditVerifyOutcome};
 use data_lifecycle::{
-    DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest,
+    DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest, ExportPairState,
 };
 use history_erasure_lifecycle::{
     HistoryErasureLifecycleError, HistoryErasureLifecycleOutcome, HistoryErasureLifecycleRequest,
@@ -2436,6 +2436,20 @@ fn data_lifecycle_failure(
             "the Registry data transport is unavailable",
             DiagnosticArtifact::DataTransport,
             SuggestedAction::VerifyDataTransport,
+        ),
+        DataLifecycleError::ExportPair(ExportPairState::CheckpointMissing) => (
+            format!("{prefix}.checkpoint.missing"),
+            "checkpoint",
+            "the export output exists without the checkpoint that records it, which is what a run stopped before its first checkpoint leaves; remove the output file to export again, or name the checkpoint the output belongs to",
+            DiagnosticArtifact::DataCheckpoint,
+            SuggestedAction::VerifyDataCheckpoint,
+        ),
+        DataLifecycleError::ExportPair(ExportPairState::OutputMissing) => (
+            format!("{prefix}.output.missing"),
+            "output",
+            "the export checkpoint exists without the output it records; remove the checkpoint file to export again, or name the output the checkpoint belongs to",
+            DiagnosticArtifact::DataCheckpoint,
+            SuggestedAction::VerifyDataCheckpoint,
         ),
     };
     FailureReport {
@@ -9486,6 +9500,41 @@ mod tests {
             b"module: original\n"
         );
         assert_no_migration_transaction_directories(&directory);
+    }
+
+    #[test]
+    fn a_half_reserved_export_pair_names_the_file_that_is_missing() {
+        let checkpoint = serde_json::to_value(data_lifecycle_failure(
+            "data export",
+            "data.export",
+            DataLifecycleError::ExportPair(ExportPairState::CheckpointMissing),
+        ))
+        .expect("the failure report serializes");
+        assert_eq!(
+            checkpoint["diagnostics"][0]["code"],
+            "data.export.checkpoint.missing"
+        );
+        assert_eq!(checkpoint["diagnostics"][0]["path"], "checkpoint");
+        assert!(checkpoint["diagnostics"][0]["message"]
+            .as_str()
+            .expect("the message renders")
+            .contains("without the checkpoint"));
+
+        let output = serde_json::to_value(data_lifecycle_failure(
+            "data export",
+            "data.export",
+            DataLifecycleError::ExportPair(ExportPairState::OutputMissing),
+        ))
+        .expect("the failure report serializes");
+        assert_eq!(
+            output["diagnostics"][0]["code"],
+            "data.export.output.missing"
+        );
+        assert_eq!(output["diagnostics"][0]["path"], "output");
+        assert!(output["diagnostics"][0]["message"]
+            .as_str()
+            .expect("the message renders")
+            .contains("without the output"));
     }
 
     #[test]
