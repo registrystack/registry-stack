@@ -421,7 +421,11 @@ class RuntimePreflightTest(unittest.TestCase):
                     stderr="",
                 )
                 run = unittest.mock.Mock(return_value=render)
-                with unittest.mock.patch.object(self.module.subprocess, "run", run):
+                reported = io.StringIO()
+                with (
+                    unittest.mock.patch.object(self.module.subprocess, "run", run),
+                    contextlib.redirect_stderr(reported),
+                ):
                     result = self.module.main(
                         [
                             "--compose-file",
@@ -431,6 +435,13 @@ class RuntimePreflightTest(unittest.TestCase):
                         ]
                     )
                 self.assertEqual(1, result)
+                self.assertEqual(
+                    1, len(reported.getvalue().splitlines()), reported.getvalue()
+                )
+                self.assertTrue(
+                    reported.getvalue().startswith("runtime preflight failed: "),
+                    reported.getvalue(),
+                )
                 run.assert_called_once()
 
     def test_a_healthcheck_may_only_run_the_official_product_command(self) -> None:
