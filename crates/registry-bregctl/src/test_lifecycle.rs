@@ -125,8 +125,11 @@ pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycl
     let opened = match file.metadata() {
         Ok(metadata) => metadata,
         Err(_) => {
+            // The failed call is the only source of the identity a by-name
+            // removal would need to prove it still targets this file, so none
+            // is available here; leave the created file rather than unlink
+            // whatever the name currently resolves to.
             drop(file);
-            let _ = destination.remove_file();
             return Err(TestLifecycleError::OutputPreflight);
         }
     };
@@ -532,7 +535,10 @@ fn cleanup_temporary_file(parent: &SafeDir, name: &OsStr) {
 
 /// Remove an entry only when it is still the exact file this process created,
 /// so a name swapped underneath the held parent descriptor is left alone.
-fn remove_exact_file(destination: &SafeEntry, expected: &fs::Metadata) -> std::io::Result<()> {
+pub(crate) fn remove_exact_file(
+    destination: &SafeEntry,
+    expected: &fs::Metadata,
+) -> std::io::Result<()> {
     let actual = destination.stat()?;
     if actual.is_symlink() || !actual.is_file() || !actual.is_same_file_as(expected) {
         return Err(std::io::Error::other("output identity changed"));
