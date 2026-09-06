@@ -530,18 +530,26 @@ function pluralLines(count) {
 // word, bare or single- or double-quoted, with an optional trailing `# comment`. It is not
 // a YAML grammar, so a value it cannot read (a folded or literal block, a flow sequence, a
 // value continued on the next line) is reported as unreadable rather than taken as absent:
-// a specification cannot step around REQ-DOC-014 by spelling `verified` another way.
+// a specification cannot step around REQ-DOC-014 by spelling `verified` another way. The
+// same holds for a root key written in a form the reader does not take (the root mapping
+// indented as a whole, or a space before the key's colon); a key indented deeper than the
+// root mapping's first key is nested under another key and is not the field.
 const PLAIN_WORD = /^(?:(['"])([A-Za-z0-9_-]+)\1|([A-Za-z0-9_-]+))(?:[ \t]+#.*|[ \t]*)$/;
 
 // One top-level frontmatter field: `{ present: false }`, `{ present: true, value }` for a
 // word this check reads, or `{ present: true, value: null }` for a form it does not.
 function readFrontmatterWord(block, key) {
   const line = new RegExp(`^${key}:(.*)$`, 'm').exec(block);
-  if (!line) {
-    return { present: false };
+  if (line) {
+    const match = PLAIN_WORD.exec(line[1].trimStart());
+    return { present: true, value: match ? (match[2] ?? match[3]) : null };
   }
-  const match = PLAIN_WORD.exec(line[1].trimStart());
-  return { present: true, value: match ? (match[2] ?? match[3]) : null };
+  // YAML takes the root mapping's indentation from its first key.
+  const indent = /^([ \t]*)[^ \t#\n]/m.exec(block)?.[1] ?? '';
+  if (new RegExp(`^${indent}${key}[ \\t]*:`, 'm').test(block)) {
+    return { present: true, value: null };
+  }
+  return { present: false };
 }
 
 // Where the page stands against REQ-DOC-014: 'verified' for a specification that declares
@@ -643,7 +651,7 @@ export function checkEvidenceAnchors({
     if (axis === 'unreadable') {
       errors.push(
         `${location} writes doc_type or evidence in a form this check does not read; write ` +
-          'each as one plain word on its own line so RS-DOC REQ-DOC-014 can be applied',
+          'each as one plain word at the start of its own line so RS-DOC REQ-DOC-014 can be applied',
       );
     }
     const verifiedSpecification = axis === 'verified';
