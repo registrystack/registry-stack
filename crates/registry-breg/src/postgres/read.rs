@@ -13,7 +13,7 @@ use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
-use tokio_postgres::types::ToSql;
+use tokio_postgres::types::{ToSql, Type};
 use uuid::Uuid;
 
 use crate::api::{
@@ -396,7 +396,7 @@ impl PostgresRecordReadService {
                     target_record(&request.kind).ok_or(ReadServiceError::Unavailable)?;
                 transaction
                     .transaction()
-                    .query(&sql, &[&record_id])
+                    .query_typed(&sql, &[(&record_id, Type::TEXT)])
                     .await
                     .map_err(|_| ReadServiceError::Unavailable)?
             }
@@ -417,31 +417,30 @@ impl PostgresRecordReadService {
                         .get(..count_parameters)
                         .ok_or(ReadServiceError::Unavailable)?
                         .iter()
-                        .map(|value| value as &(dyn ToSql + Sync))
+                        .map(|value| (value as &(dyn ToSql + Sync), Type::TEXT))
                         .collect::<Vec<_>>();
                     total_count = Some(
                         transaction
                             .transaction()
-                            .query_one(&count_sql, &refs)
+                            .query_typed_one(&count_sql, &refs)
                             .await
                             .map_err(|_| ReadServiceError::Unavailable)?
                             .get::<_, i64>(0),
                     );
                 }
                 let mut params = values
-                    .into_iter()
-                    .map(|value| Box::new(value) as Box<dyn ToSql + Sync + Send>)
-                    .collect::<Vec<_>>();
-                params.push(Box::new(limit));
-                let refs = params
                     .iter()
-                    .map(|value| &**value as &(dyn ToSql + Sync))
+                    .map(|value| (value as &(dyn ToSql + Sync), Type::TEXT))
                     .collect::<Vec<_>>();
+                params.push((&limit, Type::INT8));
                 #[cfg(feature = "postgres-test")]
                 if let Some(probe) = &self.query_plan {
                     let explained: Value = transaction
                         .transaction()
-                        .query_one(&format!("EXPLAIN (FORMAT JSON, COSTS OFF) {sql}"), &refs)
+                        .query_typed_one(
+                            &format!("EXPLAIN (FORMAT JSON, COSTS OFF) {sql}"),
+                            &params,
+                        )
                         .await
                         .map_err(|_| ReadServiceError::Unavailable)?
                         .get(0);
@@ -452,7 +451,7 @@ impl PostgresRecordReadService {
                 }
                 transaction
                     .transaction()
-                    .query(&sql, &refs)
+                    .query_typed(&sql, &params)
                     .await
                     .map_err(|_| ReadServiceError::Unavailable)?
             }
@@ -463,17 +462,13 @@ impl PostgresRecordReadService {
                 };
                 let (sql, values) = lookup_sql(&plan.entity, &relations, values, &projection)?;
                 let mut params = values
-                    .into_iter()
-                    .map(|value| Box::new(value) as Box<dyn ToSql + Sync + Send>)
-                    .collect::<Vec<_>>();
-                params.push(Box::new(limit));
-                let refs = params
                     .iter()
-                    .map(|value| &**value as &(dyn ToSql + Sync))
+                    .map(|value| (value as &(dyn ToSql + Sync), Type::TEXT))
                     .collect::<Vec<_>>();
+                params.push((&limit, Type::INT8));
                 transaction
                     .transaction()
-                    .query(&sql, &refs)
+                    .query_typed(&sql, &params)
                     .await
                     .map_err(|_| ReadServiceError::Unavailable)?
             }
@@ -1738,9 +1733,9 @@ async fn install_evaluation_date(
         .unwrap_or_else(time::OffsetDateTime::now_utc);
     let evaluation_date = instant.date().to_string();
     transaction
-        .execute(
+        .execute_typed(
             "SELECT set_config('registry.evaluation_date', $1, true)",
-            &[&evaluation_date],
+            &[(&evaluation_date, Type::TEXT)],
         )
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;

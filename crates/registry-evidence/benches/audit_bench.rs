@@ -2,13 +2,12 @@
 //! Microbenchmarks for the durable Evidence audit chain.
 //!
 //! These measure the real filesystem path through the shared
-//! `DurableSegmentedAuditLog`, because the cost that decides service throughput
-//! is the durable `fsync` that covers each append, not the chain hashing.
+//! `DurableSegmentedAuditLog`, including the durable `fsync` that covers each
+//! append and can be shared by a concurrent group of records.
 //!
 //! Covers:
 //! - one sequential append, the latency floor a request pays per audit record;
-//! - concurrent appends, which show whether added concurrency raises append
-//!   throughput or merely queues behind the same serialized `fsync`;
+//! - concurrent appends, which measure the sink's durable group commit;
 //! - event construction and serialization alone, for scale against the I/O.
 //!
 //! The `record_bytes` line printed on startup reports the on-disk size of one
@@ -29,6 +28,8 @@ use tokio::{runtime::Runtime, task::JoinSet};
 /// ceiling never interferes with the measurement.
 const BENCH_MAXIMUM_FILE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const BENCH_SECRET: [u8; 64] = [0x5a; 64];
+const BENCH_BUNDLE_REVISION: &str =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 const CONCURRENCY_LEVELS: [usize; 4] = [1, 8, 32, 128];
 
 /// Build a pseudonym of the shape the runtime actually writes, so records are
@@ -43,10 +44,10 @@ fn pseudonym(seed: u8) -> String {
 fn sample_event() -> EvidenceAuditEvent {
     EvidenceAuditEvent::new(
         AssuranceProfile::EvidenceGrade,
-        "evidence.request.evaluate".to_string(),
+        ulid::Ulid::new().to_string(),
         AuditPhase::AccessAttempt,
-        "adult-status".to_string(),
-        "2026-08-01T00:00:00Z/1".to_string(),
+        "urn:example:fixture:requirement:adult-status:v1".to_string(),
+        BENCH_BUNDLE_REVISION.to_string(),
         "age-verification".to_string(),
         pseudonym(0x11),
         AuditAuthority {
@@ -94,7 +95,11 @@ fn report_record_bytes(runtime: &Runtime) {
             EvidenceAuditLog::initialize(&path, BENCH_MAXIMUM_FILE_BYTES, BENCH_SECRET.to_vec(), 1)
                 .await
                 .expect("initialize audit log");
-        log.append(sample_event()).await.expect("append");
+        let event = sample_event();
+        event
+            .validate_phase_fields()
+            .expect("benchmark event matches the current audit contract");
+        log.append(event).await.expect("append");
     });
     let bytes = std::fs::metadata(&path).expect("metadata").len();
     eprintln!("audit/record_bytes: {bytes}");
@@ -116,9 +121,9 @@ fn benchmark_sequential_append(c: &mut Criterion) {
     group.finish();
 }
 
-/// Many appends in flight at once. Because the sink holds its state mutex
-/// across the blocking write and `fsync`, throughput here is expected to stay
-/// flat as concurrency rises: the extra callers queue rather than batch.
+/// Many appends in flight at once. The sink assigns chain positions in order
+/// and groups pending records into durable writes. Each completed append waits
+/// for the `fsync` covering its group, so concurrency can amortize that cost.
 fn benchmark_concurrent_append(c: &mut Criterion) {
     let runtime = runtime();
     let (_directory, log) = durable_log(&runtime);
