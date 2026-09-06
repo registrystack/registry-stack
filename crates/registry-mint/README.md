@@ -429,8 +429,12 @@ that the configured audit sink resolves at or below a directory the deployment
 declares persistent. Mint resolves `audit.path` exactly as it loads it,
 against the configuration file's directory when the setting is relative, then
 canonicalizes the declared root and the deepest existing ancestor of the sink
-before comparing. A sink outside the root, and a symlink inside the root that
-leads to ephemeral storage, both fail closed. The option relaxes nothing: the
+before comparing. A relative `--config` path works the same way, because the
+configuration directory is resolved to its canonical location as the file
+loads. A sink outside the root, a symlink inside the root that leads to
+ephemeral storage, and an `audit.path` that climbs with `..` all fail closed;
+a climbing component cannot be proven to stay inside the root. The option
+relaxes nothing: the
 signer and audit chain proofs still run. Deciding whether the declared root is
 durable storage belongs to the deployment that mounts it; Mint only proves
 where its own configured sink resolves, and reports the failing side without
