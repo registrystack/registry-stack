@@ -347,8 +347,19 @@ mod descriptor {
                     FileType::Symlink => (false, false, true),
                     FileType::RegularFile => (false, true, false),
                     _ => {
-                        let stat = self.entry_stat(&name)?;
-                        (stat.is_dir(), stat.is_file(), stat.is_symlink())
+                        fire_listing_stat_hook();
+                        match self.entry_stat(&name) {
+                            Ok(stat) => (stat.is_dir(), stat.is_file(), stat.is_symlink()),
+                            // The name is already gone by the time the stat
+                            // asks about it, so it is not one of the entries
+                            // this listing reports. A listing promises the
+                            // entries the directory held, and refusing the
+                            // whole listing over a name another process removed
+                            // meanwhile would fail an operation that has
+                            // nothing left to do about that name.
+                            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                            Err(error) => return Err(error),
+                        }
                     }
                 };
                 entries.push(SafeDirEntry {
@@ -547,6 +558,46 @@ mod descriptor {
 
     #[cfg(not(test))]
     fn fire_race_hook() {}
+
+    // Test-only seam that stands in for another process acting between a
+    // directory read and the no-follow stat a listing falls back to for an
+    // entry whose advisory type is not a file, a directory, or a symbolic link.
+    #[cfg(test)]
+    thread_local! {
+        static LISTING_STAT_HOOK: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    #[cfg(test)]
+    fn fire_listing_stat_hook() {
+        let taken = LISTING_STAT_HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(mut hook) = taken {
+            hook();
+        }
+    }
+
+    #[cfg(not(test))]
+    fn fire_listing_stat_hook() {}
+
+    /// Install a callback that runs once, before a listing stats the first
+    /// entry whose advisory type made it fall back to a no-follow stat.
+    #[cfg(test)]
+    pub(crate) fn install_listing_stat_hook(hook: impl FnMut() + 'static) -> ListingStatHookGuard {
+        LISTING_STAT_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        ListingStatHookGuard
+    }
+
+    /// Clears any listing hook the test did not consume, so one test cannot
+    /// leak a hook into the next test on the same thread.
+    #[cfg(test)]
+    pub(crate) struct ListingStatHookGuard;
+
+    #[cfg(test)]
+    impl Drop for ListingStatHookGuard {
+        fn drop(&mut self) {
+            LISTING_STAT_HOOK.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
 
     /// Install a callback that runs once, after the next resolution captures
     /// its directory descriptors and before the caller uses them.
@@ -779,7 +830,7 @@ mod descriptor {
 pub(crate) use descriptor::{EntryStat, SafeDir, SafeEntry};
 
 #[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
-pub(crate) use descriptor::{install_race_hook, RaceHookGuard};
+pub(crate) use descriptor::{install_listing_stat_hook, install_race_hook, RaceHookGuard};
 
 /// The deterministic ancestor-swap fixture the race regressions share.
 ///
@@ -942,7 +993,9 @@ mod tests {
     use std::io::{Read, Write};
 
     use super::race_fixture::race_tree;
-    use super::{SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
+    use super::{
+        install_listing_stat_hook, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH,
+    };
 
     #[test]
     fn resolution_refuses_an_ancestor_symbolic_link() {
@@ -1106,6 +1159,31 @@ mod tests {
 
         assert!(!tree.root().join("genuine-moved/staged").exists());
         assert!(tree.root().join("attacker/staged/nested/file").exists());
+    }
+
+    #[test]
+    fn a_listing_skips_an_entry_that_vanishes_before_its_no_follow_stat() {
+        let tree = race_tree();
+        // A socket is neither a file, a directory, nor a symbolic link, so the
+        // listing falls back to the no-follow stat for it, the same fallback a
+        // filesystem that reports no advisory type at all takes for every name.
+        let socket = tree.named("socket");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("socket entry");
+        let directory = SafeDir::resolve(&tree.named_directory()).expect("the directory resolves");
+        let removed = socket.clone();
+        let _guard = install_listing_stat_hook(move || {
+            fs::remove_file(&removed).expect("the entry is removed before its stat");
+        });
+
+        let names: Vec<_> = directory
+            .read_entries()
+            .expect("a vanished entry does not refuse the listing")
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        drop(listener);
+
+        assert_eq!(names, vec![OsStr::new("target").to_owned()]);
     }
 
     #[test]
