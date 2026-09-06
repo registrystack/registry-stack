@@ -761,3 +761,301 @@ fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
         .get("configurationRevision")
         .is_none());
 }
+
+#[test]
+fn deleting_obsolete_artifact_with_a_local_edit_requires_an_explicit_resolution() {
+    let fixture = Fixture::new();
+    let initial = fixture.export(
+        "initial",
+        "lookup",
+        "v1",
+        &[
+            ("sources/lookup.yaml", "kind: initial\n"),
+            ("adapters/custom.rhai", "generated\n"),
+        ],
+    );
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    accepted(&lock, &[initial], BTreeMap::new());
+    let state_before = fs::read(fixture.project.join(STATE_PATH)).unwrap();
+    put(&fixture.project, "adapters/custom.rhai", "customized\n");
+    let next = fixture.export(
+        "next",
+        "lookup",
+        "v2",
+        &[("sources/lookup.yaml", "kind: next\n")],
+    );
+    // Unlike `deleting_obsolete_artifacts_preserves_customization_and_authored_references`,
+    // no resolution is supplied for the edited, now-obsolete artifact, so the
+    // conflict must reach `validate` unresolved instead of being silently
+    // decided by an implicit keep or delete.
+    let mut candidate = prepare(&lock, &[next], &BTreeMap::new()).unwrap();
+    assert_eq!(candidate.report().conflicts, ["adapters/custom.rhai"]);
+    let error = candidate.validate(|_| Ok(())).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "source candidate has unresolved conflicts; choose keep, adopt, or an explicit resolved file"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.project.join("adapters/custom.rhai")).unwrap(),
+        "customized\n"
+    );
+    assert!(!fixture.project.join(JOURNAL_PATH).exists());
+    assert_eq!(
+        fs::read(fixture.project.join(STATE_PATH)).unwrap(),
+        state_before
+    );
+}
+
+#[test]
+fn import_refuses_manifest_over_one_mebibyte() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().join("oversized-manifest");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join(MANIFEST_FILE),
+        vec![b'a'; (MAX_FILE_BYTES + 1) as usize],
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[root], &BTreeMap::new())
+        .err()
+        .expect("bounded export is refused");
+    assert_eq!(
+        error.to_string(),
+        "local artifact must be a bounded plain file"
+    );
+}
+
+#[test]
+fn import_refuses_more_than_256_artifacts() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().join("too-many-artifacts");
+    fs::create_dir_all(&root).unwrap();
+    let manifest = ExportManifest {
+        format_version: 1,
+        source_id: "lookup".to_owned(),
+        provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
+        artifacts: (0..=MAX_ARTIFACTS)
+            .map(|index| ExportArtifact {
+                path: format!("adapters/pad-{index:03}.rhai"),
+                sha256: "0".repeat(64),
+            })
+            .collect(),
+    };
+    fs::write(
+        root.join(MANIFEST_FILE),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[root], &BTreeMap::new())
+        .err()
+        .expect("bounded export is refused");
+    assert_eq!(
+        error.to_string(),
+        "a source export must inventory between 1 and 256 artifacts"
+    );
+}
+
+#[test]
+fn import_refuses_artifact_over_one_mebibyte() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().join("oversized-artifact");
+    fs::create_dir_all(&root).unwrap();
+    put(
+        &root,
+        "sources/lookup.yaml",
+        &"a".repeat((MAX_FILE_BYTES + 1) as usize),
+    );
+    let manifest = ExportManifest {
+        format_version: 1,
+        source_id: "lookup".to_owned(),
+        provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
+        artifacts: vec![ExportArtifact {
+            path: "sources/lookup.yaml".to_owned(),
+            sha256: "0".repeat(64),
+        }],
+    };
+    fs::write(
+        root.join(MANIFEST_FILE),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[root], &BTreeMap::new())
+        .err()
+        .expect("bounded export is refused");
+    assert_eq!(
+        error.to_string(),
+        "local artifact must be a bounded plain file"
+    );
+}
+
+#[test]
+fn import_refuses_export_over_sixteen_mebibytes_aggregate() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().join("oversized-export");
+    fs::create_dir_all(&root).unwrap();
+    const PAD_ARTIFACTS: usize = 17;
+    const PAD_BYTES: usize = 1_000_000;
+    let padding = "x".repeat(PAD_BYTES);
+    let mut artifacts = Vec::new();
+    for index in 0..PAD_ARTIFACTS {
+        let path = format!("adapters/pad-{index:02}.rhai");
+        put(&root, &path, &padding);
+        artifacts.push(ExportArtifact {
+            path,
+            sha256: digest(padding.as_bytes()),
+        });
+    }
+    let sources = "kind: lookup\n";
+    put(&root, "sources/lookup.yaml", sources);
+    artifacts.push(ExportArtifact {
+        path: "sources/lookup.yaml".to_owned(),
+        sha256: digest(sources.as_bytes()),
+    });
+    let manifest = ExportManifest {
+        format_version: 1,
+        source_id: "lookup".to_owned(),
+        provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
+        artifacts,
+    };
+    fs::write(
+        root.join(MANIFEST_FILE),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[root], &BTreeMap::new())
+        .err()
+        .expect("bounded export is refused");
+    assert_eq!(
+        error.to_string(),
+        "source export exceeds its 16 MiB artifact bound"
+    );
+}
+
+#[test]
+fn import_refuses_provenance_outside_its_bounds() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().join("bad-provenance");
+    fs::create_dir_all(&root).unwrap();
+    let manifest = ExportManifest {
+        format_version: 1,
+        source_id: "lookup".to_owned(),
+        provenance: BTreeMap::new(),
+        artifacts: Vec::new(),
+    };
+    fs::write(
+        root.join(MANIFEST_FILE),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[root], &BTreeMap::new())
+        .err()
+        .expect("bounded export is refused");
+    assert_eq!(
+        error.to_string(),
+        "export provenance must be a bounded map of nonempty printable strings"
+    );
+}
+
+#[test]
+fn import_refuses_yaml_artifact_that_is_not_a_mapping() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().join("non-mapping-artifact");
+    fs::create_dir_all(&root).unwrap();
+    let content = "not-a-mapping\n";
+    put(&root, "sources/lookup.yaml", content);
+    let manifest = ExportManifest {
+        format_version: 1,
+        source_id: "lookup".to_owned(),
+        provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
+        artifacts: vec![ExportArtifact {
+            path: "sources/lookup.yaml".to_owned(),
+            sha256: digest(content.as_bytes()),
+        }],
+    };
+    fs::write(
+        root.join(MANIFEST_FILE),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[root], &BTreeMap::new())
+        .err()
+        .expect("bounded export is refused");
+    assert_eq!(
+        error.to_string(),
+        "export source, selector, and schema artifacts must be objects"
+    );
+}
+
+#[test]
+fn import_refuses_export_without_exactly_one_sources_artifact() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().join("extra-sources-artifact");
+    fs::create_dir_all(&root).unwrap();
+    let lookup = "kind: lookup\n";
+    let extra = "kind: extra\n";
+    put(&root, "sources/lookup.yaml", lookup);
+    put(&root, "sources/extra.yaml", extra);
+    let manifest = ExportManifest {
+        format_version: 1,
+        source_id: "lookup".to_owned(),
+        provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
+        artifacts: vec![
+            ExportArtifact {
+                path: "sources/lookup.yaml".to_owned(),
+                sha256: digest(lookup.as_bytes()),
+            },
+            ExportArtifact {
+                path: "sources/extra.yaml".to_owned(),
+                sha256: digest(extra.as_bytes()),
+            },
+        ],
+    };
+    fs::write(
+        root.join(MANIFEST_FILE),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[root], &BTreeMap::new())
+        .err()
+        .expect("bounded export is refused");
+    assert_eq!(
+        error.to_string(),
+        "one export must inventory exactly sources/<sourceId>.yaml and its auxiliary artifacts"
+    );
+}
+
+#[test]
+fn import_refuses_artifact_stem_outside_its_bounds() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().join("bad-stem-artifact");
+    fs::create_dir_all(&root).unwrap();
+    let manifest = ExportManifest {
+        format_version: 1,
+        source_id: "lookup".to_owned(),
+        provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
+        artifacts: vec![ExportArtifact {
+            path: "sources/Lookup.yaml".to_owned(),
+            sha256: "0".repeat(64),
+        }],
+    };
+    fs::write(
+        root.join(MANIFEST_FILE),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[root], &BTreeMap::new())
+        .err()
+        .expect("bounded export is refused");
+    assert_eq!(
+        error.to_string(),
+        "export artifact names must be bounded lowercase authoring names"
+    );
+}
