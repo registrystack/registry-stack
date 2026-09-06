@@ -4483,6 +4483,10 @@ fn problem_contract(
         (404, "resource.not_found") => {
             Some(("Not Found", &["The requested resource was not found."]))
         }
+        (404, "lookup.unresolved") => Some((
+            "Not Found",
+            &["The lookup did not resolve exactly one record."],
+        )),
         (409, "mutation.conflict") => {
             Some(("Conflict", &["The mutation conflicts with current state."]))
         }
@@ -6695,6 +6699,7 @@ journeys:
             (400, "query.invalid"),
             (400, "request.invalid"),
             (404, "resource.not_found"),
+            (404, "lookup.unresolved"),
             (409, "mutation.conflict"),
             (409, "idempotency.conflict"),
             (412, "precondition.failed"),
@@ -6715,6 +6720,41 @@ journeys:
         );
         assert!(problem_contract(400, Some("request.plan_declined")).is_none());
         assert!(problem_contract(503, Some("request.plan_refused")).is_none());
+    }
+
+    #[test]
+    fn evidence_golden_journey_accepts_only_the_exact_unresolved_lookup_problem() {
+        let project = parse_project_yaml(include_bytes!(
+            "../../../products/breg/evidence/registry/registry.yaml"
+        ))
+        .expect("maintained Evidence registry parses");
+        let registry = compile_project_with_assets(&project, &[], &[], CompileProfile::Authoring)
+            .expect("maintained Evidence registry compiles");
+        let suite = validate_fixture_journeys(
+            include_bytes!("../../../products/breg/evidence/registry/tests/journeys.yaml"),
+            &registry,
+        )
+        .expect("the complete native composition journey validates");
+        let step = &suite.journeys[0].steps[3];
+        assert_eq!(step.id, "source-unresolved-is-not-a-negative-status");
+        let problem = json!({
+            "type":"https://id.registrystack.org/problems/registry-breg/lookup/unresolved",
+            "title":"Not Found", "status":404,
+            "detail":"The lookup did not resolve exactly one record.",
+            "code":"lookup.unresolved", "traceId":"11111111111111111111111111111111"
+        });
+        assert_response(step, StatusCode::NOT_FOUND, &problem)
+            .expect("the exact runtime response satisfies the declared refusal");
+        let mut incorrect = problem.clone();
+        incorrect["detail"] = json!("The requested resource was not found.");
+        assert_eq!(
+            assert_response(step, StatusCode::NOT_FOUND, &incorrect),
+            Err(FixtureError::ExpectationMismatch)
+        );
+        assert_eq!(
+            assert_response(step, StatusCode::BAD_REQUEST, &problem),
+            Err(FixtureError::ExpectationMismatch)
+        );
     }
 
     fn plan_refused_step() -> ValidatedStep {

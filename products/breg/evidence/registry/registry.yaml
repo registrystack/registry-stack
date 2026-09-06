@@ -1,0 +1,129 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: registry
+  canonicalBaseIri: https://registry.example.test
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: local
+  instanceId: synthetic-evidence-registry
+  sequence: 1
+  sourceRevision: synthetic-evidence-registry-v1
+manifestProjection:
+  accessProfile: operator
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://registry.example.test
+    title: Synthetic record registry
+    publisher:
+      id: example-authority
+      name: Example institution
+  publicService:
+    id: registry-service
+    title: Synthetic record registry
+  datasets:
+  - id: registry
+    title: Synthetic records
+    owner: Example institution
+    status: active
+  dataServices:
+  - id: registry-data
+    title: Synthetic records
+    endpointUrl: https://registry.example.test
+    servesDatasets:
+    - registry
+  distributions: []
+entities:
+- id: record
+  primaryDataset: registry
+  route: records
+  mutationMode: mutable
+  classification: internal
+  fields:
+  - id: code
+    type: string
+    required: true
+    minLength: 1
+    maxLength: 64
+    classification: internal
+  - id: registration-number
+    apiName: registrationNumber
+    type: string
+    required: true
+    minLength: 1
+    maxLength: 64
+    classification: internal
+  - id: status
+    type: vocabulary-code
+    vocabulary: record-status
+    classification: internal
+  - id: label
+    type: string
+    required: true
+    maxLength: 100
+    classification: internal
+  constraints:
+  - kind: unique
+    fields:
+    - code
+  - kind: unique
+    fields:
+    - registration-number
+  selectorProfiles:
+  - id: by-code
+    fields:
+    - code
+  - id: by-registration-number
+    fields:
+    - registration-number
+accessProfiles:
+- id: operator
+  default: true
+  principalClaim: registry_principal
+  requiredScopes:
+  - registry:generic:operate
+  requiredPurposes:
+  - registry-operations
+  grants:
+  - entity: record
+    operations:
+    - create
+    - get
+    - patch
+    readableFields:
+    - code
+    - registration-number
+    - status
+    - label
+    writableFields:
+    - code
+    - registration-number
+    - status
+    - label
+    rowBoundaries: []
+- id: evidence-source
+  principalClaim: registry_principal
+  requiredScopes:
+  - registry:evidence:lookup
+  requiredPurposes:
+  - evidence-source-read
+  grants:
+  - entity: record
+    operations:
+    - lookup
+    readableFields:
+    - code
+    - registration-number
+    - status
+    lookups:
+    - selector: by-code
+      valueOrigin: request
+    - selector: by-registration-number
+      valueOrigin: request
+    rowBoundaries: []
+vocabularies:
+- id: record-status
+  values:
+  - active
+  - retired

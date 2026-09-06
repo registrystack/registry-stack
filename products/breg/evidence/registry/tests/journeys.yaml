@@ -1,0 +1,73 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+- id: source-lookup-boundary
+  steps:
+  - id: operator-creates-record
+    entity: record
+    accessProfile: operator
+    claims:
+      principal: generic-registry-operator
+      purpose: registry-operations
+      scopes:
+      - registry:generic:operate
+    request:
+      operation: create
+      data:
+        code: SYNTHETIC-JOURNEY
+        registration-number: SYNTHETIC-JOURNEY-REG
+        status: active
+        label: SYNTHETIC-PRIVATE-LABEL
+    expect:
+      outcome: success
+      status: 201
+      fields:
+        code: SYNTHETIC-JOURNEY
+        status: active
+    capture: record
+  - id: source-looks-up-by-code
+    entity: record
+    accessProfile: evidence-source
+    claims: &id001
+      principal: evidence-source
+      purpose: evidence-source-read
+      scopes:
+      - registry:evidence:lookup
+    request:
+      operation: lookup
+      selector: by-code
+      values:
+        code: SYNTHETIC-JOURNEY
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        code: SYNTHETIC-JOURNEY
+        status: active
+  - id: source-looks-up-by-registration-number
+    entity: record
+    accessProfile: evidence-source
+    claims: *id001
+    request:
+      operation: lookup
+      selector: by-registration-number
+      values:
+        registration-number: SYNTHETIC-JOURNEY-REG
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        registration-number: SYNTHETIC-JOURNEY-REG
+        status: active
+  - id: source-unresolved-is-not-a-negative-status
+    entity: record
+    accessProfile: evidence-source
+    claims: *id001
+    request:
+      operation: lookup
+      selector: by-code
+      values:
+        code: SYNTHETIC-NOT-REGISTERED
+    expect:
+      outcome: refusal
+      status: 404
+      problemCode: lookup.unresolved

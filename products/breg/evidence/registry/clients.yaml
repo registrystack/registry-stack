@@ -1,0 +1,45 @@
+version: 1
+clients:
+- id: operator
+  accessProfiles:
+  - operator
+  scopes:
+  - registry:generic:operate
+  claims:
+    registry_principal: generic-registry-operator
+    registry_purpose: registry-operations
+- id: source
+  accessProfiles:
+  - evidence-source
+  scopes:
+  - registry:evidence:lookup
+  claims:
+    registry_principal: evidence-source
+    registry_purpose: evidence-source-read
+seed:
+- id: active
+  client: operator
+  entity: record
+  accessProfile: operator
+  data:
+    code: SYNTHETIC-ACTIVE
+    registrationNumber: SYNTHETIC-REG-001
+    status: active
+    label: SYNTHETIC-PRIVATE-LABEL
+- id: retired
+  client: operator
+  entity: record
+  accessProfile: operator
+  data:
+    code: SYNTHETIC-RETIRED
+    registrationNumber: SYNTHETIC-REG-002
+    status: retired
+    label: SYNTHETIC-PRIVATE-LABEL
+- id: missing-status
+  client: operator
+  entity: record
+  accessProfile: operator
+  data:
+    code: SYNTHETIC-MISSING
+    registrationNumber: SYNTHETIC-REG-003
+    label: SYNTHETIC-PRIVATE-LABEL

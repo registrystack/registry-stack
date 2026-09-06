@@ -84,6 +84,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_partial_unique",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_constraint_races",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_read",
+    "cargo test --locked -p registry-breg --features postgres-test --test postgres_read_dependencies",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_record_profile_conformance",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_spatial_storage",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_spatial_read",
