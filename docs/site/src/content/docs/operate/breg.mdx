@@ -34,13 +34,14 @@ the commands stay the same. Every command reads `--help`. Paths given to `--runt
 Many operator paths are resolved through held directory descriptors rather than by name: audit
 export output, data export output and checkpoint, data import state and checkpoint, test receipt
 output and the credentials file `bregctl test` reads, package inputs and outputs, history request
-files, the reviewed migrations tree, project migrate writes, and authoring sources. `bregctl`
-resolves each component of these paths against the directory descriptor that holds it, then opens,
-creates, renames, and publishes through those held descriptors, so a directory replaced by a
-symbolic link after the path is validated cannot redirect the command. `--runtime-config` and
-`--package` are resolved by pathname in `registry-breg` instead, as is every `bregctl dev` path,
-and the local file `apply --backup <binding>=<path>` names, which `registry-breg` opens with
-`O_NOFOLLOW` on its final component only.
+files, the reviewed migrations tree, project migrate writes, and authoring sources, including each
+module's SQL assets and planner scripts, which are read through the module directory the listing
+opened. `bregctl` resolves each component of these paths against the directory descriptor that
+holds it, then opens, creates, renames, and publishes through those held descriptors, so a
+directory replaced by a symbolic link after the path is validated cannot redirect the command.
+`--runtime-config` and `--package` are resolved by pathname in `registry-breg` instead, as is
+every `bregctl dev` path, and the local file `apply --backup <binding>=<path>` names, which
+`registry-breg` opens with `O_NOFOLLOW` on its final component only.
 
 Name the real directory rather than a symbolic link: on macOS, `/tmp`, `/var`, `/etc`, and `/home`,
 among others, are reached through symbolic links at the root, so pass `/private/tmp` and
@@ -57,7 +58,8 @@ surface reports the refusal under its own code rather than one shared across all
     crates/registry-bregctl/src/history_erasure_lifecycle.rs and history_rebaseline_lifecycle.rs;
     crates/registry-bregctl/src/reviewed_migrations.rs;
     crates/registry-bregctl/src/lib.rs, write_project_registry(), write_migration_files_with_fault(),
-    read_bounded_source_file(), and path_diagnostic();
+    read_bounded_source_file(), read_module_directory_names(), load_module_asset_files(),
+    and path_diagnostic();
     crates/registry-bregctl/src/safe_path.rs, SafeDir and SafeEntry;
     crates/registry-breg/src/runtime_config.rs, read_bounded_runtime_config();
     crates/registry-breg/src/package.rs, reject_relative_symlinks();
