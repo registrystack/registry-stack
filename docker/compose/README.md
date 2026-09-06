@@ -99,7 +99,9 @@ readiness from a listener the Mint configuration may not bind. Name the numeric
 private `/ready` listener Mint binds, loopback included. A started Mint remains
 under the operator's Compose lifecycle; the preflight names every service it
 started, and the `docker compose stop` command that stops those containers,
-whether the run passed or failed. That command repeats the
+whether the run passed or failed. A Mint whose start did not return
+successfully is named as one the preflight could not confirm, since Compose may
+have created its container before failing. That command repeats the
 `--env-file` and `--compose-file` arguments you passed, so it targets the same
 project the preflight started them in.
 The preflight accepts only Docker-managed local named audit volumes without
