@@ -60,6 +60,13 @@ fn yaml(export: &EvidenceSourceExport, path: &str) -> Value {
     serde_json::from_slice(file(export, path)).unwrap()
 }
 
+fn refused(registry: &CompiledRegistry, options: &EvidenceSourceOptions) -> Diagnostic {
+    match export_evidence_source(registry, options) {
+        Err(diagnostic) => diagnostic,
+        Ok(_) => panic!("the exporter accepted an input it must refuse"),
+    }
+}
+
 #[test]
 fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
     let registry = compiled(&project(), SQL);
@@ -283,4 +290,156 @@ fn refuses_alternative_union_that_exceeds_runtime_projection_bound() {
         selection.selectors.push(selector);
     }
     assert!(export_evidence_source(&compiled(&original, SQL), &selection).is_err());
+}
+
+#[test]
+fn emitted_extract_checks_the_returned_identity_by_exact_value_and_scalar_type() {
+    let export = export_evidence_source(&compiled(&project(), SQL), &options()).unwrap();
+    let extract =
+        std::str::from_utf8(file(&export, "adapters/registry-status-extract.rhai")).unwrap();
+    // The Evidence adapter, not BReg, rejects a substituted record. The exporter is
+    // the only place this check is written, so pin the emitted comparison verbatim.
+    assert!(extract.contains(
+        "if is_missing(record[\"code\"]) \
+         || type_of(record[\"code\"]) != type_of(subject[\"values\"][\"code\"]) \
+         || record[\"code\"] != subject[\"values\"][\"code\"] \
+         { throw \"source_protocol_error\"; }"
+    ));
+    assert!(extract.contains(
+        "if is_missing(record[\"registrationNumber\"]) \
+         || type_of(record[\"registrationNumber\"]) \
+            != type_of(subject[\"values\"][\"registration-number\"]) \
+         || record[\"registrationNumber\"] != subject[\"values\"][\"registration-number\"] \
+         { throw \"source_protocol_error\"; }"
+    ));
+}
+
+#[test]
+fn refuses_change_request_lifecycle_entities() {
+    let mut original = project();
+    original["entities"][0]["changeControl"] = json!({"requiredFor":["patch"]});
+    original["entities"].as_array_mut().unwrap().push(json!({
+        "id":"record-request","primaryDataset":"test-dataset","route":"record-requests","mutationMode":"mutable",
+        "fields":[
+            {"id":"code","type":"string","minLength":1,"maxLength":32,"required":true,"classification":"internal"},
+            {"id":"subject","type":"reference","target":"record","required":true,"classification":"internal"},
+            {"id":"new-status","type":"string","maxLength":16,"required":true,"classification":"internal"}],
+        "selectorProfiles":[{"id":"by-code","fields":["code"]}],
+        "changeRequest":{
+            "effects":[{"target":{"fromField":"subject"},"operation":"patch","set":{"status":{"fromField":"new-status"}}}],
+            "review":{"stages":[{"id":"review","approvals":1}]}}}));
+    original["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"record-request-steward","principalClaim":"principal","requiredScopes":["registry.write"],
+            "grants":[{"entity":"record-request","rowBoundaries":[],
+                "operations":["create","get","submit_request","approve_request","apply_request"],
+                "readableFields":["code","subject","new-status"],
+                "writableFields":["code","subject","new-status"],
+                "reviewStages":[{"stage":"review","targets":[{"entity":"record","readableFields":["status"],"rowBoundaries":[]}]}],
+                "applyTargets":[{"entity":"record","rowBoundaries":[]}]}]}));
+    original["accessProfiles"][0]["grants"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"entity":"record-request","operations":["lookup"],"readableFields":["code"],
+            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":[]}),
+        );
+    let mut selection = options();
+    selection.entity = "record-request".into();
+    selection.selectors = vec!["by-code".into()];
+    selection.fields = vec!["code".into()];
+    // The lookup is granted and routed; only the lifecycle shape is refused.
+    let diagnostic = refused(&compiled(&original, SQL), &selection);
+    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(
+        diagnostic.message,
+        "change-request lifecycle records require a reviewed custom Evidence adapter"
+    );
+}
+
+#[test]
+fn refuses_a_profile_that_does_not_grant_lookup() {
+    let mut original = project();
+    original["accessProfiles"][0]["grants"][0]["operations"] = json!(["get"]);
+    original["accessProfiles"][0]["grants"][0]["lookups"] = json!([]);
+    let diagnostic = refused(&compiled(&original, SQL), &options());
+    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(
+        diagnostic.message,
+        "the selected profile does not grant lookup; declare and review that authority in BReg first"
+    );
+}
+
+#[test]
+fn refuses_a_lookup_grant_without_a_compiled_lookup_route() {
+    let mut compiled_registry = serde_json::to_value(compiled(&project(), SQL)).unwrap();
+    compiled_registry["routeInventory"]["routes"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|route| route["operation"] != json!("lookup"));
+    let routeless: CompiledRegistry = serde_json::from_value(compiled_registry).unwrap();
+    let diagnostic = refused(&routeless, &options());
+    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(
+        diagnostic.message,
+        "the compiled profile has no lookup route"
+    );
+}
+
+#[test]
+fn refuses_selector_names_beyond_the_evidence_profile_name_bound() {
+    let mut original = project();
+    let selector = format!("by-{}", "a".repeat(37));
+    original["entities"][0]["selectorProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":selector,"fields":["code"]}));
+    original["accessProfiles"][0]["grants"][0]["lookups"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"selector":selector,"valueOrigin":"request"}));
+    let mut selection = options();
+    selection.selectors = vec![selector];
+    let diagnostic = refused(&compiled(&original, SQL), &selection);
+    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(
+        diagnostic.message,
+        "the connection/entity/selector names produce a profile longer than 64 bytes; use shorter stable technical names or a custom adapter"
+    );
+}
+
+#[test]
+fn refuses_a_composite_selector_beyond_the_aggregate_selector_bound() {
+    let mut original = project();
+    let mut fields = Vec::new();
+    for index in 0..3 {
+        let id = format!("part-{index}");
+        original["entities"][0]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":id,"type":"string","minLength":1,"maxLength":1000,"classification":"internal"}));
+        original["accessProfiles"][0]["grants"][0]["readableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(id));
+        fields.push(id);
+    }
+    original["entities"][0]["selectorProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"by-parts","fields":fields}));
+    original["accessProfiles"][0]["grants"][0]["lookups"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"selector":"by-parts","valueOrigin":"request"}));
+    let mut selection = options();
+    selection.selectors = vec!["by-parts".into()];
+    // Each field stays inside the per-selector bound; only their union crosses it.
+    let diagnostic = refused(&compiled(&original, SQL), &selection);
+    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(
+        diagnostic.message,
+        "the complete composite selector exceeds Evidence's 8192-byte bound"
+    );
 }
