@@ -710,7 +710,8 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
                 .arg("doctor")
                 .arg("--runtime-config")
                 .arg(root.join("runtime.yaml"));
-            if command(&mut doctor, &root, "doctor-before-apply", None).is_err() {
+            let (reported, report) = output(&mut doctor, &root, "doctor-before-apply", None)?;
+            if activation(reported, &report)? == Activation::NotActivated {
                 let mut apply = ctl(&state);
                 apply
                     .arg("apply")
@@ -951,12 +952,14 @@ fn service(binary: &Path, args: &[&str], config: &Path, root: &Path, name: &str)
     });
     Ok(child)
 }
-fn command(
+/// Run one owned prerequisite, returning whether it succeeded together with
+/// its captured stdout. Diagnostics stay in the owner-only log directory.
+fn output(
     command: &mut Command,
     root: &Path,
     name: &str,
     input: Option<&[u8]>,
-) -> Result<Vec<u8>> {
+) -> Result<(bool, Vec<u8>)> {
     let log = log_file(root, name)?;
     let mut child = command
         .stdin(if input.is_some() {
@@ -1006,6 +1009,17 @@ fn command(
         // privately as well; selectors and credentials never enter the report.
         let mut log = log_file(root, &format!("{name}-report"))?;
         log.write_all(&bytes)?;
+    }
+    Ok((status.success(), bytes))
+}
+fn command(
+    command: &mut Command,
+    root: &Path,
+    name: &str,
+    input: Option<&[u8]>,
+) -> Result<Vec<u8>> {
+    let (success, bytes) = output(command, root, name, input)?;
+    if !success {
         bail!(
             "native {name} failed; inspect owner-only diagnostics in {}",
             root.join("logs").display()
@@ -1013,6 +1027,47 @@ fn command(
     }
     Ok(bytes)
 }
+#[derive(Debug, Eq, PartialEq)]
+enum Activation {
+    Activated,
+    NotActivated,
+}
+
+/// Classify the doctor report taken before activation. Only a database that is
+/// not ready for the runtime package means activation never committed; every
+/// other refusal is a real prerequisite failure and must stop the start.
+fn activation(success: bool, report: &[u8]) -> Result<Activation> {
+    if success {
+        return Ok(Activation::Activated);
+    }
+    let report: Value = serde_json::from_slice(report).context(
+        "doctor refused the runtime configuration without a machine-readable report; inspect private logs",
+    )?;
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .filter(|diagnostics| !diagnostics.is_empty())
+        .context("doctor refused without naming a diagnostic; inspect private logs")?;
+    if diagnostics
+        .iter()
+        .all(|entry| entry["code"] == "startup.database.unready")
+    {
+        return Ok(Activation::NotActivated);
+    }
+    bail!(
+        "doctor refused before activation: {}",
+        diagnostics
+            .iter()
+            .map(|entry| format!(
+                "{} at {}: {}",
+                entry["code"].as_str().unwrap_or("unknown"),
+                entry["path"].as_str().unwrap_or("unknown"),
+                entry["message"].as_str().unwrap_or("no message")
+            ))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+}
+
 fn ctl(state: &State) -> Command {
     let mut command = Command::new(std::env::current_exe().expect("current executable exists"));
     command
