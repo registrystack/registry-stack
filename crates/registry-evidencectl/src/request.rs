@@ -81,11 +81,11 @@ pub struct PrepareArgs {
     #[arg(long, requires = "question")]
     purpose: Option<String>,
 
-    /// Subject selector. Repeat role:field=value for multiple roles. JSON booleans and integers keep their types.
+    /// Subject selector. Repeat role:field=value; local alternatives require role@profile:field=value.
     #[arg(long)]
     subject: Vec<String>,
 
-    /// Owner-only JSON file containing typed role, field, and value entries.
+    /// Owner-only JSON file containing typed role, field, and value entries; local alternatives also require profile.
     #[arg(long, value_name = "PATH")]
     subjects_file: Option<PathBuf>,
 
@@ -148,7 +148,7 @@ struct LocalProcedureSubject<'a> {
 #[derive(Serialize)]
 struct LocalProcedureSelector<'a> {
     profile: &'a str,
-    values: BTreeMap<&'a str, &'a str>,
+    values: BTreeMap<&'a str, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -193,13 +193,26 @@ impl From<ProgressiveSelectorValue> for SelectorValue {
 #[serde(deny_unknown_fields)]
 struct SubjectInput {
     role: String,
+    #[serde(default)]
+    profile: Option<String>,
     field: String,
-    value: String,
+    value: ProgressiveSelectorValue,
 }
 
 struct ValidatedSubject<'a> {
     definition: &'a dev::ReadySubjectState,
-    value: Zeroizing<String>,
+    selector: &'a crate::authoring::CompiledSelector,
+    values: BTreeMap<String, SelectorValue>,
+}
+
+impl Drop for ValidatedSubject<'_> {
+    fn drop(&mut self) {
+        for value in self.values.values_mut() {
+            if let SelectorValue::String(value) = value {
+                value.zeroize();
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -617,46 +630,51 @@ fn validate_closed_inputs<'a>(
         bail!("purpose does not match the active local tutorial question");
     }
     let inputs = load_subject_inputs(args, question)?;
-    if inputs.len() != question.subjects.len() {
+    let mut grouped: BTreeMap<String, Vec<SubjectInput>> = BTreeMap::new();
+    for input in inputs {
+        grouped.entry(input.role.clone()).or_default().push(input);
+    }
+    if grouped.len() != question.subjects.len() {
         bail!("subject inputs must match the question's complete role set");
     }
-    let mut values = BTreeMap::new();
-    for input in inputs {
-        let subject = question
-            .subjects
+    let mut subjects = Vec::with_capacity(question.subjects.len());
+    for definition in &question.subjects {
+        let entries = grouped
+            .remove(&definition.role)
+            .ok_or_else(|| anyhow!("subject inputs must cover the question's complete role set"))?;
+        let profile = entries[0].profile.as_deref();
+        if entries
             .iter()
-            .find(|subject| subject.role == input.role)
-            .ok_or_else(|| anyhow!("subject role does not match the active local question"))?;
-        if input.field != subject.selector_field
-            || values
-                .insert(input.role, Zeroizing::new(input.value))
-                .is_some()
+            .any(|entry| entry.profile.as_deref() != profile)
         {
-            bail!("subject inputs must contain each declared role and selector exactly once");
+            bail!("every field for a subject must select the same explicit profile");
         }
-        let value = values
-            .get(subject.role.as_str())
-            .expect("the inserted subject value is present");
-        if value.is_empty()
-            || value.len() > MAX_SELECTOR_VALUE_BYTES
-            || value.chars().any(char::is_control)
-        {
-            bail!("subject value must be non-empty, bounded, and contain no control characters");
+        let selector = match profile {
+            Some(profile) => definition.selectors.iter().find(|selector| selector.profile == profile)
+                .ok_or_else(|| anyhow!("subject profile does not match the active local question"))?,
+            None if definition.selectors.len() == 1 => &definition.selectors[0],
+            None => bail!("subject alternatives require an explicit profile in --subjects-file or role@profile:field=value"),
+        };
+        let mut subject = ValidatedSubject {
+            definition,
+            selector,
+            values: BTreeMap::new(),
+        };
+        for input in entries {
+            if !selector.fields.contains(&input.field) || subject.values.contains_key(&input.field)
+            {
+                bail!("subject inputs must contain each selected profile field exactly once");
+            }
+            subject
+                .values
+                .insert(input.field, progressive_selector_value(input.value)?);
         }
+        if subject.values.len() != selector.fields.len() {
+            bail!("subject inputs must contain the selected profile's complete field set");
+        }
+        subjects.push(subject);
     }
-    let subjects = question
-        .subjects
-        .iter()
-        .map(|subject| {
-            values
-                .remove(subject.role.as_str())
-                .map(|value| ValidatedSubject {
-                    definition: subject,
-                    value,
-                })
-                .ok_or_else(|| anyhow!("subject inputs do not cover the complete role set"))
-        })
-        .collect::<Result<Vec<_>>>()?;
+
     Ok((question, subjects))
 }
 
@@ -685,10 +703,29 @@ fn parse_subject_argument(input: &str, question: &dev::ReadyQuestionState) -> Re
         None if question.subjects.len() == 1 => (question.subjects[0].role.as_str(), binding),
         _ => bail!("multi-subject inputs must use role:field=value"),
     };
+    let (role, profile) = match role.split_once('@') {
+        Some((role, profile)) if !profile.is_empty() && !profile.contains('@') => {
+            (role, Some(profile.to_owned()))
+        }
+        Some(_) => bail!("subject profile must be one explicit profile name"),
+        None => (role, None),
+    };
+    let value = if profile.is_some() {
+        match parse_progressive_selector_value(value)? {
+            SelectorValue::String(value) => ProgressiveSelectorValue::String(value),
+            SelectorValue::Integer(value) => ProgressiveSelectorValue::Integer(value),
+            SelectorValue::Boolean(value) => ProgressiveSelectorValue::Boolean(value),
+        }
+    } else {
+        // Existing local shorthand remains lexical, including numeric-looking
+        // identifiers. Typed values are explicit in the JSON file or profile form.
+        ProgressiveSelectorValue::String(value.to_owned())
+    };
     Ok(SubjectInput {
         role: role.to_owned(),
+        profile,
         field: field.to_owned(),
-        value: value.to_owned(),
+        value,
     })
 }
 
@@ -756,11 +793,19 @@ fn local_procedure_input<'a>(
         .map(|subject| LocalProcedureSubject {
             role: &subject.definition.role,
             selector: LocalProcedureSelector {
-                profile: &subject.definition.selector_profile,
-                values: BTreeMap::from([(
-                    subject.definition.selector_field.as_str(),
-                    subject.value.as_str(),
-                )]),
+                profile: &subject.selector.profile,
+                values: subject
+                    .values
+                    .iter()
+                    .map(|(field, value)| {
+                        let value = match value {
+                            SelectorValue::String(value) => serde_json::json!(value),
+                            SelectorValue::Integer(value) => serde_json::json!(value),
+                            SelectorValue::Boolean(value) => serde_json::json!(value),
+                        };
+                        (field.as_str(), value)
+                    })
+                    .collect(),
             },
         })
         .collect::<Vec<_>>();
@@ -836,11 +881,14 @@ fn evidence_request_spec(
         .iter()
         .map(|subject| SubjectRequest {
             role: subject.definition.role.clone(),
-            selector_profile: subject.definition.selector_profile.clone(),
-            selector_values: Some(vec![(
-                subject.definition.selector_field.clone(),
-                SelectorValue::String(subject.value.to_string()),
-            )]),
+            selector_profile: subject.selector.profile.clone(),
+            selector_values: Some(
+                subject
+                    .values
+                    .iter()
+                    .map(|(field, value)| (field.clone(), value.clone()))
+                    .collect(),
+            ),
         })
         .collect();
     EvidenceRequestSpec {
@@ -1149,6 +1197,128 @@ mod tests {
             evidence_bin: None,
             mint_bin: None,
         }
+    }
+
+    fn selector_ready_state() -> ReadyDevState {
+        ReadyDevState {
+            project: PathBuf::from("/tmp/project"),
+            runtime_path: PathBuf::from("/tmp/runtime.yaml"),
+            evidence_origin: "http://127.0.0.1:8080".to_owned(),
+            mint_origin: "http://127.0.0.1:8081".to_owned(),
+            token_url: "http://127.0.0.1:8081/token".to_owned(),
+            access_token_audience: "local".to_owned(),
+            caller: None,
+            access_policies: vec![],
+            questions: vec![dev::ReadyQuestionState {
+                alias: "marker".to_owned(),
+                requirement_uri: "urn:example:marker".to_owned(),
+                purpose: "check".to_owned(),
+                concepts: vec![],
+                subjects: vec![dev::ReadySubjectState {
+                    role: "record".to_owned(),
+                    selectors: vec![
+                        crate::authoring::CompiledSelector {
+                            profile: "by-code".to_owned(),
+                            fields: vec!["code".to_owned()],
+                        },
+                        crate::authoring::CompiledSelector {
+                            profile: "by-code-and-region".to_owned(),
+                            fields: vec!["code".to_owned(), "region".to_owned()],
+                        },
+                        crate::authoring::CompiledSelector {
+                            profile: "by-secondary-code".to_owned(),
+                            fields: vec!["code".to_owned()],
+                        },
+                    ],
+                }],
+            }],
+        }
+    }
+
+    fn local_selector_args(subjects: Vec<&str>) -> PrepareArgs {
+        let mut args = progressive_args(subjects, None);
+        args.question = Some("marker".to_owned());
+        args.purpose = Some("check".to_owned());
+        args.profile = None;
+        args.requirement = None;
+        args
+    }
+
+    #[test]
+    fn local_request_selects_one_explicit_composite_profile_and_preserves_types() {
+        let ready = selector_ready_state();
+        let args = local_selector_args(vec![
+            "record@by-code-and-region:code=A",
+            "record@by-code-and-region:region=7",
+        ]);
+        let (question, subjects) = validate_closed_inputs(&ready, &args).unwrap();
+        let input = serde_json::to_value(local_procedure_input(
+            question,
+            &subjects,
+            "urn:example:audience",
+            PreparedResponseFormat::SignedJws,
+        ))
+        .unwrap();
+        assert_eq!(
+            input["subjects"][0]["selector"],
+            serde_json::json!({"profile":"by-code-and-region","values":{"code":"A","region":7}})
+        );
+        for values in [
+            vec!["record:code=A"],
+            vec!["record@unknown:code=A"],
+            vec!["record@by-code-and-region:code=A"],
+            vec!["record@by-code:code=A", "record@by-code:region=7"],
+            vec!["record@by-code:code=A", "record@by-code:code=B"],
+            vec![
+                "record@by-code-and-region:code=A",
+                "record@by-code:region=7",
+            ],
+        ] {
+            assert!(validate_closed_inputs(&ready, &local_selector_args(values)).is_err());
+        }
+        let file: SubjectInputFile = serde_json::from_value(serde_json::json!({"subjects":[{"role":"record","profile":"by-code-and-region","field":"region","value":7}]})).unwrap();
+        assert!(matches!(
+            file.subjects[0].value,
+            ProgressiveSelectorValue::Integer(7)
+        ));
+        assert!(serde_json::from_value::<SubjectInputFile>(serde_json::json!({"subjects":[{"role":"record","profile":"by-code-and-region","field":"region","value":7.0}]})).is_err());
+    }
+
+    #[test]
+    fn legacy_local_request_shorthand_keeps_numeric_identifiers_as_strings() {
+        let mut ready = selector_ready_state();
+        ready.questions[0].subjects[0].selectors.truncate(1);
+        let args = local_selector_args(vec!["code=00123"]);
+        let (question, subjects) = validate_closed_inputs(&ready, &args).unwrap();
+        let input = serde_json::to_value(local_procedure_input(
+            question,
+            &subjects,
+            "urn:example:audience",
+            PreparedResponseFormat::SignedJws,
+        ))
+        .unwrap();
+        assert_eq!(input["subjects"][0]["selector"]["values"]["code"], "00123");
+    }
+
+    #[test]
+    fn local_request_uses_the_explicit_profile_when_shapes_overlap() {
+        let ready = selector_ready_state();
+        let args = local_selector_args(vec!["record@by-secondary-code:code=A"]);
+        let (question, subjects) = validate_closed_inputs(&ready, &args).unwrap();
+        let input = serde_json::to_value(local_procedure_input(
+            question,
+            &subjects,
+            "urn:example:audience",
+            PreparedResponseFormat::SignedJws,
+        ))
+        .unwrap();
+        assert_eq!(
+            input["subjects"][0]["selector"],
+            serde_json::json!({"profile":"by-secondary-code", "values":{"code":"A"}})
+        );
+        assert!(
+            validate_closed_inputs(&ready, &local_selector_args(vec!["record:code=A"])).is_err()
+        );
     }
 
     #[test]

@@ -36,8 +36,9 @@ use zeroize::Zeroizing;
 use crate::{
     access,
     authoring::{
-        access_policy_requester_tag, compile_local_project_with_ports, CompiledAccessPolicy,
-        CompiledConceptForm, CompiledProject, CompiledQuestion, LocalServicePorts,
+        access_policy_requester_tag, compile_local_project_with_ports,
+        compile_local_project_with_target_inputs, CompiledAccessPolicy, CompiledConceptForm,
+        CompiledProject, CompiledQuestion, LocalServicePorts,
     },
     keygen,
 };
@@ -78,6 +79,11 @@ pub struct DevArgs {
     /// Project root. Defaults to the current directory.
     #[arg(long, default_value = ".", hide = true)]
     project: PathBuf,
+
+    /// Reuse a local target's source connections and outbound TLS in the generated
+    /// local caller rehearsal. Target service authentication is not replayed.
+    #[arg(long)]
+    target: Option<PathBuf>,
 
     #[arg(long, hide = true)]
     evidence_bin: Option<PathBuf>,
@@ -194,11 +200,45 @@ struct QuestionState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "SubjectStateDocument")]
 struct SubjectState {
     role: String,
-    selector_profile: String,
-    selector_field: String,
+    selectors: Vec<crate::authoring::CompiledSelector>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubjectStateDocument {
+    role: String,
+    #[serde(default)]
+    selectors: Vec<crate::authoring::CompiledSelector>,
+    #[serde(default)]
+    selector_profile: Option<String>,
+    #[serde(default)]
+    selector_field: Option<String>,
+}
+
+impl TryFrom<SubjectStateDocument> for SubjectState {
+    type Error = &'static str;
+
+    fn try_from(document: SubjectStateDocument) -> Result<Self, Self::Error> {
+        let selectors = match (
+            document.selectors.is_empty(),
+            document.selector_profile,
+            document.selector_field,
+        ) {
+            (true, Some(profile), Some(field)) => vec![crate::authoring::CompiledSelector {
+                profile,
+                fields: vec![field],
+            }],
+            (false, None, None) => document.selectors,
+            _ => return Err("subject state must carry one complete selector representation"),
+        };
+        Ok(Self {
+            role: document.role,
+            selectors,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -255,8 +295,7 @@ pub(crate) struct ReadyQuestionState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReadySubjectState {
     pub(crate) role: String,
-    pub(crate) selector_profile: String,
-    pub(crate) selector_field: String,
+    pub(crate) selectors: Vec<crate::authoring::CompiledSelector>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -321,6 +360,7 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
                 args.mint_bin.as_deref(),
                 args.ready_timeout_seconds,
                 ports,
+                args.target.as_deref(),
             )
         }
     }
@@ -584,15 +624,35 @@ fn valid_question_state(question: &QuestionState) -> bool {
         && question.subjects.len() <= 8
         && question.subjects.iter().all(|subject| {
             valid_local_identifier(&subject.role)
-                && valid_local_identifier(&subject.selector_profile)
-                && valid_local_identifier(&subject.selector_field)
-                && (!subject.selector_profile.starts_with("local-subject-")
-                    || subject.selector_profile
-                        == if subject_count == 1 {
-                            format!("local-subject-{}-v1", question.alias)
-                        } else {
-                            format!("local-subject-{}-{}-v1", question.alias, subject.role)
-                        })
+                && (1..=16).contains(&subject.selectors.len())
+                && subject.selectors.iter().all(|selector| {
+                    valid_local_identifier(&selector.profile)
+                        && (1..=16).contains(&selector.fields.len())
+                        && selector
+                            .fields
+                            .iter()
+                            .all(|field| valid_local_identifier(field))
+                        && selector
+                            .fields
+                            .iter()
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .len()
+                            == selector.fields.len()
+                        && (!selector.profile.starts_with("local-subject-")
+                            || selector.profile
+                                == if subject_count == 1 {
+                                    format!("local-subject-{}-v1", question.alias)
+                                } else {
+                                    format!("local-subject-{}-{}-v1", question.alias, subject.role)
+                                })
+                })
+                && subject
+                    .selectors
+                    .iter()
+                    .map(|selector| &selector.profile)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == subject.selectors.len()
         })
         && question
             .subjects
@@ -684,20 +744,29 @@ fn state_matches_sealed_bundle(
                             .get("selectorProfiles")
                             .and_then(Value::as_array)
                             .is_some_and(|profiles| {
-                                profiles.iter().any(|profile| {
-                                    profile.as_str() == Some(subject.selector_profile.as_str())
-                                })
+                                profiles.len() == subject.selectors.len()
+                                    && subject.selectors.iter().all(|selector| {
+                                        profiles.contains(&Value::String(selector.profile.clone()))
+                                    })
                             })
-                }) || !selector_profiles
-                    .get(&subject.selector_profile)
-                    .and_then(|profile| profile.get("fields"))
-                    .and_then(Value::as_object)
-                    .is_some_and(|fields| fields.contains_key(&subject.selector_field))
+                }) || subject.selectors.iter().any(|selector| {
+                    !selector_profiles
+                        .get(&selector.profile)
+                        .and_then(|profile| profile.get("fields"))
+                        .and_then(Value::as_object)
+                        .is_some_and(|fields| {
+                            selector
+                                .fields
+                                .iter()
+                                .all(|field| fields.contains_key(field))
+                        })
+                })
             })
         {
             return Ok(false);
         }
     }
+
     let authority_profiles = bundle
         .get("authorityProfiles")
         .and_then(Value::as_object)
@@ -747,16 +816,38 @@ fn authority_profile_matches(
     {
         return false;
     }
-    profile
-        .get("grants")
-        .and_then(Value::as_array)
-        .is_some_and(|grants| {
-            grants.len() == questions.len()
-                && grants
-                    .iter()
-                    .zip(questions)
-                    .all(|(grant, question)| grant_matches_question(grant, question))
-        })
+    let Some(grants) = profile.get("grants").and_then(Value::as_array) else {
+        return false;
+    };
+    let expected_count = questions.iter().try_fold(0_usize, |total, question| {
+        question
+            .subjects
+            .iter()
+            .try_fold(1_usize, |count, subject| {
+                count.checked_mul(subject.selectors.len())
+            })
+            .and_then(|count| total.checked_add(count))
+            .filter(|count| *count <= 128)
+    });
+    if expected_count != Some(grants.len()) {
+        return false;
+    }
+    // Exact complete shapes must each occur once. Counting permitted grants
+    // alone would accept duplicated alternatives while omitting another one.
+    let mut seen = std::collections::BTreeSet::new();
+    grants.iter().all(|grant| {
+        let Some(question) = questions.iter().find(|question| {
+            grant.get("requirement").and_then(Value::as_str)
+                == Some(question.requirement_uri.as_str())
+        }) else {
+            return false;
+        };
+        grant_matches_question(grant, question)
+            && seen.insert((
+                question.requirement_uri.as_str(),
+                grant["subjects"].to_string(),
+            ))
+    })
 }
 
 fn grant_matches_question(grant: &Value, question: &QuestionState) -> bool {
@@ -777,8 +868,10 @@ fn grant_matches_question(grant: &Value, question: &QuestionState) -> bool {
                     .all(|(configured, expected)| {
                         configured.get("role").and_then(Value::as_str)
                             == Some(expected.role.as_str())
-                            && configured.get("selectorProfile").and_then(Value::as_str)
-                                == Some(expected.selector_profile.as_str())
+                            && expected.selectors.iter().any(|selector| {
+                                configured.get("selectorProfile").and_then(Value::as_str)
+                                    == Some(selector.profile.as_str())
+                            })
                             && configured.get("valueOrigin").and_then(Value::as_str)
                                 == Some("request")
                     })
@@ -821,6 +914,7 @@ fn start_detached(
     mint_override: Option<&Path>,
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
+    target: Option<&Path>,
 ) -> Result<ExitCode> {
     let project = canonical_project(project)?;
     let generated_root = ensure_private_generated_root(&project)?;
@@ -845,6 +939,7 @@ fn start_detached(
         mint_override,
         ready_timeout_seconds,
         ports,
+        target,
     );
     if let Err(error) = result {
         let kept = preserve_failed_start_logs(&dev_root);
@@ -948,6 +1043,7 @@ fn prepare_and_start(
     mint_override: Option<&Path>,
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
+    target: Option<&Path>,
 ) -> Result<ExitCode> {
     let evidence_bin = canonical_tool_binary(resolve_tool_binary(
         "evidence",
@@ -959,7 +1055,25 @@ fn prepare_and_start(
         mint_override,
         "EVIDENCECTL_TEST_MINT_BIN",
     )?)?;
-    let compiled = compile_local_project_with_ports(project, dev_root, &evidence_bin, ports)?;
+    let compiled = {
+        let _project_lock = crate::source_import::ProjectLock::acquire(project)?;
+        match target {
+            Some(target) => {
+                let (connections, outbound_tls) = crate::build::local_dev_target_inputs(target)?;
+                let compiled = compile_local_project_with_target_inputs(
+                    project,
+                    dev_root,
+                    &evidence_bin,
+                    ports,
+                    connections,
+                    outbound_tls,
+                )?;
+                println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and Mint use generated local governance.");
+                compiled
+            }
+            None => compile_local_project_with_ports(project, dev_root, &evidence_bin, ports)?,
+        }
+    };
     let evidence_origin = local_origin(ports.evidence);
     let mint_origin = local_origin(ports.mint);
     let token_url = format!("{mint_origin}/token");
@@ -1708,8 +1822,7 @@ impl From<&CompiledQuestion> for QuestionState {
                 .iter()
                 .map(|subject| SubjectState {
                     role: subject.role.clone(),
-                    selector_profile: subject.selector_profile.clone(),
-                    selector_field: subject.selector_field.clone(),
+                    selectors: subject.selectors.clone(),
                 })
                 .collect(),
             concepts: compiled
@@ -2047,8 +2160,7 @@ fn ready_question(question: QuestionState) -> ReadyQuestionState {
             .into_iter()
             .map(|subject| ReadySubjectState {
                 role: subject.role,
-                selector_profile: subject.selector_profile,
-                selector_field: subject.selector_field,
+                selectors: subject.selectors,
             })
             .collect(),
         concepts: question
@@ -2077,8 +2189,10 @@ mod tests {
                 purpose: "age-check".to_owned(),
                 subjects: vec![crate::authoring::CompiledSubject {
                     role: "person".to_owned(),
-                    selector_profile: "local-subject-adult-status-v1".to_owned(),
-                    selector_field: "person_id".to_owned(),
+                    selectors: vec![crate::authoring::CompiledSelector {
+                        profile: "local-subject-adult-status-v1".to_owned(),
+                        fields: vec!["person_id".to_owned()],
+                    }],
                 }],
                 concepts: vec![crate::authoring::CompiledConcept {
                     concept_alias: "is_adult".to_owned(),
@@ -2092,6 +2206,17 @@ mod tests {
             caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
             access_policies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn selector_state_accepts_legacy_shape_and_refuses_mixed_shapes() {
+        let legacy: SubjectState = serde_json::from_value(
+            serde_json::json!({"role":"record","selectorProfile":"by-code","selectorField":"code"}),
+        )
+        .unwrap();
+        assert_eq!(legacy.selectors[0].profile, "by-code");
+        assert_eq!(legacy.selectors[0].fields, ["code"]);
+        assert!(serde_json::from_value::<SubjectState>(serde_json::json!({"role":"record","selectorProfile":"by-code","selectorField":"code","selectors":[{"profile":"other","fields":["code"]}]})).is_err());
     }
 
     #[test]

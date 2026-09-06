@@ -322,6 +322,37 @@ fn a_bundle_without_publication_carries_no_catalog_description() {
 }
 
 #[test]
+fn local_target_build_accepts_local_source_without_production_transport_requirements() {
+    let fixture = Fixture::new();
+    fs::write(
+        &fixture.governance,
+        GOVERNANCE.replace("assuranceProfile: production", "assuranceProfile: local"),
+    )
+    .expect("local target governance");
+    fs::write(
+        fixture.project.join("sources/registry.yaml"),
+        SOURCE
+            .replace("baseUrl: https://registry.invalid", "baseUrl: http://127.0.0.1:8088")
+            .replace(
+                "authentication: {kind: static-authorization, tokenRef: 'secret:file/source-token'}",
+                "authentication: {kind: none}",
+            ),
+    )
+    .expect("local source");
+
+    let output = fixture.build();
+
+    assert_success(&output, "local target build");
+    assert_eq!(fixture.steps(), ["check", "evaluate:fixtures/answer.yaml"]);
+    let bundle =
+        fs::read_to_string(fixture.output.join("bundle/evidence.yaml")).expect("generated bundle");
+    assert!(bundle.contains("assuranceProfile: local"));
+    assert!(bundle.contains("baseUrl: http://127.0.0.1:8088"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("source-token"));
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
 fn sqlite_extract_build_copies_the_statement_without_http_only_artifacts() {
     let fixture = Fixture::new();
     fixture.use_sqlite_source();
@@ -1145,9 +1176,11 @@ if [ "${FAKE_EVIDENCE_BLOCK:-}" = '1' ]; then
 fi
 
 fixture=''
+json=0
 previous=''
 for arg in "$@"; do
   if [ "$previous" = '--fixture' ]; then fixture=$arg; fi
+  if [ "$arg" = '--json' ]; then json=1; fi
   previous=$arg
 done
 
@@ -1170,7 +1203,11 @@ if [ "$failure" = "fixture:$fixture" ]; then
 fi
 
 if [ -z "$fixture" ]; then
-  printf '%s\n' 'Evidence bundle sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa passed check (2 requirements)'
+  if [ "$json" = '1' ]; then
+    printf '%s\n' '{"bundleRevision":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requirements":[{"id":"urn:example:requirements:allowed:v1","configurationRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}'
+  else
+    printf '%s\n' 'Evidence bundle sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa passed check (2 requirements)'
+  fi
 else
   printf '%s\n' 'Evidence fixture passed (1 evaluated cases)'
 fi

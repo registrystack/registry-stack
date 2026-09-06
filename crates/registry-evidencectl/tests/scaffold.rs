@@ -25,6 +25,7 @@ fn bare_new_names_both_authoring_inputs_and_writes_nothing() {
     assert!(stderr(&output).contains("required arguments"));
     assert!(stderr(&output).contains("--openapi <OPENAPI>"));
     assert!(stderr(&output).contains("--transport <TRANSPORT>"));
+    assert!(stderr(&output).contains("--starter <STARTER>"));
     assert!(stderr(&output).contains("--profile <PROFILE>"));
     assert!(!project.exists());
 }
@@ -58,6 +59,22 @@ fn local_sqlite_extract_creates_a_runnable_synthetic_starter() {
 }
 
 #[test]
+fn local_starter_creates_offline_project_and_target_settings_example() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let starter = write_local_starter(workspace.path());
+    let project = workspace.path().join("project");
+    let output = starter_new(&project, &starter, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert_starter_project(&project);
+    let printed = stdout(&output);
+    assert!(printed.contains("editable starter authoring project"));
+    assert!(printed.contains("Starter files were copied from"));
+    assert!(printed.contains("evidencectl fixtures run --project"));
+    assert!(!printed.contains("source suggest"));
+}
+
+#[test]
 fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
     let workspace = TempDir::new().expect("temporary directory");
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
@@ -76,6 +93,21 @@ fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("cannot be used with"));
     assert!(!project.exists());
+
+    let starter_project = workspace.path().join("starter-project");
+    let output = evidencectl(&[
+        "new",
+        path(&starter_project),
+        "--starter",
+        "local",
+        "--transport",
+        "sqlite-extract",
+        "--profile",
+        "local",
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("cannot be used with"));
+    assert!(!starter_project.exists());
 }
 
 #[test]
@@ -664,6 +696,38 @@ fn assert_sqlite_project(project: &Path) {
             "sources",
         ]
     );
+    assert_common_starter_files(project);
+}
+
+fn assert_starter_project(project: &Path) {
+    assert_eq!(
+        entries(project),
+        [
+            ".evidence-editor",
+            ".gitignore",
+            ".vscode",
+            ".zed",
+            "README.md",
+            "adapters",
+            "derivations",
+            "evidence-project.yaml",
+            "fixtures",
+            "queries",
+            "questions",
+            "schemas",
+            "secrets",
+            "selectors",
+            "sources",
+            "targets",
+        ]
+    );
+    assert_common_starter_files(project);
+    assert!(project
+        .join("targets/local/settings.example.yaml")
+        .is_file());
+}
+
+fn assert_common_starter_files(project: &Path) {
     for file in [
         "selectors/record-reference-v1.yaml",
         "sources/record-status.yaml",
@@ -717,6 +781,77 @@ fn sqlite_new(project: &Path, extra: &[&str]) -> Output {
     ];
     arguments.extend_from_slice(extra);
     evidencectl(&arguments)
+}
+
+fn starter_new(project: &Path, starter: &Path, extra: &[&str]) -> Output {
+    let mut arguments = vec![
+        "new",
+        path(project),
+        "--starter",
+        path(starter),
+        "--profile",
+        "local",
+    ];
+    arguments.extend_from_slice(extra);
+    evidencectl(&arguments)
+}
+
+fn write_local_starter(root: &Path) -> PathBuf {
+    let starter = root.join("starter");
+    for (relative, contents) in [
+        ("README.md", b"# Reviewed starter\n".as_slice()),
+        (
+            "selectors/record-reference-v1.yaml",
+            include_bytes!("../templates/sqlite-extract/selectors/record-reference-v1.yaml")
+                .as_slice(),
+        ),
+        (
+            "sources/record-status.yaml",
+            include_bytes!("../templates/sqlite-extract/sources/record-status.yaml").as_slice(),
+        ),
+        (
+            "queries/record-status.sql",
+            include_bytes!("../templates/sqlite-extract/queries/record-status.sql").as_slice(),
+        ),
+        (
+            "adapters/record-status-extract.rhai",
+            include_bytes!("../templates/sqlite-extract/adapters/record-status-extract.rhai")
+                .as_slice(),
+        ),
+        (
+            "schemas/record-status-response.schema.yaml",
+            include_bytes!(
+                "../templates/sqlite-extract/schemas/record-status-response.schema.yaml"
+            )
+            .as_slice(),
+        ),
+        (
+            "schemas/record-status-facts.schema.yaml",
+            include_bytes!("../templates/sqlite-extract/schemas/record-status-facts.schema.yaml")
+                .as_slice(),
+        ),
+        (
+            "questions/record-status.yaml",
+            include_bytes!("../templates/sqlite-extract/questions/record-status.yaml").as_slice(),
+        ),
+        (
+            "derivations/record-status.rhai",
+            include_bytes!("../templates/sqlite-extract/derivations/record-status.rhai").as_slice(),
+        ),
+        (
+            "fixtures/record-status.yaml",
+            include_bytes!("../templates/sqlite-extract/fixtures/record-status.yaml").as_slice(),
+        ),
+        (
+            "targets/local/settings.example.yaml",
+            b"formatVersion: 1\n".as_slice(),
+        ),
+    ] {
+        let path = starter.join(relative);
+        fs::create_dir_all(path.parent().expect("starter file parent")).expect("starter parent");
+        fs::write(path, contents).expect("starter file");
+    }
+    starter
 }
 
 fn evidencectl(arguments: &[&str]) -> Output {

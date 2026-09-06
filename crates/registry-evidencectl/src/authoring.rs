@@ -83,8 +83,14 @@ pub(crate) struct CompiledQuestion {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CompiledSubject {
     pub(crate) role: String,
-    pub(crate) selector_profile: String,
-    pub(crate) selector_field: String,
+    pub(crate) selectors: Vec<CompiledSelector>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CompiledSelector {
+    pub(crate) profile: String,
+    pub(crate) fields: Vec<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -195,6 +201,40 @@ pub(crate) fn compile_local_project_with_ports(
     evidence_bin: &Path,
     ports: LocalServicePorts,
 ) -> Result<CompiledProject> {
+    compile_local_project_with_connections(
+        project_root,
+        staging_root,
+        evidence_bin,
+        ports,
+        json!({}),
+    )
+}
+
+pub(crate) fn compile_local_project_with_connections(
+    project_root: &Path,
+    staging_root: &Path,
+    evidence_bin: &Path,
+    ports: LocalServicePorts,
+    source_connections: Value,
+) -> Result<CompiledProject> {
+    compile_local_project_with_target_inputs(
+        project_root,
+        staging_root,
+        evidence_bin,
+        ports,
+        source_connections,
+        json!({"systemRoots": true, "trustProfiles": {}}),
+    )
+}
+
+pub(crate) fn compile_local_project_with_target_inputs(
+    project_root: &Path,
+    staging_root: &Path,
+    evidence_bin: &Path,
+    ports: LocalServicePorts,
+    source_connections: Value,
+    outbound_tls: Value,
+) -> Result<CompiledProject> {
     LocalServicePorts::new(ports.evidence, ports.mint)?;
     let project_root = validate_project_root(project_root)?;
     validate_private_empty_staging(staging_root)?;
@@ -205,15 +245,23 @@ pub(crate) fn compile_local_project_with_ports(
     let inputs = read_inputs(&project_root, true)?;
     validate_local_dev_sources(&inputs.sources)?;
     let (active_public_jwk_file, active_public_jwk) = local_signing_public_jwk(&project_root)?;
-    let plan = compile_plan(
+    let plan = compile_plan_with_connections(
         inputs,
         CompileProfile::Local {
             ports,
             active_public_jwk_file,
             active_public_jwk,
         },
+        source_connections,
     )?;
-    let compilation = write_plan(&project_root, staging_root, &plan, ports, evidence_bin)?;
+    let compilation = write_plan(
+        &project_root,
+        staging_root,
+        &plan,
+        ports,
+        evidence_bin,
+        outbound_tls,
+    )?;
 
     if let Err(error) = check_with_evidence(evidence_bin, &compilation.runtime_path) {
         // A rejected unpublished generation should remain removable by its
@@ -240,7 +288,25 @@ fn validate_local_dev_sources(sources: &BTreeMap<String, Value>) -> Result<()> {
 
 /// Compile one complete non-local deployment bundle into an unpublished private
 /// staging directory. The caller owns temporary runtime validation and publication.
+#[cfg(test)]
 pub(crate) fn compile_production_project(
+    project_root: &Path,
+    deployment_target_root: &Path,
+    staging_root: &Path,
+    governed_bundle: Value,
+    evidence_bin: &Path,
+) -> Result<CompiledProductionProject> {
+    compile_target_project(
+        project_root,
+        deployment_target_root,
+        staging_root,
+        governed_bundle,
+        evidence_bin,
+    )
+}
+
+/// Compile the target's complete governance under its declared assurance profile.
+pub(crate) fn compile_target_project(
     project_root: &Path,
     deployment_target_root: &Path,
     staging_root: &Path,
@@ -254,10 +320,20 @@ pub(crate) fn compile_production_project(
         .context("resolving deployment target directory")?;
     validate_private_empty_staging(staging_root)?;
     let inputs = read_inputs(&project_root, false)?;
-    validate_production_inputs(&project_root, &inputs)?;
+    let production = match governed_bundle
+        .get("assuranceProfile")
+        .and_then(Value::as_str)
+    {
+        Some("production") => true,
+        Some("local") => false,
+        _ => bail!("deployment governance must declare local or production assuranceProfile"),
+    };
+    validate_deployment_inputs(&project_root, &inputs, production)?;
     let plan = compile_plan(inputs, CompileProfile::Production(governed_bundle))?;
-    reject_local_production_values(&plan.bundle)?;
-    validate_production_sources(&plan.bundle)?;
+    if production {
+        reject_local_production_values(&plan.bundle)?;
+        validate_production_sources(&plan.bundle)?;
+    }
     let bundle_path = write_bundle(
         &project_root,
         Some(&deployment_target_root),
@@ -292,18 +368,28 @@ pub(crate) fn compile_fixture_project(
     staging_root: &Path,
     evidence_bin: &Path,
 ) -> Result<CompiledFixtureProject> {
+    compile_fixture_project_with_connections(project_root, staging_root, evidence_bin, json!({}))
+}
+
+pub(crate) fn compile_fixture_project_with_connections(
+    project_root: &Path,
+    staging_root: &Path,
+    evidence_bin: &Path,
+    source_connections: Value,
+) -> Result<CompiledFixtureProject> {
     let project_root = validate_project_root(project_root)?;
     validate_private_empty_staging(staging_root)?;
     let inputs = read_inputs(&project_root, false)?;
     validate_production_inputs(&project_root, &inputs)?;
     let (active_public_jwk_file, active_public_jwk) = local_signing_public_jwk(&project_root)?;
-    let plan = compile_plan(
+    let plan = compile_plan_with_connections(
         inputs,
         CompileProfile::Local {
             ports: LocalServicePorts::default(),
             active_public_jwk_file,
             active_public_jwk,
         },
+        source_connections,
     )?;
     let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin)?;
     let fixture_paths = plan
@@ -363,7 +449,7 @@ struct QuestionPlan {
     subjects: Vec<SubjectPlan>,
     source_id: String,
     source_value: Value,
-    grant: Value,
+    grants: Vec<Value>,
     requirement: Value,
     response_schema: Value,
     fact_schema: Value,
@@ -373,13 +459,19 @@ struct QuestionPlan {
     derivation_script: String,
 }
 
+#[derive(Debug)]
 struct SubjectPlan {
     role: String,
-    selector_field: String,
-    selector_profile: String,
-    selector_profile_value: Value,
+    selectors: Vec<SubjectSelectorPlan>,
     source: bool,
     derivation: bool,
+}
+
+#[derive(Debug)]
+struct SubjectSelectorPlan {
+    profile: String,
+    fields: Vec<String>,
+    value: Value,
 }
 
 struct ConceptPlan {
@@ -625,6 +717,14 @@ fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
 }
 
 fn validate_production_inputs(project_root: &Path, inputs: &Inputs) -> Result<()> {
+    validate_deployment_inputs(project_root, inputs, true)
+}
+
+fn validate_deployment_inputs(
+    project_root: &Path,
+    inputs: &Inputs,
+    production: bool,
+) -> Result<()> {
     for authored in &inputs.questions {
         let question = &authored.question;
         let governance = question
@@ -645,7 +745,7 @@ fn validate_production_inputs(project_root: &Path, inputs: &Inputs) -> Result<()
                     .filter_map(|answer| answer.id.as_deref()),
             )
         {
-            if uri.starts_with(LOCAL_URI_PREFIX) {
+            if production && uri.starts_with(LOCAL_URI_PREFIX) {
                 bail!("deployment governance must not use disposable local identifiers");
             }
         }
@@ -996,6 +1096,22 @@ fn validate_openapi_version(document: &Value) -> Result<()> {
 }
 
 fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> {
+    let connections = match &profile {
+        CompileProfile::Production(governance) => governance
+            .get("sourceConnections")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+        CompileProfile::Local { .. } => json!({}),
+    };
+    compile_plan_with_connections(inputs, profile, connections)
+}
+
+fn compile_plan_with_connections(
+    mut inputs: Inputs,
+    profile: CompileProfile,
+    source_connections: Value,
+) -> Result<CompilePlan> {
+    resolve_source_connections(&mut inputs.sources, &source_connections)?;
     let has_inline_source = inputs
         .questions
         .iter()
@@ -1034,6 +1150,7 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
             authored,
         )?);
     }
+    prune_unused_source_alternatives(&mut questions);
     let access_policies = inputs.access_policies;
     match profile {
         CompileProfile::Local {
@@ -1041,8 +1158,14 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
             active_public_jwk_file,
             active_public_jwk,
         } => {
-            let bundle =
+            let mut bundle =
                 render_local_bundle(&questions, &access_policies, ports, &active_public_jwk_file);
+            if source_connections
+                .as_object()
+                .is_some_and(|connections| !connections.is_empty())
+            {
+                bundle["sourceConnections"] = source_connections;
+            }
             Ok(CompilePlan {
                 questions,
                 access_policies,
@@ -1060,6 +1183,240 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
             })
         }
     }
+}
+
+fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) {
+    let mut reached = BTreeMap::<String, BTreeSet<(String, String)>>::new();
+    for question in questions.iter() {
+        let profiles = reached.entry(question.source_id.clone()).or_default();
+        for subject in &question.subjects {
+            if subject.source {
+                profiles.extend(
+                    subject
+                        .selectors
+                        .iter()
+                        .map(|selector| (subject.role.clone(), selector.profile.clone())),
+                );
+            }
+        }
+    }
+    for question in questions {
+        let profiles = &reached[&question.source_id];
+        if let Some(inputs) = question
+            .source_value
+            .pointer_mut("/request/selectorInputs")
+            .and_then(Value::as_array_mut)
+        {
+            for input in inputs {
+                let role = input["role"].as_str().unwrap_or_default().to_owned();
+                if let Some(alternatives) = input["alternatives"].as_array_mut() {
+                    alternatives.retain(|alternative| {
+                        alternative["profile"].as_str().is_some_and(|profile| {
+                            profiles.contains(&(role.clone(), profile.to_owned()))
+                        })
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Copy only the connection-owned slots into ordinary source configuration.
+/// The runtime validates the resulting bundle's closed connection/auth/TLS
+/// model and proves the copies equal their declared connection owner.
+fn resolve_source_connections(
+    sources: &mut BTreeMap<String, Value>,
+    connections: &Value,
+) -> Result<()> {
+    let connections = connections
+        .as_object()
+        .ok_or_else(|| anyhow!("sourceConnections must be a mapping"))?;
+    for source in sources.values_mut() {
+        let Some(connection) = source.get("connection") else {
+            continue;
+        };
+        let name = connection
+            .as_str()
+            .filter(|name| valid_local_identifier(name))
+            .ok_or_else(|| anyhow!("source connection must name a valid connection"))?;
+        let connection = connections
+            .get(name)
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                anyhow!("source connection `{name}` is not declared by the selected target")
+            })?;
+        let source = source
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("source must be a mapping"))?;
+        if source.get("transport").and_then(Value::as_str) != Some("http-json") {
+            bail!("only an HTTP source may reference a named connection");
+        }
+        if ["baseUrl", "authentication", "tlsTrustProfile"]
+            .iter()
+            .any(|field| source.contains_key(*field))
+        {
+            bail!("connection-owned source fields must be omitted from the authored source");
+        }
+        let request = source
+            .get_mut("request")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| anyhow!("source request must be a mapping"))?;
+        if request.contains_key("concurrencyLimit") {
+            bail!("a connected source must omit request.concurrencyLimit");
+        }
+        request.insert(
+            "concurrencyLimit".to_owned(),
+            connection
+                .get("concurrencyLimit")
+                .cloned()
+                .unwrap_or_else(|| json!(4)),
+        );
+        for field in ["baseUrl", "authentication"] {
+            source.insert(
+                field.to_owned(),
+                connection
+                    .get(field)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("source connection requires {field}"))?,
+            );
+        }
+        if let Some(trust) = connection.get("tlsTrustProfile") {
+            source.insert("tlsTrustProfile".to_owned(), trust.clone());
+        }
+    }
+    Ok(())
+}
+
+/// Validate imported ordinary artifact references without synthesizing a
+/// deployment, authority, connection, credential, or question. This is a
+/// structural import check; the real Evidence bundle check remains mandatory
+/// when an operator selects a target and builds the complete project.
+pub(crate) fn validate_source_artifact_graph(project_root: &Path) -> Result<()> {
+    let selectors = read_named_objects(project_root, SELECTORS_DIRECTORY, "selector profile")?;
+    let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source")?;
+    for (source_id, source) in &sources {
+        if source.get("connection").is_none() {
+            validate_referenced_source_authentication("imported source", source_id, source)?;
+        } else {
+            let name = source
+                .get("connection")
+                .and_then(Value::as_str)
+                .filter(|name| valid_local_identifier(name))
+                .ok_or_else(|| anyhow!("source connection must name a valid connection"))?;
+            if source.get("transport").and_then(Value::as_str) != Some("http-json")
+                || ["baseUrl", "authentication", "tlsTrustProfile"]
+                    .iter()
+                    .any(|field| source.get(field).is_some())
+                || source.pointer("/request/concurrencyLimit").is_some()
+            {
+                bail!("source `{source_id}` must leave connection-owned fields to `{name}`");
+            }
+        }
+        for input in source_selector_inputs(source)? {
+            let alternatives = input
+                .get("alternatives")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("source selector alternatives must be an array"))?;
+            for alternative in alternatives {
+                let profile = alternative
+                    .get("profile")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("source selector alternative must name a profile"))?;
+                let fields = selectors
+                    .get(profile)
+                    .and_then(|profile| profile.get("fields"))
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "source `{source_id}` references missing selector profile `{profile}`"
+                        )
+                    })?;
+                let selected = alternative
+                    .get("fields")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| anyhow!("source selector fields must be an array"))?;
+                if selected.is_empty()
+                    || selected.iter().any(|field| {
+                        field
+                            .as_str()
+                            .is_none_or(|field| !fields.contains_key(field))
+                    })
+                {
+                    bail!("source `{source_id}` references a field outside selector profile `{profile}`");
+                }
+            }
+        }
+        for artifact in referenced_source_artifacts(source)? {
+            let bytes = read_project_artifact(
+                project_root,
+                &artifact,
+                MAX_SOURCE_ARTIFACT_BYTES,
+                "imported source artifact",
+            )?;
+            if artifact.starts_with("schemas/") {
+                let schema: Value = serde_norway::from_slice(&bytes)
+                    .context("source schema must be YAML or JSON")?;
+                if !schema.is_object() {
+                    bail!("source schema must be a mapping");
+                }
+            } else if artifact.starts_with("adapters/") {
+                let script = std::str::from_utf8(&bytes).context("source adapter must be UTF-8")?;
+                let ast = rhai::Engine::new_raw()
+                    .set_max_expr_depths(64, 64)
+                    .compile(script)
+                    .map_err(|_| anyhow!("source adapter `{artifact}` does not compile"))?;
+                let name = if source
+                    .pointer("/batch/extractScript")
+                    .and_then(Value::as_str)
+                    == Some(artifact.as_str())
+                {
+                    "extract_batch"
+                } else if source
+                    .pointer("/batch/prepareScript")
+                    .and_then(Value::as_str)
+                    == Some(artifact.as_str())
+                {
+                    "prepare_batch"
+                } else if source.get("extractScript").and_then(Value::as_str)
+                    == Some(artifact.as_str())
+                {
+                    "extract"
+                } else {
+                    "prepare"
+                };
+                let functions = ast
+                    .iter_functions()
+                    .filter(|function| function.name == name)
+                    .collect::<Vec<_>>();
+                if functions.len() != 1
+                    || functions[0].access != rhai::FnAccess::Public
+                    || !(functions[0].params.len() == 2
+                        || (name == "extract" && functions[0].params.len() == 3))
+                {
+                    bail!("source adapter `{artifact}` has an invalid entry point");
+                }
+                if name == "extract"
+                    && functions[0].params.len() == 3
+                    && source.get("batch").is_some()
+                {
+                    bail!("selector-aware extraction requires sequential execution; omit source batch");
+                }
+            }
+        }
+    }
+    let questions = project_root.join(QUESTIONS_DIRECTORY);
+    if questions.is_dir() && fs::read_dir(&questions)?.next().is_some() {
+        let inputs = read_inputs(project_root, false)?;
+        for authored in &inputs.questions {
+            if let Some(source_id) = &authored.question.source.source_ref {
+                let source = sources
+                    .get(source_id)
+                    .ok_or_else(|| anyhow!("question references missing source `{source_id}`"))?;
+                compile_referenced_subjects(&authored.question, source, &selectors)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn compile_question_plan(
@@ -1215,25 +1572,27 @@ fn compile_question_plan(
             );
             SubjectPlan {
                 role: authored_subject.role.clone(),
-                selector_field: authored_subject.selector.clone(),
-                selector_profile,
-                selector_profile_value: json!({
-                    "maximumAggregateBytes": 200,
-                    "fields": {
-                        authored_subject.selector.clone(): {
-                            "type": "string",
-                            "minimumBytes": 1,
-                            "maximumBytes": 200,
-                        }
-                    },
-                }),
+                selectors: vec![SubjectSelectorPlan {
+                    profile: selector_profile,
+                    fields: vec![authored_subject.selector.clone()],
+                    value: json!({
+                        "maximumAggregateBytes": 200,
+                        "fields": {
+                            authored_subject.selector.clone(): {
+                                "type": "string",
+                                "minimumBytes": 1,
+                                "maximumBytes": 200,
+                            }
+                        },
+                    }),
+                }],
                 source: source_subjects[index],
                 derivation: authored_subject.derivation,
             }
         })
         .collect::<Vec<_>>();
     let source_id = local_source_id(&question.id);
-    let (source_value, grant, requirement) = render_question_bundle_parts(
+    let (source_value, grants, requirement) = render_question_bundle_parts(
         question,
         base_url.expect("inline source needs local base URL"),
         operation.path,
@@ -1262,7 +1621,7 @@ fn compile_question_plan(
         subjects,
         source_id,
         source_value,
-        grant,
+        grants,
         requirement,
         response_schema,
         fact_schema,
@@ -1315,7 +1674,7 @@ fn compile_referenced_question(
                 "information-requirement"
             }
         });
-    let (grant, requirement) = render_governance_parts(
+    let (grants, requirement) = render_governance_parts(
         question,
         &subjects,
         source_id,
@@ -1344,7 +1703,7 @@ fn compile_referenced_question(
         subjects,
         source_id: source_id.to_owned(),
         source_value,
-        grant,
+        grants,
         requirement,
         response_schema: Value::Null,
         fact_schema: Value::Null,
@@ -1362,76 +1721,106 @@ fn compile_referenced_subjects(
 ) -> Result<Vec<SubjectPlan>> {
     let authored = question_subjects(question).map_err(|finding| anyhow!("{}", finding.message))?;
     let mut compiled = Vec::with_capacity(authored.len());
+    let mut combinations = 1_usize;
     for subject in authored {
-        let selector_profile = match &subject.profile {
-            Some(profile) => profile.clone(),
-            None => referenced_selector_profile(source, &subject.role, &subject.selector)?,
+        let profiles = if subject.profiles.is_empty() {
+            vec![match &subject.profile {
+                Some(profile) => profile.clone(),
+                None => referenced_selector_profile(source, &subject.role, &subject.selector)?,
+            }]
+        } else {
+            subject.profiles.clone()
         };
-        let selector_profile_value = selectors
-            .get(&selector_profile)
+        combinations = combinations
+            .checked_mul(profiles.len())
+            .filter(|count| *count <= 128)
             .ok_or_else(|| {
-                anyhow!("referenced source question uses missing selectors/{selector_profile}.yaml")
-            })?
-            .clone();
-        let selector_fields = selector_profile_value
-            .get("fields")
-            .and_then(Value::as_object)
-            .ok_or_else(|| anyhow!("selector profile `{selector_profile}` has no fields object"))?;
-        if !selector_fields.contains_key(&subject.selector) {
-            bail!(
-                "selector profile `{selector_profile}` does not declare the question subject field"
-            );
-        }
-        let used_by_source =
-            source_uses_subject(source, &subject.role, &selector_profile, &subject.selector)?;
-        if !used_by_source && !subject.derivation {
-            bail!("every question subject must be used by the source or declared for derivation");
+                anyhow!("question selector alternatives exceed 128 complete authorization shapes")
+            })?;
+        let mut alternatives = Vec::with_capacity(profiles.len());
+        let mut used_by_source = false;
+        for profile in profiles {
+            let value = selectors
+                .get(&profile)
+                .ok_or_else(|| {
+                    anyhow!("referenced source question uses missing selectors/{profile}.yaml")
+                })?
+                .clone();
+            let declared_fields = value
+                .get("fields")
+                .and_then(Value::as_object)
+                .ok_or_else(|| anyhow!("selector profile `{profile}` has no fields object"))?;
+            let fields = if subject.profiles.is_empty() {
+                if !declared_fields.contains_key(&subject.selector) {
+                    bail!(
+                        "selector profile `{profile}` does not declare the question subject field"
+                    );
+                }
+                vec![subject.selector.clone()]
+            } else {
+                declared_fields.keys().cloned().collect::<Vec<_>>()
+            };
+            let uses_alternative = source_uses_subject(source, &subject.role, &profile, &fields)?;
+            if !uses_alternative && !subject.derivation {
+                bail!("every question subject alternative must be used by the source or declared for derivation");
+            }
+            // One source role cannot omit the selected alternative and hope that
+            // another one succeeds. Every allowed choice executes the same read.
+            if source_has_role(source, &subject.role)? && !uses_alternative {
+                bail!("each question profile must exactly match an alternative of its source role");
+            }
+            used_by_source |= uses_alternative;
+            alternatives.push(SubjectSelectorPlan {
+                profile,
+                fields,
+                value,
+            });
         }
         compiled.push(SubjectPlan {
             role: subject.role.clone(),
-            selector_field: subject.selector.clone(),
-            selector_profile,
-            selector_profile_value,
+            selectors: alternatives,
             source: used_by_source,
             derivation: subject.derivation,
         });
     }
-
-    let inputs = source
-        .pointer("/request/selectorInputs")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("referenced source request must declare selectorInputs"))?;
-    for input in inputs {
+    for input in source_selector_inputs(source)? {
         let role = input
             .get("role")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("source selector input has no role"))?;
-        let matches = compiled
+        if compiled
             .iter()
-            .filter(|subject| {
-                subject.role == role
-                    && source_uses_subject(
-                        source,
-                        role,
-                        &subject.selector_profile,
-                        &subject.selector_field,
-                    )
-                    .unwrap_or(false)
-            })
-            .count();
-        if matches != 1 {
-            bail!("question subjects must select exactly one alternative for every source role");
+            .filter(|subject| subject.role == role && subject.source)
+            .count()
+            != 1
+        {
+            bail!("question subjects must cover every source role exactly once");
         }
     }
     Ok(compiled)
 }
 
-fn source_uses_subject(source: &Value, role: &str, profile: &str, field: &str) -> Result<bool> {
-    let inputs = source
+fn source_selector_inputs(source: &Value) -> Result<&Vec<Value>> {
+    source
         .pointer("/request/selectorInputs")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("referenced source request must declare selectorInputs"))?;
-    Ok(inputs.iter().any(|input| {
+        .ok_or_else(|| anyhow!("referenced source request must declare selectorInputs"))
+}
+
+fn source_has_role(source: &Value, role: &str) -> Result<bool> {
+    Ok(source_selector_inputs(source)?
+        .iter()
+        .any(|input| input.get("role").and_then(Value::as_str) == Some(role)))
+}
+
+fn source_uses_subject(
+    source: &Value,
+    role: &str,
+    profile: &str,
+    fields: &[String],
+) -> Result<bool> {
+    let expected = fields.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    Ok(source_selector_inputs(source)?.iter().any(|input| {
         input.get("role").and_then(Value::as_str) == Some(role)
             && input
                 .get("alternatives")
@@ -1442,8 +1831,13 @@ fn source_uses_subject(source: &Value, role: &str, profile: &str, field: &str) -
                             && alternative
                                 .get("fields")
                                 .and_then(Value::as_array)
-                                .is_some_and(|fields| {
-                                    fields.len() == 1 && fields[0].as_str() == Some(field)
+                                .is_some_and(|actual| {
+                                    actual.len() == expected.len()
+                                        && actual
+                                            .iter()
+                                            .filter_map(Value::as_str)
+                                            .collect::<BTreeSet<_>>()
+                                            == expected
                                 })
                     })
                 })
@@ -1561,6 +1955,15 @@ fn referenced_source_artifacts(source: &Value) -> Result<Vec<String>> {
         }
         Some(other) => bail!("referenced source transport `{other}` is unsupported"),
         None => bail!("referenced source must declare its transport"),
+    }
+    if source.get("batch").is_some() {
+        for pointer in [
+            "/batch/prepareScript",
+            "/batch/extractScript",
+            "/batch/responseSchema",
+        ] {
+            required(source, pointer, &mut artifacts)?;
+        }
     }
     Ok(artifacts)
 }
@@ -2344,16 +2747,16 @@ fn render_question_bundle_parts(
     subjects: &[SubjectPlan],
     source_id: &str,
     requirement: &BundleRequirement,
-) -> (Value, Value, Value) {
+) -> (Value, Vec<Value>, Value) {
     let source_subjects = subjects.iter().filter(|subject| subject.source);
     let path_bindings = Value::Object(Map::from_iter(source_subjects.clone().map(|subject| {
         (
-            subject.selector_field.clone(),
+            subject.selectors[0].fields[0].clone(),
             json!({
                 "from": "selector",
                 "role": subject.role,
-                "profile": subject.selector_profile,
-                "field": subject.selector_field,
+                "profile": subject.selectors[0].profile,
+                "field": subject.selectors[0].fields[0],
             }),
         )
     })));
@@ -2361,10 +2764,10 @@ fn render_question_bundle_parts(
         .map(|subject| {
             json!({
                 "role": subject.role,
-                "alternatives": [{
-                    "profile": subject.selector_profile,
-                    "fields": [subject.selector_field],
-                }],
+                "alternatives": subject.selectors.iter().map(|selector| json!({
+                    "profile": selector.profile,
+                    "fields": selector.fields,
+                })).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -2407,9 +2810,9 @@ fn render_question_bundle_parts(
         "extractScript": format!("adapters/{}-source-extract.rhai", question.id),
         "factSchema": format!("schemas/{}-source-facts.schema.yaml", question.id),
     });
-    let (grant, requirement_value) =
+    let (grants, requirement_value) =
         render_governance_parts(question, subjects, source_id, requirement);
-    (source_value, grant, requirement_value)
+    (source_value, grants, requirement_value)
 }
 
 fn render_governance_parts(
@@ -2417,7 +2820,7 @@ fn render_governance_parts(
     subjects: &[SubjectPlan],
     source_id: &str,
     requirement: &BundleRequirement<'_>,
-) -> (Value, Value) {
+) -> (Vec<Value>, Value) {
     let (reference_frameworks, evidence_type, observation_timezone, validity_seconds, families) =
         match &question.governance {
             Some(governance) => (
@@ -2435,28 +2838,40 @@ fn render_governance_parts(
                 vec![local_uri(&format!("disclosure-family:{}", question.id))],
             ),
         };
-    let grant_subjects = subjects
-        .iter()
-        .map(|subject| {
-            json!({
-                "role": subject.role,
-                "selectorProfile": subject.selector_profile,
-                "valueOrigin": "request",
-            })
-        })
-        .collect::<Vec<_>>();
     let response_formats = question
         .response_formats
         .iter()
         .map(|format| format.as_str())
         .collect::<Vec<_>>();
-    let grant = json!({
-        "requirement": requirement.requirement_uri,
-        "purpose": question.purpose,
-        "audienceFrom": "authenticated-requester",
-        "responseFormats": response_formats,
-        "subjects": grant_subjects,
-    });
+    let mut grant_shapes = vec![Vec::new()];
+    for subject in subjects {
+        grant_shapes = grant_shapes
+            .into_iter()
+            .flat_map(|shape| {
+                subject.selectors.iter().map(move |selector| {
+                    let mut shape = shape.clone();
+                    shape.push(json!({
+                        "role": subject.role,
+                        "selectorProfile": selector.profile,
+                        "valueOrigin": "request",
+                    }));
+                    shape
+                })
+            })
+            .collect();
+    }
+    let grants = grant_shapes
+        .into_iter()
+        .map(|shape| {
+            json!({
+                "requirement": requirement.requirement_uri,
+                "purpose": question.purpose,
+                "audienceFrom": "authenticated-requester",
+                "responseFormats": response_formats,
+                "subjects": shape,
+            })
+        })
+        .collect();
     let concepts = requirement
         .concepts
         .iter()
@@ -2485,7 +2900,7 @@ fn render_governance_parts(
             json!({
                 "role": subject.role,
                 "cardinality": "one",
-                "selectorProfiles": [subject.selector_profile],
+                "selectorProfiles": subject.selectors.iter().map(|selector| &selector.profile).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -2495,10 +2910,10 @@ fn render_governance_parts(
         .map(|subject| {
             json!({
                 "role": subject.role,
-                "alternatives": [{
-                    "profile": subject.selector_profile,
-                    "fields": [subject.selector_field],
-                }],
+                "alternatives": subject.selectors.iter().map(|selector| json!({
+                    "profile": selector.profile,
+                    "fields": selector.fields,
+                })).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -2531,7 +2946,7 @@ fn render_governance_parts(
     if let Some(governance) = &question.governance {
         requirement_value["fixtures"] = Value::String(governance.fixtures.clone());
     }
-    (grant, requirement_value)
+    (grants, requirement_value)
 }
 
 fn render_local_bundle(
@@ -2544,12 +2959,8 @@ fn render_local_bundle(
     let selector_profiles = questions
         .iter()
         .flat_map(|question| &question.subjects)
-        .map(|subject| {
-            (
-                subject.selector_profile.clone(),
-                subject.selector_profile_value.clone(),
-            )
-        })
+        .flat_map(|subject| &subject.selectors)
+        .map(|selector| (selector.profile.clone(), selector.value.clone()))
         .collect::<Map<_, _>>();
     let sources = questions
         .iter()
@@ -2558,7 +2969,7 @@ fn render_local_bundle(
     let authority_profiles = if access_policies.is_empty() {
         let grants = questions
             .iter()
-            .map(|question| question.grant.clone())
+            .flat_map(|question| question.grants.clone())
             .collect::<Vec<_>>();
         Map::from_iter([(
             AUTHORITY_PROFILE_ID.to_owned(),
@@ -2575,12 +2986,12 @@ fn render_local_bundle(
                 let grants = policy
                     .questions
                     .iter()
-                    .map(|question_id| {
+                    .flat_map(|question_id| {
                         questions
                             .iter()
                             .find(|question| question.question_id == *question_id)
                             .expect("access policy questions were validated")
-                            .grant
+                            .grants
                             .clone()
                     })
                     .collect::<Vec<_>>();
@@ -2680,12 +3091,8 @@ fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -
             questions
                 .iter()
                 .flat_map(|question| &question.subjects)
-                .map(|subject| {
-                    (
-                        subject.selector_profile.clone(),
-                        subject.selector_profile_value.clone(),
-                    )
-                }),
+                .flat_map(|subject| &subject.selectors)
+                .map(|selector| (selector.profile.clone(), selector.value.clone())),
         )),
     );
     object.insert(
@@ -2712,6 +3119,7 @@ fn write_plan(
     plan: &CompilePlan,
     ports: LocalServicePorts,
     evidence_bin: &Path,
+    outbound_tls: Value,
 ) -> Result<CompiledProject> {
     write_bundle(project_root, None, staging_root, plan, evidence_bin)?;
     create_private_directory(&staging_root.join("audit"))?;
@@ -2742,7 +3150,7 @@ fn write_plan(
             "path": canonical_staging.join("audit/evidence.jsonl").to_string_lossy(),
             "maximumFileBytes": 1073741824_u64,
         },
-        "outboundTls": {"systemRoots": true, "trustProfiles": {}},
+        "outboundTls": outbound_tls,
     });
     let runtime_path = staging_root.join("runtime.yaml");
     write_private_file(&runtime_path, &yaml_bytes(&runtime)?)?;
@@ -2761,8 +3169,14 @@ fn write_plan(
                 .iter()
                 .map(|subject| CompiledSubject {
                     role: subject.role.clone(),
-                    selector_profile: subject.selector_profile.clone(),
-                    selector_field: subject.selector_field.clone(),
+                    selectors: subject
+                        .selectors
+                        .iter()
+                        .map(|selector| CompiledSelector {
+                            profile: selector.profile.clone(),
+                            fields: selector.fields.clone(),
+                        })
+                        .collect(),
                 })
                 .collect(),
             concepts: question
@@ -3490,10 +3904,10 @@ properties:
         assert_eq!(question.purpose, "age-check");
         assert_eq!(question.subjects[0].role, "person");
         assert_eq!(
-            question.subjects[0].selector_profile,
+            question.subjects[0].selectors[0].profile,
             local_selector_profile_id("adult-status")
         );
-        assert_eq!(question.subjects[0].selector_field, "person_id");
+        assert_eq!(question.subjects[0].selectors[0].fields[0], "person_id");
         assert_eq!(question.concepts[0].concept_alias, "is_adult");
         assert_eq!(
             question.concepts[0].concept_form,
@@ -3754,9 +4168,9 @@ properties:
         let question = &compiled.questions[0];
         assert_eq!(question.subjects.len(), 2);
         assert_eq!(question.subjects[0].role, "child");
-        assert_eq!(question.subjects[0].selector_field, "child_id");
+        assert_eq!(question.subjects[0].selectors[0].fields[0], "child_id");
         assert_eq!(question.subjects[1].role, "candidate-parent");
-        assert_eq!(question.subjects[1].selector_field, "candidate_id");
+        assert_eq!(question.subjects[1].selectors[0].fields[0], "candidate_id");
 
         let bundle: Value = serde_norway::from_slice(
             &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
@@ -4415,6 +4829,70 @@ factSchema: schemas/source-facts.schema.yaml
     }
 
     #[test]
+    fn local_target_compilation_keeps_target_governance_without_local_secrets() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        let question = write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        let mut question: Value = serde_norway::from_str(&question).unwrap();
+        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["governance"] = json!({
+            "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
+            "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
+            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":900,
+            "observationTimezone":"Asia/Bangkok", "fixtures":"fixtures/adult-status.yaml",
+            "disclosureFamilies":["urn:authority:disclosure-family:adult-status:v1"]
+        });
+        fs::write(
+            fixture.project.join("questions/adult-status.yaml"),
+            serde_norway::to_string(&question).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir(fixture.project.join("fixtures")).unwrap();
+        fs::write(
+            fixture.project.join("fixtures/adult-status.yaml"),
+            "version: 1\ncases: []\n",
+        )
+        .unwrap();
+        fs::remove_dir_all(fixture.project.join(SECRETS_DIRECTORY)).unwrap();
+        let target = json!({
+            "version":1, "assuranceProfile":"local", "service":{"publicOrigin":"http://127.0.0.1:9444"},
+            "authentication":{"issuer":"http://127.0.0.1:9445"},
+            "authorityProfiles":{"operator":{"kind":"explicit-request"}},
+            "signing":{}, "audit":{"hashKeyVersion":"target-version"}
+        });
+        let project = fs::canonicalize(&fixture.project).unwrap();
+        let compiled = compile_target_project(
+            &project,
+            &project,
+            &fixture.staging,
+            target.clone(),
+            &fixture.evidence,
+        )
+        .expect("local target permits its declared HTTP/authentication posture");
+        for field in [
+            "assuranceProfile",
+            "service",
+            "authentication",
+            "authorityProfiles",
+            "signing",
+            "audit",
+        ] {
+            assert_eq!(
+                compiled.bundle[field], target[field],
+                "target controls {field}"
+            );
+        }
+        assert_eq!(
+            compiled.bundle["sources"]["people"]["authentication"]["kind"],
+            "none"
+        );
+        assert_eq!(
+            compiled.bundle["requirements"][0]["observationTimezone"],
+            "Asia/Bangkok"
+        );
+        assert_eq!(compiled.fixture_paths, ["fixtures/adult-status.yaml"]);
+    }
+
+    #[test]
     fn a_valid_project_marker_is_accepted() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         fixture.write_marker(registry_evidence_authoring::default_project_marker_document());
@@ -4620,6 +5098,234 @@ factSchema: schemas/source-facts.schema.yaml
                 );
             }
         }
+    }
+
+    #[test]
+    fn source_artifact_graph_validates_without_questions_target_or_secrets() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        fs::remove_file(fixture.project.join("questions/adult-status.yaml")).unwrap();
+        fs::remove_dir_all(fixture.project.join(SECRETS_DIRECTORY)).unwrap();
+        fs::write(fixture.project.join("adapters/people-prepare.rhai"), r#"
+fn prepare(selectors, context) {
+    let subject = selectors["person"];
+    if subject["profile"] == "person-reference-v1" {
+        return #{query: [#{name: "projection", value: "personId"}], body: #{selector: "by-key", values: #{"personId": subject["values"]["person_id"]}}};
+    }
+    throw "unsupported selector";
+}
+"#).unwrap();
+        validate_source_artifact_graph(&fixture.project)
+            .expect("standalone source graph validates");
+        let extractor = fixture.project.join("adapters/people-extract.rhai");
+        fs::write(
+            &extractor,
+            "fn extract(r, selectors, context) { #{outcome: \"no_match\"} }",
+        )
+        .unwrap();
+        validate_source_artifact_graph(&fixture.project).expect("selector-aware source validates");
+        fs::write(
+            &extractor,
+            "fn extract(r, context) { () } fn extract(r, selectors, context) { () }",
+        )
+        .unwrap();
+        assert!(validate_source_artifact_graph(&fixture.project)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid entry point"));
+        fs::write(&extractor, "fn extract(r, context) { () }").unwrap();
+        fs::remove_file(fixture.project.join("selectors/person-reference-v1.yaml")).unwrap();
+        assert!(validate_source_artifact_graph(&fixture.project)
+            .unwrap_err()
+            .to_string()
+            .contains("missing selector profile"));
+    }
+
+    #[test]
+    fn one_question_compiles_explicit_overlapping_and_composite_profiles() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        let question = write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        let mut question: Value = serde_norway::from_str(&question).unwrap();
+        question["subject"] = json!({"role":"person", "profiles":["person-reference-v1","person-composite-v1"], "derivation":true});
+        fs::write(
+            fixture.project.join("questions/adult-status.yaml"),
+            serde_norway::to_string(&question).unwrap(),
+        )
+        .unwrap();
+        fs::write(fixture.project.join("selectors/person-composite-v1.yaml"), "maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n  region: {type: integer, minimum: 1, maximum: 99}\n").unwrap();
+        let source_path = fixture.project.join("sources/people.yaml");
+        let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
+        source["baseUrl"] = json!("http://127.0.0.1:8082");
+        let request = source["request"].as_object_mut().unwrap();
+        request.remove("pathTemplate");
+        request.remove("pathBindings");
+        request.insert("path".to_owned(), json!("/lookup"));
+        request["selectorInputs"][0]["alternatives"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"profile":"person-composite-v1","fields":["person_id","region"]}));
+        fs::write(source_path, serde_norway::to_string(&source).unwrap()).unwrap();
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("one question accepts both alternatives");
+        assert_eq!(compiled.questions.len(), 1);
+        assert_eq!(compiled.questions[0].subjects[0].selectors.len(), 2);
+        assert_eq!(
+            compiled.questions[0].subjects[0].selectors[1].fields,
+            ["person_id", "region"]
+        );
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bundle["requirements"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            bundle["requirements"][0]["subjectRoles"][0]["selectorProfiles"],
+            json!(["person-reference-v1", "person-composite-v1"])
+        );
+        assert_eq!(
+            bundle["requirements"][0]["derivation"]["selectorInputs"][0]["alternatives"],
+            source["request"]["selectorInputs"][0]["alternatives"]
+        );
+        let grants = bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"]
+            .as_array()
+            .unwrap();
+        assert_eq!(grants.len(), 2);
+        assert_ne!(
+            grants[0]["subjects"][0]["selectorProfile"],
+            grants[1]["subjects"][0]["selectorProfile"]
+        );
+
+        question["subject"]["profiles"] = json!(["person-reference-v1"]);
+        fs::write(
+            fixture.project.join("questions/adult-status.yaml"),
+            serde_norway::to_string(&question).unwrap(),
+        )
+        .unwrap();
+        let selected = compile_plan(
+            read_inputs(&fixture.project, false).unwrap(),
+            CompileProfile::Local {
+                ports: LocalServicePorts::default(),
+                active_public_jwk_file: "public-keys/test.jwk".to_owned(),
+                active_public_jwk: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            selected.bundle["sources"]["people"]["request"]["selectorInputs"][0]["alternatives"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            source["request"]["selectorInputs"][0]["alternatives"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2,
+            "the authored source remains reusable"
+        );
+    }
+
+    #[test]
+    fn question_alternatives_refuse_missing_profiles_and_incomplete_composites() {
+        let mut question: Question = serde_norway::from_str(QUESTION).unwrap();
+        question.source.source_ref = Some("records".to_owned());
+        question.source.operation = None;
+        let subject = question.subject.as_mut().unwrap();
+        subject.selector.clear();
+        subject.profiles = vec!["by-key".to_owned(), "by-composite".to_owned()];
+        let source = json!({"request":{"selectorInputs":[{"role":"person","alternatives":[{"profile":"by-key","fields":["key"]},{"profile":"by-composite","fields":["key"]}]}]}});
+        let mut profiles = BTreeMap::from([(
+            "by-key".to_owned(),
+            json!({"fields":{"key":{"type":"string"}}}),
+        )]);
+        assert!(compile_referenced_subjects(&question, &source, &profiles)
+            .unwrap_err()
+            .to_string()
+            .contains("missing selectors"));
+        profiles.insert(
+            "by-composite".to_owned(),
+            json!({"fields":{"key":{"type":"string"},"region":{"type":"integer"}}}),
+        );
+        assert!(compile_referenced_subjects(&question, &source, &profiles)
+            .unwrap_err()
+            .to_string()
+            .contains("alternative"));
+    }
+
+    #[test]
+    fn source_connections_fill_only_owned_slots_and_preserve_ordinary_sources() {
+        let original = json!({"transport":"http-json", "baseUrl":"https://ordinary.example", "authentication":{"kind":"static-authorization","tokenRef":"secret:file/existing"}, "request":{"concurrencyLimit":8}});
+        let connected = json!({"transport":"http-json", "connection":"records", "request":{}});
+        let connections = json!({"records":{"baseUrl":"https://records.example", "authentication":{"kind":"static-authorization","tokenRef":"secret:file/records"}, "tlsTrustProfile":"private-ca"}});
+        let mut sources = BTreeMap::from([
+            ("ordinary".to_owned(), original.clone()),
+            ("connected".to_owned(), connected.clone()),
+        ]);
+        resolve_source_connections(&mut sources, &connections).unwrap();
+        assert_eq!(sources["ordinary"], original);
+        assert_eq!(sources["connected"]["request"]["concurrencyLimit"], 4);
+        assert_eq!(
+            sources["connected"]["authentication"],
+            connections["records"]["authentication"]
+        );
+        for pointer in ["baseUrl", "authentication", "tlsTrustProfile"] {
+            let mut override_source = connected.clone();
+            override_source[pointer] = json!("override");
+            assert!(resolve_source_connections(
+                &mut BTreeMap::from([("connected".to_owned(), override_source)]),
+                &connections
+            )
+            .is_err());
+        }
+        assert!(resolve_source_connections(
+            &mut BTreeMap::from([("connected".to_owned(), connected)]),
+            &json!({})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn local_dev_reuses_connection_and_tls_inputs_with_generated_local_governance() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        let source_path = fixture.project.join("sources/people.yaml");
+        let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
+        source.as_object_mut().unwrap().remove("baseUrl");
+        source.as_object_mut().unwrap().remove("authentication");
+        source["request"]
+            .as_object_mut()
+            .unwrap()
+            .remove("concurrencyLimit");
+        source["connection"] = json!("records");
+        fs::write(source_path, serde_norway::to_string(&source).unwrap()).unwrap();
+        let connections = json!({"records":{"baseUrl":"http://127.0.0.1:8082", "authentication":{"kind":"none"}, "concurrencyLimit":3}});
+        let tls = json!({"systemRoots":false, "trustProfiles":{}});
+        let compiled = compile_local_project_with_target_inputs(
+            &fixture.project,
+            &fixture.staging,
+            &fixture.evidence,
+            LocalServicePorts::default(),
+            connections.clone(),
+            tls.clone(),
+        )
+        .unwrap();
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
+        )
+        .unwrap();
+        let runtime: Value =
+            serde_norway::from_slice(&fs::read(compiled.runtime_path).unwrap()).unwrap();
+        assert_eq!(bundle["sourceConnections"], connections);
+        assert_eq!(
+            bundle["sources"]["people"]["request"]["concurrencyLimit"],
+            3
+        );
+        assert_eq!(bundle["authentication"]["issuer"], "http://127.0.0.1:8081");
+        assert_eq!(bundle["assuranceProfile"], "local");
+        assert_eq!(runtime["outboundTls"], tls);
+        assert_eq!(runtime["signer"]["kind"], "local-jwk");
     }
 
     #[test]
@@ -4998,7 +5704,7 @@ factSchema: schemas/family-facts.schema.yaml
             compiled.questions[0]
                 .subjects
                 .iter()
-                .map(|subject| (subject.role.as_str(), subject.selector_profile.as_str()))
+                .map(|subject| (subject.role.as_str(), subject.selectors[0].profile.as_str()))
                 .collect::<Vec<_>>(),
             [
                 ("child", "child-reference-v1"),
@@ -5290,7 +5996,7 @@ factSchema: schemas/family-facts.schema.yaml
             .expect("punctuated names compile");
 
         assert_eq!(
-            compiled.questions[0].subjects[0].selector_field,
+            compiled.questions[0].subjects[0].selectors[0].fields[0],
             "person-id.v1"
         );
         let extract = fs::read_to_string(

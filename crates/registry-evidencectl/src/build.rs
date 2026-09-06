@@ -2,7 +2,7 @@
 //! candidate. Secrets and target-host paths remain operator-owned.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read as _, Seek as _, Write as _},
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
@@ -21,7 +21,7 @@ use clap::Args;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::authoring;
+use crate::{authoring, source_import::ProjectLock};
 
 const MAX_TARGET_BYTES: u64 = 1024 * 1024;
 const MAX_EVIDENCE_CAPTURE_BYTES: u64 = 1024 * 1024;
@@ -66,6 +66,8 @@ struct TargetGovernance {
     signing: Value,
     #[serde(default)]
     response_formats: Option<Value>,
+    #[serde(default)]
+    source_connections: Option<Value>,
     authority_profiles: Value,
 }
 
@@ -76,9 +78,9 @@ impl TargetGovernance {
         }
         if !matches!(
             self.assurance_profile.as_str(),
-            "production" | "evidence-grade"
+            "local" | "production" | "evidence-grade"
         ) {
-            bail!("deployment governance assuranceProfile must be production or evidence-grade");
+            bail!("deployment governance assuranceProfile must be local, production, or evidence-grade");
         }
         if self
             .authority_profiles
@@ -105,6 +107,9 @@ impl TargetGovernance {
         if let Some(response_formats) = self.response_formats {
             object.insert("responseFormats".to_owned(), response_formats);
         }
+        if let Some(source_connections) = self.source_connections {
+            object.insert("sourceConnections".to_owned(), source_connections);
+        }
         if let Some(publication) = self.publication {
             object.insert("publication".to_owned(), publication);
         }
@@ -120,6 +125,8 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
 fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCode> {
     interruption.check()?;
     reject_existing_output(&args.output)?;
+    let _project_lock = ProjectLock::acquire(&args.project)
+        .with_context(|| format!("locking editable project {}", args.project.display()))?;
     let project = plain_directory(&args.project, "authoring project")?;
     let output_parent = plain_parent(&args.output)?;
     let candidate = output_parent.join(
@@ -130,20 +137,7 @@ fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCo
     if candidate.starts_with(&project) {
         bail!("candidate output must remain outside the editable project");
     }
-    let target = plain_directory(&args.target, "deployment target")?;
-    let governance_bytes = read_plain_file(
-        &target.join("governance.yaml"),
-        MAX_TARGET_BYTES,
-        "deployment governance",
-    )?;
-    let target_runtime = read_plain_file(
-        &target.join("runtime.yaml"),
-        MAX_TARGET_BYTES,
-        "deployment runtime",
-    )?;
-    let governance: TargetGovernance = serde_norway::from_slice(&governance_bytes)
-        .context("deployment governance is not the closed Version 1 target shape")?;
-    let governed_bundle = governance.into_bundle()?;
+    let target = read_target_documents(&args.target)?;
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
 
     interruption.check()?;
@@ -157,8 +151,6 @@ fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCo
         &project,
         &target,
         staging.path(),
-        &target_runtime,
-        governed_bundle,
         &evidence_bin,
         interruption,
     );
@@ -187,6 +179,93 @@ fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCo
     Ok(ExitCode::SUCCESS)
 }
 
+pub(crate) fn validated_question_revisions(
+    project: &Path,
+    target: &Path,
+) -> Result<BTreeMap<String, String>> {
+    let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
+    let interruption = BuildInterruption::passive();
+    let compiled = compile_target_fixture_project(project, target, &evidence_bin)?;
+    let report =
+        run_bundle_check_report(&evidence_bin, &compiled.bundle_path, project, &interruption)?;
+    for fixture in &compiled.fixture_paths {
+        run_bundle_fixture(
+            &evidence_bin,
+            &compiled.bundle_path,
+            fixture,
+            project,
+            &interruption,
+        )?;
+    }
+    Ok(report
+        .requirements
+        .into_iter()
+        .map(|requirement| (requirement.id, requirement.configuration_revision))
+        .collect())
+}
+
+pub(crate) struct TargetFixtureProject {
+    pub(crate) bundle_path: PathBuf,
+    pub(crate) fixture_paths: Vec<String>,
+    staging: tempfile::TempDir,
+}
+
+impl Drop for TargetFixtureProject {
+    fn drop(&mut self) {
+        let _ = make_tree_removable(self.staging.path());
+    }
+}
+
+pub(crate) fn compile_target_fixture_project(
+    project: &Path,
+    target: &Path,
+    evidence_bin: &Path,
+) -> Result<TargetFixtureProject> {
+    let target = read_target_documents(target)?;
+    let staging = tempfile::Builder::new()
+        .prefix("evidencectl-target-fixtures-")
+        .tempdir()
+        .context("creating private target fixture compilation staging")?;
+    fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
+        .context("sealing private target fixture compilation staging")?;
+    let staging_path = fs::canonicalize(staging.path())
+        .context("resolving private target fixture compilation staging")?;
+    let compiled = compile_with_target(project, &target, &staging_path, evidence_bin)?;
+    Ok(TargetFixtureProject {
+        bundle_path: compiled.bundle_path,
+        fixture_paths: compiled.fixture_paths,
+        staging,
+    })
+}
+
+pub(crate) fn local_dev_target_inputs(target: &Path) -> Result<(Value, Value)> {
+    let target = read_target_documents(target)?;
+    if target
+        .governed_bundle
+        .get("assuranceProfile")
+        .and_then(Value::as_str)
+        != Some("local")
+    {
+        bail!("dev --target requires deployment governance assuranceProfile local");
+    }
+    let source_connections = target
+        .governed_bundle
+        .get("sourceConnections")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if !source_connections.is_object() {
+        bail!("deployment governance sourceConnections must be a mapping");
+    }
+    let runtime: Value = serde_norway::from_slice(&target.runtime)
+        .context("deployment runtime is not a readable native runtime document")?;
+    let mut outbound_tls = runtime
+        .get("outboundTls")
+        .cloned()
+        .ok_or_else(|| anyhow!("deployment runtime outboundTls is required for dev --target"))?;
+    rebase_outbound_tls(&target.root, &mut outbound_tls)?;
+    Ok((source_connections, outbound_tls))
+}
+
 struct BuildInterruption {
     requested: Arc<AtomicBool>,
     registrations: Vec<signal_hook::SigId>,
@@ -206,12 +285,72 @@ impl BuildInterruption {
         Ok(guard)
     }
 
+    fn passive() -> Self {
+        Self {
+            requested: Arc::new(AtomicBool::new(false)),
+            registrations: Vec::new(),
+        }
+    }
+
     fn check(&self) -> Result<()> {
         if self.requested.load(Ordering::Relaxed) {
             bail!("deployment build interrupted");
         }
         Ok(())
     }
+}
+
+struct TargetDocuments {
+    root: PathBuf,
+    runtime: Vec<u8>,
+    governed_bundle: Value,
+}
+
+fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
+    let root = plain_directory(target, "deployment target")?;
+    let governance_bytes = read_plain_file(
+        &root.join("governance.yaml"),
+        MAX_TARGET_BYTES,
+        "deployment governance",
+    )?;
+    let runtime = read_plain_file(
+        &root.join("runtime.yaml"),
+        MAX_TARGET_BYTES,
+        "deployment runtime",
+    )?;
+    let governance: TargetGovernance = serde_norway::from_slice(&governance_bytes)
+        .context("deployment governance is not the closed Version 1 target shape")?;
+    Ok(TargetDocuments {
+        root,
+        runtime,
+        governed_bundle: governance.into_bundle()?,
+    })
+}
+
+struct TargetCompilation {
+    bundle_path: PathBuf,
+    fixture_paths: Vec<String>,
+    bundle: Value,
+}
+
+fn compile_with_target(
+    project: &Path,
+    target: &TargetDocuments,
+    staging_root: &Path,
+    evidence_bin: &Path,
+) -> Result<TargetCompilation> {
+    let compiled = authoring::compile_target_project(
+        project,
+        &target.root,
+        staging_root,
+        target.governed_bundle.clone(),
+        evidence_bin,
+    )?;
+    Ok(TargetCompilation {
+        bundle_path: compiled.bundle_path,
+        fixture_paths: compiled.fixture_paths,
+        bundle: compiled.bundle,
+    })
 }
 
 impl Drop for BuildInterruption {
@@ -224,25 +363,17 @@ impl Drop for BuildInterruption {
 
 fn prepare_candidate(
     project: &Path,
-    deployment_target: &Path,
+    target: &TargetDocuments,
     staging_root: &Path,
-    target_runtime: &[u8],
-    governed_bundle: Value,
     evidence_bin: &Path,
     interruption: &BuildInterruption,
 ) -> Result<(String, Vec<String>)> {
-    let compiled = authoring::compile_production_project(
-        project,
-        deployment_target,
-        staging_root,
-        governed_bundle,
-        evidence_bin,
-    )?;
+    let compiled = compile_with_target(project, target, staging_root, evidence_bin)?;
     interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;
-    reject_review_markers_in_bytes(target_runtime, "deployment runtime")?;
+    reject_review_markers_in_bytes(&target.runtime, "deployment runtime")?;
     let runtime_path = staging_root.join("runtime.yaml");
-    write_new_file(&runtime_path, target_runtime, 0o600)?;
+    write_new_file(&runtime_path, &target.runtime, 0o600)?;
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
         .context("sealing the copied deployment runtime")?;
 
@@ -267,11 +398,21 @@ fn run_bundle_check(
     project: &Path,
     interruption: &BuildInterruption,
 ) -> Result<String> {
+    Ok(run_bundle_check_report(evidence_bin, bundle, project, interruption)?.bundle_revision)
+}
+
+fn run_bundle_check_report(
+    evidence_bin: &Path,
+    bundle: &Path,
+    project: &Path,
+    interruption: &BuildInterruption,
+) -> Result<BundleCheckReport> {
     let mut command = Command::new(evidence_bin);
     command
         .arg("bundle-check")
         .arg("--bundle")
         .arg(bundle)
+        .arg("--json")
         .env_remove("REGISTRY_EVIDENCE_RUNTIME");
     let output = run_evidence(command, interruption, true, true)?;
     if !output.status.success() {
@@ -281,7 +422,56 @@ fn run_bundle_check(
             bounded_diagnostic(&output.stderr).as_deref(),
         );
     }
-    parse_bundle_revision(&String::from_utf8_lossy(&output.stdout))
+    parse_bundle_check_report(&output.stdout)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BundleCheckReport {
+    bundle_revision: String,
+    requirements: Vec<BundleCheckRequirement>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BundleCheckRequirement {
+    id: String,
+    configuration_revision: String,
+}
+
+fn parse_bundle_check_report(stdout: &[u8]) -> Result<BundleCheckReport> {
+    let report: BundleCheckReport = serde_json::from_slice(stdout)
+        .context("Evidence check returned an invalid bundle revision report")?;
+    validate_digest(&report.bundle_revision, "bundleRevision")?;
+    if report.requirements.is_empty() {
+        bail!("Evidence check returned no requirement revisions");
+    }
+    let mut ids = BTreeSet::new();
+    for requirement in &report.requirements {
+        if requirement.id.is_empty() || requirement.id.len() > 512 {
+            bail!("Evidence check returned an invalid requirement id");
+        }
+        if !ids.insert(requirement.id.clone()) {
+            bail!("Evidence check returned duplicate requirement revisions");
+        }
+        validate_digest(
+            &requirement.configuration_revision,
+            "requirement configurationRevision",
+        )?;
+    }
+    Ok(report)
+}
+
+fn validate_digest(value: &str, label: &str) -> Result<()> {
+    if value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Ok(());
+    }
+    bail!("Evidence check returned an invalid {label}")
 }
 
 fn run_bundle_fixture(
@@ -451,20 +641,6 @@ fn bounded_diagnostic(raw: &[u8]) -> Option<String> {
     Some(excerpt)
 }
 
-fn parse_bundle_revision(stdout: &str) -> Result<String> {
-    let revision = stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("Evidence bundle "))
-        .and_then(|line| line.split_whitespace().next())
-        .filter(|value| {
-            value.len() == 71
-                && value.starts_with("sha256:")
-                && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
-        .ok_or_else(|| anyhow!("Evidence check returned no bundle revision"))?;
-    Ok(revision.to_owned())
-}
-
 fn secret_references(value: &Value) -> Result<Vec<String>> {
     let mut references = BTreeSet::new();
     collect_secret_references(value, &mut references)?;
@@ -558,6 +734,61 @@ fn reject_existing_output(path: &Path) -> Result<()> {
     }
 }
 
+fn rebase_outbound_tls(target_root: &Path, outbound_tls: &mut Value) -> Result<()> {
+    let outbound_tls = outbound_tls
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("deployment runtime outboundTls must be a mapping"))?;
+    let trust_profiles = outbound_tls
+        .get_mut("trustProfiles")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow!("deployment runtime outboundTls.trustProfiles must be a mapping"))?;
+    for profile in trust_profiles.values_mut() {
+        let profile = profile
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("deployment runtime TLS trust profiles must be mappings"))?;
+        let Some(file) = profile.get_mut("caBundleFile") else {
+            continue;
+        };
+        let file_name = file
+            .as_str()
+            .ok_or_else(|| anyhow!("deployment runtime TLS caBundleFile must be a string"))?;
+        *file = Value::String(rebase_target_file(
+            target_root,
+            file_name,
+            "TLS CA bundle file",
+        )?);
+    }
+    Ok(())
+}
+
+fn rebase_target_file(target_root: &Path, value: &str, description: &str) -> Result<String> {
+    let path = Path::new(value);
+    let resolved = if path.is_absolute() {
+        plain_file_path(path, description)?
+    } else {
+        if path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            bail!("{description} must be an absolute path or a plain target-relative file path");
+        }
+        plain_file_path(&target_root.join(path), description)?
+    };
+    Ok(resolved.display().to_string())
+}
+
+fn plain_file_path(path: &Path, description: &str) -> Result<PathBuf> {
+    if !matches!(path.components().next_back(), Some(Component::Normal(_))) {
+        bail!("{description} must name one file");
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    validate_plain_components(parent, description, true)?;
+    let parent = fs::canonicalize(parent).with_context(|| format!("resolving {description}"))?;
+    Ok(parent.join(path.file_name().expect("checked file name")))
+}
 fn plain_parent(path: &Path) -> Result<PathBuf> {
     if !matches!(path.components().next_back(), Some(Component::Normal(_))) {
         bail!("candidate output must name one new directory");
@@ -727,20 +958,127 @@ requirements: []
     }
 
     #[test]
-    fn revision_and_secret_reference_parsing_are_closed() {
-        let revision = format!(
-            "Evidence bundle sha256:{} passed check (2 requirements)\n",
-            "a".repeat(64)
-        );
+    fn local_dev_target_inputs_accept_only_local_targets_and_rebase_ca_files() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let target = temporary.path().join("target");
+        fs::create_dir(&target).expect("target directory");
+        fs::create_dir(target.join("trust")).expect("trust directory");
+        fs::write(target.join("trust/local-ca.pem"), "ca").expect("ca bundle");
+        fs::write(
+            target.join("governance.yaml"),
+            r#"version: 1
+assuranceProfile: local
+service: {}
+issuer: {}
+authentication: {}
+audit: {}
+subjectBinding: {}
+rateLimits: {}
+signing: {}
+sourceConnections:
+  registry:
+    baseUrl: http://127.0.0.1:8088
+authorityProfiles:
+  local: {}
+"#,
+        )
+        .expect("governance");
+        fs::write(
+            target.join("runtime.yaml"),
+            r#"version: 1
+outboundTls:
+  systemRoots: true
+  trustProfiles:
+    local-ca:
+      caBundleFile: trust/local-ca.pem
+"#,
+        )
+        .expect("runtime");
+
+        let target = fs::canonicalize(target).expect("canonical target");
+        let (connections, outbound_tls) =
+            local_dev_target_inputs(&target).expect("local dev target inputs");
+
+        assert_eq!(connections["registry"]["baseUrl"], "http://127.0.0.1:8088");
         assert_eq!(
-            parse_bundle_revision(&revision).expect("revision"),
-            format!("sha256:{}", "a".repeat(64))
+            outbound_tls["trustProfiles"]["local-ca"]["caBundleFile"],
+            fs::canonicalize(target.join("trust/local-ca.pem"))
+                .expect("canonical CA")
+                .display()
+                .to_string()
         );
-        assert!(parse_bundle_revision(
-            "Evidence deployment sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+
+        fs::write(
+            target.join("governance.yaml"),
+            fs::read_to_string(target.join("governance.yaml"))
+                .expect("governance")
+                .replace("assuranceProfile: local", "assuranceProfile: production"),
+        )
+        .expect("production governance");
+        assert!(local_dev_target_inputs(&target).is_err());
+    }
+
+    #[test]
+    fn production_governance_passes_source_connections_to_the_compiler() {
+        let governance: TargetGovernance = serde_norway::from_str(
+            r#"version: 1
+assuranceProfile: production
+service: {}
+issuer: {}
+authentication: {}
+audit: {}
+subjectBinding: {}
+rateLimits: {}
+signing: {}
+sourceConnections:
+  registry:
+    baseUrl: https://registry.example.test
+    authentication: {kind: static-authorization, tokenRef: 'secret:file/registry-token'}
+authorityProfiles:
+  reviewed: {}
+"#,
+        )
+        .expect("sourceConnections are native target governance");
+        let bundle = governance.into_bundle().expect("governed bundle");
+        assert_eq!(
+            bundle["sourceConnections"]["registry"]["baseUrl"],
+            "https://registry.example.test"
+        );
+    }
+
+    #[test]
+    fn revision_report_and_secret_reference_parsing_are_closed() {
+        let report = parse_bundle_check_report(
+            serde_json::json!({
+                "bundleRevision": format!("sha256:{}", "b".repeat(64)),
+                "requirements": [
+                    {"id": "registry-status", "configurationRevision": format!("sha256:{}", "c".repeat(64))}
+                ]
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .expect("bundle-check JSON report");
+        assert_eq!(report.bundle_revision, format!("sha256:{}", "b".repeat(64)));
+        assert_eq!(
+            report.requirements[0].configuration_revision,
+            format!("sha256:{}", "c".repeat(64))
+        );
+        assert!(parse_bundle_check_report(
+            serde_json::json!({
+                "bundleRevision": format!("sha256:{}", "b".repeat(64)),
+                "requirements": [
+                    {"id": "registry-status", "configurationRevision": format!("sha256:{}", "C".repeat(64))}
+                ]
+            })
+            .to_string()
+            .as_bytes()
         )
         .is_err());
-        assert!(parse_bundle_revision("Evidence bundle sha256:not-a-digest\n").is_err());
+        assert!(parse_bundle_check_report(
+            br#"{"bundleRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requirements":[{"id":"dup","configurationRevision":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"id":"dup","configurationRevision":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}]}"#
+        )
+        .is_err());
 
         let names = secret_references(&json!({
             "z": "secret:file/source-token",
