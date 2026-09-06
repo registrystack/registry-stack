@@ -474,6 +474,17 @@ impl AuditOperatorService {
     #[cfg(feature = "postgres-test")]
     #[doc(hidden)]
     pub async fn append_record_for_test(&self, record: serde_json::Value) -> Result<()> {
+        self.append_records_for_test(vec![record]).await
+    }
+
+    /// Append records to the journal over one pooled runtime connection, one
+    /// transaction per record, so a test can seed a large chain without
+    /// opening a fresh connection per record. Each record still commits on
+    /// its own transaction, so the chain produced is the same one
+    /// `append_record_for_test` would have produced call by call.
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    pub async fn append_records_for_test(&self, records: Vec<serde_json::Value>) -> Result<()> {
         let pool = self
             .runtime_connection
             .build_pool()
@@ -483,15 +494,18 @@ impl AuditOperatorService {
             .await
             .map_err(|_| AuditToolingError::Unavailable)?;
         let pg_client: &mut tokio_postgres::Client = &mut client;
-        let transaction = pg_client
-            .transaction()
-            .await
-            .map_err(|_| AuditToolingError::Unavailable)?;
-        append_audit_envelope(&transaction, &self.audit_profile, record).await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| AuditToolingError::Unavailable)
+        for record in records {
+            let transaction = pg_client
+                .transaction()
+                .await
+                .map_err(|_| AuditToolingError::Unavailable)?;
+            append_audit_envelope(&transaction, &self.audit_profile, record).await?;
+            transaction
+                .commit()
+                .await
+                .map_err(|_| AuditToolingError::Unavailable)?;
+        }
+        Ok(())
     }
 
     /// Read the reachable chain in one repeatable-read, read-only snapshot on
