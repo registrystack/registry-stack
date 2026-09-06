@@ -1125,6 +1125,58 @@ mod tests {
     }
 
     #[test]
+    fn a_hard_link_publication_after_an_ancestor_is_replaced_takes_only_the_named_tree() {
+        let tree = race_tree();
+        let named = tree.named("published");
+        let _guard = tree.arm();
+
+        let entry = SafeEntry::resolve(&named).expect("the path resolves before the swap");
+        entry
+            .parent()
+            .create_new(OsStr::new("staged.tmp"), 0o600)
+            .expect("the staged sibling is created")
+            .write_all(b"published")
+            .expect("the staged sibling writes");
+        entry
+            .publish_new_from(OsStr::new("staged.tmp"))
+            .expect("the staged sibling publishes");
+
+        assert_eq!(
+            fs::read(tree.moved("published")).expect("the publication lands in the named tree"),
+            b"published"
+        );
+        // The temporary name is gone from the named tree, and the tree the
+        // operator never named holds neither the publication nor a leftover.
+        assert!(!tree.moved("staged.tmp").exists());
+        assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+    }
+
+    #[test]
+    fn a_hard_link_publication_refuses_a_taken_name_and_drops_the_temporary() {
+        let tree = race_tree();
+        let entry = SafeEntry::resolve(&tree.named("target")).expect("the path resolves");
+        entry
+            .parent()
+            .create_new(OsStr::new("staged.tmp"), 0o600)
+            .expect("the staged sibling is created")
+            .write_all(b"published")
+            .expect("the staged sibling writes");
+
+        let refused = entry
+            .publish_new_from(OsStr::new("staged.tmp"))
+            .expect_err("publication never replaces an existing destination");
+
+        assert_eq!(refused.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read(tree.named("target")).expect("the destination survives"),
+            b"genuine"
+        );
+        // The caller holds its own descriptor for the staged bytes, so the
+        // refusal leaves no staging name behind either way.
+        assert!(!tree.named("staged.tmp").exists());
+    }
+
+    #[test]
     fn a_directory_read_after_an_ancestor_is_replaced_lists_the_named_directory() {
         let tree = race_tree();
         let named = tree.named_directory();
