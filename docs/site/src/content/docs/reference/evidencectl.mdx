@@ -33,11 +33,10 @@ acceptance, fixture evaluation, secret validation, and startup acceptance.
 | `evidencectl fixtures run --project <project>` | A deployment project with `runtime.yaml`, or an editable project with `questions/` and `sources/`, plus referenced synthetic fixtures | Uses runtime `check` and `evaluate` for a deployment; privately compiles an editable project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
 | `evidencectl fixtures run --project <candidate> --explain` | The same, and asks each evaluation to explain itself | Relays each fixture's stage trace beside its step, or as that fixture's `trace` field under `--json` | Print a response, fact, derived, or selector value, or explain a served request |
 
-`build` is create-only. It rejects an existing output directory, local assurance inputs,
-unauthenticated or non-HTTPS production HTTP sources, source transports with no stated production
-conditions, missing governance metadata or fixtures, unresolved review markers, unknown fields,
-symlink traversal, and references outside the allowed project directories. A failed build publishes
-no candidate.
+`build` is create-only. It rejects an existing output directory, unauthenticated or non-HTTPS
+production HTTP sources, source transports with no stated production conditions, missing governance
+metadata or fixtures, unresolved review markers, unknown fields, symlink traversal, and references
+outside the allowed project directories. A failed build publishes no candidate.
 
 ## Production input reference
 
