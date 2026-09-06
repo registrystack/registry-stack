@@ -260,8 +260,6 @@ fn explain(args: ExplainArgs) -> Result<ExitCode> {
     let _project_lock = ProjectLock::acquire(&args.project)
         .with_context(|| format!("locking editable project {}", args.project.display()))?;
     let evidence_bin = evidence_binary::resolve_matching(None)?;
-    let compiled = build::compile_target_fixture_project(&args.project, &target, &evidence_bin)
-        .context("compiling editable project with deployment target")?;
     let governance: Value = serde_norway::from_slice(&read_plain_file(
         &target.join("governance.yaml"),
         MAX_SETTINGS_BYTES,
@@ -290,10 +288,21 @@ fn explain(args: ExplainArgs) -> Result<ExitCode> {
     let mut secret_references = BTreeSet::new();
     collect_secret_references(&governance, &mut secret_references)?;
     collect_secret_references(&runtime, &mut secret_references)?;
+    // The compile below copies every public key file this governance
+    // references from the deployment target and fails when one is missing, so
+    // the inventory above must run first: a missing key is reported here
+    // instead of surfacing as an unrelated compile failure.
+    let fixture_paths = if missing_public_key_files.is_empty() {
+        let compiled = build::compile_target_fixture_project(&args.project, &target, &evidence_bin)
+            .context("compiling editable project with deployment target")?;
+        compiled.fixture_paths.clone()
+    } else {
+        Vec::new()
+    };
     let report = TargetReport {
         format_version: 1,
         target: target.display().to_string(),
-        fixture_paths: compiled.fixture_paths.clone(),
+        fixture_paths,
         public_key_files,
         missing_public_key_files,
         secret_references: secret_references.into_iter().collect(),
@@ -318,7 +327,11 @@ fn explain(args: ExplainArgs) -> Result<ExitCode> {
             println!("Provision {SECRET_PREFIX}{reference}");
         }
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(if report.missing_public_key_files.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 fn expected_public_key_files(governance: &Value) -> Result<Vec<String>> {
