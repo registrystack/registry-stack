@@ -18,7 +18,7 @@ test('pinned docsets expose CLI navigation only when they contain its index', as
 
   await writeFile(index, '---\ntitle: CLI reference\n---\n[breg](./breg/)\n[bregctl](./bregctl/)\n');
   const [group] = cliReferenceSidebar(index);
-  assert.equal(group.label, 'Command-line interfaces');
+  assert.equal(group.label, 'CLI commands');
   assert.deepEqual(
     group.items.map((item) => item.slug),
     [
