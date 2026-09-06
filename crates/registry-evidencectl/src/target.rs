@@ -80,6 +80,38 @@ struct TargetSettings {
     public_keys: BTreeMap<String, PathBuf>,
 }
 
+/// The closed Version 1 runtime settings shape, mirroring
+/// `products/evidence/contracts/runtime.schema.yaml`.
+///
+/// evidencectl deliberately does not link the runtime crate, so it cannot
+/// deserialize the document through the runtime's own type. The runtime denies
+/// unknown fields and refuses a misspelled or unpublished key at startup; this
+/// mirror moves that refusal into `target new`, before a target directory the
+/// deployment cannot load exists. Each section stays untyped here because the
+/// runtime, not evidencectl, owns what is inside it. The mirror is held in step
+/// with the published contract by
+/// `the_closed_runtime_mirror_matches_the_published_runtime_contract`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+// The fields state which keys the document may carry and which it must carry;
+// deserializing is the whole check, so nothing reads them afterwards.
+#[allow(dead_code)]
+struct TargetRuntime {
+    version: u32,
+    bundle_directory: String,
+    listener: Value,
+    #[serde(default)]
+    metrics_listener: Option<Value>,
+    secret_providers: Value,
+    signer: Value,
+    audit_storage: Value,
+    outbound_tls: Value,
+    #[serde(default)]
+    source_extracts: Option<Value>,
+    #[serde(default)]
+    acquisition_capabilities: Option<Value>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TargetReport {
@@ -234,6 +266,11 @@ fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()
     ] {
         require_nonempty_mapping(runtime, section, "target settings runtime")?;
     }
+    // Validate the runtime document through the closed mirror of the shape the
+    // runtime loads, so `target new` refuses an unknown or misspelled key here
+    // rather than writing a runtime.yaml the deployment refuses at startup.
+    serde_json::from_value::<TargetRuntime>(Value::Object(runtime.clone()))
+        .context("target settings runtime is not the closed Version 1 runtime shape")?;
     let mut secret_references = BTreeSet::new();
     collect_secret_references(&Value::Object(governance.clone()), &mut secret_references)?;
     collect_secret_references(&Value::Object(runtime.clone()), &mut secret_references)?;
@@ -893,6 +930,106 @@ runtime:
             !target.exists(),
             "failed target creation must be create-only"
         );
+    }
+    #[test]
+    fn target_new_rejects_unknown_runtime_field() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let key_path = temporary.path().join("active.jwk.json");
+        let settings_path = temporary.path().join("settings.yaml");
+        let target = temporary.path().join("target");
+        fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
+        let settings = target_settings(
+            "    activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json\n    publishedPublicJwkFiles: []",
+            "publicKeys:\n  _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: active.jwk.json\n",
+        )
+        .replace(
+            "  outboundTls:\n",
+            "  unexpectedField: true\n  outboundTls:\n",
+        );
+        fs::write(&settings_path, settings).expect("settings");
+
+        // The runtime denies unknown fields and names this key when it refuses
+        // the document at startup. `target new` must refuse it here instead of
+        // writing a runtime.yaml the deployment cannot load.
+        let Err(error) = new(NewArgs {
+            directory: target.clone(),
+            settings: settings_path,
+            signing_public_key: None,
+        }) else {
+            panic!("an unknown runtime field is refused");
+        };
+        let reported = format!("{error:#}");
+        assert!(reported.contains("unexpectedField"), "{reported}");
+        assert!(
+            !target.exists(),
+            "failed target creation must be create-only"
+        );
+    }
+    /// The Evidence runtime owns the settings shape and this crate does not link
+    /// it, so `TargetRuntime` is a restatement nothing but a test can hold in
+    /// step: a key the runtime adds would be refused here, and a key it drops
+    /// would still be accepted. The published runtime contract is the document
+    /// the runtime loader answers to, so it is what the mirror is held against.
+    #[test]
+    fn the_closed_runtime_mirror_matches_the_published_runtime_contract() {
+        let contract = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/evidence/contracts/runtime.schema.yaml"
+        );
+        let schema: Value = serde_norway::from_slice(
+            &fs::read(contract).expect("the published runtime contract is readable"),
+        )
+        .expect("the published runtime contract parses");
+        assert_eq!(
+            schema["additionalProperties"],
+            Value::Bool(false),
+            "the published runtime contract must stay closed"
+        );
+        let published = schema["properties"]
+            .as_object()
+            .expect("the runtime contract publishes properties");
+        let required: BTreeSet<&str> = schema["required"]
+            .as_array()
+            .expect("the runtime contract names its required properties")
+            .iter()
+            .map(|name| name.as_str().expect("each required property is a name"))
+            .collect();
+
+        let complete: serde_json::Map<String, Value> = published
+            .keys()
+            .map(|name| (name.clone(), sample_runtime_value(name)))
+            .collect();
+        serde_json::from_value::<TargetRuntime>(Value::Object(complete.clone()))
+            .expect("the mirror accepts every key the contract publishes");
+
+        for name in published.keys() {
+            let mut document = complete.clone();
+            document.remove(name);
+            let accepted = serde_json::from_value::<TargetRuntime>(Value::Object(document)).is_ok();
+            assert_eq!(
+                accepted,
+                !required.contains(name.as_str()),
+                "`{name}` is required by the mirror exactly when the contract requires it"
+            );
+        }
+
+        let mut unpublished = complete;
+        unpublished.insert("unpublishedField".to_owned(), Value::Bool(true));
+        assert!(
+            serde_json::from_value::<TargetRuntime>(Value::Object(unpublished)).is_err(),
+            "the mirror must refuse a key the contract does not publish"
+        );
+    }
+
+    /// A value the mirror can deserialize for the contract property `name`. The
+    /// mirror leaves the interior of each section to the runtime, so only
+    /// `version` and `bundleDirectory` need a shape of their own.
+    fn sample_runtime_value(name: &str) -> Value {
+        match name {
+            "version" => serde_json::json!(1),
+            "bundleDirectory" => serde_json::json!("/tmp/evidence/bundle"),
+            _ => serde_json::json!({}),
+        }
     }
 
     #[test]
