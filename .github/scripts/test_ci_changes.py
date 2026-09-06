@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from ci_changes import (
     BREG_TUTORIAL_INPUTS,
     CLI_REFERENCE_INPUTS,
@@ -213,6 +215,177 @@ class CiChangesTest(unittest.TestCase):
         # deliberately broken copy of the same dependency graph.
         cls.metadata = json.loads(metadata.stdout)
         cls.workspace = Workspace(cls.metadata)
+        workflow = yaml.safe_load(Path(".github/workflows/ci.yml").read_text())
+        cls.workflow_jobs = workflow["jobs"]
+
+    @staticmethod
+    def normalized_needs(job: dict[str, Any]) -> tuple[str, ...]:
+        needs = job.get("needs", ())
+        return (needs,) if isinstance(needs, str) else tuple(needs)
+
+    @staticmethod
+    def static_matrix_slots(job: dict[str, Any]) -> int:
+        matrix = job.get("strategy", {}).get("matrix")
+        if matrix is None:
+            return 1
+        if not isinstance(matrix, dict):
+            raise AssertionError("directly eligible jobs must use a static matrix")
+        if "include" in matrix:
+            return len(matrix["include"])
+
+        slots = 1
+        for name, values in matrix.items():
+            if name != "exclude" and isinstance(values, list):
+                slots *= len(values)
+        return slots
+
+    def test_critical_ci_work_remains_directly_eligible_after_classification(
+        self,
+    ) -> None:
+        expected = {
+            "platform-quality",
+            "platform-hygiene",
+            "rust-policy",
+            "evidence-contracts",
+            "discovery-contracts",
+            "relay-v2-contracts",
+            "breg-contracts",
+            "evidence-tutorials",
+            "docs",
+            "client-bindings",
+            "release-linux-node-clients",
+        }
+        direct = {
+            name
+            for name, job in self.workflow_jobs.items()
+            if self.normalized_needs(job) == ("changes",)
+        }
+
+        self.assertEqual(expected, direct)
+        slots = sum(self.static_matrix_slots(self.workflow_jobs[name]) for name in direct)
+        self.assertLessEqual(slots, 14)
+        self.assertEqual(14, slots)
+
+    def test_deferred_ci_work_keeps_its_selector_and_explicit_status_guard(
+        self,
+    ) -> None:
+        selectors = {
+            "platform-fuzz": "needs.changes.outputs.platform == 'true'",
+            "platform-coverage": "needs.changes.outputs.platform == 'true'",
+            "rust-quality": "needs.changes.outputs.rust == 'true'",
+            "rust-tests": "needs.changes.outputs.rust == 'true'",
+            "relay-client-contracts": (
+                "needs.changes.outputs.relay_client_contracts == 'true'"
+            ),
+            "identifiers": "needs.changes.outputs.identifiers == 'true'",
+            "release-tool": "needs.changes.outputs.release_tool == 'true'",
+            "release-source-proof": (
+                "needs.changes.outputs.release_source_proof == 'true'"
+            ),
+            "breg-tutorial": "needs.changes.outputs.breg_tutorial == 'true'",
+            "breg-evidence-composition": (
+                "needs.changes.outputs.breg_evidence_composition == 'true'"
+            ),
+            "docs-archives": "needs.changes.outputs.docs_archives == 'true'",
+            "editor-extensions": "needs.changes.outputs.editors == 'true'",
+        }
+        deferred = {
+            name
+            for name, job in self.workflow_jobs.items()
+            if self.normalized_needs(job) == ("changes", "rust-policy")
+        }
+        self.assertEqual(set(selectors), deferred)
+
+        # An explicit status-check function bypasses GitHub's implicit
+        # success() dependency guard. The original selector still decides
+        # whether a failed or skipped policy dependency should release work,
+        # and !cancelled() preserves cancellation behavior.
+        for name, selector in selectors.items():
+            with self.subTest(job=name):
+                self.assertEqual(
+                    f"${{{{ !cancelled() && {selector} }}}}",
+                    self.workflow_jobs[name]["if"],
+                )
+
+    def test_ci_scheduling_graph_retains_every_job_and_aggregate_dependency(
+        self,
+    ) -> None:
+        expected_jobs = {
+            "changes",
+            "secrets",
+            "platform-quality",
+            "platform-coverage",
+            "platform-coverage-upload",
+            "platform-hygiene",
+            "platform-fuzz",
+            "rust-policy",
+            "rust-quality",
+            "rust-tests",
+            "evidence-contracts",
+            "discovery-contracts",
+            "relay-v2-contracts",
+            "relay-client-contracts",
+            "breg-contracts",
+            "identifiers",
+            "rust-result",
+            "release-tool",
+            "release-tool-required",
+            "release-source-proof",
+            "release-source-proof-required",
+            "evidence-tutorials",
+            "breg-tutorial",
+            "breg-evidence-composition",
+            "evidence-anchors",
+            "docs",
+            "docs-required",
+            "docs-archives",
+            "editor-extensions",
+            "client-bindings",
+            "release-linux-node-clients",
+            "ci-result",
+        }
+        self.assertEqual(expected_jobs, set(self.workflow_jobs))
+
+        aggregate_needs = {
+            "rust-result": (
+                "changes",
+                "rust-policy",
+                "rust-quality",
+                "rust-tests",
+                "discovery-contracts",
+                "evidence-contracts",
+                "relay-v2-contracts",
+                "relay-client-contracts",
+                "breg-contracts",
+                "identifiers",
+            ),
+            "release-tool-required": ("changes", "release-tool"),
+            "release-source-proof-required": ("changes", "release-source-proof"),
+            "docs-required": ("changes", "docs", "docs-archives"),
+            "ci-result": (
+                "changes",
+                "secrets",
+                "platform-quality",
+                "platform-coverage",
+                "platform-coverage-upload",
+                "platform-hygiene",
+                "platform-fuzz",
+                "rust-result",
+                "release-tool",
+                "release-source-proof",
+                "evidence-tutorials",
+                "breg-tutorial",
+                "breg-evidence-composition",
+                "evidence-anchors",
+                "docs",
+                "editor-extensions",
+                "client-bindings",
+                "release-linux-node-clients",
+            ),
+        }
+        for name, expected in aggregate_needs.items():
+            with self.subTest(aggregate=name):
+                self.assertEqual(expected, self.normalized_needs(self.workflow_jobs[name]))
 
     def test_shards_cover_every_workspace_package_once(self) -> None:
         assigned = [package for packages in SHARDS.values() for package in packages]

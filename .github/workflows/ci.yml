@@ -195,8 +195,10 @@ jobs:
 
   platform-coverage:
     name: Platform line coverage
-    needs: changes
-    if: needs.changes.outputs.platform == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.platform == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -289,8 +291,10 @@ jobs:
 
   platform-fuzz:
     name: Platform fuzz smoke (${{ matrix.group }})
-    needs: changes
-    if: needs.changes.outputs.platform == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.platform == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -380,8 +384,10 @@ jobs:
 
   rust-quality:
     name: Rust format and clippy
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -414,8 +420,10 @@ jobs:
 
   rust-tests:
     name: Rust tests (${{ matrix.name }})
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -574,8 +582,10 @@ jobs:
 
   relay-client-contracts:
     name: Relay client contract and source neutrality
-    needs: changes
-    if: needs.changes.outputs.relay_client_contracts == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.relay_client_contracts == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -691,8 +701,10 @@ jobs:
 
   identifiers:
     name: Public identifier catalog
-    needs: changes
-    if: needs.changes.outputs.identifiers == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.identifiers == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -754,8 +766,10 @@ jobs:
 
   release-tool:
     name: Release tooling checks
-    needs: changes
-    if: needs.changes.outputs.release_tool == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.release_tool == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -868,8 +882,10 @@ jobs:
 
   release-source-proof:
     name: Release source proof checks
-    needs: changes
-    if: needs.changes.outputs.release_source_proof == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.release_source_proof == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -1045,8 +1061,10 @@ jobs:
 
   breg-tutorial:
     name: Base Registry Engine tutorial from source
-    needs: changes
-    if: needs.changes.outputs.breg_tutorial == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.breg_tutorial == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -1123,8 +1141,10 @@ jobs:
     # native binaries over the reviewed teaching inputs and starts no service,
     # so it needs neither Docker nor the tutorial replay's writable checkout.
     name: Base Registry Engine to Evidence composition
-    needs: changes
-    if: needs.changes.outputs.breg_evidence_composition == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.breg_evidence_composition == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -1277,8 +1297,10 @@ jobs:
 
   docs-archives:
     name: Immutable docs archives
-    needs: changes
-    if: needs.changes.outputs.docs_archives == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.docs_archives == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -1326,8 +1348,10 @@ jobs:
 
   editor-extensions:
     name: Editor extensions
-    needs: changes
-    if: needs.changes.outputs.editors == 'true'
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.outputs.editors == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
