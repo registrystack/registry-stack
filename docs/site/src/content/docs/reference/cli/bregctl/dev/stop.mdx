@@ -18,7 +18,7 @@ Stop only this project's supervised services, preserving its database.
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.26.1` and catalog SHA-256 `c6f65fc28570412fa9ded2ac6a059e0fc066168ed011e82549eeae7be80de616`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.26.1` and catalog SHA-256 `6ba95bae6f3e4ed094d1469e73dd0b63735e2a7344b65236f228ce65f7b087a4`. Hidden implementation commands are omitted.
 
 ## Usage
 
@@ -31,6 +31,7 @@ bregctl dev stop [OPTIONS]
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `--project <PROJECT>` | No | `.` | n/a | n/a | Registry project whose owned services should stop while preserving records |
+| `--remove` | No | n/a | n/a | n/a | Also remove the owned container and its data volume, discarding records |
 | `--format <FORMAT>` | No | `human` | `human`, `json` | n/a | Emit the selected command's report in this format |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 

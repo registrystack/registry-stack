@@ -45,11 +45,40 @@ impl Session {
     fn stop(&self) {
         self.success(&["dev", "stop", "--project", self.project.to_str().unwrap()]);
     }
+    fn remove(&self) {
+        self.success(&[
+            "dev",
+            "stop",
+            "--remove",
+            "--project",
+            self.project.to_str().unwrap(),
+        ]);
+    }
 }
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = self.ctl(&["dev", "stop", "--project", self.project.to_str().unwrap()]);
+        // Every exit, including a panicking assertion, reclaims the container
+        // and the data volume this test created.
+        let _ = self.ctl(&[
+            "dev",
+            "stop",
+            "--remove",
+            "--project",
+            self.project.to_str().unwrap(),
+        ]);
     }
+}
+
+fn docker_line(args: &[&str]) -> String {
+    let output = Command::new("docker")
+        .args(args)
+        .output()
+        .expect("docker command launches");
+    assert!(output.status.success());
+    String::from_utf8(output.stdout)
+        .expect("docker output is UTF-8")
+        .trim()
+        .to_owned()
 }
 
 fn write(path: &Path, bytes: &[u8]) {
@@ -140,6 +169,20 @@ seed:
     assert_eq!(again["packageRevision"], first["packageRevision"]);
     let state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
     assert_eq!(state["containerId"], failed_state["containerId"]);
+    // Records live in a named volume derived from the ownership identifier,
+    // not in an anonymous volume no command can name afterwards.
+    let owned = format!("breg-dev-{}", state["owner"].as_str().unwrap());
+    assert_eq!(
+        docker_line(&[
+            "volume",
+            "ls",
+            "--filter",
+            &format!("name=^{owned}$"),
+            "--format",
+            "{{.Name}}"
+        ]),
+        owned
+    );
     // A runtime credential must not authenticate as the migration or admin
     // role merely by replacing its username. Password bytes stay in a private
     // PostgreSQL password file, never command arguments or diagnostic output.
@@ -332,18 +375,31 @@ seed:
         .unwrap()
         .status
         .success());
-    assert!(Command::new("docker")
-        .args(["stop", "--time", "30", container])
-        .output()
-        .unwrap()
-        .status
-        .success());
-    assert!(Command::new("docker")
-        .args(["rm", "--volumes", container])
-        .output()
-        .unwrap()
-        .status
-        .success());
+    session.remove();
+    assert_eq!(
+        docker_line(&[
+            "ps",
+            "--all",
+            "--filter",
+            &format!("name=^/{owned}$"),
+            "--format",
+            "{{.ID}}"
+        ]),
+        ""
+    );
+    assert_eq!(
+        docker_line(&[
+            "volume",
+            "ls",
+            "--filter",
+            &format!("name=^{owned}$"),
+            "--format",
+            "{{.Name}}"
+        ]),
+        ""
+    );
+    // Reclaiming again tolerates the container and volume already taken.
+    session.remove();
     // The test owns this synthetic workspace and removes it only after all
     // checks and exact container-ownership verification succeeded.
     std::mem::forget(session);

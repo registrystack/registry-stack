@@ -91,6 +91,9 @@ struct StopArgs {
     /// Registry project whose owned services should stop while preserving records.
     #[arg(long, default_value = ".")]
     project: PathBuf,
+    /// Also remove the owned container and its data volume, discarding records.
+    #[arg(long)]
+    remove: bool,
 }
 
 #[derive(Debug, Args)]
@@ -154,6 +157,11 @@ impl State {
     fn container_name(&self) -> String {
         format!("breg-dev-{}", self.owner)
     }
+    /// The owned data volume carries the container's generated name; Docker
+    /// keeps container and volume names in separate namespaces.
+    fn volume_name(&self) -> String {
+        format!("breg-dev-{}", self.owner)
+    }
     fn container_id(&self) -> Result<&str> {
         self.container_id
             .as_deref()
@@ -198,7 +206,7 @@ impl State {
 
 pub fn run(args: DevArgs) -> Result<Value> {
     match args.action {
-        Some(DevAction::Stop(args)) => stop(&args.project),
+        Some(DevAction::Stop(args)) => stop(&args.project, args.remove),
         Some(DevAction::Start(args)) => start(args),
         None => start(args.start),
     }
@@ -547,7 +555,7 @@ fn verify_outputs(state: &State) -> Result<()> {
     Ok(())
 }
 
-fn stop(project_path: &Path) -> Result<Value> {
+fn stop(project_path: &Path, remove: bool) -> Result<Value> {
     let project = project(project_path)?;
     let parent = project.join(".breg");
     if !parent.exists() {
@@ -563,7 +571,10 @@ fn stop(project_path: &Path) -> Result<Value> {
     if !matches!(state.status, Status::Stopped)
         && control(&root, "stop").is_ok_and(|status| status == "stopped")
     {
-        return read_state(&root)?.report();
+        state = read_state(&root)?;
+        if !remove {
+            return state.report();
+        }
     }
     // No PID-based recovery: unrelated reused PIDs must never be signalled.
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
@@ -592,7 +603,51 @@ fn stop(project_path: &Path) -> Result<Value> {
     remove_socket(&root)?;
     state.status = Status::Stopped;
     state.save()?;
+    if remove {
+        reclaim(&docker, &mut state)?;
+    }
     state.report()
+}
+
+/// Remove the owned container and its named data volume, then forget them in
+/// the journal so the next start creates an empty database. What an earlier
+/// reclamation or a manual removal already took is tolerated; ownership is
+/// still verified for anything that is still there.
+fn reclaim(docker: &Path, state: &mut State) -> Result<()> {
+    if listed(docker, state)? {
+        let container = inspect(docker, state)?.context("owned container listing changed")?;
+        let id = container["Id"]
+            .as_str()
+            .context("verified container ID missing")?
+            .to_owned();
+        docker_command(
+            docker,
+            state,
+            "remove-database",
+            &["rm", "--volumes", &id],
+            None,
+        )?;
+    }
+    docker_command(
+        docker,
+        state,
+        "remove-database-volume",
+        &["volume", "rm", "--force", &state.volume_name()],
+        None,
+    )?;
+    reclaimed(state);
+    state.save()
+}
+
+/// Forget the reclaimed database while keeping the ownership identifier, ports,
+/// clients, credentials and built package the next start reuses.
+fn reclaimed(state: &mut State) {
+    state.container_id = None;
+    state.tls_files_copied = false;
+    state.database_ready = false;
+    state.activated = false;
+    state.seeded.clear();
+    state.status = Status::Stopped;
 }
 
 fn completed_supervisor_lock(root: &Path, status: &Status) -> Result<private::Lock> {
@@ -1148,9 +1203,9 @@ fn docker_command(
     command(Command::new(docker).args(args), &state.root(), name, input)
 }
 
-fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
-    // Listing by exact generated name distinguishes absence from a daemon
-    // failure without treating arbitrary stderr as a trustworthy classifier.
+/// Listing by exact generated name distinguishes absence from a daemon failure
+/// without treating arbitrary stderr as a trustworthy classifier.
+fn listed(docker: &Path, state: &State) -> Result<bool> {
     let listing = docker_command(
         docker,
         state,
@@ -1165,7 +1220,11 @@ fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
         ],
         None,
     )?;
-    if listing.iter().all(u8::is_ascii_whitespace) {
+    Ok(!listing.iter().all(u8::is_ascii_whitespace))
+}
+
+fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
+    if !listed(docker, state)? {
         if state.container_id.is_some() {
             bail!("retained database container is missing; restore its owned data or use a new project directory; no empty replacement was created");
         }
@@ -1212,6 +1271,8 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 &format!("{LABEL}={}", state.owner),
                 "--publish",
                 &format!("127.0.0.1:{}:5432", state.database_port),
+                "--volume",
+                &format!("{}:/var/lib/postgresql/data", state.volume_name()),
                 "--env-file",
                 root.join("database/postgres.env")
                     .to_str()

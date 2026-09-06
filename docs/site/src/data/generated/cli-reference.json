@@ -716,6 +716,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--remove",
+                  "description": "Also remove the owned container and its data volume, discarding records",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
