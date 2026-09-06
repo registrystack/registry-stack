@@ -105,10 +105,11 @@ credential and BReg's operator credential retain separate authority.
 The private `.breg/dev` directory records a random ownership identifier, exact
 Docker container ID, ports, captured authored closure, package revision, seed
 checkpoints and, for each resolved `breg`, `mint` and `docker` prerequisite, the
-fully resolved path of the file that ran and the version it reported. It contains generated configurations, separate database roles,
-local TLS material, credentials and bounded private diagnostic logs. Keep it out
-of version control and preserve it with the retained database while the exercise
-matters. It is local development material, not production key provisioning.
+fully resolved path of the file that ran and the version it reported. It
+contains generated configurations, separate database roles, local TLS material,
+credentials and bounded private diagnostic logs. Keep it out of version control
+and preserve it with the retained database while the exercise matters. It is
+local development material, not production key provisioning.
 Records live in a named `breg-dev-<owner>` Docker volume, so the storage stays
 identifiable and reclaimable once the container is gone.
 
