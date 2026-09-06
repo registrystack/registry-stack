@@ -349,7 +349,18 @@ impl MintConfig {
         let root = path
             .parent()
             .ok_or(ConfigError::Invalid("configuration path has no parent"))?;
-        config.resolve_paths(root);
+        // A relative configuration path names its directory relative to the
+        // working directory, which every later open tolerates but a proof
+        // about where a setting resolves cannot compare. The directory was
+        // just read through, so resolving it to its canonical location names
+        // the same files absolutely.
+        let root = if root.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            root
+        };
+        let root = root.canonicalize().map_err(|_| ConfigError::Unavailable)?;
+        config.resolve_paths(&root);
         config.validate()?;
         Ok(config)
     }
@@ -776,15 +787,21 @@ clients:
         let path = directory.path().join("mint.yaml");
         fs::write(&path, VALID).expect("write config");
         let config = MintConfig::load(&path).expect("valid config loads");
+        // Settings resolve against the directory's canonical location, so the
+        // same files are named wherever the process was started.
+        let root = directory
+            .path()
+            .canonicalize()
+            .expect("canonical config directory");
 
         assert_eq!(config.issuer, "https://mint.example.org");
         assert_eq!(config.validation_mode, ValidationMode::Strict);
         assert_eq!(
             config.signing.active_public_jwk_file,
-            directory.path().join("public-keys/mint.jwk.json")
+            root.join("public-keys/mint.jwk.json")
         );
-        assert_eq!(config.clients.directory, directory.path().join("clients"));
-        assert_eq!(config.audit.path, directory.path().join("audit/mint.jsonl"));
+        assert_eq!(config.clients.directory, root.join("clients"));
+        assert_eq!(config.audit.path, root.join("audit/mint.jsonl"));
         assert_eq!(config.audit.maximum_file_bytes, 1_073_741_824);
         assert_eq!(config.audit.hash_key_ref, "secret:file/audit-hmac-key");
         assert_eq!(config.audit.hash_key_version, 1);

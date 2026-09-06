@@ -394,6 +394,38 @@ fn the_dependency_check_accepts_an_audit_sink_inside_the_required_root() {
 }
 
 #[test]
+fn the_check_proves_containment_for_a_configuration_named_by_a_relative_path() {
+    // An operator runs the preflight from the deployment directory with
+    // `--config mint.yaml`. The settings resolve against that directory
+    // wherever the process was started, so the proof compares the destination
+    // `serve` opens rather than a path relative to the working directory.
+    let server = stopped_server();
+    let relative = server
+        .config
+        .strip_prefix(&server.root)
+        .expect("the configuration lives under the deployment root")
+        .to_path_buf();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mint"))
+        .current_dir(&server.root)
+        .arg("check")
+        .arg("--config")
+        .arg(&relative)
+        .arg("--require-runtime-dependencies")
+        .arg("--require-audit-under")
+        .arg(&server.root)
+        .output()
+        .expect("the checker runs");
+
+    assert!(
+        output.status.success(),
+        "check failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn the_dependency_check_refuses_an_audit_sink_outside_the_required_root() {
     let ephemeral = tempfile::tempdir().expect("temp dir");
     let server = stopped_server();
