@@ -30,7 +30,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "CI classifier tests",
-        "run: python3 .github/scripts/test_ci_changes.py",
+        "run: uv run --no-project --with PyYAML==6.0.2 python .github/scripts/test_ci_changes.py",
     ),
     (
         "CI workflow change classification",
@@ -138,7 +138,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Platform fuzz runner tests",
-        "run: python3 -m unittest products/platform/scripts/test_run_fuzz_smoke.py",
+        "run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_fuzz_smoke.py",
     ),
     ("Platform fuzz bounded runtime", "-max_total_time=60"),
     (

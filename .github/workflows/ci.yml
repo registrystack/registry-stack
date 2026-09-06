@@ -91,8 +91,13 @@ jobs:
       - name: Check repository identifier reference closure
         run: products/identifiers/scripts/generate.py --check-references
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.16"
+
       - name: Test CI classifier
-        run: python3 .github/scripts/test_ci_changes.py
+        run: uv run --no-project --with PyYAML==6.0.2 python .github/scripts/test_ci_changes.py
 
       - name: Test CI event routing
         run: python3 .github/scripts/test_ci_event_routing.py
@@ -101,7 +106,7 @@ jobs:
         run: python3 .github/scripts/test_nightly_rust_coverage.py
 
       - name: Test platform fuzz runner
-        run: python3 -m unittest products/platform/scripts/test_run_fuzz_smoke.py
+        run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_fuzz_smoke.py
 
       - name: Install pinned actionlint
         shell: bash
@@ -198,7 +203,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.platform == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -294,7 +299,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.platform == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -387,7 +392,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.rust == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -423,7 +428,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.rust == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -585,7 +590,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.relay_client_contracts == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.relay_client_contracts == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -704,7 +709,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.identifiers == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.identifiers == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -769,7 +774,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.release_tool == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.release_tool == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -885,7 +890,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.release_source_proof == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.release_source_proof == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -1064,7 +1069,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.breg_tutorial == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.breg_tutorial == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -1144,7 +1149,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.breg_evidence_composition == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.breg_evidence_composition == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -1300,7 +1305,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.docs_archives == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.docs_archives == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -1351,7 +1356,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.outputs.editors == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.editors == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout

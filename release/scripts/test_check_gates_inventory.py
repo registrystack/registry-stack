@@ -310,7 +310,7 @@ class GateInventoryTest(unittest.TestCase):
             self.workflow,
         )
         self.assertIn(
-            "run: python3 .github/scripts/test_ci_changes.py",
+            "run: uv run --no-project --with PyYAML==6.0.2 python .github/scripts/test_ci_changes.py",
             self.workflow,
         )
 
@@ -1129,7 +1129,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_platform_fuzz_runner_tests_are_reported(self) -> None:
         text = self.workflow.replace(
-            "run: python3 -m unittest products/platform/scripts/test_run_fuzz_smoke.py",
+            "run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_fuzz_smoke.py",
             "run: true # Platform fuzz runner tests disabled",
         )
         self.assertIn("Platform fuzz runner tests", self.module.missing_gates(text))

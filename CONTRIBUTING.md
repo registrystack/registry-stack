@@ -61,8 +61,10 @@ leaves capacity for the longer product, native client, documentation, and
 security jobs to start. Their original path selectors remain in force and an
 explicit [`!cancelled()` status check](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)
 lets selected jobs run after a Rust policy failure or skip while still honoring
-workflow cancellation. This controls dependency ordering; GitHub Actions does
-not guarantee runner scheduling priority.
+workflow cancellation. The same guard requires successful change
+classification, so a classifier failure cannot release downstream jobs. This
+controls dependency ordering; GitHub Actions does not guarantee runner
+scheduling priority.
 
 Optimize duplicate compilation and execution before adding more blocking jobs.
 Keep affected security, database/TLS, generated-contract, and basic adopter

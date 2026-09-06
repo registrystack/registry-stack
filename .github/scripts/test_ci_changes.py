@@ -297,13 +297,15 @@ class CiChangesTest(unittest.TestCase):
         self.assertEqual(set(selectors), deferred)
 
         # An explicit status-check function bypasses GitHub's implicit
-        # success() dependency guard. The original selector still decides
-        # whether a failed or skipped policy dependency should release work,
-        # and !cancelled() preserves cancellation behavior.
+        # success() dependency guard. Requiring a successful classifier keeps
+        # its failure closed, while !cancelled() lets originally selected work
+        # run after a failed or skipped policy dependency unless the workflow
+        # was cancelled.
         for name, selector in selectors.items():
             with self.subTest(job=name):
                 self.assertEqual(
-                    f"${{{{ !cancelled() && {selector} }}}}",
+                    "${{ !cancelled() && needs.changes.result == 'success' && "
+                    f"{selector} }}}}",
                     self.workflow_jobs[name]["if"],
                 )
 
