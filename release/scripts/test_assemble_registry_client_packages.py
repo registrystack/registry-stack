@@ -85,6 +85,21 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 f"{product} addon is not copied into the platform package",
             )
 
+    def test_the_product_wheels_are_rebuilt_from_an_empty_directory(self) -> None:
+        removals = [
+            index
+            for index, line in enumerate(self.rendered)
+            if "rm -rf /work/product-wheels)" in line
+        ]
+        self.assertEqual(1, len(removals), "the previous product wheels are kept")
+        builds = [
+            index
+            for index, line in enumerate(self.rendered)
+            if "maturin build" in line
+        ]
+        self.assertTrue(builds, "no product wheel is built")
+        self.assertLess(removals[0], min(builds))
+
     def test_the_binding_wheels_are_built_before_the_public_wheel(self) -> None:
         builds = [
             index

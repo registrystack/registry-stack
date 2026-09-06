@@ -196,10 +196,15 @@ def python_steps(
     flags = PLATFORMS[napi_platform]["maturin_flags"]
     steps = [
         Step(
+            "discard the previous product wheels so a stale one is never packed",
+            ("rm", "-rf", str(built)),
+            root,
+        ),
+        Step(
             "make the staging and output directories",
             ("mkdir", "-p", str(built), str(output_dir)),
             root,
-        )
+        ),
     ]
     for product in PRODUCTS:
         steps.append(
