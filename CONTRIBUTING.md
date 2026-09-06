@@ -55,6 +55,17 @@ runner contention. The maintainers own this budget alongside the CI workflow.
 Rust test shards run at most six at a time to reduce competition with the longer
 product integration jobs; all selected shards still execute.
 
+Post-classification fanout is capped at fourteen static matrix slots by making
+shorter and later-stage jobs wait for the existing Rust policy check. This
+leaves capacity for the longer product, native client, documentation, and
+security jobs to start. Their original path selectors remain in force and an
+explicit [`!cancelled()` status check](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)
+lets selected jobs run after a Rust policy failure or skip while still honoring
+workflow cancellation. The same guard requires successful change
+classification, so a classifier failure cannot release downstream jobs. This
+controls dependency ordering; GitHub Actions does not guarantee runner
+scheduling priority.
+
 Optimize duplicate compilation and execution before adding more blocking jobs.
 Keep affected security, database/TLS, generated-contract, and basic adopter
 journeys enforced. Partitioned suites must retain their complete test inventory

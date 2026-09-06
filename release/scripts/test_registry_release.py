@@ -756,16 +756,21 @@ class RegistryReleaseTest(TestCase):
                 "release-tool-required",
                 "Release tooling",
                 "release_tool",
+                "${{ !cancelled() && needs.changes.result == 'success' && "
+                "needs.changes.outputs.release_tool == 'true' }}",
             ),
             "release-source-proof": (
                 "release-source-proof-required",
                 "Release source proof",
                 "release_source_proof",
+                "${{ !cancelled() && needs.changes.result == 'success' && "
+                "needs.changes.outputs.release_source_proof == 'true' }}",
             ),
             "docs": (
                 "docs-required",
                 "Docs",
                 "docs",
+                "needs.changes.outputs.docs == 'true'",
             ),
         }
 
@@ -773,14 +778,12 @@ class RegistryReleaseTest(TestCase):
             required_job_id,
             context_name,
             path_output,
+            expected_condition,
         ) in required_contexts.items():
             with self.subTest(context=context_name):
                 check_job = jobs[check_job_id]
                 self.assertEqual(f"{context_name} checks", check_job["name"])
-                self.assertEqual(
-                    f"needs.changes.outputs.{path_output} == 'true'",
-                    check_job["if"],
-                )
+                self.assertEqual(expected_condition, check_job["if"])
 
                 required_job = jobs[required_job_id]
                 self.assertEqual(context_name, required_job["name"])
