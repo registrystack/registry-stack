@@ -4365,6 +4365,120 @@ fn concept_order_is_significant_and_carries_no_mapping_claim() {
     }
 }
 
+// `fields[].concepts[0]` supplies the generated property identifier, so the list
+// is a set of terms rather than free text. These tests pin that one term cannot
+// be listed twice, in any spelling that names it, and that the case-sensitive
+// part of an IRI still separates two terms.
+#[test]
+fn validation_rejects_a_field_concept_listed_twice() {
+    let manifest = manifest_with_field_concepts(&[
+        "https://vocab.example.test/person#identifier",
+        "https://vocab.example.test/person#identifier",
+    ]);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "datasets[0].entities[0].fields[0].concepts[1]"
+                && error
+                    .message
+                    .contains("https://vocab.example.test/person#identifier")
+                && error
+                    .message
+                    .contains("datasets[0].entities[0].fields[0].concepts[0]")
+        }),
+        "expected a duplicate concept error naming the IRI and both positions; got {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_field_concepts_differing_only_in_scheme_or_host_case() {
+    for spelling in [
+        "HTTPS://vocab.example.test/person#identifier",
+        "https://Vocab.Example.TEST/person#identifier",
+    ] {
+        let manifest = manifest_with_field_concepts(&[
+            "https://vocab.example.test/person#identifier",
+            spelling,
+        ]);
+
+        let errors = validation_errors(&manifest);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "datasets[0].entities[0].fields[0].concepts[1]"
+                    && error
+                        .message
+                        .contains("datasets[0].entities[0].fields[0].concepts[0]")),
+            "an IRI scheme and host are case-insensitive, so {spelling} must not pass as a second term; got {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn validation_rejects_field_concepts_that_expand_to_one_term() {
+    // `cccev` and `cv` are built-in prefixes for the same namespace, so these
+    // two spellings name one term once expanded.
+    let manifest = manifest_with_field_concepts(&["cccev:birthDate", "cv:birthDate"]);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "datasets[0].entities[0].fields[0].concepts[1]"
+                && error
+                    .message
+                    .contains("http://data.europa.eu/m8g/birthDate")
+        }),
+        "two prefixes for one namespace must not pass as two terms; got {errors:?}"
+    );
+}
+
+#[test]
+fn validation_keeps_field_concepts_that_differ_after_the_host() {
+    // RFC 3987 leaves everything after the scheme and host case-sensitive, so
+    // path and fragment case must separate two terms rather than collapse them.
+    let manifest = manifest_with_field_concepts(&[
+        "https://vocab.example.test/person#identifier",
+        "https://vocab.example.test/person#Identifier",
+        "https://vocab.example.test/Person#identifier",
+    ]);
+
+    validate_manifest(&manifest).expect("path and fragment case must distinguish two concepts");
+}
+
+fn manifest_with_field_concepts(concepts: &[&str]) -> MetadataManifest {
+    let concept_entries = concepts
+        .iter()
+        .map(|concept| format!("              - {concept}\n"))
+        .collect::<String>();
+    serde_yaml_ng::from_str(&format!(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: concept-terms
+  base_url: https://registry.example.test
+  title: Concept Terms
+  publisher:
+    name: Publisher
+datasets:
+  - id: dataset
+    title: Dataset
+    entities:
+      - name: person
+        identifiers:
+          - name: person_id
+            kind: local
+        fields:
+          - name: person_id
+            type: string
+            required: true
+            concepts:
+{concept_entries}codelists: []
+"#
+    ))
+    .expect("concept term manifest parses")
+}
+
 #[test]
 fn semic_and_publicschema_concepts_render_deterministically() {
     let first = compile_manifest(&aligned_person_concepts_fixture()).expect("compile");
