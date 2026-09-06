@@ -287,6 +287,32 @@ fn database_roles_have_independent_passwords_and_hmac_files_are_secret_safe() {
     }
 }
 
+/// The pinned image and the two deadlines are facts an operator checks before
+/// a first start. Hold the owning document, the command's own help text and
+/// the supervisor's constants equal so they cannot drift apart.
+#[test]
+fn the_documented_image_and_deadlines_are_the_supervisors_own() {
+    let document = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/DEV.md"),
+    )
+    .expect("the owning lifecycle document");
+    let help = <DevArgs as Args>::augment_args(clap::Command::new("dev"))
+        .get_long_about()
+        .expect("dev describes its own supervision")
+        .to_string();
+    for fact in [
+        IMAGE.to_owned(),
+        format!("{} seconds", CHILD_DEADLINE.as_secs()),
+        format!("{} seconds", READY_DEADLINE.as_secs()),
+    ] {
+        assert!(
+            document.contains(&fact),
+            "products/breg/DEV.md omits {fact}"
+        );
+        assert!(help.contains(&fact), "dev help text omits {fact}");
+    }
+}
+
 #[test]
 fn every_database_url_names_the_published_loopback_literal() {
     let (_temp, state, clients, files) = fixture();

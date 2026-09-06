@@ -46,9 +46,19 @@ const LABEL: &str = "org.registrystack.bregctl.dev-owner";
 /// would claim owned services were stopped when none were ever created.
 const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check --project, or start one with bregctl dev --clients-file";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// Longest one supervised prerequisite command may run before the supervisor
+/// stops it and fails the start.
+const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+/// Longest the supervisor waits for the owned database, and for each started
+/// service, to answer as ready.
+const READY_DEADLINE: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Args)]
-#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+#[command(
+    args_conflicts_with_subcommands = true,
+    subcommand_negates_reqs = true,
+    long_about = "Start or stop this project's retained local development services.\n\nA resident supervisor owns one project's PostgreSQL container, local Mint and BReg children. The database runs the pinned image postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .breg/dev/logs directory."
+)]
 pub struct DevArgs {
     #[command(subcommand)]
     action: Option<DevAction>,
@@ -1190,7 +1200,7 @@ fn output(
             .context("command input missing")?
             .write_all(input.bytes)?;
     }
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + CHILD_DEADLINE;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
@@ -1417,7 +1427,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
             None,
         )?;
     }
-    let deadline = Instant::now() + Duration::from_secs(45);
+    let deadline = Instant::now() + READY_DEADLINE;
     loop {
         let result = docker_command(
             docker,
@@ -1766,7 +1776,7 @@ fn http(
     })
 }
 fn ready(url: &str, child: &mut Child, terminate: &AtomicBool) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(45);
+    let deadline = Instant::now() + READY_DEADLINE;
     loop {
         ensure_active(terminate)?;
         if child.try_wait()?.is_some() {
