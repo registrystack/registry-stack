@@ -79,7 +79,7 @@ use request_retention::{
     RequestRetentionListOutcome,
 };
 use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError};
-use test_lifecycle::{TestLifecycleError, TestLifecycleRequest};
+use test_lifecycle::{remove_exact_file, TestLifecycleError, TestLifecycleRequest};
 use webhook_lifecycle::{
     WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome, WebhookSampleOutcome,
 };
@@ -5655,6 +5655,13 @@ struct MigrationWriteTarget {
     original: Vec<u8>,
     updated: Vec<u8>,
     metadata: fs::Metadata,
+    /// The identity of the staged, already-fsynced migrated bytes, captured
+    /// from the open file before any rename below moves it. A rename never
+    /// changes a file's device or inode, so this identity still names the
+    /// promoted file at `destination` after a rollback's first rename moves
+    /// it back into the transaction, or names it in place if that rename is
+    /// unavailable.
+    staged_metadata: Option<fs::Metadata>,
 }
 
 impl MigrationWriteTarget {
@@ -5745,6 +5752,7 @@ fn write_migration_files_with_fault(
             original: original.clone(),
             updated: updated.clone(),
             metadata,
+            staged_metadata: None,
         });
     }
 
@@ -5790,9 +5798,11 @@ fn write_migration_files_with_fault(
                 .set_permissions(target.metadata.permissions())
                 .map_err(|_| write_failed())?;
             staged.sync_all().map_err(|_| write_failed())?;
+            let staged_metadata = staged.metadata().map_err(|_| write_failed())?;
             transaction.sync().map_err(|_| write_failed())?;
             parent.sync().map_err(|_| write_failed())?;
             target.transaction = Some(transaction);
+            target.staged_metadata = Some(staged_metadata);
         }
         Ok(())
     })();
@@ -5933,11 +5943,19 @@ fn restore_migration_targets(
             )
             .is_err()
         {
-            // The promoted target contains only the already-fsynced migrated
-            // bytes. Removing that exact file is safe when moving it back into
-            // staging is unavailable, and lets the original backup be restored
-            // on platforms whose rename cannot replace an existing file.
-            if target.destination.remove_file().is_err() {
+            // The promoted target names only the already-fsynced migrated
+            // bytes this process staged, and a rename changes neither device
+            // nor inode, so the identity captured when those bytes were
+            // staged still names it here. Confirming that identity before
+            // removing it lets the original backup be restored on platforms
+            // whose rename cannot replace an existing file, without removing
+            // whatever this name holds if something else has replaced it
+            // since promotion.
+            let Some(staged_metadata) = target.staged_metadata.as_ref() else {
+                failed = true;
+                continue;
+            };
+            if remove_exact_file(&target.destination, staged_metadata).is_err() {
                 failed = true;
             }
         }
