@@ -339,6 +339,40 @@ fn every_database_url_names_the_published_loopback_literal() {
 }
 
 #[test]
+fn verify_outputs_publishes_a_recorded_pair_after_a_partial_start() {
+    let (_temp, state, mut clients, files) = fixture();
+    let out = state.project.join("out");
+    private::directory(&out).unwrap();
+    clients.clients[1].client_id_file = Some(out.join("id"));
+    clients.clients[1].assertion_key_file = Some(out.join("key"));
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let state = read_state(&state.root()).unwrap();
+    // A start that failed before publishing leaves both halves absent. The
+    // retry publishes the recorded pair from the retained credentials rather
+    // than generating a second identity for the same client.
+    assert!(!out.join("id").exists());
+    assert!(!out.join("key").exists());
+    verify_outputs(&state).expect("a retry publishes the recorded pair");
+    let credentials = state.root().join("credentials/source");
+    for (published, retained) in [("id", "client-id"), ("key", "assertion-key.jwk")] {
+        assert_eq!(
+            private::read(&out.join(published), MAX_BYTES).unwrap(),
+            private::read(&credentials.join(retained), MAX_BYTES).unwrap()
+        );
+    }
+    private::validate_tree(&out).expect("published credentials stay owner-only");
+
+    // A retained credential replaced under the recorded pair stops the start
+    // instead of publishing bytes the record does not name.
+    private::replace(&credentials.join("client-id"), b"replaced-by-hand").unwrap();
+    let refused = format!(
+        "{:#}",
+        verify_outputs(&state).expect_err("changed credential")
+    );
+    assert!(refused.contains("owned credential changed"), "{refused}");
+}
+
+#[test]
 fn corrupt_clients_refuse_success_reports() {
     let (_temp, state, clients, files) = fixture();
     initialize(&state.root(), &state, &clients, &files).unwrap();
