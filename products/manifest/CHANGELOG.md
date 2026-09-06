@@ -24,8 +24,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   SEMIC Core Person Vocabulary term without asserting equivalence, alongside a
   field with no concept and a field with one concept.
 
-Generated output is unchanged. The tests added with this entry pin the existing
-behavior.
+### Changed
+
+- `datasets[].entities[].fields[].concepts` now refuses a term listed twice.
+  Entries are compared after prefix expansion, so a CURIE and the absolute IRI
+  it expands to are one entry, as are two prefixes bound to one namespace. Per
+  RFC 3987 the comparison also folds the scheme and host, so two spellings that
+  differ only there name one term, while path, query, and fragment case still
+  separates two terms. The diagnostic names the expanded IRI and the position of
+  the first occurrence.
+
+### Compatibility
+
+- The concept reference documentation and the aligned-concepts fixture above
+  change no generated output. The tests added with those entries pin the
+  existing behavior.
+- Concept comparison folds case inside the comparison key only. Renderers
+  publish the spelling the manifest was authored with, so a manifest that still
+  validates keeps its exact typed canonical bytes and `source_manifest_digest`.
+  A manifest that named one concept twice on a field now fails validation;
+  remove the repeated entry before validating or republishing.
 
 ## [0.26.1] - 2026-09-04
 
