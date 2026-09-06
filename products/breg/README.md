@@ -238,6 +238,11 @@ and prints a separate query helper rather than printing bearer credentials.
 
 ## Portable metadata and composition
 
+Use [the Evidence lookup exporter](EVIDENCE.md) to select a compiled lookup,
+its exact selector alternatives and readable facts for an Evidence project.
+The generated files use Evidence's ordinary source contracts; connection
+credentials and question authority remain separately configured.
+
 Application clients consume the [caller-filtered metadata contract](metadata.md)
 from `/v1/registry`, including exact route/profile fields, schemas, selectors,
 reference bindings, and query capabilities.

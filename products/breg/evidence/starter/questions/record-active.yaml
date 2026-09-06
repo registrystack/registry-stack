@@ -1,0 +1,29 @@
+id: record-active
+question: Is the registered record active?
+purpose: record-verification
+subject:
+  role: subject
+  profiles:
+  - breg-8-registry-6-record-7-by-code
+  - breg-8-registry-6-record-22-by-registration-number
+source:
+  ref: registry-status
+answers:
+- concept: active
+  id: urn:example:concept:record-active:active
+  type: boolean
+derivation: derivations/record-active.rhai
+disclosure:
+  allow:
+  - active
+governance:
+  requirement: urn:example:requirement:record-active:v1
+  kind: criterion
+  referenceFrameworks:
+  - urn:example:framework:record-state:v1
+  evidenceType: urn:example:evidence:record-active
+  validitySeconds: 300
+  observationTimezone: UTC
+  fixtures: fixtures/record-active.yaml
+  disclosureFamilies:
+  - urn:example:disclosure-family:record-active

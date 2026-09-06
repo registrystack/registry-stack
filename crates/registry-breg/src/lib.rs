@@ -30,6 +30,7 @@ pub mod derived_sql;
 pub mod diagnostics;
 #[cfg(feature = "runtime")]
 pub mod event_destination;
+pub mod evidence_source;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod fixtures;
 pub mod generated_ddl;

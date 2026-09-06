@@ -98,8 +98,9 @@ impl PostgresRecordReadService {
         self
     }
 
-    /// Observe the actual list plan under its runtime role and transaction
-    /// context. Only node/index names and spatial-index use leave the probe.
+    /// Observe the executed read plan under its runtime role and transaction
+    /// context. Only node/index names, row counts, and spatial-index use leave
+    /// the probe. The test-only probe executes the read once before release.
     #[cfg(feature = "postgres-test")]
     #[must_use]
     #[doc(hidden)]
@@ -287,6 +288,33 @@ impl PostgresRecordReadService {
         Ok(held)
     }
 
+    #[cfg(feature = "postgres-test")]
+    async fn observe_query_plan(
+        &self,
+        transaction: &tokio_postgres::Transaction<'_>,
+        sql: &str,
+        parameters: &[(&(dyn ToSql + Sync), Type)],
+    ) -> Result<(), ReadServiceError> {
+        let Some(probe) = &self.query_plan else {
+            return Ok(());
+        };
+        let explained: Value = transaction
+            .query_typed_one(
+                &format!(
+                    "EXPLAIN (ANALYZE, FORMAT JSON, COSTS OFF, TIMING OFF, SUMMARY OFF) {sql}"
+                ),
+                parameters,
+            )
+            .await
+            .map_err(|_| ReadServiceError::Unavailable)?
+            .get(0);
+        let mut nodes = probe.lock().map_err(|_| ReadServiceError::Unavailable)?;
+        if let Some(plan) = explained.get(0).and_then(|entry| entry.get("Plan")) {
+            summarize_query_plan_for_test(plan, &mut nodes);
+        }
+        Ok(())
+    }
+
     async fn record_read_terminal_audit(
         &self,
         client: &mut deadpool_postgres::Client,
@@ -394,6 +422,13 @@ impl PostgresRecordReadService {
                 );
                 let record_id =
                     target_record(&request.kind).ok_or(ReadServiceError::Unavailable)?;
+                #[cfg(feature = "postgres-test")]
+                self.observe_query_plan(
+                    transaction.transaction(),
+                    &sql,
+                    &[(&record_id, Type::TEXT)],
+                )
+                .await?;
                 transaction
                     .transaction()
                     .query_typed(&sql, &[(&record_id, Type::TEXT)])
@@ -434,21 +469,8 @@ impl PostgresRecordReadService {
                     .collect::<Vec<_>>();
                 params.push((&limit, Type::INT8));
                 #[cfg(feature = "postgres-test")]
-                if let Some(probe) = &self.query_plan {
-                    let explained: Value = transaction
-                        .transaction()
-                        .query_typed_one(
-                            &format!("EXPLAIN (FORMAT JSON, COSTS OFF) {sql}"),
-                            &params,
-                        )
-                        .await
-                        .map_err(|_| ReadServiceError::Unavailable)?
-                        .get(0);
-                    let mut nodes = probe.lock().map_err(|_| ReadServiceError::Unavailable)?;
-                    if let Some(plan) = explained.get(0).and_then(|entry| entry.get("Plan")) {
-                        summarize_query_plan_for_test(plan, &mut nodes);
-                    }
-                }
+                self.observe_query_plan(transaction.transaction(), &sql, &params)
+                    .await?;
                 transaction
                     .transaction()
                     .query_typed(&sql, &params)
@@ -466,6 +488,9 @@ impl PostgresRecordReadService {
                     .map(|value| (value as &(dyn ToSql + Sync), Type::TEXT))
                     .collect::<Vec<_>>();
                 params.push((&limit, Type::INT8));
+                #[cfg(feature = "postgres-test")]
+                self.observe_query_plan(transaction.transaction(), &sql, &params)
+                    .await?;
                 transaction
                     .transaction()
                     .query_typed(&sql, &params)
@@ -655,6 +680,8 @@ fn summarize_query_plan_for_test(plan: &Value, nodes: &mut Vec<Value>) {
     nodes.push(json!({
         "nodeType": plan.get("Node Type"),
         "indexName": plan.get("Index Name"),
+        "actualRows": plan.get("Actual Rows"),
+        "actualLoops": plan.get("Actual Loops"),
         "spatialIndexCondition": spatial_index_condition,
     }));
     if let Some(children) = plan.get("Plans").and_then(Value::as_array) {
@@ -1789,6 +1816,54 @@ fn parse_rfc3339_utc(value: &str) -> Result<time::OffsetDateTime, ReadServiceErr
     Ok(parsed)
 }
 
+/// Inventory only the derived views that this collection statement references.
+/// Lookup selectors, spatial geometry, and row boundaries are compiler-limited
+/// to stored fields (or the canonical id), so their source/base/RLS dependencies
+/// remain in the unconditional joins. A reached derived relation stays whole:
+/// its SQL and cardinality check may depend on any of its declared outputs or
+/// registry_source inputs. Derived SQL cannot reference another derived view.
+fn collection_derived_relations<'a>(
+    entity: &'a CompiledEntity,
+    query: Option<&crate::api::CompiledReadQuery>,
+    selected_fields: &[String],
+) -> BTreeSet<&'a str> {
+    let mut fields = selected_fields.iter().map(String::as_str).collect();
+    if let Some(query) = query {
+        if let Some(filter) = &query.filter {
+            collect_filter_fields(filter, &mut fields);
+        }
+        if let Some(order) = &query.order {
+            fields.insert(order.field_id.as_str());
+        }
+        if query.temporal_instant.is_some() {
+            if let Some(temporal) = &entity.temporal {
+                fields.insert(temporal.start_field.as_str());
+                fields.insert(temporal.end_field.as_str());
+            }
+        }
+    }
+    fields
+        .into_iter()
+        .filter_map(|field| entity.derived_fields.get(field))
+        .map(|field| field.derivation_id.as_str())
+        .collect()
+}
+
+fn collect_filter_fields<'a>(filter: &'a ReadFilterExpr, fields: &mut BTreeSet<&'a str>) {
+    match filter {
+        ReadFilterExpr::Binary { left, right, .. } => {
+            collect_filter_fields(left, fields);
+            collect_filter_fields(right, fields);
+        }
+        ReadFilterExpr::Not(filter) | ReadFilterExpr::Group(filter) => {
+            collect_filter_fields(filter, fields);
+        }
+        ReadFilterExpr::Predicate(predicate) => {
+            fields.insert(predicate.field_id.as_str());
+        }
+    }
+}
+
 struct ReadRelations {
     base_alias: &'static str,
     source_alias: &'static str,
@@ -1802,7 +1877,7 @@ impl ReadRelations {
     fn collection(
         entity: &CompiledEntity,
         query: Option<&crate::api::CompiledReadQuery>,
-        _selected_fields: &[String],
+        selected_fields: &[String],
     ) -> Result<Self, ReadServiceError> {
         let spatial_query = query.is_some_and(|query| query.spatial.is_some());
         let base_alias = "base_record";
@@ -1850,7 +1925,13 @@ impl ReadRelations {
                 quote_identifier(&candidate_view),
             ));
         }
-        for (index, relation) in entity.derived_relations.values().enumerate() {
+        let required_relations = collection_derived_relations(entity, query, selected_fields);
+        for (index, relation) in entity
+            .derived_relations
+            .values()
+            .filter(|relation| required_relations.contains(relation.id.as_str()))
+            .enumerate()
+        {
             let alias = format!("derived_{index}");
             let view_name = crate::generated_ddl::derived_view_name(
                 &entity.source_relation.sql_name,
