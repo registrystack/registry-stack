@@ -129,8 +129,26 @@ if [ "$os_label" = "linux" ]; then
 	if command -v ldd >/dev/null 2>&1; then
 		libc_report="$(ldd --version 2>&1 || true)"
 	fi
-	if ls /lib/ld-musl-*.so.1 >/dev/null 2>&1 ||
-		printf '%s' "$libc_report" | grep -qi musl; then
+	# Only glibc's getconf answers GNU_LIBC_VERSION, so an answer names the libc
+	# this system runs on, whatever else is installed beside it: a musl loader
+	# kept for cross builds does not make a musl system. Without an answer, musl
+	# is recognised by its ldd report or its loader. The report is matched by a
+	# pattern rather than through grep, which can exit before the report is
+	# fully written and, under pipefail, lose the match.
+	detected_libc=""
+	if command -v getconf >/dev/null 2>&1; then
+		detected_libc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}' || true)"
+	fi
+	musl_system=0
+	if [ -z "$detected_libc" ]; then
+		case "$libc_report" in
+		*[Mm][Uu][Ss][Ll]*) musl_system=1 ;;
+		esac
+		if ls /lib/ld-musl-*.so.1 >/dev/null 2>&1; then
+			musl_system=1
+		fi
+	fi
+	if [ "$musl_system" = 1 ]; then
 		printf 'No musl build of the Evidence toolset is published for this platform.\n' >&2
 		printf 'Every published Linux binary needs GNU libc %s or newer, so none of them can start here.\n' \
 			"$libc_floor" >&2
@@ -138,10 +156,6 @@ if [ "$os_label" = "linux" ]; then
 		printf 'If you need musl builds, ask for them at https://github.com/%s/issues so the demand is recorded.\n' \
 			"$repo" >&2
 		exit 1
-	fi
-	detected_libc=""
-	if command -v getconf >/dev/null 2>&1; then
-		detected_libc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}' || true)"
 	fi
 	if [ -z "$detected_libc" ]; then
 		detected_libc="$(printf '%s\n' "$libc_report" | awk 'NR == 1 {print $NF}')"
