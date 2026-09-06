@@ -87,11 +87,14 @@ requires Mint's exact `/ready` response, and then checks Evidence. Relay cannot
 be started as a preflight dependency because its existing healthcheck is
 liveness-only, and a `depends_on` edge to a service you did not select starts
 nothing. Add `--dependency-timeout-seconds SECONDS` to change the bounded
-shared Mint startup and readiness deadline. Set `MINT_HEALTHCHECK_URL` on the
-Mint service to its numeric private `/ready` listener when Mint does not bind
-loopback. A started Mint remains under the operator's Compose lifecycle; the
-preflight names every service it started, and the `docker compose stop` command
-that removes them, whether the run passed or failed. That command repeats the
+shared Mint startup and readiness deadline. The overlay requires
+`MINT_HEALTHCHECK_URL` and refuses to render without it, because
+`mint healthcheck` otherwise falls back to its loopback default and would report
+readiness from a listener the Mint configuration may not bind. Name the numeric
+private `/ready` listener Mint binds, loopback included. A started Mint remains
+under the operator's Compose lifecycle; the preflight names every service it
+started, and the `docker compose stop` command that stops those containers,
+whether the run passed or failed. That command repeats the
 `--env-file` and `--compose-file` arguments you passed, so it targets the same
 project the preflight started them in.
 The preflight accepts only Docker-managed local named audit volumes without

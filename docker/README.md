@@ -169,9 +169,10 @@ same Compose files. That command repeats the `--env-file` and `--compose-file`
 arguments the preflight was given, because the preflight itself renders the
 deployment once and runs every later command against that frozen configuration
 on stdin. `--dependency-timeout-seconds` bounds both Mint startup and
-readiness polling under one shared deadline. Mint's `MINT_HEALTHCHECK_URL`
-selects a numeric private `/ready` listener when loopback is not the configured
-bind. Native checks consume the exact rendered Compose JSON already
+readiness polling under one shared deadline. The cold Mint overlay requires
+`MINT_HEALTHCHECK_URL` so the probe names the numeric private `/ready` listener
+Mint binds rather than the command's loopback default. Native checks consume the
+exact rendered Compose JSON already
 validated by the static pass, rather than re-reading mutable Compose or
 environment files.
 
