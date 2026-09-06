@@ -179,7 +179,7 @@ Existing credential output files are refused. Keep the operator client without
 these output fields so its credential stays in BReg's private development state.
 
 ```sh
-bregctl dev --project ./registry --clients-file ./registry/clients.yaml --detach
+bregctl dev --project ./registry --clients-file ./registry/clients.yaml
 ```
 
 The command returns when its owned PostgreSQL, Mint and BReg services are ready,
@@ -278,7 +278,7 @@ From `evidence/`:
 ```sh
 evidencectl dev stop
 bregctl dev stop --project ../registry
-bregctl dev start --project ../registry --detach
+bregctl dev start --project ../registry
 evidencectl dev --target ./targets/configured --detach
 ```
 
