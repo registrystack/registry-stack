@@ -191,11 +191,6 @@ BREG_TUTORIAL_INPUTS = (
     "docs/site/scripts/check-breg-tutorial.sh",
     "docs/site/scripts/check-breg-tutorial.test.mjs",
     "docs/site/src/content/docs/tutorials/first-breg.mdx",
-    "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
-    "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
-    "docs/site/scripts/generate-breg-evidence-starter*",
-    "docs/site/public/examples/breg-evidence-starter.tar.gz",
-    "products/breg/evidence/**",
     "products/breg/quickstart/**",
 )
 
@@ -335,11 +330,30 @@ ASSEMBLED_PYTHON_CLIENT_PACKAGES = frozenset(
     package for package in NATIVE_BINDING_PACKAGES if package.endswith("-client-py")
 )
 
-# This job also verifies the native BReg/Evidence source composition. Package
-# reverse-dependency routing includes their shared compiler and runtime inputs.
-BREG_TUTORIAL_PACKAGES = frozenset(
-    {"registry-breg", "registry-bregctl", "registry-evidence", "registry-evidencectl"}
-) | frozenset(SHARDS["mint"])
+# The gate builds and runs exactly these: the registry, the tool that applies
+# its package, and Registry Mint, because the launcher the tutorial starts
+# issues the operator token the reader's first authenticated call carries. The
+# clients in the Base Registry Engine shard are not on the replayed path.
+BREG_TUTORIAL_PACKAGES = frozenset({"registry-breg", "registry-bregctl"}) | frozenset(
+    SHARDS["mint"]
+)
+
+# The offline proof of the native BReg to Evidence composition drives bregctl,
+# evidencectl and the Evidence runtime over the reviewed teaching inputs. It
+# starts no container, so it is selected on its own rather than through the
+# Docker-backed tutorial replay. Reverse-dependency routing carries the shared
+# authoring and runtime crates those three binaries link.
+BREG_EVIDENCE_COMPOSITION_PACKAGES = frozenset(
+    {
+        "registry-breg",
+        "registry-bregctl",
+        "registry-evidence",
+        "registry-evidencectl",
+    }
+)
+
+# The reviewed registry, starter project and test driver the proof reads.
+BREG_EVIDENCE_COMPOSITION_INPUTS = ("products/breg/evidence/**",)
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
@@ -795,6 +809,12 @@ def classify(
         or bool(affected & BREG_TUTORIAL_PACKAGES)
     )
 
+    breg_evidence_composition = (
+        complete
+        or any(matches(path, *BREG_EVIDENCE_COMPOSITION_INPUTS) for path in paths)
+        or bool(affected & BREG_EVIDENCE_COMPOSITION_PACKAGES)
+    )
+
     matrix = []
     for shard_name, shard_packages in SHARDS.items():
         selected = sorted(affected.intersection(shard_packages))
@@ -832,6 +852,7 @@ def classify(
         "release_linux_node_clients": release_linux_node_clients,
         "evidence_tutorial": evidence_tutorial,
         "breg_tutorial": breg_tutorial,
+        "breg_evidence_composition": breg_evidence_composition,
         "identifiers": identifiers,
     }
 

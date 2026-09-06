@@ -57,6 +57,7 @@ jobs:
       release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
       breg_tutorial: ${{ steps.filter.outputs.breg_tutorial }}
+      breg_evidence_composition: ${{ steps.filter.outputs.breg_evidence_composition }}
       identifiers: ${{ steps.filter.outputs.identifiers }}
     steps:
       - name: Checkout
@@ -1059,29 +1060,24 @@ jobs:
         working-directory: docs/site
         run: npm run check:tutorial:breg:dry-run
 
-      - name: Build the Base Registry Engine and Evidence toolsets under test
+      - name: Build the Base Registry Engine toolset under test
         shell: bash
         run: |
           set -euo pipefail
           CARGO_TARGET_DIR="target/breg-tutorial-source" \
             cargo build --locked --profile ci \
             -p registry-breg --features registry-breg/runtime \
-            -p registry-bregctl -p registry-mint \
-            -p registry-evidence -p registry-evidencectl --bins
+            -p registry-bregctl -p registry-mint --bins
 
       - name: Verify native retained development lifecycle
+        shell: bash
         run: |
+          set -euo pipefail
+          # The retained lifecycle owns a PostgreSQL container of its own, so
+          # this test stays in the Docker-backed job.
           CARGO_TARGET_DIR="target/breg-tutorial-source" \
             cargo test --locked --profile ci -p registry-bregctl \
             --test dev_lifecycle -- --ignored
-
-      - name: Verify native Evidence source composition and updates
-        run: |
-          uv run --no-project --with PyYAML==6.0.3 python \
-            products/breg/evidence/tests/verify-composition.py \
-            --bregctl "$GITHUB_WORKSPACE/target/breg-tutorial-source/ci/bregctl" \
-            --evidencectl "$GITHUB_WORKSPACE/target/breg-tutorial-source/ci/evidencectl" \
-            --evidence "$GITHUB_WORKSPACE/target/breg-tutorial-source/ci/evidence"
 
       - name: Execute the Base Registry Engine tutorial from a reader directory
         shell: bash
@@ -1097,6 +1093,54 @@ jobs:
           # directory inside the checkout it was started from. The gate stages
           # a writable copy of that checkout for the reader instead.
           bash docs/site/scripts/check-breg-tutorial.sh
+
+  breg-evidence-composition:
+    # The offline proof that a BReg evidence-source export composes into an
+    # Evidence project and that a later export updates it. It drives three
+    # native binaries over the reviewed teaching inputs and starts no service,
+    # so it needs neither Docker nor the tutorial replay's writable checkout.
+    name: Base Registry Engine to Evidence composition
+    needs: changes
+    if: needs.changes.outputs.breg_evidence_composition == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.16"
+
+      - name: Build the composition toolset under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="target/breg-evidence-composition" \
+            cargo build --locked --profile ci \
+            -p registry-bregctl -p registry-evidence -p registry-evidencectl \
+            --bins
+
+      - name: Verify native Evidence source composition and updates
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-project --with PyYAML==6.0.2 python \
+            products/breg/evidence/tests/verify-composition.py \
+            --bregctl "$GITHUB_WORKSPACE/target/breg-evidence-composition/ci/bregctl" \
+            --evidencectl "$GITHUB_WORKSPACE/target/breg-evidence-composition/ci/evidencectl" \
+            --evidence "$GITHUB_WORKSPACE/target/breg-evidence-composition/ci/evidence"
 
   evidence-anchors:
     # The documentation anchors cite source across the whole workspace, so this check
@@ -1451,6 +1495,7 @@ jobs:
       - release-source-proof
       - evidence-tutorials
       - breg-tutorial
+      - breg-evidence-composition
       - evidence-anchors
       - docs
       - editor-extensions
