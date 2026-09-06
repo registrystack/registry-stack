@@ -35,6 +35,7 @@ use crate::model::{
     MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::record_profile::{self, RecordRepresentation};
+use crate::stored_bytes;
 
 use super::history_read::HISTORY_STATEMENT_TIMEOUT;
 use super::{
@@ -241,7 +242,7 @@ impl PostgresRevisionReadService {
             .transaction()
             .query(&sql, &parameter_refs)
             .await
-            .map_err(|error| snapshot_read_error(&error))?;
+            .map_err(|error| snapshot_read_error(&error, stored_bytes::Site::RevisionRead))?;
         let mut descriptors = BTreeMap::new();
         let mut context_visibility = BTreeMap::new();
         let rows = revision_rows_from_rows(
@@ -1267,7 +1268,9 @@ impl RevisionReadFaultControl {
 mod tests {
     use crate::postgres::stored_bytes_probe::{expression_error, UNREADABLE};
 
-    use super::{snapshot_boundary_expression, snapshot_read_error, ReadServiceError};
+    use super::{
+        snapshot_boundary_expression, snapshot_read_error, stored_bytes, ReadServiceError,
+    };
 
     /// A stored snapshot the JSON reader will not accept must refuse the
     /// revision read as the unreadable row it is, not as an outage the caller
@@ -1278,7 +1281,7 @@ mod tests {
         for stored in UNREADABLE {
             let error = expression_error(&expression, stored, &["jurisdiction"]).await;
             assert_eq!(
-                snapshot_read_error(&error),
+                snapshot_read_error(&error, stored_bytes::Site::RevisionRead),
                 ReadServiceError::SnapshotUnreadable,
                 "unreadable stored bytes refuse the read as corruption"
             );

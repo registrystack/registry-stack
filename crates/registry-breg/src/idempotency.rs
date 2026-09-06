@@ -728,7 +728,7 @@ pub(crate) async fn tombstone_erased_cached_responses(
             // A cached batch body is read back as JSON here. Bytes no reader
             // accepts are the row's own state, not an outage, and are named so
             // rather than retried behind a transport failure.
-            if stored_bytes::unreadable(&error) {
+            if stored_bytes::unreadable(&error, stored_bytes::Site::IdempotencyCache) {
                 IdempotencyError::CachedResponseUnreadable
             } else {
                 IdempotencyError::Unavailable
