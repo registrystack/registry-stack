@@ -517,10 +517,10 @@ class BoundedStderr:
 
     A spool file grows to whatever the child writes, and reading it back
     afterwards bounds only the reader. The child writes into a pipe instead and
-    a reader thread keeps the tail within the cap, discarding the rest, so a
-    chatty child neither costs unbounded storage nor blocks on a full pipe. The
-    kept text classifies the failure and is never printed, so preflight failures
-    stay free of Compose output and configured values.
+    a reader thread keeps the stream's first bytes up to the cap, discarding the
+    rest, so a chatty child neither costs unbounded storage nor blocks on a full
+    pipe. The kept text classifies the failure and is never printed, so
+    preflight failures stay free of Compose output and configured values.
     """
 
     def __init__(self, limit: int = MAXIMUM_NATIVE_CHECK_STDERR_BYTES) -> None:
@@ -537,8 +537,12 @@ class BoundedStderr:
             chunk = self._reader.read(CAPTURE_CHUNK_BYTES)
             if not chunk:
                 return
-            self._kept.extend(chunk)
-            del self._kept[: max(0, len(self._kept) - self._limit)]
+            # What is kept is the start of the stream, because a command that
+            # refuses an argument says so before it does anything else, and a
+            # wrapper entrypoint that keeps printing would otherwise displace
+            # that refusal. Later output is still read, so the child never
+            # blocks on a full pipe.
+            self._kept.extend(chunk[: self._limit - len(self._kept)])
 
     def fileno(self) -> int:
         """The descriptor the child inherits as its stderr."""
