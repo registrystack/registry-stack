@@ -63,9 +63,9 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: named_source_connections_reject_retargeting_and_preserve_authentication_defaults}
       - {file: crates/registry-evidence/src/source.rs, name: named_connections_share_aggregate_admission_and_release_on_cancellation}
+      - {file: crates/registry-evidence/src/source.rs, name: identical_connection_values_are_never_deduplicated_into_one_allocation}
       - {file: crates/registry-evidence/src/source.rs, name: named_oauth_refresh_is_single_flight_and_file_rotation_takes_effect_after_restart}
       - {file: crates/registry-evidence/src/source.rs, name: named_oauth_readiness_rechecks_a_concurrent_refresh_after_admission_timeout}
-      - {file: crates/registry-evidence/src/bundle.rs, name: requirement_projection_prunes_unreached_connections_and_covers_selected_behavior}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: exact_request_applies_path_query_body_headers_auth_and_projection_once}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: hostile_path_values_and_malformed_preparation_fail_before_transport_and_redact}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
@@ -123,6 +123,7 @@ entries:
   - id: sec-runtime-bundle-mutation-absent
     tests:
       - {file: crates/registry-evidence/src/bundle.rs, name: revision_binds_paths_and_exact_bytes_deterministically}
+      - {file: crates/registry-evidence/src/bundle.rs, name: requirement_projection_prunes_unreached_connections_and_covers_selected_behavior}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture}
   - id: sec-mutually-distrustful-configuration
     tests: [{file: crates/registry-evidence/src/config.rs, name: one_trust_domain_and_native_token_identity_are_closed_configuration}]
