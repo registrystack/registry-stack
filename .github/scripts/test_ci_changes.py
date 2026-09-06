@@ -711,6 +711,16 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("registry-platform-crypto", outputs["rust_packages"])
 
+    def test_platform_fuzz_runner_changes_select_platform_gates(self) -> None:
+        for path in (
+            "products/platform/scripts/run-fuzz-smoke.sh",
+            "products/platform/scripts/test_run_fuzz_smoke.py",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["platform"])
+                self.assertTrue(outputs["platform_hygiene"])
+
     def test_platform_changes_select_relay_client_reverse_dependents(self) -> None:
         # The Relay SDK deliberately reuses the shared bounded outbound and
         # OAuth primitives. A platform change can therefore alter its wire

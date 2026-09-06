@@ -100,6 +100,9 @@ jobs:
       - name: Test nightly coverage planning
         run: python3 .github/scripts/test_nightly_rust_coverage.py
 
+      - name: Test platform fuzz runner
+        run: python3 -m unittest products/platform/scripts/test_run_fuzz_smoke.py
+
       - name: Install pinned actionlint
         shell: bash
         run: |
@@ -285,7 +288,7 @@ jobs:
         run: products/platform/scripts/check-hygiene-alignment.sh
 
   platform-fuzz:
-    name: Platform fuzz smoke (${{ matrix.target }})
+    name: Platform fuzz smoke (${{ matrix.group }})
     needs: changes
     if: needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-24.04
@@ -293,11 +296,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - authcommon_parsers
-          - sdjwt_holder_proof
-          - sdjwt_issuance
-          - sqlite_statement
+        include:
+          - group: authcommon-sqlite
+            target_a: authcommon_parsers
+            target_b: sqlite_statement
+          - group: sd-jwt
+            target_a: sdjwt_holder_proof
+            target_b: sdjwt_issuance
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -313,31 +318,29 @@ jobs:
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
-          key: platform-fuzz-${{ matrix.target }}
+          key: platform-fuzz-${{ matrix.group }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: products/platform/fuzz -> target
 
       - name: Install pinned cargo-fuzz
         uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
         with:
           tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
 
-      - name: Smoke fuzz target
-        working-directory: products/platform
-        run: |
-          set -euo pipefail
-          mkdir -p "fuzz/artifacts/${{ matrix.target }}"
-          cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${{ matrix.target }}" -- \
-            -max_total_time=60 \
-            -rss_limit_mb=1024 \
-            -artifact_prefix="fuzz/artifacts/${{ matrix.target }}/" \
-            -print_final_stats=1
+      - name: Smoke fuzz target pair
+        env:
+          FUZZ_TARGET_A: ${{ matrix.target_a }}
+          FUZZ_TARGET_B: ${{ matrix.target_b }}
+        run: products/platform/scripts/run-fuzz-smoke.sh "$FUZZ_TARGET_A" "$FUZZ_TARGET_B"
 
       - name: Upload fuzz failures
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: platform-fuzz-${{ matrix.target }}
-          path: products/platform/fuzz/artifacts/${{ matrix.target }}/
+          name: platform-fuzz-${{ matrix.group }}
+          path: |
+            products/platform/fuzz/artifacts/${{ matrix.target_a }}/
+            products/platform/fuzz/artifacts/${{ matrix.target_b }}/
           if-no-files-found: ignore
 
   rust-policy:
