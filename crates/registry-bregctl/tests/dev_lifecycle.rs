@@ -85,6 +85,22 @@ fn installed(name: &str) -> PathBuf {
         .unwrap_or_else(|| panic!("{name} must be installed to run the retained lifecycle test"))
 }
 
+/// Three distinct loopback ports nothing is listening on, taken the way the
+/// supervisor probes one: bind `127.0.0.1:0`, let the kernel name the port,
+/// and release all three together so this test's own ports stay distinct.
+/// Fixed ports would make two concurrent runs collide.
+fn free_ports() -> [u16; 3] {
+    let held: Vec<std::net::TcpListener> = (0..3)
+        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port is available"))
+        .collect();
+    let ports: Vec<u16> = held
+        .iter()
+        .map(|listener| listener.local_addr().expect("the bound port").port())
+        .collect();
+    drop(held);
+    ports.try_into().expect("three ports")
+}
+
 fn docker_line(args: &[&str]) -> String {
     let output = Command::new("docker")
         .args(args)
@@ -228,16 +244,18 @@ seed:
     );
     // A service that exits before readiness causes owned child/container
     // cleanup. The same persisted keys and database can then start normally.
+    let [database_port, breg_port, mint_port] = free_ports();
+    let origin = format!("http://127.0.0.1:{breg_port}");
     let failed = session.dev(&[
         "start",
         "--clients-file",
         clients.to_str().unwrap(),
         "--database-port",
-        "55448",
+        &database_port.to_string(),
         "--breg-port",
-        "8094",
+        &breg_port.to_string(),
         "--mint-port",
-        "8095",
+        &mint_port.to_string(),
         "--mint-bin",
         "/usr/bin/false",
     ]);
@@ -249,6 +267,7 @@ seed:
         fs::read(project.join(".breg/dev/credentials/operator/assertion-key.jwk")).unwrap();
     let first = session.start();
     assert_eq!(first["status"], "ready");
+    assert_eq!(first["bregUrl"], origin);
     // A client token lives 300 seconds, less than the worst case a first
     // start may spend on its child and readiness deadlines before it seeds.
     // Every token must therefore be minted after the rehearsal, the built
@@ -346,7 +365,9 @@ seed:
             .build()
             .unwrap();
         let list: Value = client
-            .get("http://127.0.0.1:8094/v1/records/records?accessProfile=operator")
+            .get(format!(
+                "{origin}/v1/records/records?accessProfile=operator"
+            ))
             .bearer_auth(&token)
             .send()
             .await
@@ -357,8 +378,7 @@ seed:
         let records = list["items"].as_array().expect("list records");
         assert_eq!(records.len(), 1, "first seed is executed once");
         let record = records[0]["recordIdentifier"].as_str().unwrap().to_owned();
-        let url =
-            format!("http://127.0.0.1:8094/v1/records/records/{record}?accessProfile=operator");
+        let url = format!("{origin}/v1/records/records/{record}?accessProfile=operator");
         let response = client.get(&url).bearer_auth(&token).send().await.unwrap();
         let etag = response
             .headers()
@@ -453,10 +473,7 @@ seed:
             .unwrap();
         let lookup = |value: &str| {
             let mut sent = client
-                .post(format!(
-                    "http://127.0.0.1:8094{}",
-                    request["path"].as_str().unwrap()
-                ))
+                .post(format!("{origin}{}", request["path"].as_str().unwrap()))
                 .bearer_auth(&token)
                 .query(&[
                     (
@@ -518,7 +535,7 @@ seed:
             .unwrap();
         let response = client
             .get(format!(
-                "http://127.0.0.1:8094/v1/records/records/{record}?accessProfile=operator"
+                "{origin}/v1/records/records/{record}?accessProfile=operator"
             ))
             .bearer_auth(&token)
             .send()
