@@ -5195,17 +5195,18 @@ mod tests {
         }
     }
 
-    /// Configuration validation projects the publication before it accepts the
-    /// document, so a publication the shared profile refuses is reported as an
+    /// Configuration validation refuses every scalar the shared public profile
+    /// refuses, so a document that could not be projected is reported as an
     /// invalid configuration and never reaches the projection stage.
     #[tokio::test]
     async fn render_discovery_description_refuses_an_unprojectable_publication() {
         const ACCEPTANCE: &str = include_str!(
             "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
         );
-        // A non-breaking space is a URI character the configuration contract
-        // accepts and the shared public profile refuses, so this document is
-        // rejected only by the publication projection.
+        // The issuer id becomes a role identifier in the projection. A
+        // no-break space is whitespace no URI carries, and `validate_uri`
+        // reads that rule from the same shared profile the projection reads,
+        // so the document is refused while its fields are checked.
         let document = ACCEPTANCE.replace(
             "issuer: {id: urn:example:fixture:issuer:authority}",
             "issuer: {id: \"urn:example:fixture:issuer\u{a0}authority\"}",
@@ -5215,10 +5216,7 @@ mod tests {
             .expect("the acceptance configuration is accepted as written");
         let refusal = EvidenceConfig::parse_yaml(document.as_bytes())
             .expect_err("an unprojectable publication is not accepted as configuration");
-        assert_eq!(
-            refusal.fault().cause(),
-            "provider publication cannot be rendered"
-        );
+        assert_eq!(refusal.fault().cause(), "URI is invalid");
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("unprojectable-publication.yaml");
