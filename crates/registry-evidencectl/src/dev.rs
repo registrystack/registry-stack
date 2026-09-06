@@ -2749,4 +2749,30 @@ requirements:
             "local development state is not an active session"
         );
     }
+
+    #[test]
+    fn stop_dev_reports_a_dev_root_with_the_wrong_mode_as_its_own_fault() {
+        let project = tempfile::tempdir().expect("tempdir");
+        let generated_root = project.path().join(".evidence");
+        fs::create_dir(&generated_root).expect("create generated root");
+        fs::set_permissions(
+            &generated_root,
+            fs::Permissions::from_mode(PRIVATE_DIR_MODE),
+        )
+        .expect("mode generated root");
+        let dev_root = generated_root.join("dev");
+        fs::create_dir(&dev_root).expect("create dev root");
+        fs::set_permissions(&dev_root, fs::Permissions::from_mode(0o755)).expect("mode dev root");
+
+        // Only a missing generated root, dev directory, or state file is an
+        // inactive session. Every other fault keeps its own diagnostic.
+        let error = stop_dev(project.path())
+            .expect_err("stop must refuse a dev directory that is not private");
+        let diagnostic = format!("{error:#}");
+        assert_ne!(
+            diagnostic,
+            "local development state is not an active session"
+        );
+        assert!(diagnostic.contains("must have mode 0700"), "{diagnostic}");
+    }
 }
