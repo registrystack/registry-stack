@@ -1125,7 +1125,13 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
                 .to_owned()
         })
         .collect::<Vec<_>>();
-    assert_eq!(findings, vec!["access.profile.unrestricted_collection"]);
+    assert_eq!(
+        findings,
+        vec![
+            "access.profile.unrestricted_collection",
+            "access.profile.unrestricted_rows"
+        ]
+    );
     let artifacts = report["artifacts"]
         .as_array()
         .expect("artifacts is an array")
@@ -1164,7 +1170,7 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
             .as_array()
             .expect("findings is an array")
             .len(),
-        1
+        2
     );
 
     let locked = bregctl(&[
@@ -1590,8 +1596,8 @@ fn init_prints_the_next_command_and_what_the_example_leaves_open() {
         "init names the next command: {stdout}"
     );
     assert!(
-        stdout.contains("next: leave the finding above as it is;"),
-        "init says the reported finding belongs to the example: {stdout}"
+        stdout.contains("next: leave the findings above as they are;"),
+        "init says the reported findings belong to the example: {stdout}"
     );
     assert!(
         stdout.contains(&format!(

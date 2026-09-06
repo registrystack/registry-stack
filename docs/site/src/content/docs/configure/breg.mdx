@@ -53,7 +53,7 @@ The command writes a working example project rather than a blank one:
 
 | File | What it holds |
 |---|---|
-| `registry.yaml` | Registry and package identity, a Registry Manifest projection, one closed vocabulary, two entities, and two access profiles. |
+| `registry.yaml` | Registry and package identity, a Registry Manifest projection, one closed vocabulary, two entities, and three access profiles. |
 | `modules/record-notes/module.yaml` | One module adding an optional field to an entity the project owns, pinned by content digest in the project's `modules` list. |
 | `tests/journeys.yaml` | A journey that creates a group and a record, reads it under both profiles, patches it, and lists it. |
 | `runtime.example.yaml` | An example of the runtime configuration an operator supplies. No command reads it; copy it out of the project and replace every value. |
@@ -62,22 +62,24 @@ The command writes a working example project rather than a blank one:
 Every block in those files carries a comment saying what it does and what an adopter changes.
 Replace the placeholder identifiers with your own; they are deliberately generic.
 
-`init` then compiles the project, prints the compiled revision, and reports one finding:
+`init` then compiles the project, prints the compiled revision, and reports two findings:
 
 ```text
 init succeeded
 revision: sha256:<digest>
 finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
 artifacts: 5
 next: read ./my-registry/README.md, then run 'bregctl check ./my-registry'
-next: leave the finding above as it is; the example operator profile lists a whole collection on purpose, and ./my-registry/README.md says where to narrow it
+next: leave the findings above as they are; the example operator profile lists a whole collection and the example evidence-source profile looks up any record, both on purpose, and ./my-registry/README.md says where to narrow them
 next: replace canonicalBaseIri in ./my-registry/registry.yaml before you build a production package; the example value is a reserved .invalid name that never resolves
 ```
 
 A finding is an advisory the compiler attaches to a document path; it does not fail `check`, and [Test with journeys](../breg-journeys/) lists every finding the compiler can report and explains `--deny-findings` and `--production`.
-This one says the `operator` profile can list every row, which is right for a registry-wide operations role and wrong once the registry holds more than one caller's data.
-The project's `record-reader` profile shows the row boundary that closes it.
-The `next:` lines name the command to run after the README, the finding the example keeps on purpose, and the placeholder `canonicalBaseIri` that has to be replaced before a production package. Only `init` prints them.
+The first says the `operator` profile can list every row, which is right for a registry-wide operations role and wrong once the registry holds more than one caller's data.
+The second says the `evidence-source` profile can look up any record by its code, which is right for a source that vouches for the whole registry.
+The project's `record-reader` profile shows the row boundary that closes either one.
+The `next:` lines name the command to run after the README, the findings the example keeps on purpose, and the placeholder `canonicalBaseIri` that has to be replaced before a production package. Only `init` prints them.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init() and write_files_with_before_publish(); products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
 

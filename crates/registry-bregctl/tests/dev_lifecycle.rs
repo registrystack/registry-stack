@@ -171,41 +171,6 @@ fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
     let mut registry: Value =
         serde_norway::from_slice(&fs::read(project.join("registry.yaml")).unwrap()).unwrap();
     registry["package"]["environment"] = json!("local");
-    // The initialized project grants no lookup, so `generate evidence-source`
-    // has nothing to export. Author one exact selector and one narrow
-    // request-origin profile before the first start captures the closure. An
-    // exact selector field must declare a non-empty minLength, since Evidence's
-    // selector profile cannot express the empty value the initialized `code`
-    // field otherwise accepts.
-    let record = registry["entities"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|entity| entity["id"] == "record")
-        .unwrap();
-    record["fields"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|field| field["id"] == "code")
-        .unwrap()["minLength"] = json!(1);
-    record["selectorProfiles"] = json!([{"id": "by-code", "fields": ["code"]}]);
-    registry["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "id": "evidence-source",
-            "principalClaim": "registry_principal",
-            "requiredScopes": ["registry:evidence:lookup"],
-            "requiredPurposes": ["evidence-source-read"],
-            "grants": [{
-                "entity": "record",
-                "operations": ["lookup"],
-                "readableFields": ["code", "status"],
-                "lookups": [{"selector": "by-code", "valueOrigin": "request"}],
-                "rowBoundaries": [],
-            }],
-        }));
     write(
         &project.join("registry.yaml"),
         serde_norway::to_string(&registry).unwrap().as_bytes(),

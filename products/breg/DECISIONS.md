@@ -54,7 +54,7 @@
   does not weaken or invalidate the operational relationship.
 - `bregctl init` emits a working example project rather than a blank
   one: package identity, a manifest projection, a closed vocabulary, two inline
-  entities, two access profiles, one module extending an entity, and that
+  entities, three access profiles, one module extending an entity, and that
   module's lock computed as the project is written. Module locks are refreshed
   explicitly with `project lock`; lock digests still bind every module source
   and declared SQL asset before a production package is compiled.

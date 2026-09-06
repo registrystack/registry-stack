@@ -3743,8 +3743,8 @@ fn init(destination: &Path) -> Result<SuccessReport, FailureReport> {
 
 /// What a reader does after `init`, named against the directory just written.
 ///
-/// The example project reports a finding and carries a reserved base IRI, both
-/// on purpose. A reader who is told neither reads the finding as a mistake and
+/// The example project reports findings and carries a reserved base IRI, both
+/// on purpose. A reader who is told neither reads a finding as a mistake and
 /// carries the reserved identity into a real package, so `init` says which of
 /// the two it left standing for teaching and which one has to go before a
 /// production package.
@@ -3757,7 +3757,7 @@ fn init_next_steps(destination: &Path) -> Vec<String> {
             destination.display()
         ),
         format!(
-            "leave the finding above as it is; the example operator profile lists a whole collection on purpose, and {} says where to narrow it",
+            "leave the findings above as they are; the example operator profile lists a whole collection and the example evidence-source profile looks up any record, both on purpose, and {} says where to narrow them",
             readme.display()
         ),
         format!(
@@ -5154,7 +5154,7 @@ and every file carries comments saying what a block does and what you change.
 
 | File | What it holds |
 | --- | --- |
-| `registry.yaml` | The registry: its identity and package identity, the catalogue projection, one closed vocabulary, two entities, and two access profiles. Every command reads this file. |
+| `registry.yaml` | The registry: its identity and package identity, the catalogue projection, one closed vocabulary, two entities, and three access profiles. Every command reads this file. |
 | `modules/record-notes/module.yaml` | A module: a reusable part of the model, versioned on its own and pinned by content digest in the project's `modules` list. |
 | `tests/journeys.yaml` | The requests `bregctl test` replays over HTTP against a throwaway database before a package is built. |
 | `runtime.example.yaml` | An example of the operator's runtime configuration. No command reads it; copy it out of the project and replace every value. |
@@ -5163,9 +5163,10 @@ and every file carries comments saying what a block does and what you change.
 
 Two entities: `record-group` is public reference data, and `record` is the
 internal record that points at a group through a `reference` field and carries a
-`status` drawn from a closed vocabulary. Two access profiles read them: an
-`operator` that runs the whole registry, and a `record-reader` whose rows are
-restricted by a claim on its own credentials.
+`status` drawn from a closed vocabulary. Three access profiles read them: an
+`operator` that runs the whole registry, a `record-reader` whose rows are
+restricted by a claim on its own credentials, and an `evidence-source` that may
+only look a record up by its `code`.
 
 Replace this model with your own. The names are deliberately generic so that
 nothing here reads as advice about what your registry should contain.
@@ -5178,13 +5179,30 @@ bregctl explain queries .
 bregctl explain events .
 ```
 
-`check` compiles the project and reports problems and findings. It reports one
-finding for this project on purpose: `access.profile.unrestricted_collection`,
-because the `operator` profile can list every record. The comment above that
-profile says how to close it.
+`check` compiles the project and reports problems and findings. It reports two
+findings for this project on purpose: `access.profile.unrestricted_collection`,
+because the `operator` profile can list every record, and
+`access.profile.unrestricted_rows`, because the `evidence-source` profile can
+look up any record by its code. The comment above each profile says how to
+close it.
 
 `explain` prints what the compiled project exposes, such as the query surface
 each profile gets and the events the package would emit.
+
+The `evidence-source` profile's lookup is what `generate evidence-source`
+exports, so this project already produces an Evidence source definition:
+
+```sh
+mkdir exports
+bregctl generate evidence-source . --access-profile evidence-source \
+  --entity record --selector by-code --fields status \
+  --source-id registry-status --connection registry \
+  --output ./exports/registry-status
+```
+
+The export refuses a destination that already exists and a parent directory that
+does not, so the output path names a directory the command creates inside one
+you made.
 
 Edit `modules/record-notes/module.yaml`, then re-pin it:
 
@@ -5277,7 +5295,7 @@ entities:
     mutationMode: mutable
     classification: public
     fields:
-      - {id: code, type: string, required: true, maxLength: 64, classification: public}
+      - {id: code, type: string, required: true, minLength: 1, maxLength: 64, classification: public}
       - {id: label, type: string, required: true, maxLength: 200, classification: public}
     constraints:
       - {kind: unique, fields: [code]}
@@ -5298,12 +5316,19 @@ entities:
     mutationMode: mutable
     classification: internal
     fields:
-      - {id: code, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: code, type: string, required: true, minLength: 1, maxLength: 64, classification: internal}
       - {id: label, type: string, required: true, maxLength: 200, classification: internal}
       - {id: group, type: reference, target: record-group, classification: internal}
       - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}
     constraints:
       - {kind: unique, fields: [code]}
+    # A selector profile names an exact-match question a caller may ask by
+    # value, rather than a filter over a listing. Every field it names must
+    # refuse the empty value, which is why `code` declares `minLength: 1` above.
+    # `bregctl generate evidence-source` exports one Evidence source per
+    # selector an access profile grants a lookup on.
+    selectorProfiles:
+      - {id: by-code, fields: [code]}
 
 # A token selects one profile per request, and that profile decides everything
 # the request may touch. Profiles are never merged, and naming one in a request
@@ -5358,6 +5383,30 @@ accessProfiles:
         filterableFields: [code]
         rowBoundaries:
           - {field: status, claim: registry_record_status, operator: equals}
+
+  # A lookup-only source. It answers one exact-match question, by `code`, and
+  # reads only the fields that answer it. `valueOrigin: request` says the caller
+  # supplies the selector value. The profile grants no `list`, so it can confirm
+  # a record whose code it is given and cannot enumerate the registry.
+  # `bregctl generate evidence-source .` exports this grant as an Evidence
+  # source definition, so a project written by `init` exports unmodified.
+  #
+  # `check` reports `access.profile.unrestricted_rows` for this profile: any
+  # record's code answers it, and the value a caller supplies is not
+  # authorization. That is intended for a source that vouches for the whole
+  # registry. Close it by giving the grant a `rowBoundaries` entry, the way
+  # `record-reader` above does.
+  - id: evidence-source
+    principalClaim: registry_principal
+    requiredScopes: [registry:evidence:lookup]
+    requiredPurposes: [evidence-source-read]
+    grants:
+      - entity: record
+        rowBoundaries: []
+        operations: [lookup]
+        readableFields: [code, status]
+        lookups:
+          - {selector: by-code, valueOrigin: request}
 
 # Modules contribute to the model from their own files under `modules/`.
 # `bregctl project lock` writes the version and content digest below;
