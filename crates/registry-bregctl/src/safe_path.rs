@@ -405,6 +405,13 @@ mod descriptor {
             &self.parent
         }
 
+        /// Consume this entry and keep the directory it names an entry in, so a
+        /// caller that read one file through it reads that file's siblings
+        /// through the same descriptor rather than opening the directory again.
+        pub(crate) fn into_parent(self) -> SafeDir {
+            self.parent
+        }
+
         pub(crate) fn name(&self) -> &OsStr {
             &self.name
         }
@@ -715,6 +722,10 @@ mod descriptor {
         }
 
         pub(crate) fn parent(&self) -> &SafeDir {
+            match self.0 {}
+        }
+
+        pub(crate) fn into_parent(self) -> SafeDir {
             match self.0 {}
         }
 

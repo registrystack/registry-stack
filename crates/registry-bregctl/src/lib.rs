@@ -3812,7 +3812,7 @@ fn project_migrate(
         (original.clone(), migrated.bytes.clone()),
     );
     let mut module_locks = Vec::new();
-    for (module_id, bytes) in discover_module_files(project_path).map_err(|diagnostic| {
+    for source in discover_module_files(project_path).map_err(|diagnostic| {
         source_failure(
             "project migrate",
             diagnostic,
@@ -3820,6 +3820,11 @@ fn project_migrate(
             SuggestedAction::CorrectAuthoringSource,
         )
     })? {
+        let ModuleSource {
+            id: module_id,
+            bytes,
+            directory,
+        } = source;
         let updated = project_migration::add_module_entity_membership(&bytes, &migrated.dataset_id)
             .map_err(|diagnostic| {
                 source_failure(
@@ -3846,7 +3851,7 @@ fn project_migrate(
                 })
                 .collect(),
         })?;
-        let assets = load_module_asset_files(project_path, &module_id, &module)
+        let assets = load_module_asset_files(&directory, &module_id, &module)
             .map_err(|diagnostic| {
                 source_failure(
                     "project migrate",
@@ -4541,7 +4546,7 @@ fn source_failure(
 }
 
 fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, Diagnostic> {
-    validate_project_directory(project_path)?;
+    let project_directory = validate_project_directory(project_path)?;
     let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
         "source.project.missing",
@@ -4549,13 +4554,18 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
-    let project_assets = load_project_planner_asset_files(project_path, &project)?;
+    let project_assets = load_project_planner_asset_files(&project_directory, &project)?;
     let modules = load_module_files(project_path, &project)?
         .into_iter()
-        .map(|(id, bytes)| {
+        .map(|source| {
+            let ModuleSource {
+                id,
+                bytes,
+                directory,
+            } = source;
             let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
             ensure_module_id_matches_directory(&module.id, &id)?;
-            let assets = load_module_asset_files(project_path, &id, &module)?;
+            let assets = load_module_asset_files(&directory, &id, &module)?;
             Ok(CapturedModuleSource {
                 id,
                 module,
@@ -4616,7 +4626,7 @@ fn ensure_every_lock_has_a_source(
 fn capture_project_source_for_lock(
     project_path: &Path,
 ) -> Result<CapturedProjectSource, Diagnostic> {
-    validate_project_directory(project_path)?;
+    let project_directory = validate_project_directory(project_path)?;
     let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
         "source.project.missing",
@@ -4624,7 +4634,7 @@ fn capture_project_source_for_lock(
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
-    let project_assets = load_project_planner_asset_files(project_path, &project)?;
+    let project_assets = load_project_planner_asset_files(&project_directory, &project)?;
     let mut locked = BTreeSet::new();
     for lock in &project.modules {
         if !locked.insert(lock.id.as_str()) {
@@ -4637,10 +4647,15 @@ fn capture_project_source_for_lock(
     }
     let modules = discover_module_files(project_path)?
         .into_iter()
-        .map(|(directory_id, bytes)| {
+        .map(|source| {
+            let ModuleSource {
+                id: directory_id,
+                bytes,
+                directory,
+            } = source;
             let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
             ensure_module_id_matches_directory(&module.id, &directory_id)?;
-            let assets = load_module_asset_files(project_path, &directory_id, &module)?;
+            let assets = load_module_asset_files(&directory, &directory_id, &module)?;
             Ok(CapturedModuleSource {
                 id: directory_id,
                 module,
@@ -4661,7 +4676,7 @@ fn capture_project_source_for_lock(
 fn load_module_files(
     project_path: &Path,
     project: &RegistryProject,
-) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
+) -> Result<Vec<ModuleSource>, Diagnostic> {
     let locked: std::collections::BTreeSet<&str> = project
         .modules
         .iter()
@@ -4752,12 +4767,20 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
     })
 }
 
+/// One authored module: its `module.yaml` bytes and the module directory
+/// descriptor they were read through. The assets the module declares are read
+/// through that same descriptor, so one captured module source never mixes
+/// bytes from two trees.
+struct ModuleSource {
+    id: String,
+    bytes: Vec<u8>,
+    directory: SafeDir,
+}
+
 /// Read each listed module's `module.yaml` through the listed `modules`
 /// directory, so the file read is the one under the directory whose entries
 /// were checked, whatever the pathname reaches by now.
-fn read_module_yaml_files(
-    modules: ModuleDirectories,
-) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
+fn read_module_yaml_files(modules: ModuleDirectories) -> Result<Vec<ModuleSource>, Diagnostic> {
     let ModuleDirectories { directory, names } = modules;
     let Some(directory) = directory else {
         return Ok(Vec::new());
@@ -4782,17 +4805,21 @@ fn read_module_yaml_files(
                 &report_path,
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )?;
-            Ok((id, bytes))
+            Ok(ModuleSource {
+                id,
+                bytes,
+                directory: entry.into_parent(),
+            })
         })
         .collect()
 }
 
-fn discover_module_files(project_path: &Path) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
+fn discover_module_files(project_path: &Path) -> Result<Vec<ModuleSource>, Diagnostic> {
     read_module_yaml_files(read_module_directory_names(project_path)?)
 }
 
 fn load_project_planner_asset_files(
-    project_path: &Path,
+    project_directory: &SafeDir,
     project: &RegistryProject,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
     let paths = project
@@ -4806,11 +4833,15 @@ fn load_project_planner_asset_files(
                 .map(|planner| planner.script.clone())
         })
         .collect::<BTreeSet<_>>();
-    load_planner_asset_files(project_path, "registry.yaml", paths)
+    load_planner_asset_files(project_directory, "registry.yaml", paths)
 }
 
+/// Read a module's declared assets through the module directory descriptor the
+/// module source was read from, so a `modules` ancestor replaced between the
+/// listing and these reads cannot mix another tree's bytes into one captured
+/// module.
 fn load_module_asset_files(
-    project_path: &Path,
+    module_directory: &SafeDir,
     module_id: &str,
     module: &RegistryModule,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
@@ -4842,10 +4873,25 @@ fn load_module_asset_files(
     let mut assets = paths
         .into_iter()
         .map(|path| {
-            let bytes = read_bounded_source_file(
-                &project_path.join("modules").join(module_id).join(&path),
+            let report_path = format!("modules/{module_id}/{path}");
+            let entry = open_asset_entry(
+                module_directory,
+                &path,
+                || module_asset_path_diagnostic(module_id),
+                |error| {
+                    path_diagnostic(
+                        error,
+                        "source.module_asset.missing",
+                        &report_path,
+                        "the required authoring source is not available",
+                        "authoring sources must be regular files and must not be symbolic links",
+                    )
+                },
+            )?;
+            let bytes = read_bounded_source_entry(
+                &entry,
                 "source.module_asset.missing",
-                &format!("modules/{module_id}/{path}"),
+                &report_path,
                 MAX_DERIVED_SQL_ASSET_BYTES,
             )?;
             if bytes.is_empty() {
@@ -4877,7 +4923,7 @@ fn load_module_asset_files(
         }))
         .collect::<BTreeSet<_>>();
     assets.extend(load_planner_asset_files(
-        &project_path.join("modules").join(module_id),
+        module_directory,
         &format!("modules/{module_id}/module.yaml"),
         planner_paths,
     )?);
@@ -4885,8 +4931,11 @@ fn load_module_asset_files(
     Ok(assets)
 }
 
+/// Read the Rhai planner scripts declared by one authoring source through the
+/// descriptor of the directory that source was read from, so the scripts come
+/// from the tree the declaring file came from.
 fn load_planner_asset_files(
-    origin: &Path,
+    origin: &SafeDir,
     declaring_path: &str,
     paths: BTreeSet<String>,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
@@ -4894,9 +4943,24 @@ fn load_planner_asset_files(
         .into_iter()
         .map(|path| {
             validate_rhai_planner_asset_path(declaring_path, &path)?;
-            let bytes = read_bounded_regular_file(
-                &origin.join(&path),
+            let entry = open_asset_entry(
+                origin,
+                &path,
+                || planner_asset_path_diagnostic(declaring_path),
+                |error| {
+                    path_diagnostic(
+                        error,
+                        "source.planner_asset.missing",
+                        "project",
+                        "the required authoring source is not available",
+                        "authoring sources must be regular files and must not be symbolic links",
+                    )
+                },
+            )?;
+            let bytes = read_bounded_source_entry(
+                &entry,
                 "source.planner_asset.missing",
+                "project",
                 MAX_RHAI_PLANNER_SOURCE_BYTES,
             )?;
             if bytes.is_empty() {
@@ -4909,6 +4973,34 @@ fn load_planner_asset_files(
             Ok(CapturedModuleAssetSource { path, bytes })
         })
         .collect()
+}
+
+/// Open an asset named relative to an authoring origin through that origin's
+/// held directory descriptor.
+///
+/// Every component is opened with `openat` and `O_NOFOLLOW`, and a path that is
+/// absolute, climbs with `..`, or carries a prefix is refused rather than
+/// walked, so the asset read reaches the tree the declaring source was read
+/// from and no other.
+fn open_asset_entry(
+    origin: &SafeDir,
+    asset_path: &str,
+    unsafe_path: impl Fn() -> Diagnostic,
+    unavailable: impl Fn(SafePathError) -> Diagnostic,
+) -> Result<SafeEntry, Diagnostic> {
+    let mut names = Vec::new();
+    for component in Path::new(asset_path).components() {
+        match component {
+            Component::Normal(name) => names.push(name),
+            _ => return Err(unsafe_path()),
+        }
+    }
+    let name = names.pop().ok_or_else(&unsafe_path)?;
+    let mut directory = origin.try_clone().map_err(&unavailable)?;
+    for part in names {
+        directory = directory.open_directory(part).map_err(&unavailable)?;
+    }
+    Ok(SafeEntry::in_directory(directory, name))
 }
 
 fn validate_rhai_planner_asset_path(
@@ -7025,7 +7117,10 @@ fn decimal_literal_order(left: &str, right: &str) -> Option<std::cmp::Ordering> 
     left.partial_cmp(&right)
 }
 
-fn validate_project_directory(project_path: &Path) -> Result<(), Diagnostic> {
+/// Resolve the project directory to a held descriptor, refusing a symbolic link
+/// at every component. Callers that read the project's own files afterwards read
+/// them through the returned descriptor.
+fn validate_project_directory(project_path: &Path) -> Result<SafeDir, Diagnostic> {
     if project_path.as_os_str().is_empty() || has_parent_component(project_path) {
         return Err(diagnostic(
             "source.project.path_unsafe",
@@ -7033,7 +7128,7 @@ fn validate_project_directory(project_path: &Path) -> Result<(), Diagnostic> {
             "the project path must not contain parent-directory components",
         ));
     }
-    validate_directory(project_path, "source.project.invalid").map(|_| ())
+    validate_directory(project_path, "source.project.invalid")
 }
 
 /// Resolve a directory to a held descriptor, refusing a symbolic link at every
@@ -8817,8 +8912,9 @@ mod tests {
             b"fn plan(ctx) { #{ disposition: \"apply\", effects: [] } }\n",
         )
         .unwrap();
+        let origin = SafeDir::resolve(&directory.path).expect("the test directory resolves");
         let captured = load_planner_asset_files(
-            &directory.path,
+            &origin,
             "registry.yaml",
             BTreeSet::from(["planners/request.rhai".to_owned()]),
         )
@@ -8846,12 +8942,50 @@ mod tests {
         )
         .unwrap();
         let oversized = load_planner_asset_files(
-            &directory.path,
+            &origin,
             "registry.yaml",
             BTreeSet::from(["planners/oversized.rhai".to_owned()]),
         )
         .unwrap_err();
         assert_eq!(oversized.code, "source.file.bounds");
+    }
+
+    /// The asset readers refuse an escaping path themselves, so the module and
+    /// planner path rules are not the only thing between a declared asset and a
+    /// file outside the directory the module was listed in.
+    #[test]
+    fn an_asset_path_that_climbs_out_of_its_origin_is_refused_before_any_component_opens() {
+        let directory = TestDirectory::create();
+        fs::create_dir_all(directory.path.join("modules/persons")).unwrap();
+        fs::write(directory.path.join("modules/outside.sql"), b"outside\n").unwrap();
+        let origin = SafeDir::resolve(&directory.path.join("modules/persons"))
+            .expect("the module directory resolves");
+
+        for asset_path in ["../outside.sql", "/etc/passwd"] {
+            let refused = open_asset_entry(
+                &origin,
+                asset_path,
+                || module_asset_path_diagnostic("persons"),
+                |error| {
+                    path_diagnostic(
+                        error,
+                        "source.module_asset.missing",
+                        "modules/persons",
+                        "the required authoring source is not available",
+                        "authoring sources must be regular files and must not be symbolic links",
+                    )
+                },
+            )
+            .expect_err("an escaping asset path is refused");
+
+            // The path arm answered, so no component of the escaping path was
+            // opened on the way to a missing-source refusal.
+            assert_eq!(refused.code, "source.module_asset.path_unsafe");
+        }
+        assert_eq!(
+            fs::read(directory.path.join("modules/outside.sql")).unwrap(),
+            b"outside\n"
+        );
     }
 
     #[test]
@@ -9741,6 +9875,75 @@ accessProfiles:
             assert_eq!(fs::read(&named).unwrap(), b"decoy\n");
         }
 
+        /// A module that declares one derived SQL asset and one Rhai planner
+        /// script, so both asset readers are exercised by one capture.
+        const MODULE_WITH_ASSETS: &[u8] = br#"id: persons
+version: 0.1.0
+extendEntities:
+  - entity: person
+    derived:
+      - id: person-summary
+        sql: sql/summary.sql
+        key: id
+    changeRequest:
+      planner:
+        kind: rhai
+        script: planners/person.rhai
+        abi: registry.change-request-plan/v1
+      review: {}
+"#;
+
+        fn plant_module_with_assets(root: &Path, sql: &[u8], planner: &[u8]) {
+            fs::create_dir_all(root.join("modules/persons/sql")).unwrap();
+            fs::create_dir_all(root.join("modules/persons/planners")).unwrap();
+            fs::write(root.join("modules/persons/module.yaml"), MODULE_WITH_ASSETS).unwrap();
+            fs::write(root.join("modules/persons/sql/summary.sql"), sql).unwrap();
+            fs::write(root.join("modules/persons/planners/person.rhai"), planner).unwrap();
+        }
+
+        #[test]
+        fn module_assets_read_after_an_ancestor_swap_carry_the_listed_module_bytes() {
+            let tree = race_tree();
+            let project = tree.named_directory();
+            plant_module_with_assets(&project, b"genuine sql\n", b"genuine planner\n");
+            plant_module_with_assets(
+                &tree.outside_directory(),
+                b"decoy sql\n",
+                b"decoy planner\n",
+            );
+
+            let sources = read_module_yaml_files(read_module_directory_names(&project).unwrap())
+                .expect("the listed module source reads");
+            let module = parse_module_yaml(&sources[0].bytes).expect("the module source parses");
+            // The ancestor becomes a real directory holding the decoy assets, so
+            // an asset read that resolved its pathname again would reach them
+            // without meeting a symbolic link.
+            tree.swap_ancestor_directory();
+            let assets = load_module_asset_files(&sources[0].directory, "persons", &module)
+                .expect("the module assets read");
+
+            let captured = assets
+                .iter()
+                .map(|asset| (asset.path.as_str(), asset.bytes.as_slice()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                captured,
+                vec![
+                    ("planners/person.rhai", b"genuine planner\n".as_slice()),
+                    ("sql/summary.sql", b"genuine sql\n".as_slice()),
+                ]
+            );
+            // The window is real: the same pathnames now reach the decoys.
+            assert_eq!(
+                fs::read(project.join("modules/persons/sql/summary.sql")).unwrap(),
+                b"decoy sql\n"
+            );
+            assert_eq!(
+                fs::read(project.join("modules/persons/planners/person.rhai")).unwrap(),
+                b"decoy planner\n"
+            );
+        }
+
         #[test]
         fn module_sources_listed_before_an_ancestor_swap_are_read_from_the_listed_directory() {
             let tree = race_tree();
@@ -9759,7 +9962,9 @@ accessProfiles:
             tree.swap_ancestor_directory();
             let files = read_module_yaml_files(modules).unwrap();
 
-            assert_eq!(files, vec![("persons".to_owned(), b"genuine\n".to_vec())]);
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].id, "persons");
+            assert_eq!(files[0].bytes, b"genuine\n");
             assert_eq!(
                 fs::read(project.join("modules/persons/module.yaml")).unwrap(),
                 b"decoy\n"
