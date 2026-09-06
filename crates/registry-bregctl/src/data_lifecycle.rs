@@ -195,9 +195,8 @@ pub(crate) fn run_import(
     }
     let breg_url = parse_breg_url(request.breg_url)?;
     let token = read_access_token(request.access_token_file)?;
-    let state_path = import_state_path(request.checkpoint);
-    let (mut checkpoint, import_id) =
-        load_or_start_import(&plan, &inspected, request.checkpoint, &state_path)?;
+    let destinations = ImportDestinations::resolve(request.checkpoint)?;
+    let (mut checkpoint, import_id) = load_or_start_import(&plan, &inspected, &destinations)?;
     let client = build_data_http_client()?;
     let (_committed_chunks, _committed_items) = run_import_chunks(
         &plan,
@@ -208,14 +207,7 @@ pub(crate) fn run_import(
             import_id: &import_id,
         },
         request.max_chunks,
-        |checkpoint| {
-            write_atomic(
-                request.checkpoint,
-                &checkpoint
-                    .canonical_json()
-                    .map_err(DataLifecycleError::Data)?,
-            )
-        },
+        |checkpoint| publish_import_checkpoint(&destinations.checkpoint, checkpoint),
         |data_request| dispatch_http(&client, &breg_url, &token, data_request),
     )?;
     Ok(DataImportOutcome {
@@ -474,22 +466,60 @@ fn inspect_data_package(package: &Path) -> Result<InspectedDataPackage, DataLife
     })
 }
 
+/// The two files one import run reads and writes, each resolved to a held
+/// parent directory descriptor when the run validates them.
+///
+/// Every existence check, every read, and every checkpoint publication of the
+/// run acts through these, so an ancestor replaced while the run is in flight
+/// can neither redirect a write nor leave the checkpoint and the state file
+/// that binds it in different trees.
+struct ImportDestinations {
+    checkpoint: SafeEntry,
+    state: SafeEntry,
+}
+
+impl ImportDestinations {
+    fn resolve(checkpoint: &Path) -> Result<Self, DataLifecycleError> {
+        let state = import_state_path(checkpoint);
+        Ok(ImportDestinations {
+            checkpoint: resolve_write_destination(checkpoint)
+                .map_err(|_| DataLifecycleError::Checkpoint)?,
+            state: resolve_write_destination(&state).map_err(|_| DataLifecycleError::Checkpoint)?,
+        })
+    }
+}
+
+/// Replace the checkpoint an import run advances, through the destination the
+/// run resolved at its start.
+fn publish_import_checkpoint(
+    destination: &SafeEntry,
+    checkpoint: &DataImportCheckpoint,
+) -> Result<(), DataLifecycleError> {
+    write_atomic_entry(
+        destination,
+        &checkpoint
+            .canonical_json()
+            .map_err(DataLifecycleError::Data)?,
+    )
+}
+
 fn load_or_start_import(
     plan: &DataImportPlan,
     inspected: &InspectedDataPackage,
-    checkpoint_path: &Path,
-    state_path: &Path,
+    destinations: &ImportDestinations,
 ) -> Result<(DataImportCheckpoint, String), DataLifecycleError> {
-    let checkpoint_exists = checkpoint_path
-        .try_exists()
+    let checkpoint_exists = destinations
+        .checkpoint
+        .exists()
         .map_err(|_| DataLifecycleError::Checkpoint)?;
-    let state_exists = state_path
-        .try_exists()
+    let state_exists = destinations
+        .state
+        .exists()
         .map_err(|_| DataLifecycleError::Checkpoint)?;
     match (checkpoint_exists, state_exists) {
-        (false, false) => start_new_import(plan, inspected, checkpoint_path, state_path),
-        (false, true) => recover_state_only_import(plan, inspected, checkpoint_path, state_path),
-        (true, true) => load_existing_import(plan, inspected, checkpoint_path, state_path),
+        (false, false) => start_new_import(plan, inspected, destinations),
+        (false, true) => recover_state_only_import(plan, inspected, destinations),
+        (true, true) => load_existing_import(plan, inspected, destinations),
         (true, false) => Err(DataLifecycleError::Checkpoint),
     }
 }
@@ -566,8 +596,7 @@ fn load_or_start_export(
 fn start_new_import(
     plan: &DataImportPlan,
     inspected: &InspectedDataPackage,
-    checkpoint_path: &Path,
-    state_path: &Path,
+    destinations: &ImportDestinations,
 ) -> Result<(DataImportCheckpoint, String), DataLifecycleError> {
     let checkpoint = DataImportCheckpoint::start(
         plan,
@@ -580,10 +609,10 @@ fn start_new_import(
     let checkpoint_bytes = checkpoint
         .canonical_json()
         .map_err(DataLifecycleError::Data)?;
-    write_atomic_create_new(state_path, &state_bytes)
+    write_atomic_create_new_entry(&destinations.state, &state_bytes)
         .map_err(|_| DataLifecycleError::Checkpoint)?;
-    if write_atomic_create_new(checkpoint_path, &checkpoint_bytes).is_err() {
-        return load_existing_import(plan, inspected, checkpoint_path, state_path)
+    if write_atomic_create_new_entry(&destinations.checkpoint, &checkpoint_bytes).is_err() {
+        return load_existing_import(plan, inspected, destinations)
             .map_err(|_| DataLifecycleError::Checkpoint);
     }
     Ok((checkpoint, state.import_id))
@@ -592,17 +621,16 @@ fn start_new_import(
 fn recover_state_only_import(
     plan: &DataImportPlan,
     inspected: &InspectedDataPackage,
-    checkpoint_path: &Path,
-    state_path: &Path,
+    destinations: &ImportDestinations,
 ) -> Result<(DataImportCheckpoint, String), DataLifecycleError> {
-    let state = read_import_state(state_path, plan, inspected)?;
+    let state = read_import_state(&destinations.state, plan, inspected)?;
     let checkpoint = start_checkpoint_from_state(plan, inspected, &state)?;
     let checkpoint_bytes = checkpoint
         .canonical_json()
         .map_err(DataLifecycleError::Data)?;
-    match write_atomic_create_new(checkpoint_path, &checkpoint_bytes) {
+    match write_atomic_create_new_entry(&destinations.checkpoint, &checkpoint_bytes) {
         Ok(_) => Ok((checkpoint, state.import_id)),
-        Err(_) => load_existing_import(plan, inspected, checkpoint_path, state_path)
+        Err(_) => load_existing_import(plan, inspected, destinations)
             .map_err(|_| DataLifecycleError::Checkpoint),
     }
 }
@@ -610,11 +638,10 @@ fn recover_state_only_import(
 fn load_existing_import(
     plan: &DataImportPlan,
     inspected: &InspectedDataPackage,
-    checkpoint_path: &Path,
-    state_path: &Path,
+    destinations: &ImportDestinations,
 ) -> Result<(DataImportCheckpoint, String), DataLifecycleError> {
-    let state = read_import_state(state_path, plan, inspected)?;
-    let checkpoint_bytes = read_bounded_regular(checkpoint_path, MAX_CHECKPOINT_BYTES)
+    let state = read_import_state(&destinations.state, plan, inspected)?;
+    let checkpoint_bytes = read_bounded_entry(&destinations.checkpoint, MAX_CHECKPOINT_BYTES)
         .map_err(|_| DataLifecycleError::Checkpoint)?;
     let checkpoint = DataImportCheckpoint::from_json(
         &checkpoint_bytes,
@@ -676,11 +703,11 @@ fn start_checkpoint_from_state(
 }
 
 fn read_import_state(
-    path: &Path,
+    entry: &SafeEntry,
     plan: &DataImportPlan,
     inspected: &InspectedDataPackage,
 ) -> Result<ImportState, DataLifecycleError> {
-    let bytes = read_bounded_regular(path, MAX_CHECKPOINT_BYTES)
+    let bytes = read_bounded_entry(entry, MAX_CHECKPOINT_BYTES)
         .map_err(|_| DataLifecycleError::Checkpoint)?;
     let state: ImportState = serde_json::from_value(
         parse_json_strict(&bytes).map_err(|_| DataLifecycleError::Checkpoint)?,
@@ -878,10 +905,6 @@ fn append_export_page(destination: &SafeEntry, page: &[u8]) -> Result<(), DataLi
         .map_err(|_| DataLifecycleError::Output)
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DataLifecycleError> {
-    write_atomic_entry(&resolve_write_destination(path)?, bytes)
-}
-
 /// Replace a destination's bytes through its held parent descriptor: stage a
 /// sibling temporary, then rename it over the destination.
 fn write_atomic_entry(destination: &SafeEntry, bytes: &[u8]) -> Result<(), DataLifecycleError> {
@@ -891,10 +914,6 @@ fn write_atomic_entry(destination: &SafeEntry, bytes: &[u8]) -> Result<(), DataL
         let _ = destination.parent().remove_file(&temporary);
         DataLifecycleError::Output
     })
-}
-
-fn write_atomic_create_new(path: &Path, bytes: &[u8]) -> Result<(), DataLifecycleError> {
-    write_atomic_create_new_entry(&resolve_write_destination(path)?, bytes)
 }
 
 /// Create a destination through its held parent descriptor, refusing to replace
@@ -1234,7 +1253,11 @@ mod tests {
         let collided_temporary = directory.join(atomic_write_temporary_name(collided_sequence));
         std::os::unix::fs::symlink(&canary, &collided_temporary).unwrap();
 
-        write_atomic(&destination, b"checkpoint").unwrap();
+        write_atomic_entry(
+            &resolve_write_destination(&destination).unwrap(),
+            b"checkpoint",
+        )
+        .unwrap();
 
         assert_eq!(fs::read(&destination).unwrap(), b"checkpoint");
         assert_eq!(
@@ -1249,7 +1272,10 @@ mod tests {
 
         std::os::unix::fs::symlink(&canary, &final_symlink).unwrap();
         assert!(matches!(
-            write_atomic(&final_symlink, b"must-not-follow"),
+            write_atomic_entry(
+                &resolve_write_destination(&final_symlink).unwrap(),
+                b"must-not-follow"
+            ),
             Err(DataLifecycleError::Output)
         ));
         assert_eq!(fs::read(&canary).unwrap(), b"unchanged");
@@ -1302,7 +1328,11 @@ mod tests {
             let tree = race_tree();
 
             let guard = tree.arm();
-            write_atomic(&tree.named("export.checkpoint.json"), b"checkpoint").unwrap();
+            write_atomic_entry(
+                &resolve_write_destination(&tree.named("export.checkpoint.json")).unwrap(),
+                b"checkpoint",
+            )
+            .unwrap();
             drop(guard);
 
             assert_eq!(
@@ -1317,7 +1347,11 @@ mod tests {
             let tree = race_tree();
 
             let guard = tree.arm();
-            write_atomic_create_new(&tree.named("records.jsonl"), b"reserved").unwrap();
+            write_atomic_create_new_entry(
+                &resolve_write_destination(&tree.named("records.jsonl")).unwrap(),
+                b"reserved",
+            )
+            .unwrap();
             drop(guard);
 
             assert_eq!(fs::read(tree.moved("records.jsonl")).unwrap(), b"reserved");
@@ -1403,6 +1437,84 @@ mod tests {
                 .collect();
             substituted.sort();
             assert_eq!(substituted, vec!["records.jsonl", "target"]);
+        }
+
+        #[test]
+        fn an_import_run_writes_every_checkpoint_in_the_tree_it_resolved() {
+            let (plan, inspected) = import_plan_and_inspected();
+            let tree = race_tree();
+            let checkpoint_path = tree.named("import.checkpoint.json");
+
+            let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+            let (mut checkpoint, import_id) =
+                load_or_start_import(&plan, &inspected, &destinations).unwrap();
+
+            // The ancestor the run resolved is renamed away and a different
+            // directory takes its place, so the operator pathname reaches the
+            // substitute tree without meeting a symbolic link.
+            fs::rename(
+                tree.root().join("genuine"),
+                tree.root().join("genuine-moved"),
+            )
+            .unwrap();
+            fs::rename(tree.root().join("attacker"), tree.root().join("genuine")).unwrap();
+            let substitute = tree.root().join("genuine/inner");
+
+            run_import_chunks(
+                &plan,
+                &mut checkpoint,
+                ImportExecutionBinding {
+                    package_revision: &inspected.package_revision,
+                    schema_fingerprint: &inspected.schema_fingerprint,
+                    import_id: &import_id,
+                },
+                None,
+                |checkpoint| publish_import_checkpoint(&destinations.checkpoint, checkpoint),
+                |request| async move {
+                    let body = parse_json_strict(request.body()).unwrap();
+                    let results = body["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|item| {
+                            json!({
+                                "operation": item["operation"],
+                                "id": "018f06d6-0248-4c7f-8a7e-df9dfbd83d2c",
+                                "revision": 1,
+                                "etag": "\"breg-revision\"",
+                                "data": item["data"]
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let body = canonicalize_json(&json!({
+                        "results": results,
+                        "snapshot": "breg1_00000000-0000-4000-8000-000000000001"
+                    }))
+                    .unwrap();
+                    Ok::<_, ()>(
+                        DataHttpResponse::new(200, Some("application/json".to_owned()), body)
+                            .unwrap(),
+                    )
+                },
+            )
+            .unwrap();
+
+            // The advanced checkpoint stays beside the state file that binds
+            // it, in the tree the run resolved.
+            assert!(checkpoint.is_complete());
+            assert_eq!(
+                fs::read(tree.moved("import.checkpoint.json")).unwrap(),
+                checkpoint.canonical_json().unwrap()
+            );
+            assert!(tree.moved("import.checkpoint.json.state").exists());
+
+            // Nothing lands in the substitute tree.
+            let mut substituted: Vec<_> = fs::read_dir(&substitute)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            substituted.sort();
+            assert_eq!(substituted, vec!["target"]);
         }
 
         #[test]
@@ -1882,10 +1994,11 @@ mod tests {
         let directory = test_directory("initial-collisions");
         let checkpoint_path = directory.join("import.checkpoint.json");
         let state_path = import_state_path(&checkpoint_path);
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
 
         fs::write(&state_path, b"existing-state").unwrap();
         assert!(matches!(
-            start_new_import(&plan, &inspected, &checkpoint_path, &state_path),
+            start_new_import(&plan, &inspected, &destinations),
             Err(DataLifecycleError::Checkpoint)
         ));
         assert_eq!(fs::read(&state_path).unwrap(), b"existing-state");
@@ -1894,11 +2007,11 @@ mod tests {
 
         fs::write(&checkpoint_path, b"existing-checkpoint").unwrap();
         assert!(matches!(
-            start_new_import(&plan, &inspected, &checkpoint_path, &state_path),
+            start_new_import(&plan, &inspected, &destinations),
             Err(DataLifecycleError::Checkpoint)
         ));
         assert_eq!(fs::read(&checkpoint_path).unwrap(), b"existing-checkpoint");
-        read_import_state(&state_path, &plan, &inspected).unwrap();
+        read_import_state(&destinations.state, &plan, &inspected).unwrap();
 
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1909,6 +2022,7 @@ mod tests {
         let directory = test_directory("state-repair-race");
         let checkpoint_path = directory.join("import.checkpoint.json");
         let state_path = import_state_path(&checkpoint_path);
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
         let checkpoint = DataImportCheckpoint::start(
             &plan,
             &inspected.package_revision,
@@ -1919,22 +2033,22 @@ mod tests {
         let state_bytes = canonical_import_state(&state).unwrap();
         let checkpoint_bytes = checkpoint.canonical_json().unwrap();
 
-        write_atomic_create_new(&state_path, &state_bytes).unwrap();
+        write_atomic_create_new_entry(&destinations.state, &state_bytes).unwrap();
 
         let (repaired, repaired_import_id) =
-            recover_state_only_import(&plan, &inspected, &checkpoint_path, &state_path).unwrap();
+            recover_state_only_import(&plan, &inspected, &destinations).unwrap();
 
         assert_eq!(repaired_import_id, checkpoint.import_id());
         assert_eq!(repaired.import_id(), checkpoint.import_id());
 
         assert!(matches!(
-            write_atomic_create_new(&checkpoint_path, &checkpoint_bytes),
+            write_atomic_create_new_entry(&destinations.checkpoint, &checkpoint_bytes),
             Err(DataLifecycleError::Output)
         ));
         assert_eq!(fs::read(&state_path).unwrap(), state_bytes);
 
         let (loaded, loaded_import_id) =
-            load_existing_import(&plan, &inspected, &checkpoint_path, &state_path).unwrap();
+            load_existing_import(&plan, &inspected, &destinations).unwrap();
         assert_eq!(loaded_import_id, checkpoint.import_id());
         assert_eq!(loaded.import_id(), checkpoint.import_id());
 
@@ -1957,8 +2071,12 @@ mod tests {
         let state_bytes = canonical_import_state(&state).unwrap();
         fs::write(&state_path, &state_bytes).unwrap();
 
-        let (repaired, import_id) =
-            load_or_start_import(&plan, &inspected, &checkpoint_path, &state_path).unwrap();
+        let (repaired, import_id) = load_or_start_import(
+            &plan,
+            &inspected,
+            &ImportDestinations::resolve(&checkpoint_path).unwrap(),
+        )
+        .unwrap();
 
         assert_eq!(import_id, checkpoint.import_id());
         assert_eq!(repaired.import_id(), checkpoint.import_id());
@@ -1986,7 +2104,11 @@ mod tests {
         .unwrap();
         fs::write(&checkpoint_path, checkpoint.canonical_json().unwrap()).unwrap();
         assert!(matches!(
-            load_or_start_import(&plan, &inspected, &checkpoint_path, &state_path),
+            load_or_start_import(
+                &plan,
+                &inspected,
+                &ImportDestinations::resolve(&checkpoint_path).unwrap()
+            ),
             Err(DataLifecycleError::Checkpoint)
         ));
         assert!(!state_path.try_exists().unwrap());
@@ -2358,7 +2480,8 @@ mod tests {
         value["unknownCredential"] = json!("SECRET-CANARY");
         fs::write(&state_path, canonicalize_json(&value).unwrap()).unwrap();
 
-        let error = read_import_state(&state_path, &plan, &inspected).unwrap_err();
+        let state_entry = resolve_write_destination(&state_path).unwrap();
+        let error = read_import_state(&state_entry, &plan, &inspected).unwrap_err();
         let rendered = format!("{error:?}");
         assert!(!rendered.contains("SECRET-CANARY"));
         assert!(!rendered.contains(PACKAGE));
@@ -2367,7 +2490,7 @@ mod tests {
         let mut changed: Value = serde_json::to_value(&state).unwrap();
         changed["profileId"] = json!("other-profile-canary");
         fs::write(&state_path, canonicalize_json(&changed).unwrap()).unwrap();
-        assert!(read_import_state(&state_path, &plan, &inspected).is_err());
+        assert!(read_import_state(&state_entry, &plan, &inspected).is_err());
         fs::remove_dir_all(directory).unwrap();
     }
 }
