@@ -830,12 +830,9 @@ fn write_atomic_create_new(path: &Path, bytes: &[u8]) -> Result<(), DataLifecycl
     let temporary = write_atomic_temporary(destination.parent(), bytes)?;
     // A hard link never replaces an existing destination, so a losing writer
     // keeps the winner's bytes.
-    let linked = destination
-        .parent()
-        .link(&temporary, destination.name())
-        .map_err(|_| DataLifecycleError::Output);
-    let _ = destination.parent().remove_file(&temporary);
-    linked
+    destination
+        .publish_new_from(&temporary)
+        .map_err(|_| DataLifecycleError::Output)
 }
 
 /// Resolve an output path to its held parent directory descriptor and refuse a
