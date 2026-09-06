@@ -53,9 +53,34 @@ prepare_zig_toolchain() {
       ;;
   esac
 
-  # The wrapper directory outlives this function, so the trap that removes it
-  # reads a variable that is still set when the shell exits.
-  release_zig_wrapper_root="$(mktemp -d /tmp/registry-release-zig.XXXXXX)"
+  # Cargo fingerprints the compiler/linker paths. An identical pinned recipe
+  # must expose the same paths in each fresh container, including after a lock
+  # update. Changed compiler inputs get different paths and invalidate native
+  # build outputs even when a build script does not track those files itself.
+  local wrapper_key wrapper_root
+  wrapper_key="$(
+    {
+      printf '%s\0' "${zig_arch}" /usr/bin/python3
+      (
+        cd -- "${repo_root}"
+        sha256sum \
+          rust-toolchain.toml \
+          release/scripts/build-release-binaries.sh \
+          release/docker/Dockerfile.builder \
+          release/requirements/ziglang-0.12.1.txt \
+          release/glibc-floor.env \
+          release/scripts/zig-glibc-compiler
+      )
+    } | sha256sum | cut -d ' ' -f 1
+  )"
+  wrapper_root="/tmp/registry-release-zig-${wrapper_key}"
+  # /tmp belongs to this disposable container. Claim the exact directory
+  # exclusively; never follow, reuse, or remove an unexpected existing path.
+  if ! mkdir -m 0700 -- "${wrapper_root}"; then
+    printf 'cannot create canonical compiler directory: %s\n' "${wrapper_root}" >&2
+    exit 2
+  fi
+  release_zig_wrapper_root="${wrapper_root}"
   trap cleanup_zig_toolchain EXIT
   ln -s "${script_dir}/zig-glibc-compiler" "${release_zig_wrapper_root}/zig-cc"
   ln -s "${script_dir}/zig-glibc-compiler" "${release_zig_wrapper_root}/zig-cxx"

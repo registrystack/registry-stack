@@ -423,7 +423,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
 
     def test_builds_once_scans_exact_images_and_attests_the_candidate(self) -> None:
-        text, _ = workflow("release-candidate.yml")
+        text, document = workflow("release-candidate.yml")
         self.assertIn("Build canonical Linux payload once", text)
         self.assertIn("Build private candidate image layouts once", text)
         self.assertIn("Verify and scan exact candidate images", text)
@@ -431,6 +431,25 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("Seal compact candidate manifest and bundle", text)
         self.assertIn("Reverify all bytes before requesting OIDC", text)
         self.assertIn("Attest manifest and bundle after re-verification", text)
+
+        stage = step_run(
+            document, "build-canonical", "Stage canonical build products"
+        )
+        self.assertIn("cp -R dist/bin candidate-canonical/dist/bin", stage)
+        self.assertIn("cp -R dist/images candidate-canonical/dist/images", stage)
+        self.assertNotIn("dist/image-bin", stage)
+        assemble_runs = "\n".join(
+            step["run"]
+            for step in document["jobs"]["assemble"]["steps"]
+            if "run" in step
+        )
+        self.assertIn(
+            'cp "${canonical}"/dist/bin/* candidate/bundle-root/', assemble_runs
+        )
+        self.assertIn(
+            '"oci-layout://${canonical}/dist/images/${name}.oci"', assemble_runs
+        )
+        self.assertNotIn("/dist/image-bin", assemble_runs)
 
     def test_current_candidate_builds_and_seals_registry_docs(self) -> None:
         text, _ = workflow("release-candidate.yml")
@@ -806,6 +825,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "crates/registry-relay-client-node/package-lock.json",
             str(clients),
         )
+        upload = next(
+            step
+            for step in clients["steps"]
+            if step.get("name") == "Upload native client packages"
+        )
+        self.assertEqual(upload["with"]["path"], "candidate-client-package")
+        self.assertEqual(upload["with"]["compression-level"], 0)
         assemble = step_run(
             document,
             "assemble",
@@ -870,22 +896,35 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
 
     def test_scopes_canonical_cache_to_exact_builder_recipe(self) -> None:
         text, document = workflow("release-candidate.yml")
-        cache = next(
-            step
-            for step in document["jobs"]["build-canonical"]["steps"]
-            if step.get("name") == "Restore reusable Cargo cache"
-        )
-        self.assertEqual(
-            cache["with"]["key"],
+        recipe_prefix = (
             "registry-stack-release-${{ runner.os }}-"
-            "${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', "
+            "${{ hashFiles('rust-toolchain.toml', "
             "'release/scripts/build-release-binaries.sh', "
             "'release/docker/Dockerfile.builder', "
             "'release/requirements/ziglang-0.12.1.txt', "
             "'release/glibc-floor.env', "
-            "'release/scripts/zig-glibc-compiler') }}",
+            "'release/scripts/zig-glibc-compiler') }}-"
         )
-        self.assertNotIn("restore-keys", cache["with"])
+        for filename, job_name in (
+            ("release-candidate.yml", "build-canonical"),
+            ("release-rehearsal.yml", "canonical-linux"),
+        ):
+            with self.subTest(workflow=filename):
+                _, cache_workflow = workflow(filename)
+                job = cache_workflow["jobs"][job_name]
+                cache = next(
+                    step
+                    for step in job["steps"]
+                    if step.get("name") == "Restore reusable Cargo cache"
+                )
+                self.assertEqual(
+                    cache["with"]["key"],
+                    recipe_prefix + "${{ hashFiles('Cargo.lock') }}",
+                )
+                self.assertEqual(
+                    cache["with"]["restore-keys"].splitlines(), [recipe_prefix]
+                )
+                self.assertNotIn("cache-hit", str(job))
         self.assertIn("created_at} + 7 days", text)
         final_upload = next(
             step

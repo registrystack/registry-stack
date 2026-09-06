@@ -25,6 +25,17 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("${{ inputs.request_id }}", document["run-name"])
         self.assertIn("request_id:", trigger)
         self.assertIn("required: true", trigger)
+        triggers = document.get("on", document.get(True))
+        advisory_input = triggers["workflow_dispatch"]["inputs"]["advisory_evidence"]
+        self.assertEqual(
+            {
+                "description": "Collect review-only image advisory evidence",
+                "required": False,
+                "default": False,
+                "type": "boolean",
+            },
+            advisory_input,
+        )
         self.assertEqual({"contents": "read"}, document["permissions"])
         self.assertEqual(
             ["validate", "rehearse", "canonical-linux", "node-clients"],
@@ -40,7 +51,9 @@ class ReleaseRehearsalTest(unittest.TestCase):
             for step in validate["steps"]
             if step.get("name") == "Check complete release image onboarding"
         )
-        self.assertEqual("${{ inputs.version }}", onboarding["env"]["REHEARSAL_VERSION"])
+        self.assertEqual(
+            "${{ inputs.version }}", onboarding["env"]["REHEARSAL_VERSION"]
+        )
         self.assertIn("check-image-onboarding", onboarding["run"])
         self.assertIn('--version "${REHEARSAL_VERSION}"', onboarding["run"])
         self.assertNotIn("--allow-missing-baseline", onboarding["run"])
@@ -64,22 +77,66 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertEqual("ubuntu-24.04", canonical["runs-on"])
         self.assertLessEqual(canonical["timeout-minutes"], 90)
         self.assertEqual({"contents": "read"}, canonical["permissions"])
-        self.assertFalse(
-            any("upload-artifact@" in str(step) for step in canonical["steps"])
+        advisory_steps = [
+            step
+            for step in canonical["steps"]
+            if "advisory" in step.get("name", "").lower()
+        ]
+        self.assertEqual(4, len(advisory_steps))
+        self.assertTrue(
+            all(
+                step.get("if") == "${{ inputs.advisory_evidence }}"
+                for step in advisory_steps
+            )
         )
+        candidate = yaml.safe_load(
+            (ROOT / ".github/workflows/release-candidate.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        for pin in (
+            "RELEASE_BUILDX_VERSION",
+            "RELEASE_BUILDKIT_IMAGE",
+            "SYFT_VERSION",
+            "SYFT_LINUX_AMD64_SHA256",
+            "GRYPE_VERSION",
+            "GRYPE_LINUX_AMD64_SHA256",
+            "CRANE_VERSION",
+            "CRANE_LINUX_AMD64_SHA256",
+            "ORAS_VERSION",
+            "ORAS_LINUX_AMD64_SHA256",
+        ):
+            self.assertEqual(candidate["env"][pin], canonical["env"][pin])
+        self.assertRegex(
+            canonical["env"]["REHEARSAL_REGISTRY_IMAGE"],
+            r"^registry:3\.1\.1@sha256:[0-9a-f]{64}$",
+        )
+        collection = next(
+            step
+            for step in canonical["steps"]
+            if step.get("name") == "Collect exact advisory review evidence"
+        )
+        self.assertIn("collect-rehearsal-advisory-evidence.py", collection["run"])
+        self.assertIn("${{ github.sha }}", collection["env"]["REHEARSAL_REVISION"])
+        self.assertNotIn("github.token", str(canonical))
+        self.assertNotIn("ghcr.io", str(canonical))
         canonical_cache = next(
             step
             for step in canonical["steps"]
             if step.get("name") == "Restore reusable Cargo cache"
         )
-        self.assertNotIn("restore-keys", canonical_cache["with"])
+        prefix = canonical_cache["with"]["restore-keys"].strip()
+        self.assertEqual(
+            canonical_cache["with"]["key"], prefix + "${{ hashFiles('Cargo.lock') }}"
+        )
+        self.assertNotIn("Cargo.lock", prefix)
         for recipe_input in (
             "'release/docker/Dockerfile.builder'",
             "'release/requirements/ziglang-0.12.1.txt'",
             "'release/glibc-floor.env'",
             "'release/scripts/zig-glibc-compiler'",
         ):
-            self.assertIn(recipe_input, canonical_cache["with"]["key"])
+            self.assertIn(recipe_input, prefix)
         canonical_build = next(
             step["run"]
             for step in canonical["steps"]
@@ -93,7 +150,6 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("bregctl-v${REHEARSAL_VERSION}-linux-amd64", canonical_build)
         self.assertNotIn("${{ inputs.", canonical_build)
         for forbidden in (
-            "upload-artifact@",
             "npm publish",
             "gh release",
             "git tag",
@@ -131,7 +187,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         )
         self.assertIn("--require-hashes --only-binary=:all:", install)
         self.assertIn("release/requirements/maturin-1.9.6.txt", install)
-        self.assertIn("-m ziglang version)\" = 0.12.1", install)
+        self.assertIn('-m ziglang version)" = 0.12.1', install)
 
         build = next(
             step["run"]
@@ -182,7 +238,9 @@ class ReleaseRehearsalTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, str(clients))
 
-    def test_script_exercises_future_tag_source_archive_and_dev_base_in_order(self) -> None:
+    def test_script_exercises_future_tag_source_archive_and_dev_base_in_order(
+        self,
+    ) -> None:
         text = SCRIPT.read_text(encoding="utf-8")
         ordered = (
             "git ls-remote --exit-code --tags origin",
@@ -208,6 +266,44 @@ class ReleaseRehearsalTest(unittest.TestCase):
             "crane copy",
         ):
             self.assertNotIn(forbidden, text)
+
+    def test_advisory_artifact_docs_bind_one_image_before_strict_check(self) -> None:
+        operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
+        preparation = next(
+            block
+            for block in operations.split("```")
+            if 'gh run download "${rehearsal_run}"' in block
+        )
+        checker = next(
+            block
+            for block in operations.split("```")
+            if 'grype "${artifact_dir}/grype/${name}.grype.json"' in block
+        )
+        self.assertIn('collection="${artifact_dir}/collection.json"', preparation)
+        self.assertIn(".revision", preparation)
+        self.assertIn("[.images[] | select(.name == $name)] as $matches", preparation)
+        self.assertIn("image must appear exactly once", preparation)
+        self.assertIn(".version == $version", preparation)
+        self.assertIn('.purpose == "review_only"', preparation)
+        self.assertIn('--file="${artifact_dir}/rootfs/${name}.tar"', preparation)
+        self.assertIn('--directory="${review_dir}/rootfs"', preparation)
+        for schema_binding in (
+            '.reference_provenance == "local_reproduction"',
+            ".reference_image_digest == $digest",
+            ".reference_source_revision == $revision",
+        ):
+            self.assertIn(schema_binding, checker)
+        for argument in (
+            '--baseline "${baseline}"',
+            '--syft-report "${artifact_dir}/syft/${name}.syft.json"',
+            '--rootfs "${review_dir}/rootfs"',
+            '--candidate-image-digest "${digest}"',
+            '--source-revision "${source_revision}"',
+            '--oci-config "${artifact_dir}/oci-config/${name}.json"',
+            '--subject "${name}-image"',
+        ):
+            self.assertIn(argument, checker)
+        self.assertNotIn("--reference-provenance", checker)
 
     def test_docs_ci_replaces_root_build_with_dev_base_build(self) -> None:
         package = json.loads(

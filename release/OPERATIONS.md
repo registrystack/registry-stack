@@ -263,6 +263,110 @@ gh run watch "${rehearsal_run}" \
   --exit-status
 ```
 
+When an image advisory baseline needs review for the prepared version, add
+`-f advisory_evidence=true` to the rehearsal dispatch. The canonical Linux job
+then builds every image in that version's owned roster from the same local
+payload and pinned image recipes, transfers the layouts only through a pinned
+ephemeral local registry, and uploads the full OCI configs, daemon-backed Syft
+and Grype reports, and exact exported root filesystem archives. The artifact is
+review input for a deliberate baseline or live-pin update. It neither accepts
+an advisory nor supplies publication bytes, and the release candidate still
+rebuilds and checks its exact protected-main images under the normal release
+policy.
+
+Download that exact rehearsal artifact and prepare one image's evidence with:
+
+```sh
+rehearsal_run=<successful-rehearsal-run-id>
+version=<version>
+request_id=<rehearsal-request-id>
+name=relay # or evidence, mint, discovery, or breg
+artifact_dir="rehearsal-advisory-${rehearsal_run}-${name}"
+test ! -e "${artifact_dir}"
+gh run download "${rehearsal_run}" \
+  --repo registrystack/registry-stack \
+  --name "release-advisory-evidence-${version}-${request_id}" \
+  --dir "${artifact_dir}"
+
+case "${name}" in
+  relay) baseline=products/relay-v2/security/advisory-baseline.json ;;
+  breg|discovery|evidence|mint)
+    baseline="release/security/${name}-advisory-baseline.json"
+    ;;
+  *) echo "unsupported release image: ${name}" >&2; exit 2 ;;
+esac
+collection="${artifact_dir}/collection.json"
+source_revision="$(
+  jq -er '
+    .revision
+    | select(type == "string" and test("^[0-9a-f]{40}$"))
+  ' "${collection}"
+)"
+digest="$(
+  jq -er --arg name "${name}" '
+    [.images[] | select(.name == $name)] as $matches
+    | if ($matches | length) == 1 then $matches[0].digest
+      else error("image must appear exactly once in collection.json") end
+    | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))
+  ' "${collection}"
+)"
+jq -e \
+  --arg source https://github.com/registrystack/registry-stack \
+  --arg version "${version}" '
+    .source == $source and
+    .version == $version and
+    .purpose == "review_only" and
+    .publication_eligible == false and
+    .advisory_accepted == false
+  ' "${collection}" >/dev/null
+
+review_dir="$(mktemp -d "${TMPDIR:-/tmp}/registry-advisory-review.XXXXXX")"
+mkdir "${review_dir}/rootfs"
+tar --extract \
+  --file="${artifact_dir}/rootfs/${name}.tar" \
+  --directory="${review_dir}/rootfs" \
+  --no-same-owner --no-same-permissions
+if find "${review_dir}/rootfs" \
+    \( -type b -o -type c -o -type p -o -type s \) \
+    -print -quit | grep -q .; then
+  echo "exported rootfs contains a forbidden special file" >&2
+  exit 1
+fi
+```
+
+Independently review the OCI process configuration, ordered DiffIDs, component
+layer, every assertion file and native Syft SHA-256, and the exposure claim as
+described below. If that review supports a local reproduction, update each
+affected `exposure_assertion` in `${baseline}` with
+`reference_provenance: local_reproduction`, `reference_image_digest: ${digest}`,
+and `reference_source_revision: ${source_revision}`. Recompute the runtime and
+assertion definition digests by the documented canonical JSON procedure. Then
+prove those exact schema bindings and run the unchanged strict checker:
+
+```sh
+jq -e --arg digest "${digest}" --arg revision "${source_revision}" '
+  (.exceptions | length > 0) and
+  all(.exceptions[].exposure_assertion;
+    .reference_provenance == "local_reproduction" and
+    .reference_image_digest == $digest and
+    .reference_source_revision == $revision)
+' "${baseline}" >/dev/null
+python3 release/scripts/check-advisory-baselines.py \
+  grype "${artifact_dir}/grype/${name}.grype.json" \
+  --baseline "${baseline}" \
+  --syft-report "${artifact_dir}/syft/${name}.syft.json" \
+  --rootfs "${review_dir}/rootfs" \
+  --candidate-image-digest "${digest}" \
+  --source-revision "${source_revision}" \
+  --oci-config "${artifact_dir}/oci-config/${name}.json" \
+  --subject "${name}-image"
+```
+
+This local check does not accept the vulnerability decision by itself. Commit
+the independently reviewed baseline and live-pin changes through the normal
+review, then let the release candidate rebuild and enforce them against its own
+protected-source image bytes.
+
 The rehearsal requires the future tag to remain absent. It validates the
 prepared plan, current manifest and source model, reproduces the exact archive
 lock on Ubuntu, exercises unpublished-tag archive bootstrap, and checks the

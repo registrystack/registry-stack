@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = ROOT / "release/scripts/zig-glibc-compiler"
+BINARY_RECIPE = ROOT / "release/scripts/build-release-binaries.sh"
 
 
 def product_glibc_floor() -> str:
@@ -160,6 +162,212 @@ class ZigGlibcCompilerTest(unittest.TestCase):
                 result = self.run_wrapper(wrapper, *arguments, env=env)
                 self.assertEqual(result.returncode, 2)
                 self.assertIn(message, result.stderr)
+
+
+class CanonicalCompilerIdentityTest(unittest.TestCase):
+    """Exercise the recipe's real setup and build calls without compiling Rust."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.addCleanup(self.temporary.cleanup)
+        for relative in (
+            "rust-toolchain.toml",
+            "Cargo.lock",
+            "release/scripts/build-release-binaries.sh",
+            "release/docker/Dockerfile.builder",
+            "release/requirements/ziglang-0.12.1.txt",
+            "release/glibc-floor.env",
+        ):
+            destination = self.root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / relative, destination)
+        self.scripts = self.root / "release/scripts"
+        # Stand in for Zig itself; the wrapper's real dispatch and argument
+        # validation have their own tests above. Include a fixture identity so
+        # independent test processes do not claim each other's /tmp directory.
+        compiler = self.scripts / "zig-glibc-compiler"
+        compiler.write_text(
+            "#!/usr/bin/env python3\n"
+            f"# fixture {self.root.name}\n"
+            "import json, os, sys\n"
+            "print(json.dumps([os.path.basename(sys.argv[0]), "
+            "os.environ['REGISTRY_ZIG_TARGET'], *sys.argv[1:]]))\n",
+            encoding="utf-8",
+        )
+        compiler.chmod(0o755)
+        gate = self.scripts / "check-glibc-floor.sh"
+        gate.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        gate.chmod(0o755)
+        self.fake_bin = self.root / "fake-bin"
+        self.fake_bin.mkdir()
+        cargo = self.fake_bin / "cargo"
+        cargo.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, pathlib, subprocess, sys\n"
+            "names = ['HOST_CC', 'HOST_CXX', 'TARGET_CC', 'TARGET_CXX', "
+            "'REGISTRY_ZIG_PYTHON', 'REGISTRY_ZIG_TARGET', 'RUSTFLAGS', "
+            "'ZIG_GLOBAL_CACHE_DIR', 'ZIG_LOCAL_CACHE_DIR']\n"
+            "names += [name for name in os.environ if "
+            "name.startswith(('CC_', 'CXX_', 'CARGO_TARGET_'))]\n"
+            "record = {'args': sys.argv[1:], "
+            "'env': {name: os.environ[name] for name in names}}\n"
+            "record['drivers'] = [json.loads(subprocess.check_output("
+            "[os.environ[name], '-c', 'probe.c'], text=True)) "
+            "for name in ('HOST_CC', 'HOST_CXX')]\n"
+            "with open(os.environ['CARGO_LOG'], 'a') as log:\n"
+            "    log.write(json.dumps(record) + '\\n')\n"
+            "if os.environ.get('FAIL_CARGO'):\n"
+            "    sys.exit(7)\n"
+            "target = pathlib.Path('target/release')\n"
+            "target.mkdir(parents=True, exist_ok=True)\n"
+            "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
+            "'evidencectl', 'mint', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl'):\n"
+            "    (target / binary).write_text('fixture binary\\n')\n",
+            encoding="utf-8",
+        )
+        cargo.chmod(0o755)
+        uname = self.fake_bin / "uname"
+        uname.write_text('#!/bin/sh\nprintf "%s\\n" "$FIXTURE_MACHINE"\n')
+        uname.chmod(0o755)
+        self.log = self.root / "cargo.jsonl"
+        self.env = {
+            **os.environ,
+            "PATH": f"{self.fake_bin}:{os.environ.get('PATH', '')}",
+            "CARGO_LOG": str(self.log),
+            "FIXTURE_MACHINE": "x86_64",
+            "RELEASE_RUSTFLAGS": "--remap-path-prefix=/workspace=/source",
+        }
+        for relative in ("dist/bin", "dist/image-bin"):
+            (self.root / relative).mkdir(parents=True)
+
+    def run_payload(
+        self, *, version: str = "0.27.0", env: dict[str, str] | None = None
+    ) -> tuple[subprocess.CompletedProcess[str], list[dict]]:
+        # Load the actual functions, stopping before Docker's outer entry
+        # point. This keeps the fixture unprivileged and runs every real Cargo
+        # invocation and staging copy. Cargo, the compiler, and the final
+        # glibc gate use fixtures; glibc enforcement has its own tests.
+        recipe = (self.scripts / BINARY_RECIPE.name).read_text(encoding="utf-8")
+        definitions = recipe.split("\n# The outer invocation prepares", 1)[0]
+        probe = self.scripts / "probe-build.sh"
+        probe.write_text(definitions + '\nRELEASE_TAG="$tag"\nbuild_payload\n')
+        self.log.unlink(missing_ok=True)
+        result = subprocess.run(
+            ["bash", str(probe), version],
+            cwd=self.root,
+            env=env or self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        calls = (
+            [json.loads(line) for line in self.log.read_text().splitlines()]
+            if self.log.exists()
+            else []
+        )
+        return result, calls
+
+    def successful_paths(
+        self, *, version: str = "0.27.0", env: dict[str, str] | None = None
+    ) -> dict[str, str]:
+        result, calls = self.run_payload(version=version, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(calls), 7)
+        paths = calls[0]["env"]
+        for call in calls:
+            self.assertEqual(call["env"], paths)
+            self.assertEqual(call["args"][:3], ["build", "--release", "--locked"])
+            self.assertEqual(
+                call["drivers"],
+                [
+                    [driver, paths["REGISTRY_ZIG_TARGET"], "-c", "probe.c"]
+                    for driver in ("zig-cc", "zig-cxx")
+                ],
+            )
+        wrapper = Path(paths["HOST_CC"]).parent
+        self.assertEqual(wrapper.parent, Path("/tmp"))
+        self.assertFalse(wrapper.exists(), "the recipe cleans only its owned directory")
+        for variable in ("ZIG_GLOBAL_CACHE_DIR", "ZIG_LOCAL_CACHE_DIR"):
+            self.assertEqual(Path(paths[variable]).parent, wrapper)
+        self.assertEqual(paths["RUSTFLAGS"], self.env["RELEASE_RUSTFLAGS"])
+        self.assertEqual(paths["REGISTRY_ZIG_PYTHON"], "/usr/bin/python3")
+        return paths
+
+    def test_identical_recipe_and_lock_update_keep_compiler_paths(self) -> None:
+        first = self.successful_paths()
+        self.assertEqual(first, self.successful_paths())
+        (self.root / "Cargo.lock").write_text("# another release's lockfile\n")
+        self.assertEqual(first, self.successful_paths(version="0.28.0"))
+        for variable in (
+            "TARGET_CC",
+            "CC_x86_64_unknown_linux_gnu",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+        ):
+            self.assertEqual(first[variable], first["HOST_CC"])
+        for variable in ("TARGET_CXX", "CXX_x86_64_unknown_linux_gnu"):
+            self.assertEqual(first[variable], first["HOST_CXX"])
+
+    def test_changed_compiler_recipe_and_floor_change_compiler_paths(self) -> None:
+        first = self.successful_paths()
+        for relative in (
+            "rust-toolchain.toml",
+            "release/scripts/build-release-binaries.sh",
+            "release/docker/Dockerfile.builder",
+            "release/requirements/ziglang-0.12.1.txt",
+            "release/scripts/zig-glibc-compiler",
+            "release/glibc-floor.env",
+        ):
+            with self.subTest(input=relative):
+                path = self.root / relative
+                original = path.read_text()
+                path.write_text(original + "\n# changed compiler input\n")
+                try:
+                    self.assertNotEqual(
+                        first["HOST_CC"], self.successful_paths()["HOST_CC"]
+                    )
+                finally:
+                    path.write_text(original)
+        floor = self.root / "release/glibc-floor.env"
+        floor.write_text("REGISTRY_GLIBC_FLOOR=2.36\n")
+        changed = self.successful_paths()
+        self.assertNotEqual(first["HOST_CC"], changed["HOST_CC"])
+        self.assertEqual(changed["REGISTRY_ZIG_TARGET"], "x86_64-linux-gnu.2.36")
+        arm = self.successful_paths(env={**self.env, "FIXTURE_MACHINE": "aarch64"})
+        self.assertNotEqual(changed["HOST_CC"], arm["HOST_CC"])
+
+    def test_occupied_directory_and_symlink_fail_without_cleanup_or_build(self) -> None:
+        wrapper = Path(self.successful_paths()["HOST_CC"]).parent
+        for symlink in (False, True):
+            with self.subTest(symlink=symlink):
+                if symlink:
+                    wrapper.symlink_to(self.root, target_is_directory=True)
+                else:
+                    wrapper.mkdir()
+                    (wrapper / "sentinel").write_text("keep")
+                try:
+                    result, calls = self.run_payload()
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn(
+                        "cannot create canonical compiler directory", result.stderr
+                    )
+                    self.assertEqual(calls, [])
+                    self.assertTrue(wrapper.exists())
+                    if symlink:
+                        self.assertEqual(wrapper.readlink(), self.root)
+                    else:
+                        self.assertEqual((wrapper / "sentinel").read_text(), "keep")
+                finally:
+                    if symlink:
+                        wrapper.unlink()
+                    else:
+                        shutil.rmtree(wrapper)
+
+    def test_failed_cargo_still_cleans_owned_directory(self) -> None:
+        result, calls = self.run_payload(env={**self.env, "FAIL_CARGO": "1"})
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(Path(calls[0]["env"]["HOST_CC"]).parent.exists())
 
 
 if __name__ == "__main__":
