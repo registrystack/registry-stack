@@ -128,6 +128,10 @@ fn export_refuses_a_destination_that_already_holds_a_file() {
     let root = std::env::temp_dir().join(format!("bregctl-audit-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir(&root).expect("test directory is created");
+    // The platform temporary directory can itself sit behind a symbolic link,
+    // which the export path resolution refuses by design, so name the real
+    // directory the operator would name.
+    let root = root.canonicalize().expect("test directory canonicalizes");
     let output = root.join("audit.jsonl");
     std::fs::write(&output, b"occupied\n").expect("destination writes");
 
