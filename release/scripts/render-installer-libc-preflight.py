@@ -59,8 +59,26 @@ if [ "$os_label" = "linux" ]; then
 {i}if command -v ldd >/dev/null 2>&1; then
 {i}{i}libc_report="$(ldd --version 2>&1 || true)"
 {i}fi
-{i}if ls /lib/ld-musl-*.so.1 >/dev/null 2>&1 ||
-{i}{i}printf '%s' "$libc_report" | grep -qi musl; then
+{i}# Only glibc's getconf answers GNU_LIBC_VERSION, so an answer names the libc
+{i}# this system runs on, whatever else is installed beside it: a musl loader
+{i}# kept for cross builds does not make a musl system. Without an answer, musl
+{i}# is recognised by its ldd report or its loader. The report is matched by a
+{i}# pattern rather than through grep, which can exit before the report is
+{i}# fully written and, under pipefail, lose the match.
+{i}detected_libc=""
+{i}if command -v getconf >/dev/null 2>&1; then
+{i}{i}detected_libc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{{print $2}}' || true)"
+{i}fi
+{i}musl_system=0
+{i}if [ -z "$detected_libc" ]; then
+{i}{i}case "$libc_report" in
+{i}{i}*[Mm][Uu][Ss][Ll]*) musl_system=1 ;;
+{i}{i}esac
+{i}{i}if ls /lib/ld-musl-*.so.1 >/dev/null 2>&1; then
+{i}{i}{i}musl_system=1
+{i}{i}fi
+{i}fi
+{i}if [ "$musl_system" = 1 ]; then
 {i}{i}printf 'No musl build of {product} is published for this platform.\\n' >&2
 {i}{i}printf 'Every published Linux binary needs GNU libc %s or newer, so none of them can start here.\\n' \\
 {i}{i}{i}"$libc_floor" >&2
@@ -68,10 +86,6 @@ if [ "$os_label" = "linux" ]; then
 {i}{i}printf 'If you need musl builds, ask for them at https://github.com/%s/issues so the demand is recorded.\\n' \\
 {i}{i}{i}"$repo" >&2
 {i}{i}exit 1
-{i}fi
-{i}detected_libc=""
-{i}if command -v getconf >/dev/null 2>&1; then
-{i}{i}detected_libc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{{print $2}}' || true)"
 {i}fi
 {i}if [ -z "$detected_libc" ]; then
 {i}{i}detected_libc="$(printf '%s\\n' "$libc_report" | awk 'NR == 1 {{print $NF}}')"

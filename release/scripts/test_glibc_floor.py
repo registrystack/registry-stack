@@ -252,6 +252,73 @@ class InstallerPreflightTests(unittest.TestCase):
                 self.assertIn('if [ "$os_label" = "linux" ]; then', block)
                 self.assertLess(text.index(RENDERER.END), text.index(RENDERER.ANCHOR))
 
+    def test_generated_block_trusts_the_active_libc(self) -> None:
+        """The libc the system runs on decides, read from glibc's getconf. A musl
+        loader installed beside glibc for cross builds is not a musl system, and
+        a musl system without a GNU_LIBC_VERSION answer is refused. The check never
+        pipes the ldd report into grep: under pipefail bash loses the match
+        whenever grep exits before the report is fully written."""
+        floor = repository_floor()
+        block = RENDERER.render(RENDERER.INSTALLERS[0], floor)
+        self.assertNotRegex(block, r"\|\s*grep\b")
+        scenarios = {
+            "glibc beside a musl loader": (
+                {"getconf": "printf 'glibc 2.41\\n'",
+                 "ldd": "printf 'ldd (Debian GLIBC 2.41-12) 2.41\\n'",
+                 "ls": "exit 0"},
+                0,
+                "",
+            ),
+            "musl with a getconf that has no GNU_LIBC_VERSION": (
+                {"getconf": "printf 'getconf: GNU_LIBC_VERSION: unknown variable\\n' >&2; exit 1",
+                 "ldd": "printf 'musl libc (aarch64)\\nVersion 1.2.5\\n' >&2; exit 1",
+                 "ls": "exit 0"},
+                1,
+                "No musl build",
+            ),
+            "musl without getconf": (
+                {"getconf": "exit 127",
+                 "ldd": "printf 'musl libc (x86_64)\\nVersion 1.2.5\\n' >&2; exit 1",
+                 "ls": "exit 2"},
+                1,
+                "No musl build",
+            ),
+            "glibc below the floor": (
+                {"getconf": "printf 'glibc 2.28\\n'",
+                 "ldd": "printf 'ldd (GNU libc) 2.28\\n'",
+                 "ls": "exit 2"},
+                1,
+                "need " + floor,
+            ),
+        }
+        for name, (fakes, expected_status, expected_message) in scenarios.items():
+            with self.subTest(scenario=name), tempfile.TemporaryDirectory() as temporary:
+                fake_bin = Path(temporary) / "bin"
+                fake_bin.mkdir()
+                for command, body in fakes.items():
+                    fake = fake_bin / command
+                    fake.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+                    fake.chmod(0o755)
+                script = Path(temporary) / "preflight.sh"
+                script.write_text(
+                    "set -euo pipefail\nos_label=linux\nrepo=example/repo\n"
+                    + block
+                    + "printf 'preflight passed\\n'\n",
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    ["bash", str(script)],
+                    env={"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, expected_status, result.stderr)
+                self.assertIn(expected_message, result.stderr)
+                self.assertEqual(
+                    result.stdout, "preflight passed\n" if expected_status == 0 else ""
+                )
+
     def test_generated_block_stays_within_stock_macos_bash(self) -> None:
         for installer in RENDERER.INSTALLERS:
             with self.subTest(installer=str(installer.path)):
