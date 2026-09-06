@@ -54,11 +54,7 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(120);
 const READY_DEADLINE: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Args)]
-#[command(
-    args_conflicts_with_subcommands = true,
-    subcommand_negates_reqs = true,
-    long_about = "Start or stop this project's retained local development services.\n\nA resident supervisor owns one project's PostgreSQL container, local Mint and BReg children. The database runs the pinned image postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .breg/dev/logs directory."
-)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 pub struct DevArgs {
     #[command(subcommand)]
     action: Option<DevAction>,
@@ -69,6 +65,16 @@ pub struct DevArgs {
 #[derive(Debug, Subcommand)]
 enum DevAction {
     /// Start or reuse the project's retained local database and services.
+    ///
+    /// A resident supervisor owns this project's PostgreSQL container plus its
+    /// local Mint and Base Registry Engine (BReg) children. The database runs
+    /// the pinned image
+    /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// which the supervisor pulls on the first start. Each supervised
+    /// prerequisite command may run for 120 seconds, and the database and each
+    /// started service have 45 seconds to answer as ready. A start that passes
+    /// a deadline fails, stops what it acquired, and keeps its owner-only
+    /// diagnostics in the project's private .breg/dev/logs directory.
     Start(StartArgs),
     /// Stop only this project's supervised services, preserving its database.
     Stop(StopArgs),

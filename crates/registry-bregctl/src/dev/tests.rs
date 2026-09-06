@@ -296,9 +296,19 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/DEV.md"),
     )
     .expect("the owning lifecycle document");
-    let help = <DevArgs as Args>::augment_args(clap::Command::new("dev"))
-        .get_long_about()
-        .expect("dev describes its own supervision")
+    // Read the tree the binary publishes. A long description set on DevArgs
+    // never reaches an operator, because the variant that carries dev states
+    // its own description after the arguments are augmented.
+    let cli = <crate::Cli as clap::CommandFactory>::command();
+    let dev = cli
+        .get_subcommands()
+        .find(|command| command.get_name() == "dev")
+        .expect("bregctl publishes dev");
+    let help = dev
+        .get_subcommands()
+        .find(|command| command.get_name() == "start")
+        .and_then(|command| command.get_long_about())
+        .expect("dev start describes its own supervision")
         .to_string();
     for fact in [
         IMAGE.to_owned(),
@@ -309,7 +319,7 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
             document.contains(&fact),
             "products/breg/DEV.md omits {fact}"
         );
-        assert!(help.contains(&fact), "dev help text omits {fact}");
+        assert!(help.contains(&fact), "bregctl dev start help omits {fact}");
     }
 }
 
