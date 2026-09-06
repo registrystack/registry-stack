@@ -355,11 +355,13 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let config =
                 EvidenceConfig::parse_yaml(&bytes).map_err(|_| DISCOVERY_CONFIG_INVALID)?;
             // Configuration validation projects the publication before it
-            // accepts the document, so a publication the shared profile
-            // refuses is already reported as an invalid configuration. This
-            // class stays the projection's own refusal.
+            // accepts the document, so every projection refusal is already
+            // reported as an invalid configuration and this call cannot fail
+            // for a document that parsed. The refusal is still classified
+            // rather than unwrapped, and it is classified as the same invalid
+            // configuration `validate` would have reported.
             if let Some(rendered) = registry_evidence::discovery::render(&config)
-                .map_err(|_| DISCOVERY_RENDER_FAILED)?
+                .map_err(|_| DISCOVERY_CONFIG_INVALID)?
             {
                 std::io::stdout()
                     .write_all(&rendered)
@@ -422,18 +424,23 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     }
 }
 
-/// The four ways provider-publication compilation refuses.
+/// The three ways provider-publication compilation refuses.
 ///
 /// Each stage of the compilation reports its own class, so an adopter learns
 /// whether the configuration was unreadable, refused as Evidence
-/// configuration, refused as a publication, or never reached standard output.
-/// Every class is fixed text: the configured path and the document's own keys
-/// and scalars stay out of it, exactly as they stay out of `check`.
+/// configuration, or never reached standard output. Every class is fixed text:
+/// the configured path and the document's own keys and scalars stay out of it,
+/// exactly as they stay out of `check`.
+///
+/// The projection has no class of its own because it has no refusal of its
+/// own. `EvidenceConfig::validate` renders the publication before it accepts
+/// the document and refuses the document when the render refuses, and the
+/// render is a no-op when no publication is configured, so every projection
+/// refusal is an invalid configuration before this command sees it.
 const DISCOVERY_CONFIG_UNREADABLE: CliError =
     CliError("discovery description configuration could not be read");
 const DISCOVERY_CONFIG_INVALID: CliError =
     CliError("discovery description configuration is not valid Evidence configuration");
-const DISCOVERY_RENDER_FAILED: CliError = CliError("discovery description could not be rendered");
 const DISCOVERY_OUTPUT_UNWRITABLE: CliError =
     CliError("discovery description output could not be written");
 
@@ -5125,14 +5132,14 @@ mod tests {
         }
     }
 
-    /// Provider-publication compilation has four stages, and each one reports
-    /// its own class, so a rejected compilation says which stage refused.
+    /// Provider-publication compilation refuses in three stages, and each one
+    /// reports its own class, so a rejected compilation says which stage
+    /// refused.
     #[test]
     fn discovery_description_failure_classes_are_distinct() {
         let classes = [
             DISCOVERY_CONFIG_UNREADABLE,
             DISCOVERY_CONFIG_INVALID,
-            DISCOVERY_RENDER_FAILED,
             DISCOVERY_OUTPUT_UNWRITABLE,
         ];
 
