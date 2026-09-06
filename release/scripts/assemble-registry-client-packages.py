@@ -25,6 +25,10 @@ Prerequisites this script does not perform:
 `--dry-run` prints the exact commands instead of running them, which is the
 readable form of the recipe.
 
+Python wheels use the release profile by default. `--python-profile ci` opts
+into the workspace's cheaper CI profile for installed-package tutorial checks;
+it still assembles all four bindings with the same platform and package layout.
+
 The checked-in `crates/registry-stack-client-node/package.json` is never
 modified: the optional platform dependencies bind in a staging copy, because
 the version they name only exists at pack time.
@@ -190,7 +194,11 @@ def python_steps(
     maturin: str,
     work_dir: Path,
     output_dir: Path,
+    python_profile: str = "release",
 ) -> list[Step]:
+    if python_profile not in ("release", "ci"):
+        raise ValueError(f"unsupported Python build profile: {python_profile}")
+    profile_flags = ("--release",) if python_profile == "release" else ("--profile", "ci")
     built = work_dir / "product-wheels"
     wheel_tag = PLATFORMS[napi_platform]["wheel_tag"]
     flags = PLATFORMS[napi_platform]["maturin_flags"]
@@ -210,7 +218,7 @@ def python_steps(
         steps.append(
             Step(
                 f"build the {product} product wheel",
-                (maturin, "build", "--release", "--locked", *flags, "--out", str(built)),
+                (maturin, "build", *profile_flags, "--locked", *flags, "--out", str(built)),
                 root / "crates" / f"registry-{product}-client-py",
             )
         )
@@ -241,13 +249,14 @@ def plan(
     maturin: str,
     work_dir: Path,
     output_dir: Path,
+    python_profile: str = "release",
 ) -> list[Step]:
     steps: list[Step] = []
     if artifacts in ("all", "node"):
         steps += node_steps(root, version, napi_platform, work_dir, output_dir)
     if artifacts in ("all", "python"):
         steps += python_steps(
-            root, version, napi_platform, maturin, work_dir, output_dir
+            root, version, napi_platform, maturin, work_dir, output_dir, python_profile
         )
     return steps
 
@@ -272,6 +281,12 @@ def main() -> int:
         "--artifacts", choices=("all", "node", "python"), default="all"
     )
     parser.add_argument("--maturin", default="maturin")
+    parser.add_argument(
+        "--python-profile",
+        choices=("release", "ci"),
+        default="release",
+        help="Python binding build profile; ci is for installed-package CI checks",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -288,6 +303,7 @@ def main() -> int:
         args.maturin,
         work_dir,
         output_dir,
+        args.python_profile,
     )
     for step in steps:
         print(f"# {step.description}")

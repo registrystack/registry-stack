@@ -202,7 +202,7 @@ class CiChangesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         metadata = subprocess.run(
-            ("cargo", "metadata", "--locked", "--format-version", "1"),
+            ("cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"),
             check=True,
             capture_output=True,
             text=True,

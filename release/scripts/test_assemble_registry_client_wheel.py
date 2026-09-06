@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -132,6 +133,24 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
         )
         for product in PRODUCTS:
             self.assertIn(f"`registry_client.{product}`", description)
+
+    def test_assembled_facade_imports_all_four_product_namespaces(self) -> None:
+        result = self.run_assembler()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The fixture modules exercise facade imports without claiming a native
+        # build. Native extension loading remains covered by the package smoke.
+        imported = subprocess.run(
+            [
+                sys.executable, "-I", "-c",
+                "import sys; sys.path.insert(0, sys.argv[1]); "
+                "from registry_client import discovery, evidence, relay, breg; "
+                "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT)",
+                result.stdout.strip(),
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(imported.returncode, 0, imported.stderr)
+        self.assertEqual(imported.stdout.strip(), "discovery evidence relay breg")
 
     def test_unified_and_legacy_distributions_never_own_the_same_path(self) -> None:
         result = self.run_assembler()

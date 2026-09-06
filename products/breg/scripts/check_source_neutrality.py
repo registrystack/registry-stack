@@ -129,6 +129,7 @@ SOURCE_ROOTS = (
 SOURCE_SUFFIXES = {".rs"}
 PRODUCTION_INPUT_DIRECTORIES = ("resources", "schemas", "migrations", "templates")
 EXCLUDED_SOURCE_DIRECTORIES = {"tests", "fixtures", "examples", "benches"}
+RAW_STRING_START = re.compile(r'(?:br|r)(?P<hashes>#{0,255})"')
 PUBLIC_KERNEL_CONTRACTS = ("products/breg/contracts/package-layout.yaml",)
 DOMAIN_COMPONENT = re.compile(
     r"(?i)(?:^|[._:/-])(?:"
@@ -208,7 +209,7 @@ def rust_structure(source: str) -> str:
             block_depth = 1
             index += 2
             continue
-        raw = re.match(r"(?:br|r)(?P<hashes>#{0,255})\"", source[index:])
+        raw = RAW_STRING_START.match(source, index)
         if raw:
             delimiter = '"' + raw.group("hashes")
             end = source.find(delimiter, index + len(raw.group(0)))
@@ -279,7 +280,7 @@ def rust_string_literals(source: str) -> list[str]:
     literals: list[str] = []
     index = 0
     while index < len(source):
-        raw = re.match(r"(?:br|r)(?P<hashes>#{0,255})\"", source[index:])
+        raw = RAW_STRING_START.match(source, index)
         if raw:
             body_start = index + len(raw.group(0))
             delimiter = '"' + raw.group("hashes")

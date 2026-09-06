@@ -44,6 +44,30 @@ certification is true.
 
 ## Review Standards
 
+### CI feedback budget
+
+Ordinary pull-request and main CI should complete within ten minutes, measured
+from workflow creation until every selected synchronous check finishes. Include
+runner scheduling time. Record reruns from the original event as well as the
+latest attempt; a fast retry does not erase a failed or slow first attempt.
+Use the longest job and total job minutes to distinguish serial work from
+runner contention. The maintainers own this budget alongside the CI workflow.
+
+Optimize duplicate compilation and execution before adding more blocking jobs.
+Keep affected security, database/TLS, generated-contract, and basic adopter
+journeys enforced. Partitioned suites must retain their complete test inventory
+and feed the same aggregate result. Never meet the budget by hiding a failure,
+dropping an aggregate dependency, or increasing a timeout.
+
+Repeated fuzz exploration and broad assurance can run asynchronously when an
+equivalent affected-change regression remains in CI. Before moving a check,
+name its owning workflow and maintainer, prove the replacement executes
+successfully, and document which changed inputs bring it back into ordinary
+CI. Nightly Rust coverage complements the product database gates; its default
+feature shards do not replace PostgreSQL or TLS execution.
+
+### Change review
+
 Every pull request should make the review path clear:
 
 - Explain the user-visible or operator-visible impact in the pull request

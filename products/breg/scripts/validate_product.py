@@ -8,7 +8,9 @@ compiler will own configuration semantics and generated artifact correctness.
 from __future__ import annotations
 
 import ast
+from collections import Counter
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -478,8 +480,31 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
     for fragment in required_fragments:
         if fragment not in source:
             errors.append(f"PostgreSQL entrypoint: missing required fail-closed setting {fragment!r}")
-    cargo_commands = [line.strip() for line in source.splitlines() if line.lstrip().startswith("cargo ")]
-    if cargo_commands != list(POSTGRES_TEST_COMMANDS):
+    # Compare the owned feature/target inventory, allowing compatible targets
+    # to share an invocation and the complete action harness to run in a lane.
+    cargo_commands: list[str] = []
+    for line in source.replace("\\\n", " ").splitlines():
+        if not line.lstrip().startswith("cargo "):
+            continue
+        try:
+            arguments = shlex.split(line)
+        except ValueError:
+            errors.append("PostgreSQL entrypoint: invalid Cargo command quoting")
+            continue
+        if (
+            len(arguments) < 9
+            or arguments[:6] != ["cargo", "test", "--locked", "-p", "registry-breg", "--features"]
+        ):
+            errors.append("PostgreSQL entrypoint: unsupported Cargo invocation")
+            continue
+        # The first --test follows the feature value at argument 6.
+        prefix = arguments[:7]
+        targets = arguments[7:]
+        if len(targets) % 2 or any(flag != "--test" for flag in targets[::2]):
+            errors.append("PostgreSQL entrypoint: targets must be complete test harnesses")
+            continue
+        cargo_commands.extend(" ".join(prefix + ["--test", target]) for target in targets[1::2])
+    if Counter(cargo_commands) != Counter(POSTGRES_TEST_COMMANDS):
         errors.append(
             "PostgreSQL entrypoint: must run exactly the owned locked HTTP, kernel, "
             "startup, compiled-schema, read, mutation, and package commands"

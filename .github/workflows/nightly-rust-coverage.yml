@@ -34,44 +34,7 @@ jobs:
 
       - name: Build coverage matrix from the CI shard inventory
         id: matrix
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          import sys
-
-          sys.path.insert(0, ".github/scripts")
-          from ci_changes import SHARDS, Workspace
-
-          metadata = json.loads(
-              subprocess.run(
-                  ("cargo", "metadata", "--locked", "--format-version", "1"),
-                  check=True,
-                  capture_output=True,
-                  text=True,
-              ).stdout
-          )
-          Workspace(metadata)
-
-          flags = {
-              "platform": "platform",
-              "manifest": "manifest-unit",
-              "developer-tools": "developer-tools",
-          }
-          matrix = [
-              {
-                  "name": name,
-                  "packages": " ".join(packages),
-                  "all_features": str(name in {"platform", "relay-v2"}).lower(),
-                  "features": "",
-                  "flag": flags[name],
-              }
-              for name, packages in SHARDS.items()
-          ]
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"matrix={json.dumps({'include': matrix})}\n")
-          PY
+        run: python3 .github/scripts/nightly_rust_coverage.py
 
   rust:
     name: Rust coverage (${{ matrix.name }})

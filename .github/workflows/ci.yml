@@ -76,7 +76,9 @@ jobs:
           set -euo pipefail
           metadata="${RUNNER_TEMP}/registry-stack-cargo-metadata.json"
           changed_files="${RUNNER_TEMP}/registry-stack-changed-files"
-          cargo metadata --locked --format-version 1 > "${metadata}"
+          # Routing needs workspace manifests and their declared dependency
+          # edges, not downloaded registry sources or resolved external crates.
+          cargo metadata --locked --no-deps --format-version 1 > "${metadata}"
           classifier=(
             python3 .github/scripts/ci_changes.py
             --metadata "${metadata}"
@@ -107,7 +109,9 @@ jobs:
         run: products/identifiers/scripts/generate.py --check-references
 
       - name: Test CI classifier
-        run: python3 .github/scripts/test_ci_changes.py
+        run: |
+          python3 .github/scripts/test_ci_changes.py
+          python3 .github/scripts/test_nightly_rust_coverage.py
 
       - name: Install pinned actionlint
         shell: bash
@@ -599,11 +603,15 @@ jobs:
         run: products/relay-v2/scripts/check-source-neutrality.sh
 
   breg-contracts:
-    name: Base Registry Engine product contracts
+    name: Base Registry Engine product contracts (${{ matrix.lane }})
     needs: changes
     if: needs.changes.outputs.breg_contracts == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [contracts, postgres, immediate-actions]
     services:
       postgres:
         # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
@@ -650,29 +658,39 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install uv
+        if: matrix.lane == 'contracts'
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.11.16"
 
       - name: Base Registry Engine contract consistency
+        if: matrix.lane == 'contracts'
         run: products/breg/scripts/check-contracts.sh
 
       - name: BReg client contract consistency
+        if: matrix.lane == 'contracts'
         run: products/breg/scripts/check-client-contract.sh
 
       - name: Base Registry Engine PostgreSQL journeys
-        run: products/breg/scripts/test-postgres.sh
+        if: matrix.lane != 'contracts'
+        env:
+          BREG_POSTGRES_LANE: ${{ matrix.lane }}
+        run: products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"
 
       - name: Base Registry Engine PostgreSQL TLS proof
+        if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-postgres-tls.sh
 
       - name: Base Registry Engine clean-checkout adopter workflow
+        if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-adopter-workflow.sh
 
       - name: Base Registry Engine generic quickstart
+        if: matrix.lane == 'contracts'
         run: products/breg/quickstart/run.sh --smoke
 
       - name: Base Registry Engine spatial quickstart
+        if: matrix.lane == 'contracts'
         run: products/breg/quickstart/run.sh --spatial --smoke
 
   identifiers:
@@ -962,8 +980,9 @@ jobs:
           set -euo pipefail
           # The tutorial installs the maintained client package, so the replay
           # imports that same package, assembled from this commit. maturin gets
-          # the pinned environment the release workflows build the published
-          # wheel with, so a packaging regression fails here too.
+          # the pinned release build environment. The CI profile exercises the
+          # same four-binding assembly and installed facade without release LTO.
+          # Production optimization remains covered by release recipe checks.
           python3 -m venv "${RUNNER_TEMP}/maturin"
           "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
             --require-hashes --only-binary=:all: \
@@ -977,6 +996,7 @@ jobs:
           export PATH="${RUNNER_TEMP}/maturin/bin:${PATH}"
           python3 release/scripts/assemble-registry-client-packages.py \
             --artifacts python \
+            --python-profile ci \
             --output-dir "${out_dir}" \
             --work-dir "${RUNNER_TEMP}/client-assembly" \
             --maturin "${RUNNER_TEMP}/maturin/bin/maturin"

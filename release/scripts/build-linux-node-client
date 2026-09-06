@@ -72,13 +72,35 @@ fi
 compiler="${script_dir}/zig-glibc-compiler"
 test -x "${compiler}"
 
-wrapper_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/registry-node-zig.XXXXXX")"
-cleanup() {
-  rm -rf -- "${wrapper_root}"
-}
-trap cleanup EXIT
-ln -s "${compiler}" "${wrapper_root}/zig-cc"
-ln -s "${compiler}" "${wrapper_root}/zig-cxx"
+if [[ -n "${RUNNER_TEMP:-}" ]]; then
+  # Keep compiler paths stable across this job's product builds. Separate
+  # checkouts, toolchains, targets, and wrapper revisions retain distinct paths
+  # so Cargo cannot reuse a native build made with different compiler inputs.
+  wrapper_key="$(
+    {
+      printf '%s\0' "${compiler}" "${zig_python}" "${zig_version}" "${zig_target}"
+      cat "${compiler}" "${script_dir}/../glibc-floor.env"
+    } | sha256sum | cut -d ' ' -f 1
+  )"
+  wrapper_root="${RUNNER_TEMP}/registry-node-zig/${wrapper_key}"
+  mkdir -p -- "${wrapper_root}"
+else
+  wrapper_root="$(mktemp -d /tmp/registry-node-zig.XXXXXX)"
+  cleanup() {
+    rm -rf -- "${wrapper_root}"
+  }
+  trap cleanup EXIT
+fi
+for driver in zig-cc zig-cxx; do
+  # Do not replace an existing link while another product is compiling.
+  if ! ln -s "${compiler}" "${wrapper_root}/${driver}" 2>/dev/null; then
+    if [[ ! -L "${wrapper_root}/${driver}" ||
+          "$(readlink -- "${wrapper_root}/${driver}")" != "${compiler}" ]]; then
+      printf 'unexpected compiler wrapper: %s\n' "${wrapper_root}/${driver}" >&2
+      exit 2
+    fi
+  fi
+done
 
 cc_wrapper="${wrapper_root}/zig-cc"
 cxx_wrapper="${wrapper_root}/zig-cxx"
