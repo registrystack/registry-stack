@@ -6233,6 +6233,40 @@ mod tests {
                 "the bundle contract accepted {reason}"
             );
         }
+
+        // An unused connection is still declared, and the assurance-profile
+        // conditional must refuse it the same way it refuses a declared
+        // source, regardless of whether any requirement resolves to it.
+        let unused_loopback =
+            "    baseUrl: http://127.0.0.1:18081\n    authentication: {kind: none}\n";
+        let evidence_grade = source_connection_document(acceptance_fixture(), unused_loopback);
+        let production = source_connection_document(
+            &edited(
+                acceptance_fixture(),
+                "assuranceProfile: evidence-grade\n",
+                "assuranceProfile: production\n",
+            ),
+            unused_loopback,
+        );
+        for (reason, document) in [
+            (
+                "an unauthenticated loopback connection under evidence-grade assurance",
+                evidence_grade,
+            ),
+            (
+                "an unauthenticated loopback connection under production assurance",
+                production,
+            ),
+        ] {
+            assert!(
+                EvidenceConfig::parse_yaml(document.as_bytes()).is_err(),
+                "the runtime accepted {reason}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(document.as_bytes())),
+                "the bundle contract accepted {reason}"
+            );
+        }
     }
 
     /// One `sourceConnections` entry named `shared`, spliced into a whole
