@@ -291,12 +291,13 @@ LINUX_NODE_BINDING_PACKAGES = frozenset(
 
 # Inputs that can change the production Linux Node client recipe without
 # changing either binding crate. This proof is deliberately selected from the
-# actual changed paths rather than `complete`: push and merge-queue CI use
-# `--all` for their Rust matrices, and an unrelated change must not rebuild all
-# release addons merely because those matrices are complete.
+# actual changed paths rather than `complete`: an unrelated change must not
+# rebuild release addons merely because its Rust matrix is complete. Explicit
+# periodic/manual full sweeps additionally select this proof.
 LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
     {
         ".github/scripts/ci_changes.py",
+        ".github/scripts/ci_event_routing.py",
         ".github/workflows/ci.yml",
         ".github/workflows/release-candidate.yml",
         ".github/workflows/release-rehearsal.yml",
@@ -580,7 +581,11 @@ def is_root_workflow(path: str) -> bool:
 
 
 def classify(
-    workspace: Workspace, changed_paths: Iterable[str], *, run_all: bool = False
+    workspace: Workspace,
+    changed_paths: Iterable[str],
+    *,
+    run_all: bool = False,
+    full_sweep: bool = False,
 ) -> dict[str, Any]:
     paths = tuple(
         path.strip().removeprefix("./") for path in changed_paths if path.strip()
@@ -593,11 +598,12 @@ def classify(
     registry_record_cross_product = any(
         matches(path, *REGISTRY_RECORD_CROSS_PRODUCT_INPUTS) for path in paths
     )
-    force_all = run_all or any(
+    force_all = run_all or full_sweep or any(
         path
         in {
             ".github/workflows/ci.yml",
             ".github/scripts/ci_changes.py",
+            ".github/scripts/ci_event_routing.py",
             ".github/scripts/run_cargo_packages.py",
         }
         or (is_root_workflow(path) and path not in SECURITY_WORKFLOW_GATES)
@@ -653,7 +659,7 @@ def classify(
         for path in paths
         if (package := workspace.package_for_path(path)) is not None
     }
-    release_linux_node_clients = any(
+    release_linux_node_clients = full_sweep or any(
         path in LINUX_NODE_RELEASE_RECIPE_INPUTS
         or path.startswith(".cargo/")
         or path.startswith("crates/registry-stack-client-node/")
@@ -767,7 +773,7 @@ def classify(
     # change. Publication workflows and this classifier do not alter archived
     # bytes; their focused tests cover those contracts without replaying every
     # historical docset.
-    docs_archives = any(
+    docs_archives = full_sweep or any(
         path
         in {
             ".github/workflows/ci.yml",
@@ -888,11 +894,12 @@ def main() -> None:
     parser.add_argument("--metadata", type=Path, required=True)
     parser.add_argument("--changed-files", type=Path)
     parser.add_argument("--all", action="store_true", dest="run_all")
+    parser.add_argument("--full-sweep", action="store_true")
     parser.add_argument("--github-output", type=Path, required=True)
     args = parser.parse_args()
 
-    if not args.run_all and args.changed_files is None:
-        parser.error("--changed-files is required unless --all is set")
+    if not (args.run_all or args.full_sweep) and args.changed_files is None:
+        parser.error("--changed-files is required unless --all or --full-sweep is set")
 
     metadata = json.loads(args.metadata.read_text(encoding="utf-8"))
     changed_paths = (
@@ -900,7 +907,9 @@ def main() -> None:
         if args.changed_files is not None
         else ()
     )
-    outputs = classify(Workspace(metadata), changed_paths, run_all=args.run_all)
+    outputs = classify(
+        Workspace(metadata), changed_paths, run_all=args.run_all, full_sweep=args.full_sweep
+    )
     write_github_outputs(args.github_output, outputs)
     print(json.dumps(outputs, indent=2, sort_keys=True))
 

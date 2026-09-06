@@ -68,6 +68,19 @@ successfully, and document which changed inputs bring it back into ordinary
 CI. Nightly Rust coverage complements the product database gates; its default
 feature shards do not replace PostgreSQL or TLS execution.
 
+Main pushes and merge-queue checks select affected work using the event's exact
+before/after commits, including every commit in a multi-commit push and both
+owners of a renamed path. Shared build and CI inputs still select the broad
+matrix. Missing comparison commits select all gates and refuse to claim archive
+immutability without the required baseline.
+
+The same `RegistryStack CI` workflow runs every gate daily at 22:37 UTC,
+including immutable archives and both Linux client release recipes. Maintainers
+own failures of this full regression sweep. A manual workflow run defaults to
+the same full sweep; turning off `full` compares the chosen ref with main.
+Periodic archive reconstruction validates current locked bytes, while event
+runs additionally compare the lock against their actual change baseline.
+
 ### Change review
 
 Every pull request should make the review path clear:

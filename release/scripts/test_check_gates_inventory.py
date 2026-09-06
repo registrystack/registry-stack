@@ -46,6 +46,9 @@ class GateInventoryTest(unittest.TestCase):
         self.classifier = (ROOT / ".github" / "scripts" / "ci_changes.py").read_text(
             encoding="utf-8"
         )
+        self.platform_fuzz_runner = (
+            ROOT / "products" / "platform" / "scripts" / "run-fuzz-smoke.sh"
+        ).read_text(encoding="utf-8")
         self.nightly_security = (
             ROOT / ".github" / "workflows" / "nightly-security.yml"
         ).read_text(encoding="utf-8")
@@ -303,7 +306,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_ci_classifier_and_its_tests_are_wired(self) -> None:
         self.assertIn(
-            "python3 .github/scripts/ci_changes.py",
+            "python3 .github/scripts/ci_event_routing.py",
             self.workflow,
         )
         self.assertIn(
@@ -1108,8 +1111,28 @@ class GateInventoryTest(unittest.TestCase):
                 self.assertEqual(0, ignored.returncode)
 
     def test_missing_platform_fuzz_bound_is_reported(self) -> None:
-        text = self.workflow.replace("-max_total_time=60", "-runs=0")
-        self.assertIn("Platform fuzz bounded runtime", self.module.missing_gates(text))
+        runner = self.platform_fuzz_runner.replace("-max_total_time=60", "-runs=0")
+        self.assertIn(
+            "Platform fuzz bounded runtime",
+            self.module.missing_gates(
+                self.workflow,
+                platform_fuzz_runner_text=runner,
+            ),
+        )
+
+    def test_missing_platform_fuzz_runner_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: products/platform/scripts/run-fuzz-smoke.sh",
+            "run: true # Platform fuzz runner disabled",
+        )
+        self.assertIn("Platform fuzz runner", self.module.missing_gates(text))
+
+    def test_missing_platform_fuzz_runner_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 -m unittest products/platform/scripts/test_run_fuzz_smoke.py",
+            "run: true # Platform fuzz runner tests disabled",
+        )
+        self.assertIn("Platform fuzz runner tests", self.module.missing_gates(text))
 
     def test_missing_production_shaped_docs_build_check_is_reported(self) -> None:
         text = self.workflow.replace(
