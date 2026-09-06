@@ -738,12 +738,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if selection.service in dependency_services:
                 deadline = time.monotonic() + args.dependency_timeout_seconds
+                started.append(selection.service)
                 start_dependency(
                     selection,
                     deadline,
                     frozen_compose,
                 )
-                started.append(selection.service)
                 wait_for_dependency(
                     selection,
                     deadline,

@@ -984,7 +984,7 @@ class RuntimePreflightTest(unittest.TestCase):
             argv,
         )
         self.assertEqual(1, result)
-        self.assertNotIn("docker compose stop", stderr)
+        self.assertIn("docker compose stop mint", stderr)
 
     def test_the_cold_fixture_passes_without_publishing_a_host_port(self) -> None:
         if not compose_is_available():
