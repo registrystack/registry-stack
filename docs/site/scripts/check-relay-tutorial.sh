@@ -362,6 +362,14 @@ if [[ "$record_output" == *"registeredAddress"* ]]; then
 	printf 'tutorial behaviour drift: the disclosure boundary leaked registeredAddress\n' >&2
 	exit 1
 fi
+if jq -e '.data | has("registryIdentifier")' <<<"$record_output" >/dev/null; then
+	printf 'tutorial behaviour drift: the record answer still carries data.registryIdentifier\n' >&2
+	exit 1
+fi
+if ! jq -e '.meta | has("registryIdentifier")' <<<"$record_output" >/dev/null; then
+	printf 'tutorial behaviour drift: the record answer is missing meta.registryIdentifier\n' >&2
+	exit 1
+fi
 
 printf '==> ask for less, then try to ask for more\n'
 narrow_output="$(bash "$FENCES/narrow.sh")"
