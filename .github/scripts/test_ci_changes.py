@@ -599,10 +599,6 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/scripts/check-breg-tutorial.sh",
             "docs/site/scripts/check-breg-tutorial.test.mjs",
             "docs/site/src/content/docs/tutorials/first-breg.mdx",
-            "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
-            "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
-            "docs/site/scripts/generate-breg-evidence-starter.mjs",
-            "products/breg/evidence/starter/fixtures/record-active.yaml",
             "docs/site/package.json",
         )
         for path in infrastructure:
@@ -645,16 +641,52 @@ class CiChangesTest(unittest.TestCase):
                 ),
             )["breg_tutorial"]
         )
-
-    def test_native_composition_routes_provider_and_evidence_changes(self) -> None:
+        # The replay starts the quickstart launcher and no Evidence binary, and
+        # it replays neither composition page. The offline composition proof
+        # owns the Evidence toolset and those pages' commands. A change to
+        # registry-evidence itself still reaches the replay, because Registry
+        # Mint links it and the launcher issues the reader's operator token.
         for path in (
+            "crates/registry-evidencectl/src/source_cli.rs",
+            "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
+            "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
+            "docs/site/scripts/generate-breg-evidence-starter.mjs",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["breg_tutorial"])
+
+    def test_breg_evidence_composition_routing(self) -> None:
+        # The proof drives bregctl, evidencectl and the Evidence runtime over
+        # the reviewed teaching inputs, so a change to any of those three, to a
+        # crate they link, or to the inputs themselves must select it.
+        for path in (
+            "crates/registry-breg/src/evidence_source.rs",
+            "crates/registry-bregctl/src/main.rs",
             "crates/registry-evidence/src/source.rs",
             "crates/registry-evidencectl/src/source_cli.rs",
             "crates/registry-evidence-authoring/src/model.rs",
+            "products/breg/evidence/registry/registry.yaml",
             "products/breg/evidence/tests/verify-composition.py",
         ):
             with self.subTest(path=path):
-                self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
+                self.assertTrue(
+                    classify(self.workspace, (path,))["breg_evidence_composition"]
+                )
+        # Nothing the proof reads or runs: the pages that narrate the same
+        # journey, the archive generator that publishes its inputs, and the
+        # driver of the Docker-backed tutorial replay.
+        for path in (
+            "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
+            "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
+            "docs/site/scripts/generate-breg-evidence-starter.mjs",
+            "docs/site/scripts/check-breg-tutorial.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(
+                    classify(self.workspace, (path,))["breg_evidence_composition"]
+                )
+        # The same reviewed inputs and the references that explain them are
+        # published, so they also rebuild the documentation.
         for path in (
             "products/breg/evidence/starter/fixtures/record-active.yaml",
             "products/evidence/reference/authoring-projects/SOURCE-EXPORT.md",
