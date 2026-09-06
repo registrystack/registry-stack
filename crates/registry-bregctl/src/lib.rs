@@ -4650,7 +4650,7 @@ fn load_module_files(
         .map(|module| module.id.as_str())
         .collect();
     let modules = read_module_directory_names(project_path)?;
-    for id in &modules {
+    for id in &modules.names {
         if !locked.contains(id.as_str()) {
             return Err(diagnostic(
                 "source.modules.unlocked",
@@ -4659,13 +4659,22 @@ fn load_module_files(
             ));
         }
     }
-    read_module_yaml_files(project_path, modules)
+    read_module_yaml_files(modules)
+}
+
+/// The authored module directories a project holds, together with the `modules`
+/// directory descriptor they were listed through, so the reads that follow open
+/// each `module.yaml` under the directory that was listed rather than resolving
+/// its pathname again. An absent `modules` directory means the project authored
+/// none.
+struct ModuleDirectories {
+    directory: Option<SafeDir>,
+    names: Vec<String>,
 }
 
 /// List the authored module directories a project holds, refusing an entry that
-/// is not a directory or that traverses a symbolic link. An absent `modules`
-/// directory means the project authored none.
-fn read_module_directory_names(project_path: &Path) -> Result<Vec<String>, Diagnostic> {
+/// is not a directory or that traverses a symbolic link.
+fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories, Diagnostic> {
     let unreadable = || {
         diagnostic(
             "source.modules.unreadable",
@@ -4682,7 +4691,12 @@ fn read_module_directory_names(project_path: &Path) -> Result<Vec<String>, Diagn
     };
     let directory = match SafeDir::resolve(&project_path.join("modules")) {
         Ok(directory) => directory,
-        Err(SafePathError::NotFound) => return Ok(Vec::new()),
+        Err(SafePathError::NotFound) => {
+            return Ok(ModuleDirectories {
+                directory: None,
+                names: Vec::new(),
+            })
+        }
         Err(SafePathError::Unavailable) => return Err(unreadable()),
         Err(error) => {
             return Err(path_diagnostic(
@@ -4714,20 +4728,40 @@ fn read_module_directory_names(project_path: &Path) -> Result<Vec<String>, Diagn
         names.push(name.to_owned());
     }
     names.sort();
-    Ok(names)
+    Ok(ModuleDirectories {
+        directory: Some(directory),
+        names,
+    })
 }
 
+/// Read each listed module's `module.yaml` through the listed `modules`
+/// directory, so the file read is the one under the directory whose entries
+/// were checked, whatever the pathname reaches by now.
 fn read_module_yaml_files(
-    project_path: &Path,
-    modules: Vec<String>,
+    modules: ModuleDirectories,
 ) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
-    modules
+    let ModuleDirectories { directory, names } = modules;
+    let Some(directory) = directory else {
+        return Ok(Vec::new());
+    };
+    names
         .into_iter()
         .map(|id| {
-            let bytes = read_bounded_source_file(
-                &project_path.join("modules").join(&id).join("module.yaml"),
+            let report_path = format!("modules/{id}/module.yaml");
+            let module_directory = directory.open_directory(OsStr::new(&id)).map_err(|error| {
+                path_diagnostic(
+                    error,
+                    "source.module.missing",
+                    &report_path,
+                    "the required authoring source is not available",
+                    "authoring sources must be regular files and must not be symbolic links",
+                )
+            })?;
+            let entry = SafeEntry::in_directory(module_directory, OsStr::new("module.yaml"));
+            let bytes = read_bounded_source_entry(
+                &entry,
                 "source.module.missing",
-                &format!("modules/{id}/module.yaml"),
+                &report_path,
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )?;
             Ok((id, bytes))
@@ -4736,7 +4770,7 @@ fn read_module_yaml_files(
 }
 
 fn discover_module_files(project_path: &Path) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
-    read_module_yaml_files(project_path, read_module_directory_names(project_path)?)
+    read_module_yaml_files(read_module_directory_names(project_path)?)
 }
 
 fn load_project_planner_asset_files(
@@ -9669,6 +9703,31 @@ accessProfiles:
             // The window is real: the same pathname now reaches the tree the
             // operator never named.
             assert_eq!(fs::read(&named).unwrap(), b"decoy\n");
+        }
+
+        #[test]
+        fn module_sources_listed_before_an_ancestor_swap_are_read_from_the_listed_directory() {
+            let tree = race_tree();
+            let project = tree.named_directory();
+            fs::create_dir_all(project.join("modules/persons")).unwrap();
+            fs::write(project.join("modules/persons/module.yaml"), b"genuine\n").unwrap();
+            let outside = tree.outside_directory();
+            fs::create_dir_all(outside.join("modules/persons")).unwrap();
+            fs::write(outside.join("modules/persons/module.yaml"), b"decoy\n").unwrap();
+
+            let modules = read_module_directory_names(&project).unwrap();
+            assert_eq!(modules.names, ["persons"]);
+            // The ancestor becomes a real directory holding the decoy, so a
+            // read that resolved the pathname again would reach it without
+            // meeting a symbolic link.
+            tree.swap_ancestor_directory();
+            let files = read_module_yaml_files(modules).unwrap();
+
+            assert_eq!(files, vec![("persons".to_owned(), b"genuine\n".to_vec())]);
+            assert_eq!(
+                fs::read(project.join("modules/persons/module.yaml")).unwrap(),
+                b"decoy\n"
+            );
         }
 
         #[test]

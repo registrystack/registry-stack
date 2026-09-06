@@ -391,6 +391,16 @@ mod descriptor {
             })
         }
 
+        /// Name an entry inside a directory the caller already holds, so the
+        /// read that follows goes through that descriptor instead of resolving
+        /// the entry's pathname again.
+        pub(crate) fn in_directory(parent: SafeDir, name: &OsStr) -> Self {
+            SafeEntry {
+                parent,
+                name: name.to_owned(),
+            }
+        }
+
         pub(crate) fn parent(&self) -> &SafeDir {
             &self.parent
         }
@@ -700,6 +710,10 @@ mod descriptor {
             Err(SafePathError::Unsupported)
         }
 
+        pub(crate) fn in_directory(parent: SafeDir, _name: &OsStr) -> Self {
+            match parent.0 {}
+        }
+
         pub(crate) fn parent(&self) -> &SafeDir {
             match self.0 {}
         }
@@ -836,6 +850,13 @@ pub(crate) mod race_fixture {
         /// operator never named.
         pub(crate) fn swap_ancestor(&self) {
             swap(&self.root);
+        }
+
+        /// Move the tree the operator never named into the resolved ancestor's
+        /// place as a real directory, so a surface that resolves the same
+        /// pathname again reaches it without meeting a symbolic link.
+        pub(crate) fn swap_ancestor_directory(&self) {
+            swap_directory(&self.root);
         }
 
         /// Arm the swap on the resolution race hook. It runs once, however many
