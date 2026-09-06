@@ -118,10 +118,26 @@ async fn service(runtime_config: &Path) -> Result<AuditOperatorService, AuditCli
 /// An export staged as a sibling of the operator's destination, held through
 /// the destination's resolved parent descriptor so neither the staged write nor
 /// the publication can be redirected by a later path change.
+///
+/// The staging file belongs to this value: every outcome that is not a
+/// publication removes it as the value drops.
 struct StagedExport {
     destination: SafeEntry,
     temporary: OsString,
     file: File,
+    published: bool,
+}
+
+impl Drop for StagedExport {
+    fn drop(&mut self) {
+        if self.published {
+            return;
+        }
+        // The refusal that ended this export is already on its way to the
+        // operator, and an unlink the kernel refuses leaves this process
+        // nothing further to do about the staging name.
+        let _ = self.destination.parent().remove_file(&self.temporary);
+    }
 }
 
 fn create_export_file(output: &Path) -> Result<StagedExport, AuditCliError> {
@@ -143,16 +159,22 @@ fn create_export_file(output: &Path) -> Result<StagedExport, AuditCliError> {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) => return Err(AuditCliError::Operator),
         };
-        // The create mode is filtered by the process umask, so restate the
-        // owner-only permissions on the descriptor itself.
-        #[cfg(unix)]
-        file.set_permissions(std::fs::Permissions::from_mode(EXPORT_FILE_MODE))
-            .map_err(|_| AuditCliError::Operator)?;
-        return Ok(StagedExport {
+        // The staging file exists from here on, so hand it to the value that
+        // removes it before anything else can refuse.
+        let staged = StagedExport {
             destination,
             temporary,
             file,
-        });
+            published: false,
+        };
+        // The create mode is filtered by the process umask, so restate the
+        // owner-only permissions on the descriptor itself.
+        #[cfg(unix)]
+        staged
+            .file
+            .set_permissions(std::fs::Permissions::from_mode(EXPORT_FILE_MODE))
+            .map_err(|_| AuditCliError::Operator)?;
+        return Ok(staged);
     }
     Err(AuditCliError::Operator)
 }
@@ -162,17 +184,18 @@ fn finish_export_file(sink: BufWriter<&mut File>) -> Result<(), AuditCliError> {
     file.sync_all().map_err(|_| AuditCliError::Operator)
 }
 
-fn publish_export_file(staged: StagedExport) -> Result<(), AuditCliError> {
-    let StagedExport {
-        destination,
-        temporary,
-        file,
-    } = staged;
-    drop(file);
-    destination
-        .publish_new_from(&temporary)
+fn publish_export_file(mut staged: StagedExport) -> Result<(), AuditCliError> {
+    // The staged bytes are already flushed, so publication needs the staging
+    // name only; the descriptor closes when the staged export drops.
+    staged
+        .destination
+        .publish_new_from(&staged.temporary)
         .map_err(|_| AuditCliError::Operator)?;
-    destination
+    // Publication consumes the staging name, so the cleanup has nothing left
+    // to remove.
+    staged.published = true;
+    staged
+        .destination
         .parent()
         .sync()
         .map_err(|_| AuditCliError::Operator)
@@ -255,6 +278,28 @@ mod tests {
             AuditCliError::Operator
         );
         assert_eq!(std::fs::read(&output).unwrap(), b"raced\n");
+        assert!(!std::fs::read_dir(&root).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".bregctl-audit-export-")));
+    }
+
+    #[test]
+    fn an_export_that_fails_before_publication_leaves_no_staging_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let output = root.join("audit.jsonl");
+        // An absolute runtime configuration that does not load, so the export
+        // refuses after staging its temporary file and before publishing.
+        let runtime_config = root.join("runtime.yaml");
+
+        assert_eq!(
+            export(&runtime_config, &output).unwrap_err(),
+            AuditCliError::Operator
+        );
+
+        assert!(!output.exists());
         assert!(!std::fs::read_dir(&root).unwrap().any(|entry| entry
             .unwrap()
             .file_name()
