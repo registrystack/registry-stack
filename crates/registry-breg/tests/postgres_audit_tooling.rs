@@ -763,9 +763,9 @@ impl Fixture {
     /// test is the chain the runtime role writes.
     async fn seed(&self, count: usize) {
         let service = self.service();
-        for sequence in 0..count {
-            service
-                .append_record_for_test(json!({
+        let records = (0..count)
+            .map(|sequence| {
+                json!({
                     "schema": "breg-audit/v1",
                     "phase": "attempt",
                     "method": "GET",
@@ -774,10 +774,13 @@ impl Fixture {
                     "packageRevision": PACKAGE_REVISION,
                     "selectedAccessProfile": "writer",
                     "purposePresent": true,
-                }))
-                .await
-                .expect("the runtime role appends one audit record");
-        }
+                })
+            })
+            .collect();
+        service
+            .append_records_for_test(records)
+            .await
+            .expect("the runtime role appends every seeded audit record");
     }
 
     /// Recover chain order in the test the way an operator has to read it: from
