@@ -69,9 +69,6 @@ struct StartArgs {
     /// Explicit local clients, profile bindings, and optional seed records.
     #[arg(long, alias = "clients")]
     clients_file: Option<PathBuf>,
-    /// Return when the local services are ready (the supervisor always detaches).
-    #[arg(long)]
-    detach: bool,
     /// Registry loopback port on first start (default 8090; retained for restarts).
     #[arg(long)]
     breg_port: Option<u16>,

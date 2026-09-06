@@ -11,17 +11,17 @@ Prepare the project with `bregctl init ./registry`, then explicitly set its
 access profiles, journey fixtures and local clients before the first start.
 
 ```sh
-bregctl dev --project ./registry --clients-file ./dev-clients.yaml --detach
+bregctl dev --project ./registry --clients-file ./dev-clients.yaml
 bregctl dev stop --project ./registry
-bregctl dev start --project ./registry --detach
+bregctl dev start --project ./registry
 ```
 
-`dev` and `dev start` both detach. They return only after PostgreSQL, Mint,
-schema-test rehearsal, package activation, BReg readiness and explicit seed
-creation succeed. Default loopback ports are BReg `8090`, Mint `8091` and
-PostgreSQL `55432`. Override them on the first start with `--breg-port`,
-`--mint-port` and `--database-port`. A restart retains the original ports and
-clients-file location. Conflicting ports are refused.
+`dev` and `dev start` both detach a resident supervisor. They return only after
+PostgreSQL, Mint, schema-test rehearsal, package activation, BReg readiness and
+explicit seed creation succeed. Default loopback ports are BReg `8090`, Mint
+`8091` and PostgreSQL `55432`. Override them on the first start with
+`--breg-port`, `--mint-port` and `--database-port`. A restart retains the
+original ports and clients-file location. Conflicting ports are refused.
 
 Use `--format json` to consume the status, URLs, audience, package revision,
 runtime configuration and private credential file references. Keys and access
