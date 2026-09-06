@@ -180,6 +180,7 @@ test('archive generation excludes current-source generators', async () => {
     /node scripts\/apply-archive-seo\.mjs dist/,
   );
   assert.deepEqual(currentSourceGeneratedArtifacts, [
+    'docs/site/public/examples/breg-evidence-starter.tar.gz',
     'docs/site/src/content/docs/reference/cli',
     'docs/site/src/data/generated/cli-reference.json',
   ]);

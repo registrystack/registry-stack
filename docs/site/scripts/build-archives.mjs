@@ -54,6 +54,7 @@ const archiveExecutionEnvironmentKeys = Object.freeze([
 // entry stages every regular file below it. That keeps command
 // additions covered without maintaining a second manifest of generated pages.
 export const currentSourceGeneratedArtifacts = Object.freeze([
+  'docs/site/public/examples/breg-evidence-starter.tar.gz',
   'docs/site/src/content/docs/reference/cli',
   'docs/site/src/data/generated/cli-reference.json',
 ]);

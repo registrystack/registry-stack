@@ -182,7 +182,7 @@ async function restoreLocalBundle({ docsRoot, docset, lockEntry }) {
   return true;
 }
 
-async function bootstrapArchive({
+export async function bootstrapArchive({
   docsRoot,
   docset,
   lockEntry,
