@@ -49,18 +49,19 @@ Archives outside the publication window are not restored or link-checked by
 routine CI. Their immutable lock metadata and release assets remain available
 for explicit audit or recovery work.
 
-To publish a new archived docset, build only that docset and create its bundle:
+To prepare a new archived docset, follow the
+[canonical archive preparation procedure](../../release/OPERATIONS.md#prepare-the-documentation-archive-lock).
+It builds committed inputs in a fresh Ubuntu 24.04 Linux x64 checkout with
+Node 22.12.0 and the locked npm dependencies. The archive builder stages its
+owned generated inputs from the docset's source ref; the fresh checkout also
+excludes unrelated ignored `public` assets. Pagefind's platform packages can
+contain different WebAssembly payloads, so normalized gzip metadata does not
+establish identical archive bytes across macOS and Linux.
 
-```sh
-DOCS_DOCSET=vX.Y.Z npm run build:archive
-npm run archive:snapshot -- vX.Y.Z --write-lock
-npm run generate
-npm run check:archive-lock -- --base-ref origin/main
-```
-
-The release workflow repeats those steps from the exact annotated tag and
-publishes `registry-docs-vX.Y.Z.tar.gz` with the other signed, SBOM-covered,
-SLSA-provenanced release files.
+The rehearsal verifies the prepared lock on Ubuntu. The candidate builds and
+verifies its archive from the accepted protected-main source. Publication
+promotes that candidate's `registry-docs-vX.Y.Z.tar.gz` with the other signed,
+SBOM-covered, SLSA-provenanced release files, without rebuilding it.
 The archive metadata binds the release tag, version path, and both tree digests,
 not a future merge commit. The Pages workflow authenticates that one public
 asset and copies its canonical-root and version-prefixed trees unchanged to `/`

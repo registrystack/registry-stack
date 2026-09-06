@@ -1,17 +1,27 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 import YAML from 'yaml';
 
-import { assembleArchives, downloadBundle, parseArgs } from './assemble-archives.mjs';
+import {
+  assembleArchives,
+  bootstrapArchive,
+  downloadBundle,
+  parseArgs,
+} from './assemble-archives.mjs';
 import {
   createArchiveBundle,
   localArchiveBundlePath,
   releaseRootOutputDirectory,
 } from './archive-bundle.mjs';
+import { buildDocsetArchive } from './build-archives.mjs';
+
+const execFileAsync = promisify(execFile);
 
 const docset = {
   id: 'v1.2.3',
@@ -266,6 +276,118 @@ test('bootstraps candidate-era archives with the indexable canonical root', asyn
   assert.equal(indexable, true);
   assert.equal(allowUnpublishedCandidate, true);
   assert.equal(result.bootstrapped, 1);
+});
+
+test('bootstrap isolates a dirty generated public archive and restores local files', async (t) => {
+  const repoRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-bootstrap-repo-'));
+  const expectedRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-bootstrap-expected-'));
+  t.after(() => Promise.all([
+    rm(repoRoot, { recursive: true, force: true }),
+    rm(expectedRoot, { recursive: true, force: true }),
+  ]));
+
+  const docsRoot = resolve(repoRoot, 'docs/site');
+  await mkdir(docsRoot, { recursive: true });
+  await writeFile(
+    resolve(repoRoot, '.gitignore'),
+    'docs/site/public/examples/breg-evidence-starter.tar.gz\n',
+  );
+  await execFileAsync('git', ['init', '--quiet'], { cwd: repoRoot });
+  await execFileAsync('git', ['config', 'user.name', 'Archive Test'], { cwd: repoRoot });
+  await execFileAsync('git', ['config', 'user.email', 'archive@example.invalid'], {
+    cwd: repoRoot,
+  });
+  await execFileAsync('git', ['add', '.gitignore'], { cwd: repoRoot });
+  await execFileAsync('git', ['commit', '--quiet', '-m', 'release source'], {
+    cwd: repoRoot,
+  });
+  const { stdout: sourceRefOutput } = await execFileAsync(
+    'git',
+    ['rev-parse', 'HEAD'],
+    { cwd: repoRoot },
+  );
+  const releaseDocset = {
+    ...docset,
+    products: {
+      'registry-stack': {
+        version: 'v1.2.3',
+        ref: sourceRefOutput.trim(),
+      },
+    },
+  };
+
+  const expectedVersion = resolve(expectedRoot, 'dist/v/1.2.3');
+  const expectedCanonical = releaseRootOutputDirectory(expectedRoot, releaseDocset);
+  await mkdir(expectedVersion, { recursive: true });
+  await mkdir(expectedCanonical, { recursive: true });
+  await writeFile(resolve(expectedVersion, 'index.html'), '<h1>Frozen</h1>\n');
+  await writeFile(resolve(expectedCanonical, 'index.html'), '<h1>Canonical</h1>\n');
+  const expected = await createArchiveBundle({
+    docsRoot: expectedRoot,
+    docset: releaseDocset,
+    bundlePath: resolve(expectedRoot, 'bundle.tar.gz'),
+    singleTree: false,
+  });
+
+  const starterPath = resolve(
+    docsRoot,
+    'public/examples/breg-evidence-starter.tar.gz',
+  );
+  await mkdir(resolve(docsRoot, 'public/examples'), { recursive: true });
+  await writeFile(starterPath, 'generated from current source');
+
+  let buildCommands = 0;
+  const buildArchive = (targetDocset, options) => buildDocsetArchive(targetDocset, {
+    ...options,
+    runCommand: async (command, args) => {
+      buildCommands += 1;
+      await assert.rejects(readFile(starterPath), { code: 'ENOENT' });
+      if (command === 'npx' && args[0] === 'astro' && args[1] === 'build') {
+        const output = args.at(-1);
+        await mkdir(output, { recursive: true });
+        const contents = output === releaseRootOutputDirectory(docsRoot, releaseDocset)
+          ? '<h1>Canonical</h1>\n'
+          : '<h1>Frozen</h1>\n';
+        await writeFile(resolve(output, 'index.html'), contents);
+      }
+    },
+    normalizePagefind: async () => {},
+    applySeo: async () => {},
+    verifyAnalytics: async () => {},
+  });
+
+  await bootstrapArchive({
+    docsRoot,
+    docset: releaseDocset,
+    lockEntry: {
+      bundle_sha256: expected.bundle_sha256,
+      root_tree_sha256: expected.root_tree_sha256,
+      version_tree_sha256: expected.version_tree_sha256,
+    },
+    buildArchive,
+  });
+
+  assert.equal(buildCommands, 5);
+  assert.equal(await readFile(starterPath, 'utf8'), 'generated from current source');
+
+  const neighborPath = resolve(docsRoot, 'public/examples/operator-notes.txt');
+  await writeFile(neighborPath, 'unrelated local work');
+  await assert.rejects(
+    buildDocsetArchive(releaseDocset, {
+      docsRoot,
+      runCommand: async () => {
+        await assert.rejects(readFile(starterPath), { code: 'ENOENT' });
+        assert.equal(await readFile(neighborPath, 'utf8'), 'unrelated local work');
+        throw new Error('forced archive build failure');
+      },
+      normalizePagefind: async () => {},
+      applySeo: async () => {},
+      verifyAnalytics: async () => {},
+    }),
+    /forced archive build failure/,
+  );
+  assert.equal(await readFile(starterPath, 'utf8'), 'generated from current source');
+  assert.equal(await readFile(neighborPath, 'utf8'), 'unrelated local work');
 });
 
 test('reports expected and actual digests when a bootstrap drifts', async (t) => {
