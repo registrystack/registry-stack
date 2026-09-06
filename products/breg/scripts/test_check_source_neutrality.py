@@ -193,6 +193,49 @@ class SourceNeutralityTests(unittest.TestCase):
         self.assertTrue(any("person" in item for item in violations), violations)
         self.assertFalse(any("observation" in item.lower() for item in violations), violations)
 
+    def test_raw_literals_at_nonzero_offsets_preserve_structure_and_bodies(self) -> None:
+        for prefix in ("r", "br"):
+            for hashes in ("", "#", "###", "#" * 255):
+                with self.subTest(prefix=prefix, hashes=len(hashes)):
+                    body = "registry.person.requests\n{nested}"
+                    literal = prefix + hashes + '"' + body + '"' + hashes
+                    source = "const VALUE = " + literal + ";\npub struct CompiledRegistry;"
+                    self.assertEqual([body], CHECKER.rust_string_literals(source))
+                    masked_literal = "".join("\n" if char == "\n" else " " for char in literal)
+                    self.assertEqual(
+                        "const VALUE = " + masked_literal + ";\npub struct CompiledRegistry;",
+                        CHECKER.rust_structure(source),
+                    )
+
+    def test_raw_delimiter_does_not_end_on_shorter_hash_sequence(self) -> None:
+        source = 'let first = br###"quoted "# still raw"###; let second = r"next";'
+        self.assertEqual(['quoted "# still raw', "next"], CHECKER.rust_string_literals(source))
+        structure = CHECKER.rust_structure(source)
+        self.assertEqual(source.index("let second"), structure.index("let second"))
+        self.assertNotIn("still raw", structure)
+
+    def test_unterminated_raw_literal_preserves_newlines_and_stops_at_end(self) -> None:
+        source = 'let prefix = 1; let value = r##"unfinished\nbody'
+        self.assertEqual([], CHECKER.rust_string_literals(source))
+        structure = CHECKER.rust_structure(source)
+        self.assertEqual(len(source), len(structure))
+        self.assertTrue(structure.startswith("let prefix = 1; let value = "))
+        self.assertEqual(source.index("\n"), structure.index("\n"))
+        self.assertNotIn("body", structure)
+
+    def test_cfg_test_raw_braces_do_not_hide_following_production_item(self) -> None:
+        source = (
+            'const PREFIX: &str = r#"{#[cfg(test)]}"#;\n'
+            '#[cfg(test)] mod tests { const BODY: &str = br##"}}}"##; }\n'
+            'const CANARY: &str = r###"registry.person.requests"###;\n'
+        )
+        inspected = CHECKER.without_cfg_test_items(source)
+        self.assertIn('const PREFIX: &str = r#"{#[cfg(test)]}"#;', inspected)
+        self.assertNotIn("const BODY", inspected)
+        self.assertIn('const CANARY: &str = r###"registry.person.requests"###;', inspected)
+        self.assertEqual(source.count("\n"), inspected.count("\n"))
+        self.assertEqual("registry.person.requests", CHECKER.rust_string_literals(inspected)[-1])
+
     def test_public_kernel_contract_canary_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -203,7 +203,7 @@ class CiChangesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         metadata = subprocess.run(
-            ("cargo", "metadata", "--locked", "--format-version", "1"),
+            ("cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"),
             check=True,
             capture_output=True,
             text=True,
@@ -548,6 +548,7 @@ class CiChangesTest(unittest.TestCase):
             "release/requirements/maturin-1.9.6.txt",
             "release/scripts/assemble-registry-client-packages.py",
             "release/scripts/assemble-registry-client-wheel.py",
+            "release/scripts/smoke-registry-client-package.py",
         ):
             with self.subTest(path=path):
                 self.assertTrue(

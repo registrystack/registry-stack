@@ -9,6 +9,7 @@ python3 "$script_dir/check_source_neutrality.py"
 python3 -m unittest \
   "$script_dir/test_validate_product.py" \
   "$script_dir/test_check_source_neutrality.py" \
+  "$script_dir/test_postgres_runner.py" \
   "$script_dir/test_generated_gates.py" \
   "$script_dir/test_quickstart.py" \
   "$script_dir/test_change_request_runner.py" \

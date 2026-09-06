@@ -132,6 +132,47 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 assemble,
             )
 
+    def test_ci_profile_only_changes_all_four_binding_build_profiles(self) -> None:
+        for napi_platform in self.module.PLATFORMS:
+            with self.subTest(platform=napi_platform):
+                args = (
+                    ROOT, "9.9.9", napi_platform, "all", "maturin",
+                    Path("/work"), Path("/out"),
+                )
+                release = self.module.plan(*args)
+                ci = self.module.plan(*args, python_profile="ci")
+                self.assertEqual(len(release), len(ci))
+                products = []
+                for release_step, ci_step in zip(release, ci):
+                    if release_step.argv[:2] == ("maturin", "build"):
+                        self.assertEqual(
+                            ci_step.argv,
+                            ("maturin", "build", "--profile", "ci", *release_step.argv[3:]),
+                        )
+                        self.assertEqual(ci_step.cwd, release_step.cwd)
+                        products.append(ci_step.cwd.name)
+                    else:
+                        self.assertEqual(ci_step, release_step)
+                self.assertEqual(products, [
+                    f"registry-{product}-client-py" for product in self.module.PRODUCTS
+                ])
+
+    def test_cli_ci_profile_is_explicit_and_rejects_unknown_profiles(self) -> None:
+        command = [
+            sys.executable, str(SCRIPT), "--output-dir", "/out",
+            "--napi-platform", "linux-x64-gnu", "--artifacts", "python", "--dry-run",
+        ]
+        result = subprocess.run(
+            [*command, "--python-profile", "ci"], capture_output=True, text=True, check=True
+        )
+        self.assertEqual(result.stdout.count("maturin build --profile ci --locked"), 4)
+        self.assertNotIn("--release", result.stdout)
+        invalid = subprocess.run(
+            [*command, "--python-profile", "dev"], capture_output=True, text=True
+        )
+        self.assertEqual(invalid.returncode, 2)
+        self.assertIn("invalid choice", invalid.stderr)
+
     def test_each_platform_names_the_wheel_tag_its_release_matrix_builds(self) -> None:
         candidate = (
             ROOT / ".github" / "workflows" / "release-candidate.yml"
