@@ -75,6 +75,20 @@ fn local_starter_creates_offline_project_and_target_settings_example() {
 }
 
 #[test]
+fn a_starter_without_sources_defers_the_fixture_run_to_its_readme() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let starter = write_sourceless_starter(workspace.path());
+    let project = workspace.path().join("project");
+    let output = starter_new(&project, &starter, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let printed = stdout(&output);
+    assert!(printed.contains(&format!("Next: follow {}/README.md", path(&project))));
+    assert!(!printed.contains("to prove the copied starter"));
+    assert!(printed.contains("before `evidencectl fixtures run --project"));
+}
+
+#[test]
 fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
     let workspace = TempDir::new().expect("temporary directory");
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
@@ -845,6 +859,42 @@ fn write_local_starter(root: &Path) -> PathBuf {
         (
             "targets/local/settings.example.yaml",
             b"formatVersion: 1\n".as_slice(),
+        ),
+    ] {
+        let path = starter.join(relative);
+        fs::create_dir_all(path.parent().expect("starter file parent")).expect("starter parent");
+        fs::write(path, contents).expect("starter file");
+    }
+    starter
+}
+
+fn write_sourceless_starter(root: &Path) -> PathBuf {
+    let starter = root.join("sourceless-starter");
+    for (relative, contents) in [
+        ("README.md", b"# Reviewed starter\n".as_slice()),
+        (
+            "schemas/record-status-response.schema.yaml",
+            include_bytes!(
+                "../templates/sqlite-extract/schemas/record-status-response.schema.yaml"
+            )
+            .as_slice(),
+        ),
+        (
+            "schemas/record-status-facts.schema.yaml",
+            include_bytes!("../templates/sqlite-extract/schemas/record-status-facts.schema.yaml")
+                .as_slice(),
+        ),
+        (
+            "questions/record-status.yaml",
+            include_bytes!("../templates/sqlite-extract/questions/record-status.yaml").as_slice(),
+        ),
+        (
+            "derivations/record-status.rhai",
+            include_bytes!("../templates/sqlite-extract/derivations/record-status.rhai").as_slice(),
+        ),
+        (
+            "fixtures/record-status.yaml",
+            include_bytes!("../templates/sqlite-extract/fixtures/record-status.yaml").as_slice(),
         ),
     ] {
         let path = starter.join(relative);

@@ -111,6 +111,12 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         AuthoringSource::Starter(starter) => collect_starter_files(starter)?,
         AuthoringSource::OpenApi(_) | AuthoringSource::SqliteExtract => Vec::new(),
     };
+    // A starter that ships no source (its README asks for one to be imported
+    // or authored first) cannot yet prove itself with `fixtures run`, so the
+    // printed next step must defer to the starter's own README instead.
+    let starter_ships_a_source = starter_files
+        .iter()
+        .any(|file| file.relative.starts_with("sources"));
 
     let staging = tempfile::Builder::new()
         .prefix(".evidencectl-new-")
@@ -231,8 +237,13 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
                 args.directory.display()
             );
         }
-        AuthoringSource::Starter(_) => println!(
+        AuthoringSource::Starter(_) if starter_ships_a_source => println!(
             "Next: run `evidencectl fixtures run --project {}` to prove the copied starter before live credentials.",
+            args.directory.display()
+        ),
+        AuthoringSource::Starter(_) => println!(
+            "Next: follow {}/README.md; this starter ships no source, so import or author one before `evidencectl fixtures run --project {}`.",
+            args.directory.display(),
             args.directory.display()
         ),
     }
