@@ -27,10 +27,11 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::bundle::{ArtifactFault, Bundle, SourceExtract};
 use crate::config::{
     is_http_token_byte, is_uri_byte, validate_local_unauthenticated_source_origin,
-    AcquisitionPosture, CredentialPlacement, DeclaredUnresolvedProblem, FixedRequest, HttpMethod,
-    OutboundTlsConfig, PathBindingConfig, PreparationChannelPolicy, SchemaFault, SecretRef,
-    SelectorInput, SourceAuthentication, SourceConfig, SourceSelectorSet, SqliteParameterBinding,
-    SqliteRequest, RESERVED_SQL_PARAMETER,
+    AcquisitionPosture, CredentialPlacement, DeclaredUnresolvedProblem, EvidenceConfig,
+    FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig, PreparationChannelPolicy,
+    SchemaFault, SecretRef, SelectorInput, SourceAuthentication, SourceConfig,
+    SourceConnectionConfig, SourceSelectorSet, SqliteParameterBinding, SqliteRequest,
+    RESERVED_SQL_PARAMETER,
 };
 use crate::model::SelectorValue;
 use crate::rhai_runtime::{RequestParts, StatementParameters};
@@ -256,14 +257,105 @@ enum SourceTransport {
 }
 
 struct HttpTransport {
-    client: reqwest::Client,
+    resources: Arc<HttpConnectionResources>,
     request: RequestPlan,
+    operation_timeout: Duration,
+    batch_projection: Option<ProjectionNode>,
+    unresolved_problem: Option<DeclaredUnresolvedProblem>,
+}
+
+/// Process-local transport and credential state. Only an explicitly named
+/// connection may give several source operations this same allocation.
+struct HttpConnectionResources {
+    client: reqwest::Client,
     authentication: AuthenticationPlan,
     secrets: Arc<SecretResolver>,
     concurrency: Semaphore,
-    concurrency_admission_timeout: Duration,
-    batch_projection: Option<ProjectionNode>,
-    unresolved_problem: Option<DeclaredUnresolvedProblem>,
+    admission_timeout: Duration,
+}
+
+/// Explicit named connections compiled once for a serving process. Entries
+/// contain no fetched facts or authorization decisions, and independent names
+/// are never deduplicated by credentials, endpoint or resolved secret bytes.
+pub struct SourceConnectionPool {
+    connections: BTreeMap<String, (SourceConnectionConfig, Arc<HttpConnectionResources>)>,
+}
+
+impl SourceConnectionPool {
+    pub fn new(
+        config: &EvidenceConfig,
+        outbound_tls: &OutboundTlsConfig,
+        captured_ca_bundles: &BTreeMap<String, Vec<u8>>,
+        secrets: Arc<SecretResolver>,
+    ) -> Result<Self, SourceError> {
+        let mut connections = BTreeMap::new();
+        for (_, source) in config.sources.iter() {
+            let Some(name) = source.connection() else {
+                continue;
+            };
+            let connection = config
+                .source_connections
+                .get(name)
+                .ok_or(SourceError::InvalidPlan)?;
+            if !connection.matches_source(source) {
+                return Err(SourceError::InvalidPlan);
+            }
+            if connections.contains_key(name) {
+                continue;
+            }
+            let token_timeout = Duration::from_millis(connection.token_timeout_milliseconds);
+            let admission_timeout =
+                Duration::from_millis(connection.admission_timeout_milliseconds);
+            if token_timeout.is_zero()
+                || token_timeout > Duration::from_secs(30)
+                || admission_timeout.is_zero()
+                || admission_timeout > Duration::from_secs(30)
+                || connection.concurrency_limit == 0
+                || connection.concurrency_limit > 256
+            {
+                return Err(SourceError::InvalidPlan);
+            }
+            let mut authentication =
+                compile_authentication(&connection.authentication, token_timeout)?;
+            if let AuthenticationPlan::Oauth2(plan) = &mut authentication {
+                plan.admission_timeout = admission_timeout;
+            }
+            let resources = HttpConnectionResources {
+                // Per-operation request timeouts are set on each request. A
+                // neutral client ceiling keeps connection pooling independent
+                // of which source happened to compile first.
+                client: build_client(
+                    Duration::from_secs(30),
+                    connection.tls_trust_profile.as_deref(),
+                    Some((outbound_tls, captured_ca_bundles)),
+                    false,
+                )?,
+                authentication,
+                secrets: Arc::clone(&secrets),
+                concurrency: Semaphore::new(usize::from(connection.concurrency_limit)),
+                admission_timeout,
+            };
+            connections.insert(name.to_owned(), (connection.clone(), Arc::new(resources)));
+        }
+        Ok(Self { connections })
+    }
+
+    fn resources(
+        &self,
+        source: &SourceConfig,
+    ) -> Result<Option<Arc<HttpConnectionResources>>, SourceError> {
+        source
+            .connection()
+            .map(|name| {
+                let (connection, resources) =
+                    self.connections.get(name).ok_or(SourceError::InvalidPlan)?;
+                if !connection.matches_source(source) {
+                    return Err(SourceError::InvalidPlan);
+                }
+                Ok(Arc::clone(resources))
+            })
+            .transpose()
+    }
 }
 
 /// One reviewed statement, and the extract it reads.
@@ -574,6 +666,7 @@ struct OauthPlan {
     /// Lifetime used when the provider omits `expires_in`.
     assumed_lifetime: Option<Duration>,
     admission_timeout: Duration,
+    request_timeout: Duration,
     cache: Mutex<Option<CachedToken>>,
 }
 
@@ -628,7 +721,15 @@ impl SourceExecutor {
         if source.tls_trust_profile().is_some() {
             return Err(SourceError::InvalidPlan);
         }
-        Self::compile(source, allowed_selector_sets, None, false, None, secrets)
+        Self::compile(
+            source,
+            allowed_selector_sets,
+            None,
+            false,
+            None,
+            secrets,
+            None,
+        )
     }
 
     /// Compile a source against runtime-owned TLS trust bindings. System roots
@@ -651,6 +752,30 @@ impl SourceExecutor {
             false,
             statement,
             secrets,
+            None,
+        )
+    }
+
+    /// Compile an operation with its explicitly named process-local owner.
+    /// The candidate still supplies every concrete destination and auth field;
+    /// the pool refuses any mismatch before sharing resources.
+    pub fn new_with_selector_sets_and_connection_pool(
+        source: &SourceConfig,
+        allowed_selector_sets: &[SourceSelectorSet],
+        outbound_tls: &OutboundTlsConfig,
+        captured_ca_bundles: &BTreeMap<String, Vec<u8>>,
+        statement: Option<StatementInputs<'_>>,
+        secrets: Arc<SecretResolver>,
+        pool: &SourceConnectionPool,
+    ) -> Result<Self, SourceError> {
+        Self::compile(
+            source,
+            allowed_selector_sets,
+            Some((outbound_tls, captured_ca_bundles)),
+            false,
+            statement,
+            secrets,
+            pool.resources(source)?,
         )
     }
 
@@ -672,6 +797,7 @@ impl SourceExecutor {
             true,
             statement,
             secrets,
+            None,
         )
     }
 
@@ -682,7 +808,11 @@ impl SourceExecutor {
         offline_fixture: bool,
         statement: Option<StatementInputs<'_>>,
         secrets: Arc<SecretResolver>,
+        shared_resources: Option<Arc<HttpConnectionResources>>,
     ) -> Result<Self, SourceError> {
+        if source.connection().is_some() && shared_resources.is_none() && !offline_fixture {
+            return Err(SourceError::InvalidPlan);
+        }
         // The source's own transport selects the executor. A source whose
         // transport this build has no executor for is refused here rather than
         // served by a substitute.
@@ -694,6 +824,7 @@ impl SourceExecutor {
                     outbound_tls,
                     offline_fixture,
                     secrets,
+                    shared_resources,
                 )?))
             }
             SourceConfig::SqliteExtract { .. } => {
@@ -807,7 +938,7 @@ impl SourceExecutor {
     /// request. OAuth may perform its bounded token bootstrap.
     pub async fn credentials_ready(&self) -> Result<(), SourceError> {
         match &self.transport {
-            SourceTransport::Http(http) => http.authentication_header().await.map(|_| ()),
+            SourceTransport::Http(http) => http.resources.credentials_ready().await,
             // A statement source reads a file the deployment mounted beside the
             // process. There are no credentials to hold, which is the point of
             // the transport, so it is ready as soon as it has compiled.
@@ -840,7 +971,7 @@ impl SourceExecutor {
     #[cfg(test)]
     fn http_concurrency(&self) -> &Semaphore {
         match &self.transport {
-            SourceTransport::Http(http) => &http.concurrency,
+            SourceTransport::Http(http) => &http.resources.concurrency,
             SourceTransport::Statement(_) => panic!("the source is not an HTTP source"),
         }
     }
@@ -853,6 +984,7 @@ impl HttpTransport {
         outbound_tls: Option<(&OutboundTlsConfig, &BTreeMap<String, Vec<u8>>)>,
         offline_fixture: bool,
         secrets: Arc<SecretResolver>,
+        shared_resources: Option<Arc<HttpConnectionResources>>,
     ) -> Result<Self, SourceError> {
         let SourceConfig::HttpJson {
             base_url: configured_base_url,
@@ -884,31 +1016,37 @@ impl HttpTransport {
             return Err(SourceError::InvalidPlan);
         }
         let base_url = validate_url(configured_base_url, true)?;
-        let authentication = compile_authentication(configured_authentication, timeout)?;
+        let resources = if let Some(resources) = shared_resources {
+            resources
+        } else {
+            Arc::new(HttpConnectionResources {
+                client: build_client(
+                    timeout,
+                    tls_trust_profile.as_deref(),
+                    outbound_tls,
+                    offline_fixture,
+                )?,
+                authentication: compile_authentication(configured_authentication, timeout)?,
+                secrets,
+                concurrency: Semaphore::new(usize::from(configured_request.concurrency_limit)),
+                admission_timeout: timeout,
+            })
+        };
         let request = compile_request(
             configured_request,
             allowed_selector_sets,
             *posture,
             base_url,
-            &authentication,
+            &resources.authentication,
         )?;
         let batch_projection = batch
             .as_deref()
             .map(|batch| compile_projection(&batch.projection))
             .transpose()?;
-        let client = build_client(
-            timeout,
-            tls_trust_profile.as_deref(),
-            outbound_tls,
-            offline_fixture,
-        )?;
         Ok(Self {
-            client,
+            resources,
             request,
-            authentication,
-            secrets,
-            concurrency: Semaphore::new(usize::from(configured_request.concurrency_limit)),
-            concurrency_admission_timeout: timeout,
+            operation_timeout: timeout,
             batch_projection,
             unresolved_problem: unresolved_problem.clone(),
         })
@@ -941,18 +1079,23 @@ impl HttpTransport {
         let MaterializedSourceRequest::Http { url, .. } = materialized else {
             return Err(SourceError::InvalidPlan);
         };
-        let _permit =
-            acquire_source_slot(&self.concurrency, self.concurrency_admission_timeout).await?;
+        let _permit = acquire_source_slot(
+            &self.resources.concurrency,
+            self.resources.admission_timeout,
+        )
+        .await?;
         let method = match self.request.method {
             HttpMethod::GET => reqwest::Method::GET,
             HttpMethod::POST => reqwest::Method::POST,
         };
         let mut request = self
+            .resources
             .client
             .request(method, url.clone())
+            .timeout(self.operation_timeout)
             .headers(self.request.fixed_headers.clone());
         if let Some((authentication_name, authentication_value)) =
-            self.authentication_header().await?
+            self.resources.authentication_header().await?
         {
             request = request.header(authentication_name, authentication_value);
         }
@@ -1009,6 +1152,29 @@ impl HttpTransport {
             url,
             body: request_parts.body.clone(),
         })
+    }
+}
+
+impl HttpConnectionResources {
+    async fn credentials_ready(&self) -> Result<(), SourceError> {
+        if let AuthenticationPlan::Oauth2(plan) = &self.authentication {
+            if plan.cached_token_ready().await? {
+                return Ok(());
+            }
+            // Only readiness that actually needs token I/O consumes upstream
+            // capacity. Another admitted operation may refresh while this
+            // check waits. Recheck the cache once after admission times out;
+            // that path performs no token request or credential resolution.
+            let _permit = match acquire_source_slot(&self.concurrency, self.admission_timeout).await
+            {
+                Ok(permit) => permit,
+                Err(SourceError::Timeout) if plan.cached_token_ready().await? => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            self.authentication_header().await.map(|_| ())
+        } else {
+            self.authentication_header().await.map(|_| ())
+        }
     }
 
     async fn authentication_header(
@@ -1763,6 +1929,7 @@ fn compile_authentication(
                 maximum_cache_lifetime: Duration::from_secs(*maximum_cache_seconds),
                 assumed_lifetime: assumed_lifetime_seconds.map(Duration::from_secs),
                 admission_timeout,
+                request_timeout: admission_timeout,
                 cache: Mutex::new(None),
             })))
         }
@@ -1951,6 +2118,15 @@ fn encode_path_text(text: &str, invalid_selectors: bool) -> Result<String, Sourc
 }
 
 impl OauthPlan {
+    async fn cached_token_ready(&self) -> Result<bool, SourceError> {
+        let cache = tokio::time::timeout(self.admission_timeout, self.cache.lock())
+            .await
+            .map_err(|_| SourceError::Timeout)?;
+        Ok(cache
+            .as_ref()
+            .is_some_and(|cached| cached.expires_at > Instant::now()))
+    }
+
     async fn access_token(
         &self,
         client: &reqwest::Client,
@@ -2014,6 +2190,7 @@ impl OauthPlan {
         // where proxy and ingress logs would capture it.
         let mut request = client
             .post(self.token_endpoint.clone())
+            .timeout(self.request_timeout)
             .header(ACCEPT, JSON_MEDIA_TYPE);
         match &self.client_authentication {
             OauthClientAuthentication::ClientSecret {
@@ -2713,7 +2890,7 @@ mod tests {
         );
     }
 
-    fn optimized_batch_executor(base_url: &str) -> SourceExecutor {
+    fn optimized_batch_source(base_url: &str) -> SourceConfig {
         let source: SourceConfig = serde_json::from_value(json!({
             "transport": "http-json",
             "baseUrl": base_url,
@@ -2756,12 +2933,383 @@ mod tests {
             }
         }))
         .expect("batch source deserializes");
+        source
+    }
+
+    fn optimized_batch_executor(base_url: &str) -> SourceExecutor {
+        let source = optimized_batch_source(base_url);
         let secret_root = tempfile::tempdir().expect("temporary secret root");
         let secrets = Arc::new(
             SecretResolver::new([crate::secrets::SecretProvider::File], secret_root.path())
                 .expect("secret resolver builds"),
         );
         SourceExecutor::new(&source, secrets).expect("batch source executor builds")
+    }
+
+    fn connection_test_config(base_url: &str, authentication: serde_json::Value) -> EvidenceConfig {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .unwrap();
+        let connection: SourceConnectionConfig = serde_json::from_value(json!({
+            "baseUrl": base_url, "authentication": authentication,
+            "concurrencyLimit": 1, "admissionTimeoutMilliseconds": 100,
+            "tokenTimeoutMilliseconds": 1000
+        }))
+        .unwrap();
+        config.source_connections = serde_json::from_value(json!({
+            "shared": connection.clone(), "independent": connection.clone()
+        }))
+        .unwrap();
+        let mut first = optimized_batch_source(base_url);
+        if let SourceConfig::HttpJson {
+            connection: name,
+            authentication,
+            ..
+        } = &mut first
+        {
+            *name = Some("shared".to_owned());
+            *authentication = connection.authentication;
+        }
+        let mut second = first.clone();
+        if let SourceConfig::HttpJson { request, .. } = &mut second {
+            request.path = Some("/second".to_owned());
+        }
+        let mut independent = first.clone();
+        if let SourceConfig::HttpJson { connection, .. } = &mut independent {
+            *connection = Some("independent".to_owned());
+        }
+        let mut inline = first.clone();
+        if let SourceConfig::HttpJson { connection, .. } = &mut inline {
+            *connection = None;
+        }
+        config.sources = serde_json::from_value(json!({
+            "first": first, "second": second, "independent": independent, "inline": inline
+        }))
+        .unwrap();
+        config
+    }
+
+    fn connection_test_executors(
+        config: &EvidenceConfig,
+        secrets: Arc<SecretResolver>,
+    ) -> Vec<SourceExecutor> {
+        let tls = OutboundTlsConfig {
+            system_roots: true,
+            trust_profiles: crate::config::OrderedMap::default(),
+        };
+        let captures = BTreeMap::new();
+        let pool =
+            SourceConnectionPool::new(config, &tls, &captures, Arc::clone(&secrets)).unwrap();
+        ["first", "second", "independent", "inline"]
+            .iter()
+            .map(|name| {
+                let source = config.sources.get(name).unwrap();
+                SourceExecutor::new_with_selector_sets_and_connection_pool(
+                    source,
+                    &conservative_selector_sets(source).unwrap(),
+                    &tls,
+                    &captures,
+                    None,
+                    Arc::clone(&secrets),
+                    &pool,
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    fn http_resources(executor: &SourceExecutor) -> &Arc<HttpConnectionResources> {
+        match &executor.transport {
+            SourceTransport::Http(http) => &http.resources,
+            _ => panic!("expected HTTP"),
+        }
+    }
+
+    #[tokio::test]
+    async fn named_connections_share_aggregate_admission_and_release_on_cancellation() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(2))
+                    .set_body_json(json!({"results": []})),
+            )
+            .mount(&server)
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(
+            SecretResolver::new([crate::secrets::SecretProvider::File], root.path()).unwrap(),
+        );
+        let config = connection_test_config(&server.uri(), json!({"kind": "none"}));
+        let executors = connection_test_executors(&config, secrets);
+        assert!(Arc::ptr_eq(
+            http_resources(&executors[0]),
+            http_resources(&executors[1])
+        ));
+        assert!(!Arc::ptr_eq(
+            http_resources(&executors[0]),
+            http_resources(&executors[2])
+        ));
+        assert!(!Arc::ptr_eq(
+            http_resources(&executors[0]),
+            http_resources(&executors[3])
+        ));
+        let request = prepared_batch_request();
+        let mut pending = Box::pin(executors[0].execute_batch(&request));
+        tokio::select! { result = &mut pending => panic!("source unexpectedly completed: {result:?}"),
+        _ = tokio::time::sleep(Duration::from_millis(30)) => {} }
+        assert_eq!(
+            http_resources(&executors[0])
+                .concurrency
+                .available_permits(),
+            0
+        );
+        assert_eq!(
+            executors[1].execute_batch(&request).await,
+            Err(SourceError::Timeout)
+        );
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "the second operation did not reach the upstream"
+        );
+        drop(pending);
+        assert_eq!(
+            http_resources(&executors[1])
+                .concurrency
+                .available_permits(),
+            1
+        );
+        let permit = http_resources(&executors[1])
+            .concurrency
+            .acquire()
+            .await
+            .unwrap();
+        assert_eq!(
+            http_resources(&executors[2])
+                .concurrency
+                .available_permits(),
+            1,
+            "an independent name retains separate capacity"
+        );
+        executors[0]
+            .credentials_ready()
+            .await
+            .expect("credential-free readiness does not consume source capacity");
+        drop(permit);
+        assert_eq!(
+            executors[1].execute_batch(&request).await,
+            Err(SourceError::Timeout)
+        );
+        assert_eq!(
+            http_resources(&executors[0])
+                .concurrency
+                .available_permits(),
+            1,
+            "an operation timeout releases aggregate capacity"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_oauth_readiness_rechecks_a_concurrent_refresh_after_admission_timeout() {
+        use std::os::unix::fs::PermissionsExt;
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/token"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "synthetic-token", "token_type": "Bearer", "expires_in": 300
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        for (name, value) in [
+            ("client-id", "synthetic-client"),
+            ("client-secret", "synthetic-secret"),
+        ] {
+            std::fs::write(root.path().join(name), value).unwrap();
+            std::fs::set_permissions(
+                root.path().join(name),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        let secrets = Arc::new(
+            SecretResolver::new([crate::secrets::SecretProvider::File], root.path()).unwrap(),
+        );
+        let config = connection_test_config(
+            &server.uri(),
+            json!({
+                "kind": "oauth2-client-credentials", "tokenEndpoint": format!("{}/token", server.uri()),
+                "clientIdRef": "secret:file/client-id", "clientSecretRef": "secret:file/client-secret",
+                "credentialPlacement": "form-body", "maximumCacheSeconds": 300
+            }),
+        );
+        let executors = connection_test_executors(&config, secrets);
+        let resources = http_resources(&executors[0]);
+        // An already admitted operation holds the only slot. Poll readiness
+        // exactly once so it observes the empty cache and queues for that slot.
+        let _held_by_operation = resources.concurrency.acquire().await.unwrap();
+        let mut readiness = Box::pin(executors[1].credentials_ready());
+        std::future::poll_fn(|context| {
+            assert!(std::future::Future::poll(readiness.as_mut(), context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        // The admitted operation completes its real token exchange, then keeps
+        // capacity while doing source work. Readiness must use the filled cache.
+        resources.authentication_header().await.unwrap();
+        assert_eq!(resources.concurrency.available_permits(), 0);
+        readiness
+            .await
+            .expect("a concurrent refresh keeps saturated readiness healthy");
+        let AuthenticationPlan::Oauth2(plan) = &resources.authentication else {
+            panic!("expected OAuth");
+        };
+        let mut cache = plan.cache.lock().await;
+        cache.as_mut().unwrap().expires_at = Instant::now();
+        drop(cache);
+        assert_eq!(
+            executors[1].credentials_ready().await,
+            Err(SourceError::Timeout),
+            "an expired cache cannot bypass failed admission"
+        );
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "timeout rechecks perform no token I/O"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_oauth_refresh_is_single_flight_and_file_rotation_takes_effect_after_restart() {
+        use std::os::unix::fs::PermissionsExt;
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/token"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_delay(Duration::from_millis(20))
+                .set_body_json(json!({"access_token": "synthetic-token", "token_type": "Bearer", "expires_in": 300})))
+            .mount(&server).await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::header(
+                "authorization",
+                "Bearer synthetic-token",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(json!({"results": []})),
+            )
+            .mount(&server)
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        for (name, value) in [
+            ("client-id", "synthetic-client"),
+            ("client-secret", "synthetic-predecessor"),
+            ("independent-secret", "synthetic-independent"),
+        ] {
+            std::fs::write(root.path().join(name), value).unwrap();
+            std::fs::set_permissions(
+                root.path().join(name),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        let secrets = Arc::new(
+            SecretResolver::new([crate::secrets::SecretProvider::File], root.path()).unwrap(),
+        );
+        let mut config = connection_test_config(
+            &server.uri(),
+            json!({
+                "kind": "oauth2-client-credentials", "tokenEndpoint": format!("{}/token", server.uri()),
+                "clientIdRef": "secret:file/client-id", "clientSecretRef": "secret:file/client-secret",
+                "credentialPlacement": "form-body", "maximumCacheSeconds": 300
+            }),
+        );
+        // Two simultaneous operations can reach the refresh lock; one token
+        // exchange still serves both operations on the explicit connection.
+        let mut document = serde_json::to_value(&config).unwrap();
+        for connection in document["sourceConnections"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            connection["concurrencyLimit"] = 2.into();
+        }
+        for source in document["sources"].as_object_mut().unwrap().values_mut() {
+            source["request"]["concurrencyLimit"] = 2.into();
+        }
+        document["sourceConnections"]["independent"]["authentication"]["clientSecretRef"] =
+            "secret:file/independent-secret".into();
+        document["sources"]["independent"]["authentication"]["clientSecretRef"] =
+            "secret:file/independent-secret".into();
+        config = serde_json::from_value(document).unwrap();
+        let executors = connection_test_executors(&config, Arc::clone(&secrets));
+        let request = prepared_batch_request();
+        let (first, second) = tokio::join!(
+            executors[0].execute_batch(&request),
+            executors[1].execute_batch(&request)
+        );
+        assert!(first.is_ok() && second.is_ok());
+        let token_count = |requests: &[wiremock::Request]| {
+            requests
+                .iter()
+                .filter(|request| request.url.path() == "/token")
+                .count()
+        };
+        assert_eq!(token_count(&server.received_requests().await.unwrap()), 1);
+        let first_permit = http_resources(&executors[0])
+            .concurrency
+            .acquire()
+            .await
+            .unwrap();
+        let second_permit = http_resources(&executors[1])
+            .concurrency
+            .acquire()
+            .await
+            .unwrap();
+        executors[0]
+            .credentials_ready()
+            .await
+            .expect("cached credential readiness does not consume source capacity");
+        drop(first_permit);
+        drop(second_permit);
+        std::fs::write(root.path().join("client-secret"), "synthetic-successor").unwrap();
+        executors[0].execute_batch(&request).await.unwrap();
+        assert_eq!(
+            token_count(&server.received_requests().await.unwrap()),
+            1,
+            "same-reference rotation leaves an unexpired cached token intact"
+        );
+        executors[2].execute_batch(&request).await.unwrap();
+        assert_eq!(
+            token_count(&server.received_requests().await.unwrap()),
+            2,
+            "an independent declaration has an independent OAuth cache"
+        );
+        drop(executors);
+        let restarted = connection_test_executors(&config, secrets);
+        restarted[0]
+            .execute_batch(&request)
+            .await
+            .expect("the synthetic source check succeeds after restart");
+        let requests = server.received_requests().await.unwrap();
+        let token_requests = requests
+            .iter()
+            .filter(|request| request.url.path() == "/token")
+            .collect::<Vec<_>>();
+        assert_eq!(token_requests.len(), 3);
+        assert!(token_requests[0]
+            .body
+            .windows(b"synthetic-predecessor".len())
+            .any(|value| value == b"synthetic-predecessor"));
+        assert!(token_requests[1]
+            .body
+            .windows(b"synthetic-independent".len())
+            .any(|value| value == b"synthetic-independent"));
+        assert!(token_requests[2]
+            .body
+            .windows(b"synthetic-successor".len())
+            .any(|value| value == b"synthetic-successor"));
     }
 
     fn prepared_batch_request() -> PreparedSourceBatchRequest {
@@ -3051,6 +3599,7 @@ mod tests {
             maximum_cache_lifetime: Duration::from_secs(60),
             assumed_lifetime: None,
             admission_timeout: Duration::from_millis(20),
+            request_timeout: Duration::from_millis(20),
             cache: Mutex::new(None),
         };
         let _occupied = plan.cache.lock().await;
@@ -3129,6 +3678,7 @@ mod tests {
             maximum_cache_lifetime: Duration::from_secs(60),
             assumed_lifetime: None,
             admission_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(5),
             cache: Mutex::new(None),
         };
         let client = reqwest::Client::builder()

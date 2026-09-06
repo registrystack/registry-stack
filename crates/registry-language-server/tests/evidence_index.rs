@@ -376,6 +376,33 @@ fn a_selector_profile_that_is_not_there_is_reported() {
     );
 }
 
+#[test]
+fn alternative_subject_profiles_navigate_and_report_missing_profiles() {
+    let question = QUESTION.replace(
+        "  selector: person_id\n  profile: <|subject-profile|>person-reference-v1\n",
+        "  profiles: [<|subject-profile|>person-reference-v1, <|missing-profile|>missing-profile]\n",
+    );
+    let project = EvidenceProject::new(&replacing(
+        &adult_status_project(),
+        QUESTION_PATH,
+        &question,
+    ));
+    let index = project.index();
+    assert_eq!(
+        definition_paths(&index, &project, QUESTION_PATH, "subject-profile"),
+        vec![project.path(SELECTOR_PATH)]
+    );
+    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
+    assert_eq!(
+        diagnostic.range.start,
+        project.cursor(QUESTION_PATH, "missing-profile")
+    );
+    assert_eq!(
+        diagnostic.code.as_deref(),
+        Some("evidence/unknown-selector-profile")
+    );
+}
+
 /// The same edge from the plural declaration. `question_subjects` in `registry-evidence-authoring`
 /// reads `subject:` and `subjects:` as one form, so a question written either way names a selector
 /// profile per subject and `crates/registry-evidencectl/src/authoring.rs` resolves every one of

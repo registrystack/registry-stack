@@ -66,6 +66,9 @@ pub enum Command {
     BundleCheck {
         #[arg(long)]
         bundle: PathBuf,
+        /// Return value-free bundle and requirement configuration revisions.
+        #[arg(long)]
+        json: bool,
     },
     /// Internal Evidencectl seam for bundle-only fixture evaluation.
     #[command(hide = true)]

@@ -440,6 +440,14 @@ environment dumps, logs, audit, errors, snapshots, or generated contracts.
 Private JWK parsing uses an explicit ES256/P-256 allowlist. Missing or failed
 signing is fail-closed and never releases an unsigned success response.
 
+Replacing a source credential file at the same secret reference does not
+invalidate an unexpired OAuth token. Provision provider overlap, replace
+owner-only files, drain and restart every affected Evidence process when
+immediate cache replacement is needed, verify a real synthetic source request,
+and retire the predecessor under the provider's token-validity policy. See
+[Source credential rotation](reference/request-adapter/deployment-projects/SOURCE-CREDENTIAL-ROTATION.md)
+for the supported sequence and the distinct emergency-revocation boundary.
+
 The operator commits one active public JWK and zero or more additionally
 published public JWKs. Every key is exact ES256/P-256 public material and its
 43-character `kid` is derived as its RFC 7638 thumbprint, never configured
@@ -495,6 +503,20 @@ shortens availability when necessary and is intentionally stronger than the
 ordinary validity window.
 
 ## Source and selector controls
+
+An optional governed `sourceConnections` map names shared HTTP workload
+connections. Each authored source's `connection` reference is resolved at build
+time into concrete endpoint, authentication, TLS-profile and concurrency fields;
+startup rejects mismatches. The connection owns those settings and aggregate
+resource limits. Each source retains its operation-specific request, timeout,
+projection and response bounds. Existing inline sources remain supported.
+
+Only the same explicit name in one process shares a transport pool, an
+admission semaphore and an OAuth token cache with single-flight refresh.
+Independent connection names and inline sources retain separate resources even
+when their credential bytes are equal. No facts or authorization decisions are
+shared. Waiting is bounded and cancellation releases capacity. Multiple
+processes do not share a distributed concurrency budget.
 
 Each subject role admits only named selector profiles from the trusted bundle.
 Each profile has one exact deployment-defined scalar field set, byte and
@@ -1341,9 +1363,11 @@ is the number of requests Evidence will have outstanding to that source at
 once, so sustained throughput through it is about `concurrencyLimit` divided by
 the source's round-trip latency. A `concurrencyLimit` of 8 against a provider
 answering in 20 ms sustains roughly 400 requests/second, and Evidence being
-capable of thousands changes nothing about that. The field accepts 1 to 256 and
-has no default: every bundle states it explicitly, because the right value is a
-claim about what the provider tolerates rather than a number Evidence can pick.
+capable of thousands changes nothing about that. The field accepts 1 to 256. Inline sources state it explicitly.
+A named connection owns one aggregate `concurrencyLimit` across its operations,
+with a conservative default of 4; a resolved source repeats that exact value.
+Size the connection limit against the provider's tolerance for the whole
+workload, and include every Evidence process when estimating provider load.
 Raising it moves load onto the provider, so raise it against the provider's own
 documented or agreed limit, not against Evidence's spare capacity.
 

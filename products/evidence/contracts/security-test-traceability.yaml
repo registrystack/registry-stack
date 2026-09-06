@@ -53,11 +53,18 @@ entries:
     tests: [{file: crates/registry-evidence/src/model.rs, name: request_rejects_query_material_and_unknown_fields}]
   - id: sec-selector-shape-not-callable
     tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: selector_aware_extraction_receives_only_the_authorized_source_subset}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: selector_aware_extraction_checks_exact_alternative_identity_before_facts}
       - {file: crates/registry-evidence/src/selector.rs, name: selector_claim_values_are_scalar_only}
       - {file: crates/registry-evidence/src/config.rs, name: active_source_role_sets_reject_unreachable_inputs_at_startup}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: failed_selector_budget_is_enforced_by_the_runtime_and_scoped_to_authority}
   - id: sec-source-request-immutable
     tests:
+      - {file: crates/registry-evidence/src/config.rs, name: named_source_connections_reject_retargeting_and_preserve_authentication_defaults}
+      - {file: crates/registry-evidence/src/source.rs, name: named_connections_share_aggregate_admission_and_release_on_cancellation}
+      - {file: crates/registry-evidence/src/source.rs, name: named_oauth_refresh_is_single_flight_and_file_rotation_takes_effect_after_restart}
+      - {file: crates/registry-evidence/src/source.rs, name: named_oauth_readiness_rechecks_a_concurrent_refresh_after_admission_timeout}
+      - {file: crates/registry-evidence/src/bundle.rs, name: requirement_projection_prunes_unreached_connections_and_covers_selected_behavior}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: exact_request_applies_path_query_body_headers_auth_and_projection_once}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: hostile_path_values_and_malformed_preparation_fail_before_transport_and_redact}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
@@ -71,6 +78,8 @@ entries:
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}]
   - id: sec-rhai-output-shape-closed
     tests:
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: selector_aware_extraction_has_fresh_inputs_and_no_ambiguous_abi}
+      - {file: crates/registry-evidence/src/kernel.rs, name: selector_aware_extraction_cannot_be_bypassed_by_source_batching}
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: extraction_decodes_only_the_closed_union_and_validates_facts}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_rejects_an_extra_extracted_fact_before_derivation_or_release}
   - id: sec-derived-value-output-gate
@@ -278,6 +287,8 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/kernel.rs, name: a_projected_response_outside_its_declared_shape_fails_before_extraction}
       - {file: crates/registry-evidence/src/config.rs, name: source_schema_roles_are_mandatory_distinct_and_directory_scoped}
+      - {file: crates/registry-evidence/src/bundle.rs, name: only_adapter_parameter_roots_allow_an_empty_closed_object}
+      - {file: crates/registry-evidence/src/bundle.rs, name: bundle_load_accepts_an_empty_closed_adapter_parameter_schema}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: sec_declared_unresolved_problem_is_exact_and_source_neutral}
   - id: sec-script-operation-exhaustion
     tests: [{file: crates/registry-evidence/src/rhai_runtime.rs, name: operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error}]

@@ -111,9 +111,19 @@ impl RequirementKind {
 #[serde(deny_unknown_fields)]
 pub struct QuestionSubject {
     pub role: String,
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(skip_serializing_if = "String::is_empty"))]
     pub selector: String,
     #[serde(default)]
     pub profile: Option<String>,
+    /// Explicit alternative profiles from the project's selector definitions.
+    /// Each profile supplies its complete field set, including composite keys.
+    #[serde(default, deserialize_with = "deserialize_subject_profiles")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(skip_serializing_if = "Vec::is_empty", length(min = 1, max = 16))
+    )]
+    pub profiles: Vec<String>,
     /// Whether this role supplies an inline operation path selector.
     ///
     /// Omission keeps the unambiguous single-role shorthand. An explicit
@@ -122,6 +132,19 @@ pub struct QuestionSubject {
     pub source: Option<bool>,
     #[serde(default)]
     pub derivation: bool,
+}
+
+fn deserialize_subject_profiles<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let profiles = Vec::<String>::deserialize(deserializer)?;
+    if profiles.is_empty() {
+        return Err(serde::de::Error::custom(
+            "subject.profiles must not be empty",
+        ));
+    }
+    Ok(profiles)
 }
 
 /// Where a question reads from: a named source, or an operation of the

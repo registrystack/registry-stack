@@ -1230,7 +1230,11 @@ fn compile_script(
         .filter(|function| function.name == entrypoint)
         .map(|function| function.params.len())
         .collect::<Vec<_>>();
-    if entrypoint_functions != [arity] {
+    let valid_arity = match entrypoint_functions.as_slice() {
+        [actual] => *actual == arity || (entrypoint == "extract" && *actual == 3),
+        _ => false,
+    };
+    if !valid_arity {
         return Err(invalid_script(
             "script does not declare exactly one entrypoint with the required arity",
         ));
@@ -1667,7 +1671,7 @@ fn validate_closed_schema(schema: &JsonValue, role: SchemaRole) -> Result<(), Bu
             "fact schema must require its exact closed field set",
         ));
     }
-    validate_schema_node(schema, role)
+    validate_schema_node_with_empty_root(schema, role, allow_empty_root)
 }
 
 /// Reads the one type a schema node declares, and returns `None` for a node that
@@ -1708,6 +1712,14 @@ fn schema_node_type(
 }
 
 fn validate_schema_node(node: &JsonValue, role: SchemaRole) -> Result<(), BundleError> {
+    validate_schema_node_with_empty_root(node, role, false)
+}
+
+fn validate_schema_node_with_empty_root(
+    node: &JsonValue,
+    role: SchemaRole,
+    allow_empty_root: bool,
+) -> Result<(), BundleError> {
     let object = node
         .as_object()
         .ok_or(invalid_artifact("every schema node must be a typed object"))?;
@@ -1780,7 +1792,9 @@ fn validate_schema_node(node: &JsonValue, role: SchemaRole) -> Result<(), Bundle
             let properties = object
                 .get("properties")
                 .and_then(JsonValue::as_object)
-                .filter(|properties| !properties.is_empty() && properties.len() <= 64)
+                .filter(|properties| {
+                    (allow_empty_root || !properties.is_empty()) && properties.len() <= 64
+                })
                 .ok_or(invalid_artifact(
                     "schema objects must declare bounded properties",
                 ))?;
@@ -2832,6 +2846,23 @@ fn canonical_projection(
     retain_members(members, "sources", |name| {
         acquisition_sources.contains(name)
     })?;
+    if members.contains_key("sourceConnections") {
+        let reached_connections = acquisition_sources
+            .iter()
+            .filter_map(|source_id| {
+                config
+                    .sources
+                    .get(source_id)
+                    .and_then(|source| source.connection())
+            })
+            .collect::<BTreeSet<_>>();
+        retain_members(members, "sourceConnections", |name| {
+            reached_connections.contains(name)
+        })?;
+        if reached_connections.is_empty() {
+            members.remove("sourceConnections");
+        }
+    }
     retain_members(members, "selectorProfiles", |name| profiles.contains(name))?;
     retain_acquisition_capability(members, requirement)?;
     preserve_selector_field_order(members, config, &profiles)?;
@@ -3046,6 +3077,49 @@ mod tests {
             fs::set_permissions(path, fs::Permissions::from_mode(file_mode))
                 .expect("set file mode");
         }
+    }
+
+    #[test]
+    fn requirement_projection_prunes_unreached_connections_and_covers_selected_behavior() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .unwrap();
+        let requirement = config.requirements[0].clone();
+        let source_id = requirement.acquisition.initial_source().to_owned();
+        let mut document = serde_json::to_value(&config).unwrap();
+        let project = |document: &JsonValue| {
+            let candidate: EvidenceConfig = serde_json::from_value(document.clone()).unwrap();
+            candidate
+                .validate()
+                .expect("each compared candidate is valid");
+            canonical_projection(&candidate, &requirement).unwrap()
+        };
+        // Normalize both sides through the same JSON roundtrip, which sorts
+        // the selector-field map before the binding-order projection.
+        let baseline = project(&document);
+        let source = &document["sources"][&source_id];
+        let connection = serde_json::json!({
+            "baseUrl": source["baseUrl"], "authentication": source["authentication"],
+            "concurrencyLimit": source["request"]["concurrencyLimit"]
+        });
+        document["sourceConnections"] = serde_json::json!({"unreached": connection.clone()});
+        assert!(
+            baseline == project(&document),
+            "unreached connections must not change a requirement"
+        );
+        document["sources"][&source_id]["connection"] = "shared".into();
+        document["sourceConnections"]["shared"] = connection;
+        let shared = project(&document);
+        assert!(baseline != shared);
+        document["sourceConnections"]["unreached"]["tokenTimeoutMilliseconds"] = 5001.into();
+        assert!(shared == project(&document));
+        document["sourceConnections"]["shared"]["tokenTimeoutMilliseconds"] = 5001.into();
+        assert!(shared != project(&document));
+        let before_behavior = project(&document);
+        document["sources"][&source_id]["behaviorRevision"] =
+            format!("sha256:{}", "a".repeat(64)).into();
+        assert!(before_behavior != project(&document));
     }
 
     #[test]
@@ -3611,6 +3685,50 @@ mod tests {
 
             set_tree_mode(directory.path(), 0o755, 0o444);
         }
+    }
+
+    #[test]
+    fn only_adapter_parameter_roots_allow_an_empty_closed_object() {
+        let empty = serde_json::json!({
+            "type": "object", "additionalProperties": false,
+            "required": [], "properties": {},
+        });
+        validate_closed_schema(&empty, SchemaRole::AdapterParameters)
+            .expect("a source can declare no startup parameters");
+        for role in [SchemaRole::Facts, SchemaRole::Response] {
+            assert!(validate_closed_schema(&empty, role).is_err());
+        }
+        let nested = serde_json::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["nested"], "properties": {"nested": empty},
+        });
+        assert!(validate_closed_schema(&nested, SchemaRole::AdapterParameters).is_err());
+        let mut outside_subset = empty.clone();
+        outside_subset["patternProperties"] = serde_json::json!({});
+        assert!(validate_closed_schema(&outside_subset, SchemaRole::AdapterParameters).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundle_load_accepts_an_empty_closed_adapter_parameter_schema() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", directory.path());
+        let path = directory.path().join("evidence.yaml");
+        let mut config: JsonValue = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for source in config["sources"].as_object_mut().unwrap().values_mut() {
+            source["request"]["adapterParameters"] = serde_json::json!({});
+        }
+        fs::write(&path, serde_norway::to_string(&config).unwrap()).unwrap();
+        fs::write(
+            directory
+                .path()
+                .join("schemas/adapter-parameters.schema.yaml"),
+            "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+        )
+        .unwrap();
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        Bundle::load(directory.path()).expect("a closed empty startup contract loads");
+        set_tree_mode(directory.path(), 0o755, 0o644);
     }
 
     #[cfg(unix)]

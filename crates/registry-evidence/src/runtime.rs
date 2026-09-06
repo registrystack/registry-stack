@@ -472,6 +472,13 @@ impl EvidenceRuntime {
         .await
         .map_err(|error| RuntimeInitializationError::Audit((&error).into()))?;
 
+        let connection_pool = crate::source::SourceConnectionPool::new(
+            &bundle.config,
+            &runtime_config.outbound_tls,
+            &runtime_document.ca_bundles,
+            Arc::clone(&secrets),
+        )
+        .map_err(|_| RuntimeInitializationError::Source)?;
         let mut sources = BTreeMap::new();
         for (source_id, source) in bundle.config.sources.iter() {
             let allowed_selector_sets = bundle.config.source_selector_sets(source_id);
@@ -482,13 +489,14 @@ impl EvidenceRuntime {
             let statement =
                 statement_inputs(source, &bundle, Some(&runtime_document.source_extracts))
                     .map_err(|_| RuntimeInitializationError::Source)?;
-            let executor = SourceExecutor::new_with_selector_sets_and_tls(
+            let executor = SourceExecutor::new_with_selector_sets_and_connection_pool(
                 source,
                 &allowed_selector_sets,
                 &runtime_config.outbound_tls,
                 &runtime_document.ca_bundles,
                 statement,
                 Arc::clone(&secrets),
+                &connection_pool,
             )
             .map_err(|_| RuntimeInitializationError::Source)?;
             sources.insert(source_id.to_owned(), executor);
@@ -2852,7 +2860,12 @@ impl EvidenceRuntime {
         let lookup = match source_response {
             SourceResponse::Data(source_response) => SourceStageLookup::Lookup(
                 self.kernel
-                    .extract_source_for_request_batch(&source_id, &source_response, prior_facts)
+                    .extract_source_for_request_batch_with_selectors(
+                        &source_id,
+                        &source_response,
+                        &preparation_selector_value,
+                        prior_facts,
+                    )
                     .map_err(|error| {
                         failure(
                             kernel_failure_problem(&error),
@@ -3017,10 +3030,12 @@ impl EvidenceRuntime {
         let lookup = match source_response {
             SourceResponse::DeclaredUnresolved => SourceStageLookup::DeclaredUnresolved,
             SourceResponse::Data(source_response) => {
-                match self
-                    .kernel
-                    .extract_source(&source_id, &source_response, prior_facts)
-                {
+                match self.kernel.extract_source_with_selectors(
+                    &source_id,
+                    &source_response,
+                    &preparation_selector_value,
+                    prior_facts,
+                ) {
                     Ok(lookup) => SourceStageLookup::Lookup(lookup),
                     Err(error) => {
                         let category = kernel_failure_category(&error);

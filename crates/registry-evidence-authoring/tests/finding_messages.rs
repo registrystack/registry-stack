@@ -540,3 +540,30 @@ fn object(document: &mut Value) -> &mut Map<String, Value> {
         .as_object_mut()
         .expect("the corpus builds JSON objects")
 }
+
+#[test]
+fn alternative_subject_profiles_are_closed_explicit_and_reference_only() {
+    let mut value = base_question();
+    value["source"] = json!({"ref":"records"});
+    value["subject"] = json!({"role":"holder","profiles":["by-code","by-code-and-region"]});
+    let parsed: Question = serde_json::from_value(value.clone()).unwrap();
+    assert!(validate_question(&parsed).is_empty());
+    for subject in [
+        json!({"role":"holder","profiles":[]}),
+        json!({"role":"holder","profiles":[],"selector":"code"}),
+    ] {
+        value["subject"] = subject;
+        assert!(serde_json::from_value::<Question>(value.clone()).is_err());
+    }
+    for subject in [
+        json!({"role":"holder","profiles":["by-code","by-code"]}),
+        json!({"role":"holder","profiles":["by-code"],"selector":"code"}),
+        json!({"role":"holder","profiles":["by-code"],"profile":"by-code"}),
+    ] {
+        value["subject"] = subject;
+        assert!(!validate_question(&serde_json::from_value(value.clone()).unwrap()).is_empty());
+    }
+    value["subject"] = json!({"role":"holder","profiles":["by-code"]});
+    value["source"] = base_question()["source"].clone();
+    assert!(!validate_question(&serde_json::from_value(value).unwrap()).is_empty());
+}
