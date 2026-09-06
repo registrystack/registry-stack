@@ -8,8 +8,8 @@ manifest, consolidated SPDX SBOM, and security-evidence archive.
 
 ## Install tools
 
-The commands require GitHub CLI, Cosign, `jq`, `crane`, and GNU `sha256sum`.
-Pin and record the tool versions used for an audit.
+The commands require GitHub CLI, Cosign, `jq`, `crane`, GNU `sha256sum`,
+`python3`, and `base64`. Pin and record the tool versions used for an audit.
 
 ## Download one release
 
@@ -103,7 +103,11 @@ while IFS=$'\t' read -r name digest final_ref; do
     discovery|evidence|mint|breg|relay) ;;
     *) echo "unexpected release image: ${name}" >&2; exit 1 ;;
   esac
-  test "$(crane digest "${final_ref}")" = "${digest}"
+  resolved_digest="$(crane digest "${final_ref}")"
+  if [[ "${resolved_digest}" != "${digest}" ]]; then
+    echo "digest mismatch for ${name}: manifest ${digest}, resolved ${resolved_digest}" >&2
+    exit 1
+  fi
 done < <(jq -r '.images[] | [.name,.digest,.final_ref] | @tsv' "${manifest}")
 ```
 
