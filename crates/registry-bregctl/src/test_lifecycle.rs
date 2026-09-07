@@ -122,7 +122,7 @@ pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycl
     let file = destination
         .create_new(0o666)
         .map_err(|_| TestLifecycleError::OutputPreflight)?;
-    let opened = match file.metadata() {
+    let opened = match preflight_metadata(&file) {
         Ok(metadata) => metadata,
         Err(_) => {
             // The failed call is the only source of the identity a by-name
@@ -535,6 +535,18 @@ fn cleanup_temporary_file(parent: &SafeDir, name: &OsStr) {
 
 /// Remove an entry only when it is still the exact file this process created,
 /// so a name swapped underneath the held parent descriptor is left alone.
+///
+/// The stat and the unlink are two calls against one name, and POSIX offers no
+/// identity-bound removal, so the check narrows the window between them rather
+/// than closing it: a name relinked in that gap is unlinked as though it were
+/// the entry the stat approved. That bound is accepted here rather than worked
+/// around. Every name this guards is one this process itself created or
+/// promoted through the resolved parent descriptor, and its expected identity
+/// comes from the descriptor this process wrote, so a name that changes in the
+/// gap can only have been changed by a writer who already holds write access to
+/// the resolved parent directory. Quarantining the name first would rename by
+/// the same name and add a call to the same window, so it would move the gap
+/// rather than remove it.
 pub(crate) fn remove_exact_file(
     destination: &SafeEntry,
     expected: &fs::Metadata,
@@ -544,6 +556,47 @@ pub(crate) fn remove_exact_file(
         return Err(std::io::Error::other("output identity changed"));
     }
     destination.remove_file()
+}
+
+/// Read the identity of the receipt the preflight just created. A failure here
+/// is the only path that leaves the created file in place, so a test-only fault
+/// stands in for a platform that cannot answer.
+fn preflight_metadata(file: &File) -> std::io::Result<fs::Metadata> {
+    if preflight_metadata_faulted() {
+        return Err(std::io::Error::other("receipt identity unavailable"));
+    }
+    file.metadata()
+}
+
+#[cfg(test)]
+thread_local! {
+    static PREFLIGHT_METADATA_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn preflight_metadata_faulted() -> bool {
+    PREFLIGHT_METADATA_FAULT.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+fn preflight_metadata_faulted() -> bool {
+    false
+}
+
+#[cfg(test)]
+fn install_preflight_metadata_fault() -> PreflightMetadataFaultGuard {
+    PREFLIGHT_METADATA_FAULT.with(|faulted| faulted.set(true));
+    PreflightMetadataFaultGuard
+}
+
+#[cfg(test)]
+struct PreflightMetadataFaultGuard;
+
+#[cfg(test)]
+impl Drop for PreflightMetadataFaultGuard {
+    fn drop(&mut self) {
+        PREFLIGHT_METADATA_FAULT.with(|faulted| faulted.set(false));
+    }
 }
 
 fn cleanup_exact_file(destination: &SafeEntry, expected: &fs::Metadata) {
@@ -644,6 +697,48 @@ mod tests {
                     .to_string_lossy()
                     .starts_with(".bregctl-test-receipt-")),
             "temporary receipt files are cleaned up"
+        );
+    }
+
+    #[test]
+    fn an_exact_removal_refuses_a_name_that_holds_another_file() {
+        let directory = TestDirectory::create();
+        let output = directory.path.join("receipt.json");
+        let created = fs::File::create(&output).expect("the guarded file creates");
+        let identity = created.metadata().expect("the created identity reads");
+        drop(created);
+        let destination = SafeEntry::resolve(&output).expect("the destination resolves");
+
+        // The name now holds a file this process never created, which is what
+        // the identity comparison exists to refuse. The other file is created
+        // while the guarded one still exists, so its identity differs even on
+        // filesystems that hand a freed inode number straight to the next
+        // creation under the same name.
+        let other = directory.path.join("other.json");
+        fs::write(&other, b"operator-owned").expect("another writer creates its file");
+        fs::rename(&other, &output).expect("another writer takes the name");
+        let refused = remove_exact_file(&destination, &identity)
+            .expect_err("a name holding another file is refused");
+
+        assert_eq!(refused.to_string(), "output identity changed");
+        assert_eq!(
+            fs::read(&output).expect("the other file remains"),
+            b"operator-owned"
+        );
+    }
+
+    #[test]
+    fn preflight_leaves_the_receipt_it_created_when_its_identity_is_unknown() {
+        let directory = TestDirectory::create();
+        let output = directory.path.join("receipt.json");
+
+        let _fault = install_preflight_metadata_fault();
+        let error = preflight_output(&output).expect_err("an unidentifiable receipt is refused");
+
+        assert!(matches!(error, TestLifecycleError::OutputPreflight));
+        assert!(
+            output.exists(),
+            "the receipt whose identity the preflight never learned is left in place"
         );
     }
 

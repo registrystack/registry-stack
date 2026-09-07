@@ -4260,12 +4260,9 @@ fn validate_entities(
                     "field name must be unique within an entity",
                 ));
             }
-            validate_uri_list(
-                &field.concepts,
-                format!("{field_path}.concepts"),
-                vocabularies,
-                errors,
-            );
+            let concepts_path = format!("{field_path}.concepts");
+            validate_uri_list(&field.concepts, concepts_path.clone(), vocabularies, errors);
+            validate_unique_concepts(&field.concepts, &concepts_path, vocabularies, errors);
             if let Some(codelist) = field.codelist.as_deref() {
                 validate_id(codelist, format!("{field_path}.codelist"), errors);
                 if !codelist_ids.contains(codelist) {
@@ -7085,6 +7082,72 @@ fn validate_uri_list(
     for (index, value) in values.iter().enumerate() {
         validate_uri(value, format!("{path}[{index}]"), vocabularies, errors);
     }
+}
+
+// A concept list names a set of terms, and its first entry supplies the
+// generated property identifier, so one term must not appear twice under two
+// spellings. Entries are compared after prefix expansion and after the
+// case-insensitive parts of the IRI are folded, since a CURIE, its expansion,
+// and a different scheme or host casing all name the same term.
+fn validate_unique_concepts(
+    concepts: &[String],
+    path: &str,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let mut first_position: BTreeMap<String, usize> = BTreeMap::new();
+    for (index, concept) in concepts.iter().enumerate() {
+        // An entry that does not expand already carries its own error.
+        let Some(expanded) = expand_uri(concept, vocabularies) else {
+            continue;
+        };
+        let key = iri_term_key(&expanded);
+        if let Some(first) = first_position.get(&key) {
+            errors.push(ValidationError::new(
+                format!("{path}[{index}]"),
+                format!(
+                    "concept must be unique within a field; {expanded} is already listed at {path}[{first}]"
+                ),
+            ));
+        } else {
+            first_position.insert(key, index);
+        }
+    }
+}
+
+// RFC 3987 makes an IRI's scheme and host case-insensitive and leaves
+// everything after them case-sensitive. Returns a comparison key with those two
+// components ASCII-lowercased and the path, query, and fragment kept exactly as
+// authored. The key is only ever compared: authored bytes reach rendered output
+// unchanged, so folding here moves no digest.
+fn iri_term_key(iri: &str) -> String {
+    let Ok(parsed) = Iri::parse(iri) else {
+        return iri.to_string();
+    };
+    let mut key = parsed.scheme().to_ascii_lowercase();
+    key.push(':');
+    if let Some(authority) = parsed.authority() {
+        key.push_str("//");
+        // Userinfo stays case-sensitive; only the host and port fold.
+        match authority.rsplit_once('@') {
+            Some((userinfo, host)) => {
+                key.push_str(userinfo);
+                key.push('@');
+                key.push_str(&host.to_ascii_lowercase());
+            }
+            None => key.push_str(&authority.to_ascii_lowercase()),
+        }
+    }
+    key.push_str(parsed.path());
+    if let Some(query) = parsed.query() {
+        key.push('?');
+        key.push_str(query);
+    }
+    if let Some(fragment) = parsed.fragment() {
+        key.push('#');
+        key.push_str(fragment);
+    }
+    key
 }
 
 fn validate_uri_or_code_list(

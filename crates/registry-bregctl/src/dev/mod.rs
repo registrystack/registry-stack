@@ -42,7 +42,16 @@ const RUNTIME_ROLE: &str = "breg_dev_runtime";
 const IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const LABEL: &str = "org.registrystack.bregctl.dev-owner";
+/// Refusal for a project that never started. Reporting a stopped session
+/// would claim owned services were stopped when none were ever created.
+const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check --project, or start one with bregctl dev --clients-file";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// Longest one supervised prerequisite command may run before the supervisor
+/// stops it and fails the start.
+const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+/// Longest the supervisor waits for the owned database, and for each started
+/// service, to answer as ready.
+const READY_DEADLINE: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -56,6 +65,16 @@ pub struct DevArgs {
 #[derive(Debug, Subcommand)]
 enum DevAction {
     /// Start or reuse the project's retained local database and services.
+    ///
+    /// A resident supervisor owns this project's PostgreSQL container plus its
+    /// local Mint and Base Registry Engine (BReg) children. The database runs
+    /// the pinned image
+    /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// which the supervisor pulls on the first start. Each supervised
+    /// prerequisite command may run for 120 seconds, and the database and each
+    /// started service have 45 seconds to answer as ready. A start that passes
+    /// a deadline fails, stops what it acquired, and keeps its owner-only
+    /// diagnostics in the project's private .breg/dev/logs directory.
     Start(StartArgs),
     /// Stop only this project's supervised services, preserving its database.
     Stop(StopArgs),
@@ -94,6 +113,8 @@ struct StopArgs {
     /// Also remove the owned container and its data volume, discarding records.
     #[arg(long)]
     remove: bool,
+    #[arg(long, hide = true)]
+    docker_bin: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -129,6 +150,20 @@ struct State {
     activated: bool,
     seeded: BTreeSet<String>,
     outputs: Vec<CredentialOutput>,
+    /// Installed prerequisites this session resolved, keyed by command name.
+    /// A state document written by an earlier session records none.
+    #[serde(default)]
+    binaries: BTreeMap<String, Binary>,
+}
+
+/// One resolved prerequisite as the session found it. The path resolves
+/// symlinks so a later diagnosis names the file that actually ran, which the
+/// executed path deliberately does not.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Binary {
+    path: PathBuf,
+    version: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -206,7 +241,7 @@ impl State {
 
 pub fn run(args: DevArgs) -> Result<Value> {
     match args.action {
-        Some(DevAction::Stop(args)) => stop(&args.project, args.remove),
+        Some(DevAction::Stop(args)) => stop(&args.project, args.remove, args.docker_bin.as_deref()),
         Some(DevAction::Start(args)) => start(args),
         None => start(args.start),
     }
@@ -380,6 +415,7 @@ fn start(args: StartArgs) -> Result<Value> {
             activated: false,
             seeded: BTreeSet::new(),
             outputs: vec![],
+            binaries: BTreeMap::new(),
         };
         ports(state.breg_port, state.mint_port, state.database_port)?;
         for port in [state.breg_port, state.mint_port, state.database_port] {
@@ -416,6 +452,11 @@ fn start(args: StartArgs) -> Result<Value> {
     }
     probe(state.database_port)?;
     remove_socket(&root)?;
+    state.binaries = BTreeMap::from([
+        ("breg".into(), binary(&root, &breg)?),
+        ("mint".into(), binary(&root, &mint)?),
+        ("docker".into(), binary(&root, &docker)?),
+    ]);
     state.status = Status::Starting;
     state.save()?;
     let log = log_file(&root, "supervisor")?;
@@ -555,17 +596,17 @@ fn verify_outputs(state: &State) -> Result<()> {
     Ok(())
 }
 
-fn stop(project_path: &Path, remove: bool) -> Result<Value> {
+fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<Value> {
     let project = project(project_path)?;
     let parent = project.join(".breg");
     if !parent.exists() {
-        return Ok(json!({"ok":true,"command":"dev stop","status":"stopped"}));
+        bail!(MISSING_SESSION);
     }
     private::check(&parent, true)?;
     let _lock = private::lock(&parent.join("dev.lock"))?;
     let root = parent.join("dev");
     if !root.exists() {
-        return Ok(json!({"ok":true,"command":"dev stop","status":"stopped"}));
+        bail!(MISSING_SESSION);
     }
     let mut state = read_state(&root)?;
     if !matches!(state.status, Status::Stopped)
@@ -581,7 +622,7 @@ fn stop(project_path: &Path, remove: bool) -> Result<Value> {
     for port in [state.breg_port, state.mint_port] {
         probe(port)?;
     }
-    let docker = executable("docker", None)?;
+    let docker = executable("docker", docker_bin)?;
     // Remove mode tolerates a container already taken by hand: reclaim verifies
     // ownership of whatever is still there and forgets the rest, so skip the
     // inspection (and the stop it guards) when nothing is listed under this name.
@@ -758,11 +799,11 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
             children.mint.as_mut().context("Mint child missing")?,
             &terminate,
         )?;
-        for client in &clients.clients {
-            token(&args.mint_bin, &state, &client.id)?;
-        }
         if state.package_revision.is_none() {
-            package(&mut state, &clients)?;
+            // The schema-test rehearsal presents these tokens to its own
+            // disposable runtime; the seed below mints its own.
+            tokens(&args.mint_bin, &state, &clients)?;
+            package(&args.docker_bin, &mut state, &clients)?;
         }
         ensure_active(&terminate)?;
         if !state.activated {
@@ -806,6 +847,10 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
             children.breg.as_mut().context("BReg child missing")?,
             &terminate,
         )?;
+        // A client token lives 300 seconds, which the child and readiness
+        // deadlines of a slow first start can exhaust before the seed runs.
+        // Mint the seeding tokens once the registry is ready, not before it.
+        tokens(&args.mint_bin, &state, &clients)?;
         seed(&mut state, &clients)?;
         let control_root = control_directory(&root)?;
         private::directory(&control_root)?;
@@ -983,6 +1028,40 @@ fn executable(name: &str, explicit: Option<&Path>) -> Result<PathBuf> {
     }
     Ok(path)
 }
+/// Recorded when an installed prerequisite does not report a usable version.
+/// A command that declines to identify itself still serves the session, and
+/// losing its recorded path would cost a later diagnosis more than the
+/// unknown version does.
+const UNREPORTED_VERSION: &str = "unreported";
+/// Longest version line kept; a prerequisite that prints a banner is bounded
+/// like every other captured output.
+const MAX_VERSION: usize = 200;
+
+/// Identify a resolved prerequisite for the state document: the fully
+/// canonical path of the file that runs, and the version it reports for
+/// itself. Diagnostics stay in the owner-only log directory.
+fn binary(root: &Path, path: &Path) -> Result<Binary> {
+    let (success, bytes) = output(
+        Command::new(path).arg("--version"),
+        root,
+        &format!(
+            "version-{}",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        ),
+        None,
+    )?;
+    let reported = String::from_utf8_lossy(&bytes);
+    let reported = reported.lines().next().unwrap_or_default().trim();
+    let version = if !success || reported.is_empty() {
+        UNREPORTED_VERSION.to_string()
+    } else {
+        reported.chars().take(MAX_VERSION).collect()
+    };
+    Ok(Binary {
+        path: fs::canonicalize(path)?,
+        version,
+    })
+}
 fn log_file(root: &Path, name: &str) -> Result<File> {
     let path = root
         .join("logs")
@@ -1127,7 +1206,7 @@ fn output(
             .context("command input missing")?
             .write_all(input.bytes)?;
     }
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + CHILD_DEADLINE;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
@@ -1354,7 +1433,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
             None,
         )?;
     }
-    let deadline = Instant::now() + Duration::from_secs(45);
+    let deadline = Instant::now() + READY_DEADLINE;
     loop {
         let result = docker_command(
             docker,
@@ -1515,6 +1594,13 @@ fn stop_database(docker: &Path, state: &State) -> Result<()> {
     Ok(())
 }
 
+fn tokens(mint: &Path, state: &State, clients: &Clients) -> Result<()> {
+    for client in &clients.clients {
+        token(mint, state, &client.id)?;
+    }
+    Ok(())
+}
+
 fn token(mint: &Path, state: &State, id: &str) -> Result<()> {
     let root = state.root();
     let bytes = Zeroizing::new(command(
@@ -1545,13 +1631,12 @@ fn token(mint: &Path, state: &State, id: &str) -> Result<()> {
     )
 }
 
-fn package(state: &mut State, clients: &Clients) -> Result<()> {
+fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     let root = state.root();
     // The schema-test database is disposable. A failed rehearsal is rebuilt;
     // the retained runtime database is never dropped or reseeded here.
-    let docker = executable("docker", None)?;
     sql(
-        &docker,
+        docker,
         state,
         "postgres",
         b"DROP DATABASE IF EXISTS breg_dev_test WITH (FORCE); CREATE DATABASE breg_dev_test;",
@@ -1568,7 +1653,7 @@ fn package(state: &mut State, clients: &Clients) -> Result<()> {
         initialization.push_str(&format!("CREATE SCHEMA {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
     }
     sql(
-        &docker,
+        docker,
         state,
         "breg_dev_test",
         initialization.as_bytes(),
@@ -1697,7 +1782,7 @@ fn http(
     })
 }
 fn ready(url: &str, child: &mut Child, terminate: &AtomicBool) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(45);
+    let deadline = Instant::now() + READY_DEADLINE;
     loop {
         ensure_active(terminate)?;
         if child.try_wait()?.is_some() {

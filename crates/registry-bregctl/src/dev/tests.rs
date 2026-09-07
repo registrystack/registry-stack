@@ -45,6 +45,7 @@ seed: []
         activated: false,
         seeded: BTreeSet::new(),
         outputs: vec![],
+        binaries: BTreeMap::new(),
     };
     (
         temporary,
@@ -174,12 +175,74 @@ fn occupied_and_ambiguous_ports_are_refused() {
     assert!(probe(listener.local_addr().unwrap().port()).is_err());
 }
 
+fn script(path: &Path, body: &str) {
+    fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
 #[test]
-fn stop_before_first_start_is_idempotent_without_docker() {
+fn resolved_prerequisites_record_a_canonical_path_and_their_reported_version() {
+    let (_temp, state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let installed = state.project.join("installed-probe");
+    script(&installed, "echo 'probe 9.9.9 (build 1)'");
+    let linked = state.project.join("probe");
+    std::os::unix::fs::symlink(&installed, &linked).unwrap();
+
+    // The executed path keeps the installed command name, so a distribution
+    // that routes a symlink by argv[0] still behaves as installed.
+    let resolved = executable("probe", Some(&linked)).unwrap();
+    assert_eq!(resolved, linked);
+    // The recorded path resolves that symlink, so a later diagnosis names the
+    // file that served the session rather than the name it was reached by.
+    let recorded = binary(&root, &resolved).unwrap();
+    assert_eq!(recorded.path, fs::canonicalize(&installed).unwrap());
+    assert_eq!(recorded.version, "probe 9.9.9 (build 1)");
+
+    // A prerequisite that cannot answer keeps its path and says so.
+    let silent = state.project.join("silent-probe");
+    script(&silent, "exit 3");
+    let silent = binary(&root, &silent).unwrap();
+    assert_eq!(silent.version, UNREPORTED_VERSION);
+    assert!(silent.path.ends_with("silent-probe"));
+
+    let mut recorded_state = read_state(&root).unwrap();
+    recorded_state.binaries = BTreeMap::from([("probe".into(), recorded.clone())]);
+    recorded_state.save().unwrap();
+    assert_eq!(read_state(&root).unwrap().binaries["probe"], recorded);
+    // A state document written before this record stays readable.
+    let mut document = serde_json::to_value(&recorded_state).unwrap();
+    document.as_object_mut().unwrap().remove("binaries");
+    private::replace(
+        &root.join("state.json"),
+        &serde_json::to_vec(&document).unwrap(),
+    )
+    .unwrap();
+    assert!(read_state(&root).unwrap().binaries.is_empty());
+}
+
+#[test]
+fn stop_before_first_start_names_the_missing_session_without_docker() {
     let temporary = tempfile::tempdir().unwrap();
-    assert_eq!(stop(temporary.path(), false).unwrap()["status"], "stopped");
-    assert_eq!(stop(temporary.path(), false).unwrap()["status"], "stopped");
-    assert_eq!(stop(temporary.path(), true).unwrap()["status"], "stopped");
+    let project = fs::canonicalize(temporary.path()).unwrap();
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
+    let refusals = [
+        stop(&project, false, None).expect_err("a project without a session"),
+        stop(&project, true, None).expect_err("reclaiming without a session"),
+        {
+            // A private .breg directory without a dev journal is the same absence.
+            private::directory(&project.join(".breg")).unwrap();
+            stop(&project, false, None).expect_err("a project without a dev journal")
+        },
+    ];
+    for refusal in refusals {
+        let refusal = format!("{refusal:#}");
+        assert!(
+            refusal.contains("no local development session"),
+            "{refusal}"
+        );
+    }
 }
 
 #[test]
@@ -222,6 +285,101 @@ fn database_roles_have_independent_passwords_and_hmac_files_are_secret_safe() {
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')));
     }
+}
+
+/// The pinned image and the two deadlines are facts an operator checks before
+/// a first start. Hold the owning document, the command's own help text and
+/// the supervisor's constants equal so they cannot drift apart.
+#[test]
+fn the_documented_image_and_deadlines_are_the_supervisors_own() {
+    let document = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/DEV.md"),
+    )
+    .expect("the owning lifecycle document");
+    // Read the tree the binary publishes. A long description set on DevArgs
+    // never reaches an operator, because the variant that carries dev states
+    // its own description after the arguments are augmented.
+    let cli = <crate::Cli as clap::CommandFactory>::command();
+    let dev = cli
+        .get_subcommands()
+        .find(|command| command.get_name() == "dev")
+        .expect("bregctl publishes dev");
+    let help = dev
+        .get_subcommands()
+        .find(|command| command.get_name() == "start")
+        .and_then(|command| command.get_long_about())
+        .expect("dev start describes its own supervision")
+        .to_string();
+    for fact in [
+        IMAGE.to_owned(),
+        format!("{} seconds", CHILD_DEADLINE.as_secs()),
+        format!("{} seconds", READY_DEADLINE.as_secs()),
+    ] {
+        assert!(
+            document.contains(&fact),
+            "products/breg/DEV.md omits {fact}"
+        );
+        assert!(help.contains(&fact), "bregctl dev start help omits {fact}");
+    }
+}
+
+#[test]
+fn every_database_url_names_the_published_loopback_literal() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    for name in [
+        "runtime-database-url",
+        "migration-database-url",
+        "test-runtime-database-url",
+        "test-migration-database-url",
+    ] {
+        // The container publishes on 127.0.0.1 only, and a host that resolves
+        // localhost to ::1 first cannot reach it. Compare the parsed host, so
+        // a failure never prints the URL's password.
+        let url = reqwest::Url::parse(
+            &String::from_utf8(
+                private::read(&state.root().join("secrets").join(name), MAX_BYTES).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(url.host_str(), Some("127.0.0.1"), "{name}");
+        assert_eq!(url.port(), Some(state.database_port), "{name}");
+    }
+}
+
+#[test]
+fn verify_outputs_publishes_a_recorded_pair_after_a_partial_start() {
+    let (_temp, state, mut clients, files) = fixture();
+    let out = state.project.join("out");
+    private::directory(&out).unwrap();
+    clients.clients[1].client_id_file = Some(out.join("id"));
+    clients.clients[1].assertion_key_file = Some(out.join("key"));
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let state = read_state(&state.root()).unwrap();
+    // A start that failed before publishing leaves both halves absent. The
+    // retry publishes the recorded pair from the retained credentials rather
+    // than generating a second identity for the same client.
+    assert!(!out.join("id").exists());
+    assert!(!out.join("key").exists());
+    verify_outputs(&state).expect("a retry publishes the recorded pair");
+    let credentials = state.root().join("credentials/source");
+    for (published, retained) in [("id", "client-id"), ("key", "assertion-key.jwk")] {
+        assert_eq!(
+            private::read(&out.join(published), MAX_BYTES).unwrap(),
+            private::read(&credentials.join(retained), MAX_BYTES).unwrap()
+        );
+    }
+    private::validate_tree(&out).expect("published credentials stay owner-only");
+
+    // A retained credential replaced under the recorded pair stops the start
+    // instead of publishing bytes the record does not name.
+    private::replace(&credentials.join("client-id"), b"replaced-by-hand").unwrap();
+    let refused = format!(
+        "{:#}",
+        verify_outputs(&state).expect_err("changed credential")
+    );
+    assert!(refused.contains("owned credential changed"), "{refused}");
 }
 
 #[test]

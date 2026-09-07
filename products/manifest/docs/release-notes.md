@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- A field may no longer list one semantic concept twice. Two entries name one
+  term when they expand to the same IRI, or when they differ only in the
+  case-insensitive parts of that IRI, its scheme and host. Path, query, and
+  fragment case still separates two terms. Remove the repeated entry before
+  validating or republishing. Rendered output still publishes the spelling the
+  manifest was authored with, so a manifest that still validates keeps its
+  `source_manifest_digest`.
+
+## 0.27.0
+
+- Documented the order and authority of `fields[].concepts`: the first entry
+  supplies the generated property identifier, while the catalog preserves
+  every entry in author order. An empty list uses a deterministic manifest URI.
+- Added a semantic-concepts example without asserting equivalence between the
+  referenced vocabularies. Generated output is unchanged.
+
 ## 0.26.1
 
 - Registry Manifest has no user-visible format or rendering changes in this

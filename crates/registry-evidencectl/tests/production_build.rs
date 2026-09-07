@@ -963,6 +963,38 @@ impl Fixture {
     }
 }
 
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        // A successful build seals its published candidate: the bundle directory tree loses
+        // its write bit (0o500 dirs, 0o400 files) as its production immutability guarantee.
+        // The tempdir cleanup below cannot remove entries from a directory it cannot write
+        // to, so every path a test may have published a candidate under is restored to
+        // owner-writable first.
+        if let Err(error) = make_tree_writable(&self.root) {
+            // Swallowing the error would leave a read-only tree behind with no trace.
+            // A test that is already unwinding keeps its own failure as the report.
+            if !std::thread::panicking() {
+                panic!("restore fixture permissions before cleanup: {error}");
+            }
+        }
+    }
+}
+
+fn make_tree_writable(path: &Path) -> std::io::Result<()> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if metadata.is_dir() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        for entry in fs::read_dir(path)? {
+            make_tree_writable(&entry?.path())?;
+        }
+    } else if metadata.is_file() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 fn question(id: &str) -> String {
     format!(
         r#"id: {id}

@@ -127,8 +127,9 @@ any security option other than one `no-new-privileges` entry, multiple
 replicas, lifecycle hooks, dynamic-loader overrides, inherited mounts,
 executable- or library-shadowing mounts, writable configuration or secret
 trees, anonymous audit volumes, service-level tmpfs, any long-form
-tmpfs except the required read-only mount at `/dev/shm`, and
-driver-option-backed named volumes. Docker's
+tmpfs except the required read-only mount at `/dev/shm`,
+driver-option-backed named volumes, and healthchecks that run anything but the
+product's own executable as a command. Docker's
 implicit writable `/dev/shm` would otherwise let an unused durable audit
 volume hide an ephemeral configured sink. With `/dev/shm` read-only, the fixed
 nonroot identity, and the read-only root filesystem, the audit root is the only
@@ -140,7 +141,11 @@ ownership boundary: the adapter owns storage persistence and never reads
 product configuration, while the product owns configuration resolution and
 never infers which mounts are durable. Neither a durable mount sitting unused
 beside an ephemeral configured sink nor an existing symlink leading out of the
-mount satisfies both halves. An image whose check command does not support
+mount satisfies both halves. The root handed over must be an absolute directory
+below `/`, since `/` would be a containment assertion no configured sink can
+fail. A passing run states the limit of that proof: each sink resolves inside
+the declared mount, and whether the storage behind the mount survives is not
+proven. An image whose check command does not support
 `--require-audit-under` fails the preflight, which names that service and the
 missing support instead of reporting a generic failure. The preflight never
 drops the assertion to accommodate such an image.
@@ -155,8 +160,11 @@ Selected Compose dependencies are honored. A cold Evidence check can check,
 start with `--no-deps`, and readiness-probe a declared Mint dependency before
 checking Evidence. The dependency lane is an explicit allowlist: only a
 selected service whose product is Mint may be started, because Relay's existing
-healthcheck is liveness-only and is not accepted as readiness, and a
-`depends_on` edge to a service the operator did not select starts nothing. The
+healthcheck is liveness-only and is not accepted as readiness. A `depends_on`
+edge to an official Registry Stack service the operator did not select is
+refused and names both ends, because the dependent would otherwise be checked
+against a service this run never checked or started; an edge to any other
+service starts nothing. The
 plan orders every dependency before its dependent, rejects a cycle in the
 selected services before running anything, and is otherwise the given selection
 order. `docker/compose/docker-compose.mint.yaml` is the cold Mint and Evidence
@@ -164,14 +172,17 @@ fixture for that lane; it publishes no host port.
 
 Services started for dependency checking remain under the operator's Compose
 lifecycle. The preflight names them, and the command that stops them, on
-success and on failure, so a partially completed run is recoverable with the
-same Compose files. That command repeats the `--env-file` and `--compose-file`
+success and on any failure, so a partially completed run is recoverable with
+the same Compose files. A service whose start did not return successfully is
+named as one the preflight could not confirm, because Compose may have created
+its container before failing. That command repeats the `--env-file` and `--compose-file`
 arguments the preflight was given, because the preflight itself renders the
 deployment once and runs every later command against that frozen configuration
 on stdin. `--dependency-timeout-seconds` bounds both Mint startup and
-readiness polling under one shared deadline. Mint's `MINT_HEALTHCHECK_URL`
-selects a numeric private `/ready` listener when loopback is not the configured
-bind. Native checks consume the exact rendered Compose JSON already
+readiness polling under one shared deadline. The cold Mint overlay requires
+`MINT_HEALTHCHECK_URL` so the probe names the numeric private `/ready` listener
+Mint binds rather than the command's loopback default. Native checks consume the
+exact rendered Compose JSON already
 validated by the static pass, rather than re-reading mutable Compose or
 environment files.
 
@@ -181,6 +192,11 @@ Neither image declares a Docker `HEALTHCHECK`. Mint provides a strict
 `mint healthcheck` command for its private `/ready` endpoint; Evidence serves
 `GET /health` and expects an operator-owned HTTP probe. The image itself does
 not guess which listener address is reachable from the container namespace.
+
+A Compose healthcheck is a command Docker runs inside the container as the
+service identity, so the preflight validates it: absent, explicitly disabled,
+or the product's own executable run through `CMD`. A shell form is refused,
+and the distroless images have no shell to run it with.
 
 For an approved Evidence release or candidate, use the operator-owned
 [Compose adapter](compose/README.md), pin the reviewed image digest, and run

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.27.0 - 2026-09-07
+
+- Runtime dependency checks can require an explicitly configured audit root.
+- OIDC permission parsing rejects malformed present scope claims instead of
+  ignoring malformed values. A present claim must be a string or an array of
+  strings; a missing claim remains allowed and supplies no permissions.
+
 ## v0.26.1 - 2026-09-04
 
 - The shared platform crates have no user-visible changes in this release.

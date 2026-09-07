@@ -1,4 +1,8 @@
 apiVersion: registry.registrystack.org/breg-journeys/v1
+# Journeys rehearse the native request schema, so every field appears under the
+# identifier registry.yaml declares. `registration-number` also declares
+# `apiName: registrationNumber`, the property name the HTTP API uses and the one
+# the seed records in ../clients.yaml carry.
 journeys:
 - id: source-lookup-boundary
   steps:

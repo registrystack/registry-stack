@@ -1026,11 +1026,11 @@ async fn prepare_service(write_source_secret: bool) -> PreparedService {
     let deployment =
         DeploymentInputs::load(&runtime_path).expect("closed selector deployment inputs load");
     assert_ne!(
-        deployment.bundle.revision(),
-        deployment.runtime.revision(),
+        deployment.bundle().revision(),
+        deployment.runtime().revision(),
         "governed bundle and runtime have independent revisions"
     );
-    let bundle = Arc::new(deployment.bundle);
+    let bundle = Arc::new(deployment.into_parts().0);
     let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("selector kernel compiles");
     let secrets = Arc::new(
         SecretResolver::new([SecretProvider::File], &secret_root)

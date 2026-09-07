@@ -151,6 +151,35 @@ Reordering the list moves the generated property identifier and changes SHACL
 and JSON Schema output. Appending a concept does not. Treat a reorder as a
 breaking metadata change and an append as an additive one.
 
+#### Uniqueness and IRI case of `fields[].concepts`
+
+A field carries a set of terms, so `fields[].concepts` must not name one term
+twice. Entries are compared after prefix expansion, so a CURIE and the absolute
+IRI it expands to are one entry, and two prefixes bound to one namespace, such
+as the built-in `cccev:` and `cv:`, are one entry. A repeated term fails
+validation with a diagnostic that names the expanded IRI and the position of the
+first occurrence.
+
+RFC 3987 makes an IRI's scheme and host case-insensitive and everything after
+them case-sensitive, and that split decides when two spellings are one term.
+
+- **Scheme and host case is folded for comparison.**
+  `https://vocab.example.gov/person#identifier` and
+  `HTTPS://Vocab.Example.GOV/person#identifier` name one term, so a field that
+  lists both fails validation.
+- **Path, query, and fragment case is not folded.**
+  `https://vocab.example.gov/person#identifier` and
+  `https://vocab.example.gov/person#Identifier` are two terms, as are
+  `.../person#identifier` and `.../Person#identifier`. A vocabulary that
+  separates two terms by case keeps both.
+- **Comparison never rewrites the manifest.** Folding happens in the comparison
+  key alone. Every renderer publishes the spelling the manifest was authored
+  with, so a manifest that already validated keeps its typed canonical bytes and
+  its `source_manifest_digest`.
+
+Host folding is ASCII-only. Two Unicode spellings of one non-ASCII host are not
+recognised as one host.
+
 #### What a concept reference does not do
 
 A concept IRI describes the meaning of published metadata. It carries no
@@ -328,6 +357,12 @@ supported values and be unique, `policy_hash` must match the `sha256:<64 lowerca
 pattern, `odrl_policy_url` must be HTTPS). The "Required" column applies only when the
 `evidence_pack` belongs to a `governed-evidence` ecosystem binding; outside that case, every
 field is optional.
+
+The `policy_hash` pattern is exact. A digest whose hex uses an uppercase digit,
+or whose prefix is not the literal `sha256:`, is refused with a diagnostic that
+names the field rather than normalised into the documented spelling, because the
+manifest is a closed contract and the digest is compared byte for byte against
+the canonical inline policy.
 
 | Key | Required (governed-evidence) | Description |
 | --- | --- | --- |

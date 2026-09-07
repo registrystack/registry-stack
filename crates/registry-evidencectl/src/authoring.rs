@@ -7,10 +7,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::Read as _,
+    io::{self, Read as _},
+    iter::Peekable,
     os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, ExitStatus, Stdio},
+    str::Chars,
+    thread,
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -52,6 +55,14 @@ const LOCAL_AUDIENCE: &str = "registry-evidence-local";
 const LOCAL_SIGNING_PRIVATE_FILENAME: &str = "signing-p256-private-jwk";
 const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
+/// The largest number of authority grants one generated profile may carry.
+///
+/// `products/evidence/contracts/bundle.schema.yaml` bounds
+/// `authorityProfiles.*.grants` at this many entries and the runtime refuses a
+/// bundle past it when it loads. Questions each hold their own selector
+/// alternatives well under the bound, so only the profile they are gathered
+/// into can exceed it.
+const MAX_PROFILE_AUTHORITY_GRANTS: usize = 128;
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,8 +139,21 @@ pub(crate) struct CompiledFixtureProject {
 
 impl Drop for CompiledFixtureProject {
     fn drop(&mut self) {
-        let _ = set_bundle_modes(&self.bundle_path, 0o700, 0o600);
+        if let Err(error) = set_bundle_modes(&self.bundle_path, 0o700, 0o600) {
+            eprintln!("{}", cleanup_failure_line(&self.bundle_path, &error));
+        }
     }
+}
+
+/// The single line a cleanup failure a `Drop` cannot return is reported on.
+///
+/// A sealed artifact left behind is the operator's to remove, so the path and
+/// the cause both have to reach them.
+fn cleanup_failure_line(path: &Path, error: &anyhow::Error) -> String {
+    format!(
+        "evidencectl: failed to restore owner write on {}: {error:#}",
+        path.display()
+    )
 }
 
 enum CompileProfile {
@@ -266,8 +290,13 @@ pub(crate) fn compile_local_project_with_target_inputs(
     if let Err(error) = check_with_evidence(evidence_bin, &compilation.runtime_path) {
         // A rejected unpublished generation should remain removable by its
         // owner. No path outside the caller-supplied staging root is changed.
-        let _ = set_bundle_modes(&staging_root.join("bundle"), 0o700, 0o600);
-        let _ = fs::set_permissions(&compilation.runtime_path, fs::Permissions::from_mode(0o600));
+        set_bundle_modes(&staging_root.join("bundle"), 0o700, 0o600).with_context(|| {
+            format!("restoring owner write on the rejected generation after {error:#}")
+        })?;
+        fs::set_permissions(&compilation.runtime_path, fs::Permissions::from_mode(0o600))
+            .with_context(|| {
+                format!("restoring owner write on the rejected runtime settings after {error:#}")
+            })?;
         return Err(error);
     }
 
@@ -1152,7 +1181,7 @@ fn compile_plan_with_connections(
             authored,
         )?);
     }
-    prune_unused_source_alternatives(&mut questions);
+    prune_unused_source_alternatives(&mut questions)?;
     let access_policies = inputs.access_policies;
     match profile {
         CompileProfile::Local {
@@ -1161,7 +1190,7 @@ fn compile_plan_with_connections(
             active_public_jwk,
         } => {
             let mut bundle =
-                render_local_bundle(&questions, &access_policies, ports, &active_public_jwk_file);
+                render_local_bundle(&questions, &access_policies, ports, &active_public_jwk_file)?;
             if source_connections
                 .as_object()
                 .is_some_and(|connections| !connections.is_empty())
@@ -1187,7 +1216,7 @@ fn compile_plan_with_connections(
     }
 }
 
-fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) {
+fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) -> Result<()> {
     let mut reached = BTreeMap::<String, BTreeSet<(String, String)>>::new();
     for question in questions.iter() {
         let profiles = reached.entry(question.source_id.clone()).or_default();
@@ -1210,7 +1239,7 @@ fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) {
             .and_then(Value::as_array_mut)
         {
             for input in inputs {
-                let role = input["role"].as_str().unwrap_or_default().to_owned();
+                let role = selector_input_role(input)?.to_owned();
                 if let Some(alternatives) = input["alternatives"].as_array_mut() {
                     alternatives.retain(|alternative| {
                         alternative["profile"].as_str().is_some_and(|profile| {
@@ -1221,6 +1250,7 @@ fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) {
             }
         }
     }
+    Ok(())
 }
 
 /// Copy only the connection-owned slots into ordinary source configuration.
@@ -1786,10 +1816,7 @@ fn compile_referenced_subjects(
         });
     }
     for input in source_selector_inputs(source)? {
-        let role = input
-            .get("role")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("source selector input has no role"))?;
+        let role = selector_input_role(input)?;
         if compiled
             .iter()
             .filter(|subject| subject.role == role && subject.source)
@@ -1800,6 +1827,17 @@ fn compile_referenced_subjects(
         }
     }
     Ok(compiled)
+}
+
+/// The role one source selector input binds.
+///
+/// A role that is not a string is refused by name rather than read as an empty
+/// one, so no caller compares against a role no source declares.
+fn selector_input_role(input: &Value) -> Result<&str> {
+    input
+        .get("role")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("source selectorInputs entry must name a string `role`"))
 }
 
 fn source_selector_inputs(source: &Value) -> Result<&Vec<Value>> {
@@ -2956,7 +2994,7 @@ fn render_local_bundle(
     access_policies: &[AuthoredAccessPolicy],
     ports: LocalServicePorts,
     active_public_jwk_file: &str,
-) -> Value {
+) -> Result<Value> {
     let mint_origin = ports.mint_origin();
     let selector_profiles = questions
         .iter()
@@ -2969,44 +3007,26 @@ fn render_local_bundle(
         .map(|question| (question.source_id.clone(), question.source_value.clone()))
         .collect::<Map<_, _>>();
     let authority_profiles = if access_policies.is_empty() {
-        let grants = questions
-            .iter()
-            .flat_map(|question| question.grants.clone())
-            .collect::<Vec<_>>();
         Map::from_iter([(
             AUTHORITY_PROFILE_ID.to_owned(),
-            json!({
-                "kind": "explicit-request",
-                "requesterTags": [AUTHORITY_PROFILE_ID],
-                "grants": grants,
-            }),
+            render_authority_profile(AUTHORITY_PROFILE_ID, questions.iter())?,
         )])
     } else {
         access_policies
             .iter()
             .map(|policy| {
-                let grants = policy
-                    .questions
-                    .iter()
-                    .flat_map(|question_id| {
-                        questions
-                            .iter()
-                            .find(|question| question.question_id == *question_id)
-                            .expect("access policy questions were validated")
-                            .grants
-                            .clone()
-                    })
-                    .collect::<Vec<_>>();
-                (
+                let covered = policy.questions.iter().map(|question_id| {
+                    questions
+                        .iter()
+                        .find(|question| question.question_id == *question_id)
+                        .expect("access policy questions were validated")
+                });
+                Ok((
                     policy.requester_tag.clone(),
-                    json!({
-                        "kind": "explicit-request",
-                        "requesterTags": [policy.requester_tag],
-                        "grants": grants,
-                    }),
-                )
+                    render_authority_profile(&policy.requester_tag, covered)?,
+                ))
             })
-            .collect::<Map<_, _>>()
+            .collect::<Result<Map<_, _>>>()?
     };
     let requirements = questions
         .iter()
@@ -3019,7 +3039,7 @@ fn render_local_bundle(
         .into_iter()
         .map(QuestionResponseFormat::as_str)
         .collect::<Vec<_>>();
-    json!({
+    Ok(json!({
         "version": 1,
         "assuranceProfile": "local",
         "service": {
@@ -3080,7 +3100,36 @@ fn render_local_bundle(
         "sources": sources,
         "authorityProfiles": authority_profiles,
         "requirements": requirements,
-    })
+    }))
+}
+
+/// Gather the grants of the questions one generated profile covers, refusing
+/// here rather than leaving the runtime to refuse the loaded bundle.
+///
+/// A refusal names the questions so the author knows whose selector
+/// alternatives to reduce.
+fn render_authority_profile<'a>(
+    requester_tag: &str,
+    covered: impl Iterator<Item = &'a QuestionPlan>,
+) -> Result<Value> {
+    let mut grants = Vec::new();
+    let mut question_ids = Vec::new();
+    for question in covered {
+        grants.extend(question.grants.iter().cloned());
+        question_ids.push(question.question_id.as_str());
+    }
+    if grants.len() > MAX_PROFILE_AUTHORITY_GRANTS {
+        bail!(
+            "authority profile `{requester_tag}` would carry {} authority grants, more than the {MAX_PROFILE_AUTHORITY_GRANTS} one profile may hold; reduce the selector alternatives of {}",
+            grants.len(),
+            question_ids.join(", ")
+        );
+    }
+    Ok(json!({
+        "kind": "explicit-request",
+        "requesterTags": [requester_tag],
+        "grants": grants,
+    }))
 }
 
 fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -> Result<Value> {
@@ -3496,17 +3545,21 @@ fn set_bundle_modes(root: &Path, directory_mode: u32, file_mode: u32) -> Result<
 }
 
 fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
-    let output = Command::new(evidence_bin)
+    let mut command = Command::new(evidence_bin);
+    command
         .arg("--runtime")
         .arg(runtime_path)
         .arg("check")
-        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .output()
-        .with_context(|| format!("running {} check", evidence_bin.display()))?;
-    if output.status.success() {
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+    let run = run_bounded_evidence(
+        command,
+        StandardOutput::Discarded,
+        &format!("{} check", evidence_bin.display()),
+    )?;
+    if run.status.success() {
         return Ok(());
     }
-    let diagnostic = child_diagnostic(&output.stderr);
+    let diagnostic = child_diagnostic(&run.stderr);
     if diagnostic.is_empty() {
         bail!("Evidence rejected the compiled local generation");
     }
@@ -3514,26 +3567,134 @@ fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
 }
 
 fn render_discovery_description(evidence_bin: &Path, config_path: &Path) -> Result<Vec<u8>> {
-    let output = Command::new(evidence_bin)
+    let mut command = Command::new(evidence_bin);
+    command
         .arg("render-discovery-description")
         .arg("--config")
         .arg(config_path)
-        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .output()
-        .with_context(|| {
-            format!(
-                "running {} provider publication compiler",
-                evidence_bin.display()
-            )
-        })?;
-    if output.status.success() {
-        return Ok(output.stdout);
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+    let run = run_bounded_evidence(
+        command,
+        StandardOutput::Bounded(MAX_DISCOVERY_DESCRIPTION_BYTES),
+        &format!("{} provider publication compiler", evidence_bin.display()),
+    )?;
+    if run.status.success() {
+        if run.stdout_over_bound {
+            bail!(
+                "Evidence returned a provider publication description longer than {MAX_DISCOVERY_DESCRIPTION_BYTES} bytes, which no deployment bundle can carry"
+            );
+        }
+        return Ok(run.stdout);
     }
-    let diagnostic = child_diagnostic(&output.stderr);
+    let diagnostic = child_diagnostic(&run.stderr);
     if diagnostic.is_empty() {
         bail!("Evidence rejected provider publication compilation");
     }
     bail!("Evidence rejected provider publication compilation: {diagnostic}")
+}
+
+/// The longest provider publication description evidencectl accepts from the
+/// Evidence binary.
+///
+/// The description is written into the deployment bundle as `catalog.jsonld`,
+/// and the runtime bounds every bundle artifact of that kind at the same size
+/// when it loads one, so a longer description could never be deployed.
+const MAX_DISCOVERY_DESCRIPTION_BYTES: usize = 1024 * 1024;
+
+/// What a delegated `evidence` run does with its standard output.
+enum StandardOutput {
+    /// The caller reads nothing, so the child writes to the null device.
+    Discarded,
+    /// The caller reads at most this many bytes of it.
+    Bounded(usize),
+}
+
+/// What a delegated `evidence` run reported back.
+struct BoundedEvidenceRun {
+    status: ExitStatus,
+    /// The standard output that was kept, empty when it was discarded.
+    stdout: Vec<u8>,
+    /// Whether standard output ran past the caller's bound. What that means is
+    /// the caller's decision, so the bytes are still returned.
+    stdout_over_bound: bool,
+    /// At most one diagnostic's worth of the child's standard error.
+    stderr: Vec<u8>,
+}
+
+/// Run a delegated `evidence` command and keep only what the caller can use.
+///
+/// Both streams are read while the child runs and bounded as they are read, so
+/// a child that writes without end cannot grow this process while it waits.
+/// `child_diagnostic` stays the single place that sanitizes what an operator
+/// is shown.
+fn run_bounded_evidence(
+    mut command: Command,
+    stdout: StandardOutput,
+    what: &str,
+) -> Result<BoundedEvidenceRun> {
+    command.stdin(Stdio::null());
+    command.stdout(match stdout {
+        StandardOutput::Discarded => Stdio::null(),
+        StandardOutput::Bounded(_) => Stdio::piped(),
+    });
+    command.stderr(Stdio::piped());
+    let mut child = command.spawn().with_context(|| format!("running {what}"))?;
+    let mut stdout_pipe = child.stdout.take();
+    let stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("running {what} left no standard-error pipe to read"))?;
+
+    // The two pipes are read at the same time: draining one to its end first
+    // would leave the child blocked on the other once that one filled up.
+    let (read_stdout, read_stderr) = thread::scope(|scope| {
+        let reader = scope.spawn(|| read_bounded(stderr_pipe, MAX_CHILD_DIAGNOSTIC_BYTES));
+        let read_stdout = match (stdout_pipe.as_mut(), &stdout) {
+            (Some(pipe), StandardOutput::Bounded(bound)) => read_bounded(pipe, *bound),
+            _ => Ok((Vec::new(), false)),
+        };
+        let read_stderr = match reader.join() {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+        (read_stdout, read_stderr)
+    });
+    let read = read_stdout.and_then(|stdout| read_stderr.map(|stderr| (stdout, stderr)));
+    let ((stdout, stdout_over_bound), (stderr, _)) = match read {
+        Ok(read) => read,
+        Err(error) => {
+            // The child may still be writing into a pipe this process can no
+            // longer read, so it is stopped rather than waited for.
+            crate::evidence_binary::terminate_child(&mut child);
+            return Err(error).with_context(|| format!("reading the output of {what}"));
+        }
+    };
+    let status = child.wait().with_context(|| format!("running {what}"))?;
+    Ok(BoundedEvidenceRun {
+        status,
+        stdout,
+        stdout_over_bound,
+        stderr,
+    })
+}
+
+/// Read at most `bound` bytes from a child's pipe, then read the rest and
+/// throw it away.
+///
+/// One byte past the bound is read, so a caller can tell a stream that stayed
+/// inside its bound from one that ran past it. Reading the remainder away
+/// costs nothing here and keeps a child that writes more from blocking on a
+/// pipe this process stopped reading.
+fn read_bounded(reader: impl io::Read, bound: usize) -> io::Result<(Vec<u8>, bool)> {
+    let mut reader = reader;
+    let mut captured = Vec::new();
+    reader
+        .by_ref()
+        .take(bound as u64 + 1)
+        .read_to_end(&mut captured)?;
+    let over_bound = captured.len() > bound;
+    io::copy(&mut reader, &mut io::sink())?;
+    Ok((captured, over_bound))
 }
 
 /// The longest child diagnostic an operator message carries.
@@ -3556,16 +3717,18 @@ fn child_diagnostic(stderr: &[u8]) -> String {
     let mut characters = text.chars().peekable();
     while let Some(character) = characters.next() {
         match character {
-            // Dropping the introducer alone would leave the parameters of a
-            // colour or cursor sequence standing as text, so a control
-            // sequence is consumed through its final byte.
-            '\u{1b}' => {
-                if characters.next_if_eq(&'[').is_some() {
-                    while characters
-                        .next_if(|candidate| !matches!(candidate, '\u{40}'..='\u{7e}'))
-                        .is_some()
-                    {}
-                    characters.next();
+            // Dropping an introducer alone would leave the parameters of a
+            // colour or cursor sequence, or the target of a hyperlink,
+            // standing as text, so each sequence is consumed through its own
+            // terminator.
+            '\u{1b}' => consume_escape_sequences(&mut characters),
+            // The same introducers in their single-character form. A terminal
+            // reading UTF-8 acts on these too, so their payload is consumed
+            // rather than left behind by the control-character arm below.
+            '\u{9b}' => consume_control_sequence(&mut characters),
+            '\u{90}' | '\u{98}' | '\u{9d}' | '\u{9e}' | '\u{9f}' => {
+                if consume_string_sequence(&mut characters) {
+                    consume_escape_sequences(&mut characters);
                 }
             }
             '\n' | '\t' => printable.push(character),
@@ -3582,6 +3745,99 @@ fn child_diagnostic(stderr: &[u8]) -> String {
         cut -= 1;
     }
     format!("{} [truncated]", diagnostic[..cut].trim_end())
+}
+
+/// The longest run one escape sequence may consume.
+///
+/// Every sequence a terminal acts on is far shorter than this. The cap is what
+/// keeps an introducer whose terminator never arrives from swallowing the rest
+/// of a diagnostic: past it the remaining characters are read as text again.
+const MAX_ESCAPE_SEQUENCE_CHARS: usize = 128;
+
+/// Consume the escape sequence whose `ESC` was just read, and any sequence
+/// that ended it.
+///
+/// A string sequence may be closed by an `ESC` that starts the next sequence
+/// rather than by `ST`, so consumption repeats until no introducer is left.
+fn consume_escape_sequences(characters: &mut Peekable<Chars<'_>>) {
+    while consume_escape_sequence(characters) {}
+}
+
+/// Consume one ECMA-48 escape sequence, its `ESC` already read, and report
+/// whether it ended on an `ESC` the caller must still read a sequence for.
+fn consume_escape_sequence(characters: &mut Peekable<Chars<'_>>) -> bool {
+    match characters.peek() {
+        Some('[') => {
+            characters.next();
+            consume_control_sequence(characters);
+            false
+        }
+        // `OSC`, `DCS`, `SOS`, `PM` and `APC` all carry a payload closed by a
+        // terminator rather than by a final byte.
+        Some(']' | 'P' | 'X' | '^' | '_') => {
+            characters.next();
+            consume_string_sequence(characters)
+        }
+        _ => {
+            consume_two_byte_escape(characters);
+            false
+        }
+    }
+}
+
+/// Consume a control sequence's parameter and intermediate bytes and the final
+/// byte that ends it.
+///
+/// A sequence whose final byte never arrives, or one holding a character no
+/// control sequence may carry, ends where that is found: the text after it is
+/// printed rather than swallowed.
+fn consume_control_sequence(characters: &mut Peekable<Chars<'_>>) {
+    let mut consumed = 0;
+    while consumed < MAX_ESCAPE_SEQUENCE_CHARS
+        && characters
+            .next_if(|candidate| matches!(candidate, '\u{20}'..='\u{3f}'))
+            .is_some()
+    {
+        consumed += 1;
+    }
+    characters.next_if(|candidate| matches!(candidate, '\u{40}'..='\u{7e}'));
+}
+
+/// Consume the intermediate bytes of a two-byte escape and the final byte that
+/// ends it.
+///
+/// An `ESC` that ends the text, or one followed by a character no escape
+/// sequence may carry, consumes nothing further.
+fn consume_two_byte_escape(characters: &mut Peekable<Chars<'_>>) {
+    let mut consumed = 0;
+    while consumed < MAX_ESCAPE_SEQUENCE_CHARS
+        && characters
+            .next_if(|candidate| matches!(candidate, '\u{20}'..='\u{2f}'))
+            .is_some()
+    {
+        consumed += 1;
+    }
+    characters.next_if(|candidate| matches!(candidate, '\u{30}'..='\u{7e}'));
+}
+
+/// Consume a string sequence's payload and the `ST` or `BEL` that ends it, and
+/// report whether it ended on an `ESC` that starts another sequence instead.
+///
+/// The payload carries arbitrary text, a hyperlink target among it, so it is
+/// consumed rather than printed. A terminator that never arrives ends the
+/// sequence at the cap, so what follows is read as text.
+fn consume_string_sequence(characters: &mut Peekable<Chars<'_>>) -> bool {
+    let mut consumed = 0;
+    while consumed < MAX_ESCAPE_SEQUENCE_CHARS {
+        match characters.next() {
+            None | Some('\u{7}') | Some('\u{9c}') => return false,
+            // `ST` in its two-character form. Anything else after the `ESC`
+            // begins a sequence of its own, which the caller reads.
+            Some('\u{1b}') => return characters.next_if_eq(&'\\').is_none(),
+            Some(_) => consumed += 1,
+        }
+    }
+    false
 }
 
 fn yaml_bytes(value: &Value) -> Result<Vec<u8>> {
@@ -6234,6 +6490,190 @@ factSchema: schemas/family-facts.schema.yaml
             .expect("real Evidence loader accepts multiple role-bound subjects");
     }
 
+    #[test]
+    fn a_failed_unseal_after_a_rejection_reports_the_rejection_and_the_cleanup() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, false);
+        fs::write(
+            &fixture.evidence,
+            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nbundle=\"$(dirname \"$2\")/bundle\"\nchmod -R u+rwX \"$bundle\"\nrm -rf \"$bundle\"\necho 'script rejected' >&2\nexit 1\n",
+        )
+        .expect("stub that removes the generation it rejects");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a rejected generation fails");
+
+        let reported = format!("{error:#}");
+        assert!(reported.contains("script rejected"), "{reported}");
+        assert!(
+            reported.contains("restoring owner write on the rejected generation"),
+            "{reported}"
+        );
+    }
+
+    #[test]
+    fn a_failed_runtime_unseal_after_a_rejection_reports_the_rejection_and_the_cleanup() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, false);
+        fs::write(
+            &fixture.evidence,
+            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nrm -f \"$2\"\necho 'script rejected' >&2\nexit 1\n",
+        )
+        .expect("stub that removes the settings it rejects");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a rejected generation fails");
+
+        let reported = format!("{error:#}");
+        assert!(reported.contains("script rejected"), "{reported}");
+        assert!(
+            reported.contains("restoring owner write on the rejected runtime settings"),
+            "{reported}"
+        );
+    }
+
+    #[test]
+    fn a_cleanup_failure_line_names_the_path_and_the_cause() {
+        let line = cleanup_failure_line(
+            Path::new("/staging/bundle"),
+            &anyhow!("reading /staging/bundle").context("sealed generation"),
+        );
+        assert_eq!(
+            line,
+            "evidencectl: failed to restore owner write on /staging/bundle: sealed generation: reading /staging/bundle"
+        );
+    }
+
+    #[test]
+    fn generated_profile_grants_stay_under_the_bound_the_runtime_enforces() {
+        fn selector_profiles(
+            fixture: &Fixture,
+            role: &str,
+            field: &str,
+            count: usize,
+        ) -> Vec<String> {
+            (0..count)
+                .map(|index| {
+                    let profile = format!("{role}-alt-{index:02}-v1");
+                    fs::write(
+                        fixture.project.join(format!("selectors/{profile}.yaml")),
+                        format!("maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"),
+                    )
+                    .expect("selector profile");
+                    profile
+                })
+                .collect()
+        }
+
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        let referenced =
+            write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        let people = selector_profiles(&fixture, "person", "person_id", 16);
+        let guardians = selector_profiles(&fixture, "guardian", "guardian_id", 5);
+
+        let source_path = fixture.project.join("sources/people.yaml");
+        let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
+        let request = source["request"].as_object_mut().unwrap();
+        request.remove("pathTemplate");
+        request.remove("pathBindings");
+        request.insert("path".to_owned(), json!("/lookup"));
+        request.insert(
+            "selectorInputs".to_owned(),
+            json!([
+                {
+                    "role": "person",
+                    "alternatives": people
+                        .iter()
+                        .map(|profile| json!({"profile": profile, "fields": ["person_id"]}))
+                        .collect::<Vec<_>>(),
+                },
+                {
+                    "role": "guardian",
+                    "alternatives": guardians
+                        .iter()
+                        .map(|profile| json!({"profile": profile, "fields": ["guardian_id"]}))
+                        .collect::<Vec<_>>(),
+                },
+            ]),
+        );
+        fs::write(&source_path, serde_norway::to_string(&source).unwrap()).unwrap();
+
+        let subjects = json!([
+            {"role": "person", "profiles": people, "derivation": true},
+            {"role": "guardian", "profiles": guardians, "derivation": true},
+        ]);
+        let mut adult: Value = serde_norway::from_str(&referenced).unwrap();
+        let object = adult.as_object_mut().unwrap();
+        object.remove("subject");
+        object.insert("subjects".to_owned(), subjects.clone());
+        fs::write(
+            fixture.project.join("questions/adult-status.yaml"),
+            serde_norway::to_string(&adult).unwrap(),
+        )
+        .unwrap();
+        let mut bracket: Value = serde_norway::from_str(AGE_BRACKET_QUESTION).unwrap();
+        let object = bracket.as_object_mut().unwrap();
+        object.remove("subject");
+        object.insert("source".to_owned(), json!({"ref": "people"}));
+        object.insert("subjects".to_owned(), subjects);
+        fixture.add_question(
+            &serde_norway::to_string(&bracket).unwrap(),
+            AGE_BRACKET_ANSWER,
+        );
+
+        let Err(error) =
+            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+        else {
+            panic!("160 grants exceed what one profile may carry");
+        };
+
+        let reported = error.to_string();
+        assert!(reported.contains("160 authority grants"), "{reported}");
+        assert!(reported.contains(AUTHORITY_PROFILE_ID), "{reported}");
+        assert!(reported.contains("adult-status"), "{reported}");
+        assert!(reported.contains("age-bracket"), "{reported}");
+    }
+
+    /// The generated bound is a restatement of the published bundle contract,
+    /// which the runtime enforces. Pin the two together so a contract change
+    /// cannot leave evidencectl refusing what the runtime accepts or accepting
+    /// what it refuses.
+    #[test]
+    fn the_generated_grant_bound_matches_the_published_bundle_contract() {
+        let contract = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/evidence/contracts/bundle.schema.yaml"
+        );
+        let schema: Value = serde_norway::from_slice(
+            &fs::read(contract).expect("the published bundle contract is readable"),
+        )
+        .expect("the published bundle contract parses");
+        assert_eq!(
+            schema["$defs"]["authority-profile"]["properties"]["grants"]["maxItems"].as_u64(),
+            Some(MAX_PROFILE_AUTHORITY_GRANTS as u64)
+        );
+    }
+
+    #[test]
+    fn a_selector_input_role_that_is_not_a_string_is_refused_by_name() {
+        assert_eq!(
+            selector_input_role(&json!({"role": "person"})).expect("a string role reads"),
+            "person"
+        );
+        let Err(error) = selector_input_role(&json!({"role": 7})) else {
+            panic!("a numeric role is refused");
+        };
+        assert_eq!(
+            error.to_string(),
+            "source selectorInputs entry must name a string `role`"
+        );
+        let Err(error) = selector_input_role(&json!({})) else {
+            panic!("a missing role is refused");
+        };
+        assert_eq!(
+            error.to_string(),
+            "source selectorInputs entry must name a string `role`"
+        );
+    }
+
     fn punctuated_inputs() -> (String, String, String) {
         let openapi = OPENAPI
             .replace("person_id", "person-id.v1")
@@ -6338,16 +6778,29 @@ factSchema: schemas/family-facts.schema.yaml
 
     impl Drop for Fixture {
         fn drop(&mut self) {
-            if self.staging.join("bundle").is_dir() {
-                let _ = set_bundle_modes(&self.staging.join("bundle"), 0o700, 0o600);
+            let bundle = self.staging.join("bundle");
+            if bundle.is_dir() {
+                if let Err(error) = set_bundle_modes(&bundle, 0o700, 0o600) {
+                    report_fixture_cleanup(&bundle, &error);
+                }
             }
-            if self.staging.join("runtime.yaml").is_file() {
-                let _ = fs::set_permissions(
-                    self.staging.join("runtime.yaml"),
-                    fs::Permissions::from_mode(0o600),
-                );
+            let runtime = self.staging.join("runtime.yaml");
+            if runtime.is_file() {
+                if let Err(error) = fs::set_permissions(&runtime, fs::Permissions::from_mode(0o600))
+                {
+                    report_fixture_cleanup(&runtime, &anyhow::Error::from(error));
+                }
             }
         }
+    }
+
+    /// Fails the test a fixture cleanup failure belongs to, unless the test is
+    /// already unwinding and would lose its own failure to this one.
+    fn report_fixture_cleanup(path: &Path, error: &anyhow::Error) {
+        if thread::panicking() {
+            return;
+        }
+        panic!("{}", cleanup_failure_line(path, error));
     }
 
     fn tree(root: &Path) -> Vec<String> {
@@ -6472,6 +6925,73 @@ factSchema: schemas/family-facts.schema.yaml
     }
 
     #[test]
+    fn a_flooding_child_is_read_within_the_diagnostic_bound() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nyes 'evidence flooded standard error' | head -c 4194304 >&2\nexit 1\n",
+        );
+
+        let run =
+            run_bounded_evidence(Command::new(&evidence), StandardOutput::Discarded, "a stub")
+                .expect("the stub runs to completion");
+
+        assert!(!run.status.success());
+        assert!(
+            run.stderr.len() <= MAX_CHILD_DIAGNOSTIC_BYTES + 1,
+            "held {} bytes of the child's standard error",
+            run.stderr.len()
+        );
+    }
+
+    #[test]
+    fn render_discovery_description_completes_when_the_child_floods_standard_error() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nyes 'evidence flooded standard error' | head -c 4194304 >&2\nexit 1\n",
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.ends_with("[truncated]"), "{diagnostic}");
+        assert!(
+            diagnostic.len()
+                <= "Evidence rejected provider publication compilation: ".len()
+                    + MAX_CHILD_DIAGNOSTIC_BYTES
+                    + " [truncated]".len(),
+            "{}",
+            diagnostic.len()
+        );
+    }
+
+    #[test]
+    fn render_discovery_description_refuses_a_description_past_the_bundle_artifact_bound() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            &format!(
+                "#!/bin/sh\nyes 'catalog' | head -c {}\nexit 0\n",
+                MAX_DISCOVERY_DESCRIPTION_BYTES + 1024
+            ),
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("an oversized description must be refused");
+
+        assert!(format!("{error:#}").contains("longer than"), "{error:#}");
+    }
+
+    #[test]
     fn render_discovery_description_strips_child_terminal_control_sequences() {
         let root = tempfile::tempdir().expect("tempdir");
         let evidence = root.path().join("evidence-stub");
@@ -6494,6 +7014,51 @@ factSchema: schemas/family-facts.schema.yaml
         assert!(!diagnostic.contains('\u{1b}'), "{diagnostic:?}");
         assert!(!diagnostic.contains('\r'), "{diagnostic:?}");
         assert!(!diagnostic.contains("[31m"), "{diagnostic:?}");
+    }
+
+    #[test]
+    fn render_discovery_description_strips_a_child_operating_system_command() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(
+            &evidence,
+            "#!/bin/sh\nprintf '\\033]8;;https://example.invalid\\033\\\\click here\\033]8;;\\033\\\\ rejected' >&2\nexit 1\n",
+        );
+        let config_path = root.path().join("evidence.yaml");
+        fs::write(&config_path, "questions: []\n").expect("config");
+
+        let error = render_discovery_description(&evidence, &config_path)
+            .expect_err("a rejected compilation must fail");
+
+        let diagnostic = format!("{error:#}");
+        assert_eq!(
+            diagnostic,
+            "Evidence rejected provider publication compilation: click here rejected"
+        );
+        assert!(!diagnostic.contains("example.invalid"), "{diagnostic:?}");
+    }
+
+    #[test]
+    fn a_two_byte_escape_leaves_neither_its_introducer_nor_its_final_byte() {
+        assert_eq!(child_diagnostic(b"\x1b7saved\x1b8"), "saved");
+        assert_eq!(child_diagnostic(b"\x1b(Bdesignated"), "designated");
+    }
+
+    #[test]
+    fn a_control_sequence_without_a_final_byte_swallows_no_message() {
+        assert_eq!(
+            child_diagnostic(b"\x1b[1;2;3\nbundle rejected"),
+            "bundle rejected"
+        );
+    }
+
+    #[test]
+    fn a_string_sequence_without_a_terminator_is_consumed_only_to_its_cap() {
+        let mut stderr = b"\x1b]".to_vec();
+        stderr.extend(std::iter::repeat_n(b'a', MAX_ESCAPE_SEQUENCE_CHARS));
+        stderr.extend_from_slice(b"bundle rejected");
+
+        assert_eq!(child_diagnostic(&stderr), "bundle rejected");
     }
 
     #[test]

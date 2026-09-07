@@ -86,20 +86,16 @@ block links here instead of repeating a list that drifts.
 - No Windows, and no macOS on Intel: no binary, image, or client package targets either one, and
   nothing is tested under WSL. Each installer names the platforms it accepts and refuses anything
   else before it downloads.
-- No musl build: every binary links the GNU C library dynamically. On Alpine an installer reports
-  that its integrity checks passed and the installed binary then fails to start, because the check
-  covers the download rather than the platform it lands on. The Python client wheels are
-  `manylinux_2_17`; no `musllinux` wheel is published.
-- The supported C library floor is glibc 2.35 or newer, which is Ubuntu 22.04 LTS, Debian 12, and
-  newer. That floor applies from the next release. The v0.26.1 binaries do not meet it: they were
-  compiled in the pinned release builder image, which is Debian 13, so on Debian 12 or Ubuntu 22.04
-  `breg` stops at a missing `GLIBC_2.38` and `evidencectl` at a missing `GLIBC_2.39` before either
-  reaches its own code. Ubuntu 24.04 is the oldest distribution the v0.26.1 Linux binaries run on.
-- Container images are single-architecture: each published image is `linux/amd64`, and no
-  multi-architecture index is published, so an arm64 host runs one under emulation.
-- Installer scripts and the raw binaries are the only distribution channels. There is no Homebrew
-  formula, no `cargo binstall` target, no apt, apk, yum, or Nix package, and no winget or Scoop
-  package.
+- Standalone Linux binaries, including the CLI tools, link the GNU C library dynamically and require
+  glibc 2.35 or newer. The installers reject detected musl hosts, including Alpine, and glibc
+  versions below 2.35 before downloading. The Python client wheels are `manylinux_2_17`; no
+  `musllinux` wheel is published.
+- On supported container hosts, the container alternative is limited to the published service
+  images listed above. Each image is `linux/amd64`, and no multi-architecture index is published,
+  so an arm64 host runs one under emulation.
+- For standalone executables, installer scripts and raw binaries are the only distribution
+  channels. There is no Homebrew formula, no `cargo binstall` target, no apt, apk, yum, or Nix
+  package, and no winget or Scoop package.
 
 {/* Evidence: crates/registry-breg/install.sh; crates/registry-evidencectl/install.sh;
     crates/registry-relay-v2/install.sh; release/docker/Dockerfile.builder;

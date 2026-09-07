@@ -289,6 +289,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_merge_release_binary_shards.py",
     ),
     (
+        "Native release platform build and merge tests",
+        "run: python3 -m unittest release/scripts/test_release_native_platform.py",
+    ),
+    (
         "Release workflow structure tests",
         "run: python3 -m unittest release/scripts/test_release_workflow_structure.py",
     ),
@@ -363,6 +367,7 @@ RELEASE_SECURITY_POLICY_PATHS = (
     ".github/workflows/nightly-security.yml",
     ".github/workflows/release.yml",
     ".github/workflows/release-candidate.yml",
+    ".github/workflows/release-native-benchmark.yml",
     ".github/workflows/release-canary.yml",
     ".github/workflows/release-repeatability.yml",
     ".github/workflows/release-candidate-cleanup.yml",
@@ -392,6 +397,9 @@ REQUIRED_SECURITY_WORKFLOW_SELECTIONS: dict[str, frozenset[str]] = {
         {"release_source_proof", "release_tool"}
     ),
     ".github/workflows/release-candidate.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-native-benchmark.yml": frozenset(
         {"release_source_proof", "release_tool"}
     ),
     ".github/workflows/release-canary.yml": frozenset(
@@ -627,6 +635,18 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "name: Rehearse prepared release without publishing",
             "release/scripts/rehearse-release",
             "--base-ref origin/main",
+        ),
+    ),
+    (
+        "Read-only native release build benchmark",
+        ".github/workflows/release-native-benchmark.yml",
+        (
+            "name: Review-only native release build benchmark",
+            "workflow_dispatch:",
+            "permissions: {}",
+            "name: Build review-only native macOS shard",
+            "--purpose review_only",
+            "registry-stack.release-native-benchmark.v1",
         ),
     ),
     (
@@ -963,6 +983,23 @@ FORBIDDEN_RELEASE_SECURITY_GATES = (
         "Release rehearsal cannot allow a missing advisory baseline",
         ".github/workflows/release-rehearsal.yml",
         ("--allow-missing-baseline",),
+    ),
+    (
+        "Native benchmark cannot write or qualify as release rehearsal",
+        ".github/workflows/release-native-benchmark.yml",
+        (
+            "contents: write",
+            "packages: write",
+            "id-token: write",
+            "attestations: write",
+            "git push",
+            "git tag ",
+            "gh release",
+            "docker ",
+            "oras ",
+            "crane ",
+            "release/scripts/rehearse-release",
+        ),
     ),
 )
 

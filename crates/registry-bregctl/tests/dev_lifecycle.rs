@@ -13,6 +13,7 @@ use std::{
 struct Session {
     project: PathBuf,
     path: std::ffi::OsString,
+    docker: PathBuf,
 }
 impl Session {
     fn ctl(&self, args: &[&str]) -> std::process::Output {
@@ -24,8 +25,23 @@ impl Session {
             .output()
             .expect("native ctl command launches")
     }
-    fn success(&self, args: &[&str]) -> Value {
-        let output = self.ctl(args);
+    /// Run one `dev` invocation against this session's project. Docker is
+    /// always named explicitly and never reachable through `PATH`, so every
+    /// supervised phase, including the rehearsal and `dev stop`, has to use
+    /// the resolved binary the caller chose.
+    fn dev(&self, args: &[&str]) -> std::process::Output {
+        let docker = self.docker.to_str().unwrap();
+        let mut invocation = vec!["dev"];
+        invocation.extend_from_slice(args);
+        invocation.extend([
+            "--project",
+            self.project.to_str().unwrap(),
+            "--docker-bin",
+            docker,
+        ]);
+        self.ctl(&invocation)
+    }
+    fn report(&self, output: std::process::Output) -> Value {
         if !output.status.success() {
             write(
                 &self.project.parent().unwrap().join("native-failure.json"),
@@ -39,34 +55,57 @@ impl Session {
         );
         serde_json::from_slice(&output.stdout).expect("native JSON report")
     }
+    fn success(&self, args: &[&str]) -> Value {
+        self.report(self.ctl(args))
+    }
     fn start(&self) -> Value {
-        self.success(&["dev", "--project", self.project.to_str().unwrap()])
+        self.report(self.dev(&[]))
     }
     fn stop(&self) {
-        self.success(&["dev", "stop", "--project", self.project.to_str().unwrap()]);
+        self.report(self.dev(&["stop"]));
     }
     fn remove(&self) {
-        self.success(&[
-            "dev",
-            "stop",
-            "--remove",
-            "--project",
-            self.project.to_str().unwrap(),
-        ]);
+        self.report(self.dev(&["stop", "--remove"]));
     }
 }
 impl Drop for Session {
     fn drop(&mut self) {
         // Every exit, including a panicking assertion, reclaims the container
-        // and the data volume this test created.
-        let _ = self.ctl(&[
-            "dev",
-            "stop",
-            "--remove",
-            "--project",
-            self.project.to_str().unwrap(),
-        ]);
+        // and the data volume this test created. A failed reclaim is reported
+        // rather than dropped, unless the test is already unwinding.
+        let output = self.dev(&["stop", "--remove"]);
+        if !output.status.success() && !std::thread::panicking() {
+            panic!(
+                "dev stop --remove failed during cleanup: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
+}
+
+/// The one installed command this test resolves through the ambient `PATH`.
+/// The session's own `PATH` holds only the built binaries under test.
+fn installed(name: &str) -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("{name} must be installed to run the retained lifecycle test"))
+}
+
+/// Three distinct loopback ports nothing is listening on, taken the way the
+/// supervisor probes one: bind `127.0.0.1:0`, let the kernel name the port,
+/// and release all three together so this test's own ports stay distinct.
+/// Fixed ports would make two concurrent runs collide.
+fn free_ports() -> [u16; 3] {
+    let held: Vec<std::net::TcpListener> = (0..3)
+        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port is available"))
+        .collect();
+    let ports: Vec<u16> = held
+        .iter()
+        .map(|listener| listener.local_addr().expect("the bound port").port())
+        .collect();
+    drop(held);
+    ports.try_into().expect("three ports")
 }
 
 fn docker_line(args: &[&str]) -> String {
@@ -79,6 +118,36 @@ fn docker_line(args: &[&str]) -> String {
         .expect("docker output is UTF-8")
         .trim()
         .to_owned()
+}
+
+/// The most recent modification time of one retained record, following a
+/// directory to the newest file it holds.
+fn newest(path: &Path) -> std::time::SystemTime {
+    let metadata = fs::symlink_metadata(path).expect("the retained record exists");
+    if !metadata.is_dir() {
+        return metadata.modified().expect("a modification time");
+    }
+    fs::read_dir(path)
+        .expect("retained directory")
+        .map(|entry| newest(&entry.expect("retained entry").path()))
+        .max()
+        .unwrap_or_else(|| metadata.modified().expect("a modification time"))
+}
+
+/// The newest owner-only log one supervised phase wrote. Command logs carry a
+/// random suffix, so a phase is named by its prefix.
+fn newest_log(root: &Path, prefix: &str) -> std::time::SystemTime {
+    fs::read_dir(root.join("logs"))
+        .expect("private log directory")
+        .map(|entry| entry.expect("log entry").path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(prefix))
+        })
+        .map(|path| newest(&path))
+        .max()
+        .unwrap_or_else(|| panic!("the {prefix} phase left no private record"))
 }
 
 fn write(path: &Path, bytes: &[u8]) {
@@ -97,53 +166,18 @@ fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
     let parent = fs::canonicalize(temporary.keep()).unwrap();
     let project = parent.join("registry");
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
-    let mut paths = vec![binary.parent().unwrap().to_path_buf()];
-    paths.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
+    // Only the binaries built beside bregctl serve this session: an installed
+    // breg or mint from an earlier package format must not be reachable, and
+    // Docker must be named explicitly rather than found.
     let session = Session {
         project: project.clone(),
-        path: std::env::join_paths(paths).unwrap(),
+        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
+        docker: installed("docker"),
     };
     session.success(&["init", project.to_str().unwrap()]);
     let mut registry: Value =
         serde_norway::from_slice(&fs::read(project.join("registry.yaml")).unwrap()).unwrap();
     registry["package"]["environment"] = json!("local");
-    // The initialized project grants no lookup, so `generate evidence-source`
-    // has nothing to export. Author one exact selector and one narrow
-    // request-origin profile before the first start captures the closure. An
-    // exact selector field must declare a non-empty minLength, since Evidence's
-    // selector profile cannot express the empty value the initialized `code`
-    // field otherwise accepts.
-    let record = registry["entities"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|entity| entity["id"] == "record")
-        .unwrap();
-    record["fields"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|field| field["id"] == "code")
-        .unwrap()["minLength"] = json!(1);
-    record["selectorProfiles"] = json!([{"id": "by-code", "fields": ["code"]}]);
-    registry["accessProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "id": "evidence-source",
-            "principalClaim": "registry_principal",
-            "requiredScopes": ["registry:evidence:lookup"],
-            "requiredPurposes": ["evidence-source-read"],
-            "grants": [{
-                "entity": "record",
-                "operations": ["lookup"],
-                "readableFields": ["code", "status"],
-                "lookups": [{"selector": "by-code", "valueOrigin": "request"}],
-                "rowBoundaries": [],
-            }],
-        }));
     write(
         &project.join("registry.yaml"),
         serde_norway::to_string(&registry).unwrap().as_bytes(),
@@ -182,19 +216,18 @@ seed:
     );
     // A service that exits before readiness causes owned child/container
     // cleanup. The same persisted keys and database can then start normally.
-    let failed = session.ctl(&[
-        "dev",
+    let [database_port, breg_port, mint_port] = free_ports();
+    let origin = format!("http://127.0.0.1:{breg_port}");
+    let failed = session.dev(&[
         "start",
-        "--project",
-        project.to_str().unwrap(),
         "--clients-file",
         clients.to_str().unwrap(),
         "--database-port",
-        "55448",
+        &database_port.to_string(),
         "--breg-port",
-        "8094",
+        &breg_port.to_string(),
         "--mint-port",
-        "8095",
+        &mint_port.to_string(),
         "--mint-bin",
         "/usr/bin/false",
     ]);
@@ -206,6 +239,29 @@ seed:
         fs::read(project.join(".breg/dev/credentials/operator/assertion-key.jwk")).unwrap();
     let first = session.start();
     assert_eq!(first["status"], "ready");
+    assert_eq!(first["bregUrl"], origin);
+    // A client token lives 300 seconds, less than the worst case a first
+    // start may spend on its child and readiness deadlines before it seeds.
+    // Every token must therefore be minted after the rehearsal, the built
+    // package and the activation, immediately before the seed.
+    let dev = project.join(".breg/dev");
+    let prepared = [
+        newest(&dev.join("build")),
+        newest(&dev.join("schema-test-receipt.json")),
+        newest(&dev.join("runtime.yaml")),
+        newest_log(&dev, "apply-"),
+        newest_log(&dev, "verify-"),
+    ]
+    .into_iter()
+    .max()
+    .expect("the first start left its package and activation records");
+    for client in ["operator", "reader", "source"] {
+        let token = dev.join("secrets").join(format!("{client}-token"));
+        assert!(
+            newest(&token) >= prepared,
+            "the {client} token was minted before the package and activation records"
+        );
+    }
     let again = session.start();
     assert_eq!(again["packageRevision"], first["packageRevision"]);
     let state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
@@ -281,7 +337,9 @@ seed:
             .build()
             .unwrap();
         let list: Value = client
-            .get("http://127.0.0.1:8094/v1/records/records?accessProfile=operator")
+            .get(format!(
+                "{origin}/v1/records/records?accessProfile=operator"
+            ))
             .bearer_auth(&token)
             .send()
             .await
@@ -292,8 +350,7 @@ seed:
         let records = list["items"].as_array().expect("list records");
         assert_eq!(records.len(), 1, "first seed is executed once");
         let record = records[0]["recordIdentifier"].as_str().unwrap().to_owned();
-        let url =
-            format!("http://127.0.0.1:8094/v1/records/records/{record}?accessProfile=operator");
+        let url = format!("{origin}/v1/records/records/{record}?accessProfile=operator");
         let response = client.get(&url).bearer_auth(&token).send().await.unwrap();
         let etag = response
             .headers()
@@ -388,10 +445,7 @@ seed:
             .unwrap();
         let lookup = |value: &str| {
             let mut sent = client
-                .post(format!(
-                    "http://127.0.0.1:8094{}",
-                    request["path"].as_str().unwrap()
-                ))
+                .post(format!("{origin}{}", request["path"].as_str().unwrap()))
                 .bearer_auth(&token)
                 .query(&[
                     (
@@ -453,7 +507,7 @@ seed:
             .unwrap();
         let response = client
             .get(format!(
-                "http://127.0.0.1:8094/v1/records/records/{record}?accessProfile=operator"
+                "{origin}/v1/records/records/{record}?accessProfile=operator"
             ))
             .bearer_auth(&token)
             .send()
@@ -475,10 +529,7 @@ seed:
     let mut changed = original.clone();
     changed.extend_from_slice(b"\n# reviewed authored edit\n");
     write(&project.join("registry.yaml"), &changed);
-    assert!(!session
-        .ctl(&["dev", "--project", project.to_str().unwrap()])
-        .status
-        .success());
+    assert!(!session.dev(&[]).status.success());
     assert_eq!(fs::read(project.join("registry.yaml")).unwrap(), changed);
     write(&project.join("registry.yaml"), &original);
     session.start();
@@ -576,7 +627,7 @@ seed:
     );
     // Plain `dev stop` still refuses a retained container that vanished
     // without `--remove`; that refusal protects retained data.
-    let refused = session.ctl(&["dev", "stop", "--project", project.to_str().unwrap()]);
+    let refused = session.dev(&["stop"]);
     assert!(!refused.status.success());
     let refusal: Value = serde_json::from_slice(&refused.stdout).expect("refusal JSON");
     assert!(refusal["diagnostics"][0]["message"]

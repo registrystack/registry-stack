@@ -8,7 +8,7 @@ mod postgres_harness;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use postgres_harness::TestDatabase;
 use registry_breg::audit_tooling::{AuditOperatorService, AuditPruneBoundary, AuditToolingError};
@@ -597,6 +597,33 @@ async fn verify_reports_a_cycle_through_every_record_without_walking_it_twice() 
     );
 
     fixture.cleanup().await;
+}
+
+/// Measurement rather than a gate: one verification pass over journals of
+/// growing size, reported so the walk's cost per record is visible. A walk
+/// whose cost per record is flat is linear in the chain length; a walk that
+/// carries per-record state proportional to what it has already visited shows
+/// the cost per record growing with the journal. Run it with
+/// `--ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "seeds journals of up to ten thousand records to measure the walk"]
+async fn verify_cost_per_record_over_growing_journals() {
+    for records in [1_000usize, 5_000, 10_000] {
+        let fixture = Fixture::create().await;
+        fixture.seed(records).await;
+        let service = fixture.service();
+        let started = Instant::now();
+        let verified = service.verify().await.expect("the seeded journal verifies");
+        let elapsed = started.elapsed();
+        assert_eq!(verified.records, records as u64);
+        assert_eq!(verified.last_hash, verified.head_hash);
+        println!(
+            "records={records} verify={:.3}s per_record={:.1}us",
+            elapsed.as_secs_f64(),
+            elapsed.as_secs_f64() * 1_000_000.0 / records as f64,
+        );
+        fixture.cleanup().await;
+    }
 }
 
 /// One rewritten envelope and the chain position the walk reports it at.

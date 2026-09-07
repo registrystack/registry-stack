@@ -5258,10 +5258,20 @@ fn compare_decimal_text(left: &str, right: &str) -> std::cmp::Ordering {
     }
 }
 
+/// Validate a URI-typed bundle scalar against the one identifier definition
+/// this repository has.
+///
+/// `registry_discovery_profile::is_valid_identifier` already carries the
+/// character rule the publication projection enforces: an absolute URI carries
+/// no control character and no whitespace of any script, only the ASCII space
+/// family. Reading that rule from the profile instead of restating a narrower
+/// `is_ascii_whitespace` test here keeps the bundle and its projection on one
+/// definition, so no scalar can be accepted at load and then refused when the
+/// same bytes are published. The 512-byte bound stays local because the
+/// profile's own bound is the far looser public-text one.
 fn validate_uri(value: &str) -> Result<(), ConfigError> {
     validate_string(value, 1, 512, "URI")?;
-    let url = Url::parse(value).map_err(|_| ConfigError::Invalid("URI is invalid"))?;
-    if url.scheme().is_empty() || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+    if !registry_discovery_profile::is_valid_identifier(value) {
         return invalid("URI is invalid");
     }
     Ok(())
@@ -5975,6 +5985,70 @@ mod tests {
             }
         }
     }
+    /// Every URI-typed bundle scalar refuses the same characters the shared
+    /// public profile refuses, not only the ASCII whitespace `str::is_ascii_whitespace`
+    /// names.
+    ///
+    /// A URI carries no whitespace and no control character at all. Accepting
+    /// `U+00A0` or `U+3000` inside an issuer id, a requirement id, or a concept
+    /// id lets two identifiers that render alike compare unequal, so a bundle
+    /// can name one authority twice and an operator reading the audit trail
+    /// cannot tell the two apart. `validate_uri` therefore delegates the
+    /// character rule to `registry_discovery_profile::is_valid_identifier`, the
+    /// single definition the publication projection already enforces.
+    ///
+    /// The rule covers the whitespace and control classes. A zero-width format
+    /// character such as `U+FEFF` is neither, so both definitions still accept
+    /// it; that is one gap in the shared profile, not two divergent rules here.
+    #[test]
+    fn uri_scalars_refuse_every_whitespace_and_control_character_the_public_profile_refuses() {
+        let fixture = include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        );
+        let config = EvidenceConfig::parse_yaml(fixture).expect("strict fixture validates");
+        config.validate().expect("the fixture URIs are sound");
+
+        for separator in [
+            "\u{a0}",   // no-break space
+            "\u{2007}", // figure space
+            "\u{3000}", // ideographic space
+            " ",        // ASCII space
+            "\t", "\n", "\u{7}", // a control character no URI carries
+        ] {
+            let value = format!("urn:example:fixture:issuer{separator}authority");
+            let mut candidate = config.clone();
+            candidate.issuer.id.clone_from(&value);
+            assert_eq!(
+                candidate.validate(),
+                invalid("URI is invalid"),
+                "issuer id carrying {separator:?}"
+            );
+            assert!(
+                !registry_discovery_profile::is_valid_identifier(&value),
+                "the shared public profile refuses {separator:?} as well"
+            );
+        }
+
+        for surrounded in [
+            "\u{a0}urn:example:fixture:issuer",
+            "urn:example:fixture:issuer\u{a0}",
+        ] {
+            let mut candidate = config.clone();
+            candidate.issuer.id = surrounded.to_owned();
+            assert_eq!(
+                candidate.validate(),
+                invalid("URI is invalid"),
+                "issuer id bounded by a no-break space"
+            );
+        }
+
+        let mut scheme_free = config.clone();
+        scheme_free.issuer.id = "example:fixture".to_owned();
+        assert!(
+            scheme_free.validate().is_ok(),
+            "an ordinary scheme stays acceptable"
+        );
+    }
 
     /// Two authority claims naming one JWT member, or naming a member the token
     /// already defines, is a configuration the verifier must refuse.
@@ -6220,6 +6294,24 @@ mod tests {
             refused.push((
                 "an unauthenticated connection at a non-canonical loopback origin",
                 format!("    baseUrl: {origin}\n    authentication: {{kind: none}}\n"),
+            ));
+        }
+        // The authenticated branch is no looser. The runtime refuses user
+        // information, a port outside the range a port can hold, and a
+        // loopback literal that is not the canonical spelling, so the
+        // published contract has to refuse them rather than describe a
+        // connection that only fails at startup.
+        for origin in [
+            "https://user:token@source.invalid",
+            "https://source.invalid:99999",
+            "http://127.0.0.1:99999",
+            "http://127.00.0.1:18081",
+        ] {
+            refused.push((
+                "an authenticated connection at a non-canonical origin",
+                format!(
+                    "    baseUrl: {origin}\n    authentication: {{kind: static-authorization, tokenRef: secret:file/source-a-token}}\n"
+                ),
             ));
         }
         for (reason, connection) in refused {
@@ -7239,6 +7331,93 @@ mod tests {
         structured_projection["requirements"][0]["concepts"][0]["sdJwtVc"] =
             serde_json::json!({"claim": "birthCertificate", "disclosure": "top-level"});
         assert!(!validator.is_valid(&structured_projection));
+    }
+
+    /// A list concept's declared cardinality is checked while the bundle
+    /// loads, not when a question first reaches the concept.
+    ///
+    /// The kernel checks an actual list length against the declared range
+    /// every time it projects one, but that check runs only for a concept some
+    /// question reached. An incoherent range on a concept no fixture case and
+    /// no configured grant exercises would otherwise sit in a deployment that
+    /// started cleanly and refuse the first real request that ever reached it.
+    /// `validate_collection_constraints` runs over every concept of every
+    /// requirement during `EvidenceConfig::validate`, so the deployment does
+    /// not start at all.
+    ///
+    /// The cause names the rule and not the concept: `ConfigError::Invalid`
+    /// carries fixed text by contract, and a concept handle or id is
+    /// configured content.
+    #[test]
+    fn list_concept_cardinality_is_refused_at_load_not_when_a_question_reaches_it() {
+        const SUPPORTED_VALUES: &str = include_str!(
+            "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
+        );
+        EvidenceConfig::parse_yaml(SUPPORTED_VALUES.as_bytes())
+            .expect("the conformance fixture validates as written");
+
+        const INCOHERENT: &str = "collection constraints are invalid";
+        const OUT_OF_BOUNDS: &str = "numeric value is outside Version 1 bounds";
+        for (form, sound, unsound) in [
+            (
+                ConceptForm::ControlledCodeList,
+                "minimumItems: 1, maximumItems: 3, unique: true",
+                [
+                    ("minimumItems: 3, maximumItems: 1, unique: true", INCOHERENT),
+                    (
+                        "minimumItems: 1, maximumItems: 3, unique: false",
+                        INCOHERENT,
+                    ),
+                    (
+                        "minimumItems: 1, maximumItems: 65, unique: true",
+                        OUT_OF_BOUNDS,
+                    ),
+                    (
+                        "minimumItems: 0, maximumItems: 3, unique: true",
+                        OUT_OF_BOUNDS,
+                    ),
+                ],
+            ),
+            (
+                ConceptForm::EntityReferenceList,
+                "minimumItems: 1, maximumItems: 2, unique: true",
+                [
+                    ("minimumItems: 2, maximumItems: 1, unique: true", INCOHERENT),
+                    (
+                        "minimumItems: 1, maximumItems: 2, unique: false",
+                        INCOHERENT,
+                    ),
+                    (
+                        "minimumItems: 1, maximumItems: 65, unique: true",
+                        OUT_OF_BOUNDS,
+                    ),
+                    (
+                        "minimumItems: 0, maximumItems: 2, unique: true",
+                        OUT_OF_BOUNDS,
+                    ),
+                ],
+            ),
+        ] {
+            for (replacement, cause) in unsound {
+                let document = edited(SUPPORTED_VALUES, sound, replacement);
+                assert_eq!(
+                    invalid_reason(&document),
+                    cause,
+                    "{form:?} accepted {replacement}"
+                );
+            }
+        }
+
+        // The concept the fixture cases never disclose is refused just the
+        // same, so the refusal cannot depend on a question reaching it.
+        let unreached = edited(
+            SUPPORTED_VALUES,
+            "minimumItems: 1, maximumItems: 2, unique: true",
+            "minimumItems: 2, maximumItems: 1, unique: true",
+        );
+        let error = EvidenceConfig::parse_yaml(unreached.as_bytes())
+            .expect_err("an unreached list concept is refused before anything is evaluated");
+        assert_eq!(error.fault().cause(), INCOHERENT);
     }
 
     #[test]
