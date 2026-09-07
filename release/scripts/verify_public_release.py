@@ -44,6 +44,13 @@ def version_uses_client_registries(version: str) -> bool:
     )
 
 
+def version_requires_release_provenance(version: str) -> bool:
+    return (
+        tuple(int(part) for part in version.split("."))
+        >= release_candidate.RELEASE_PROVENANCE_ASSET_MINIMUM_VERSION
+    )
+
+
 def client_registry_clients(version: str) -> tuple[str, ...]:
     if (
         tuple(int(part) for part in version.split("."))
@@ -203,7 +210,7 @@ def verify_downloaded_assets(
     assets: dict[str, dict[str, Any]],
     *,
     tag: str,
-) -> tuple[dict[str, str], str]:
+) -> tuple[dict[str, str], str, str | None]:
     downloaded = {
         path.name: path
         for path in directory.iterdir()
@@ -227,13 +234,19 @@ def verify_downloaded_assets(
 
     checksum_name = "SHA256SUMS"
     bundle_name = f"registry-stack-{tag}-SHA256SUMS.sigstore.json"
-    for required in (checksum_name, bundle_name):
+    provenance_name = f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl"
+    required_names = [checksum_name, bundle_name]
+    if version_requires_release_provenance(tag.removeprefix("v")):
+        required_names.append(provenance_name)
+    for required in required_names:
         if required not in downloaded:
             raise PublicReleaseError(f"GitHub Release is missing {required}")
     checksums = parse_sha256sums(
         downloaded[checksum_name].read_text(encoding="utf-8")
     )
-    expected_closure = set(downloaded) - {checksum_name, bundle_name}
+    # The signature bundle and provenance are produced after the checksum
+    # closure is fixed, so they authenticate it rather than appear in it.
+    expected_closure = set(downloaded) - {checksum_name, bundle_name, provenance_name}
     if set(checksums) != expected_closure:
         raise PublicReleaseError(
             "SHA256SUMS closure differs from downloadable payloads: "
@@ -243,7 +256,11 @@ def verify_downloaded_assets(
     for name, expected in checksums.items():
         if actual_digests[name] != expected:
             raise PublicReleaseError(f"SHA256SUMS rejects asset {name}")
-    return checksums, bundle_name
+    return (
+        checksums,
+        bundle_name,
+        provenance_name if provenance_name in downloaded else None,
+    )
 
 
 def validate_release_manifest(
@@ -431,7 +448,7 @@ def verify(
                 str(directory),
             ]
         )
-        checksums, bundle_name = verify_downloaded_assets(
+        checksums, bundle_name, provenance_name = verify_downloaded_assets(
             directory,
             assets,
             tag=tag,
@@ -453,6 +470,24 @@ def verify(
                 SIGNER_ISSUER,
             ]
         )
+        if provenance_name is not None:
+            run_text(
+                [
+                    "gh",
+                    "attestation",
+                    "verify",
+                    str(directory / "SHA256SUMS"),
+                    "--bundle",
+                    str(directory / provenance_name),
+                    "--repo",
+                    repository,
+                    "--signer-workflow",
+                    f"{repository}/.github/workflows/release.yml",
+                    "--source-ref",
+                    "refs/heads/main",
+                    "--deny-self-hosted-runners",
+                ]
+            )
         manifest_path = directory / manifest_name
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -517,6 +552,7 @@ def verify(
         "checksum_payload_count": len(checksums),
         "image_count": len(images),
         "smoke_asset": smoke_name,
+        "provenance_asset": provenance_name,
         "client_registry_package_count": client_registry_package_count,
         "status": "verified",
     }

@@ -620,7 +620,7 @@ class GateInventoryTest(unittest.TestCase):
         for marker in (
             "name: Clean retryable final additions and reverify exact staged assets",
             "contract/final-upload-release.json",
-            "name: Sign and upload the checksum closure",
+            "name: Upload the checksum closure and its provenance",
             "name: Classify exact bound draft or published release",
             "name: Recheck complete signed release and exact public images",
             "name: Publish immutable release",
@@ -633,7 +633,7 @@ class GateInventoryTest(unittest.TestCase):
                 )
         for step_name in (
             "Clean retryable final additions and reverify exact staged assets",
-            "Sign and upload the checksum closure",
+            "Upload the checksum closure and its provenance",
             "Classify exact bound draft or published release",
             "Recheck complete signed release and exact public images",
             "Publish immutable release",

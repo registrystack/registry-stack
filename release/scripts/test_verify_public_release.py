@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -51,6 +52,202 @@ class PublicReleaseVerifierTest(TestCase):
             ("stack",),
             self.module.client_registry_clients("0.26.1"),
         )
+
+    def test_release_provenance_asset_is_required_after_v0_27_0(self) -> None:
+        self.assertFalse(self.module.version_requires_release_provenance("0.26.1"))
+        self.assertFalse(self.module.version_requires_release_provenance("0.27.0"))
+        self.assertTrue(self.module.version_requires_release_provenance("0.27.1"))
+        self.assertTrue(self.module.version_requires_release_provenance("1.0.0"))
+
+    def test_downloaded_provenance_is_outside_the_closure_and_returned(self) -> None:
+        tag = "v0.27.1"
+        payloads = {"payload.bin": b"payload\n"}
+        sums = "".join(
+            f"{digest(body)}  {name}\n" for name, body in sorted(payloads.items())
+        ).encode()
+        provenance_name = f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl"
+        files = {
+            **payloads,
+            "SHA256SUMS": sums,
+            f"registry-stack-{tag}-SHA256SUMS.sigstore.json": b"{\"bundle\":true}\n",
+            provenance_name: b"{\"dsseEnvelope\":{}}\n",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in files.items():
+                (root / name).write_bytes(body)
+            assets = {
+                name: {
+                    "name": name,
+                    "digest": f"sha256:{digest(body)}",
+                    "size": len(body),
+                }
+                for name, body in files.items()
+            }
+            checksums, _, provenance = self.module.verify_downloaded_assets(
+                root,
+                assets,
+                tag=tag,
+            )
+            self.assertEqual(set(payloads), set(checksums))
+            self.assertEqual(provenance_name, provenance)
+
+            (root / provenance_name).unlink()
+            del assets[provenance_name]
+            with self.assertRaisesRegex(
+                self.module.PublicReleaseError,
+                f"missing {provenance_name}",
+            ):
+                self.module.verify_downloaded_assets(root, assets, tag=tag)
+
+    def test_published_v0_27_0_verifies_without_a_provenance_asset(self) -> None:
+        tag = "v0.27.0"
+        payloads = {"payload.bin": b"payload\n"}
+        sums = "".join(
+            f"{digest(body)}  {name}\n" for name, body in sorted(payloads.items())
+        ).encode()
+        files = {
+            **payloads,
+            "SHA256SUMS": sums,
+            f"registry-stack-{tag}-SHA256SUMS.sigstore.json": b"{\"bundle\":true}\n",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in files.items():
+                (root / name).write_bytes(body)
+            assets = {
+                name: {
+                    "name": name,
+                    "digest": f"sha256:{digest(body)}",
+                    "size": len(body),
+                }
+                for name, body in files.items()
+            }
+            _, _, provenance = self.module.verify_downloaded_assets(
+                root,
+                assets,
+                tag=tag,
+            )
+            self.assertIsNone(provenance)
+
+            provenance_name = f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl"
+            provenance_body = b'{"dsseEnvelope":{}}\n'
+            (root / provenance_name).write_bytes(provenance_body)
+            assets[provenance_name] = {
+                "name": provenance_name,
+                "digest": f"sha256:{digest(provenance_body)}",
+                "size": len(provenance_body),
+            }
+            _, _, provenance = self.module.verify_downloaded_assets(
+                root,
+                assets,
+                tag=tag,
+            )
+            self.assertEqual(provenance_name, provenance)
+
+    def test_verify_rejects_bad_provenance_before_manifest_or_runtime_checks(
+        self,
+    ) -> None:
+        repository = "registrystack/registry-stack"
+        tag = "v0.27.1"
+        source = "a" * 40
+        manifest_name = f"registry-stack-{tag}-release-manifest.json"
+        provenance_name = f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl"
+        payloads = {
+            manifest_name: b"{}\n",
+            self.module.smoke_asset_name(tag): b"binary\n",
+        }
+        sums = "".join(
+            f"{digest(body)}  {name}\n" for name, body in sorted(payloads.items())
+        ).encode()
+        files = {
+            **payloads,
+            "SHA256SUMS": sums,
+            f"registry-stack-{tag}-SHA256SUMS.sigstore.json": b'{"bundle":true}\n',
+            provenance_name: b'{"dsseEnvelope":{}}\n',
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in files.items():
+                (root / name).write_bytes(body)
+            assets = [
+                {
+                    "name": name,
+                    "digest": f"sha256:{digest(body)}",
+                    "size": len(body),
+                }
+                for name, body in files.items()
+            ]
+            release = {
+                "tag_name": tag,
+                "draft": False,
+                "prerelease": False,
+                "published_at": "2026-09-07T00:00:00Z",
+                "assets": assets,
+            }
+            commands: list[list[str]] = []
+
+            def run_text(command: list[str], *, cwd: Path | None = None) -> str:
+                del cwd
+                commands.append(command)
+                if command[:3] == ["git", "ls-remote", "--tags"]:
+                    return (
+                        f"{'b' * 40}\trefs/tags/{tag}\n"
+                        f"{source}\trefs/tags/{tag}^{{}}\n"
+                    )
+                if command == ["gh", "api", f"repos/{repository}/releases/tags/{tag}"]:
+                    return json.dumps(release)
+                if command == ["gh", "api", f"repos/{repository}/releases/latest"]:
+                    return json.dumps({"tag_name": tag})
+                if command[:3] == ["gh", "release", "download"]:
+                    return ""
+                if command[:2] == ["cosign", "verify-blob"]:
+                    return ""
+                if command[:3] == ["gh", "attestation", "verify"]:
+                    raise self.module.PublicReleaseError("attestation rejected")
+                raise AssertionError(f"unexpected command after provenance: {command}")
+
+            temporary_directory = mock.MagicMock()
+            temporary_directory.__enter__.return_value = str(root)
+            temporary_directory.__exit__.return_value = False
+            with (
+                mock.patch.object(self.module.shutil, "which", return_value="/tool"),
+                mock.patch.object(self.module, "run_text", side_effect=run_text),
+                mock.patch.object(
+                    self.module.tempfile,
+                    "TemporaryDirectory",
+                    return_value=temporary_directory,
+                ),
+                mock.patch.object(
+                    self.module, "validate_release_manifest"
+                ) as validate_manifest,
+                mock.patch.object(self.module, "run_binary_smoke") as smoke,
+                self.assertRaisesRegex(
+                    self.module.PublicReleaseError, "attestation rejected"
+                ),
+            ):
+                self.module.verify(repo=root, repository=repository, tag=tag)
+
+            expected_attestation = [
+                "gh",
+                "attestation",
+                "verify",
+                str(root / "SHA256SUMS"),
+                "--bundle",
+                str(root / provenance_name),
+                "--repo",
+                repository,
+                "--signer-workflow",
+                f"{repository}/.github/workflows/release.yml",
+                "--source-ref",
+                "refs/heads/main",
+                "--deny-self-hosted-runners",
+            ]
+            self.assertIn(expected_attestation, commands)
+            self.assertFalse(any(command[0] == "docker" for command in commands))
+            validate_manifest.assert_not_called()
+            smoke.assert_not_called()
 
     def test_checksum_parser_requires_one_local_unique_asset_per_line(self) -> None:
         parsed = self.module.parse_sha256sums(
@@ -120,6 +317,7 @@ class PublicReleaseVerifierTest(TestCase):
             **payloads,
             "SHA256SUMS": sums,
             f"registry-stack-{tag}-SHA256SUMS.sigstore.json": b"{\"bundle\":true}\n",
+            f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl": b"{\"dsseEnvelope\":{}}\n",
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -133,7 +331,7 @@ class PublicReleaseVerifierTest(TestCase):
                 }
                 for name, body in files.items()
             }
-            checksums, bundle = self.module.verify_downloaded_assets(
+            checksums, bundle, provenance = self.module.verify_downloaded_assets(
                 root,
                 assets,
                 tag=tag,
@@ -142,6 +340,10 @@ class PublicReleaseVerifierTest(TestCase):
             self.assertEqual(
                 f"registry-stack-{tag}-SHA256SUMS.sigstore.json",
                 bundle,
+            )
+            self.assertEqual(
+                f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl",
+                provenance,
             )
 
             (root / "payload.bin").write_bytes(b"tampered\n")
