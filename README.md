@@ -73,7 +73,7 @@ the public source model.
 ### Install a released build
 
 ```bash
-# Base Registry Engine: breg and bregctl
+# Base Registry Engine: breg, bregctl, and mint
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 
 # Registry Relay: relay and relayctl

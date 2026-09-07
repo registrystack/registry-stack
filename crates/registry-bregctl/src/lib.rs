@@ -5157,6 +5157,7 @@ and every file carries comments saying what a block does and what you change.
 | `registry.yaml` | The registry: its identity and package identity, the catalogue projection, one closed vocabulary, two entities, and three access profiles. Every command reads this file. |
 | `modules/record-notes/module.yaml` | A module: a reusable part of the model, versioned on its own and pinned by content digest in the project's `modules` list. |
 | `tests/journeys.yaml` | The requests `bregctl test` replays over HTTP against a throwaway database before a package is built. |
+| `dev-clients.yaml` | The local callers `bregctl dev` registers with its token issuer: one client per access profile the journeys use. |
 | `runtime.example.yaml` | An example of the operator's runtime configuration. No command reads it; copy it out of the project and replace every value. |
 
 ## What the example models
@@ -5210,10 +5211,23 @@ Edit `modules/record-notes/module.yaml`, then re-pin it:
 bregctl project lock .
 ```
 
-`bregctl test` replays `tests/journeys.yaml` over HTTP. It needs more
+## Run it on your machine
+
+`bregctl dev` starts this project as a working registry on loopback: PostgreSQL
+in Docker, Registry Mint issuing tokens to the clients in `dev-clients.yaml`,
+and Base Registry Engine serving the package it builds and tests from these
+files. It needs Docker and the installed `breg` and `mint` binaries.
+
+```sh
+bregctl dev
+bregctl dev stop
+```
+
+`bregctl test` alone replays `tests/journeys.yaml` over HTTP. It needs more
 than the project: an empty PostgreSQL database, a runtime configuration built
 from `runtime.example.yaml`, and one credential per journey step bound in a
-credentials file. The operate documentation below walks through preparing them.
+credentials file. `dev` prepares all of that for a local run; the operate
+documentation below walks through preparing them for a deployment.
 
 ## Documentation
 
@@ -5241,11 +5255,14 @@ registry:
   canonicalBaseIri: https://generic-registry.example.invalid
 
 # Package identity binds a compiled package to one environment, one instance,
-# and one reviewed source revision. Raise `sequence` by one for each package you
-# build; the runtime refuses a package whose identity does not match its
-# configuration file.
+# and one reviewed source revision. `local` is the unsigned environment that
+# `bregctl dev` runs on your machine. A deployment names its own environment,
+# such as `production`, and a package for any other environment than `local`
+# must be signed. Raise `sequence` by one for each package you build; the
+# runtime refuses a package whose identity does not match its configuration
+# file.
 package:
-  environment: development
+  environment: local
   instanceId: generic-registry-1
   sequence: 1
   sourceRevision: generic-registry-0.1.0
@@ -5456,12 +5473,13 @@ listener:
 
 # The environment, instance, and database this file may serve. `environment`
 # and `instanceId` must equal the `package` block in registry.yaml, and
-# `databaseId` the `--database-id` given to `test` and `package`.
+# `databaseId` the `--database-id` given to `test` and `package`. The project
+# starts as `local`; when you name a deployment environment, change both files.
 identity:
-  environment: development
+  environment: local
   instanceId: generic-registry-1
   databaseId: generic-registry-db-1
-  databaseInitializationEnvironment: development
+  databaseInitializationEnvironment: local
 
 # The directory holding the owner-only files the references below name.
 secretProviders:
@@ -5523,6 +5541,31 @@ cursor:
 # project declares no event, so the map is empty. A destination's URL, shared
 # HMAC key, and retry ceilings live only here, never in the project.
 eventDestinations: {}
+"#;
+
+const INIT_DEV_CLIENTS: &[u8] =
+    br#"# Local callers for `bregctl dev`. Registry Mint, the local token issuer that
+# `dev` starts beside the registry, registers each client below and issues it
+# short-lived tokens carrying these claims. One client binds each access profile
+# that `tests/journeys.yaml` uses, with the claims those journeys expect, so a
+# first start runs the journeys and serves the package without another file.
+# `dev` generates a fresh private key per client under `.breg/dev/credentials/`;
+# nothing here is a credential, and none of it belongs in a deployment.
+version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims:
+      registry_principal: generic-registry-operator
+      registry_purpose: registry-operations
+  - id: reader
+    accessProfiles: [record-reader]
+    scopes: [registry:generic:read]
+    claims:
+      registry_principal: generic-registry-reader
+      registry_purpose: registry-reporting
+      registry_record_status: active
 "#;
 
 const INIT_JOURNEYS: &[u8] = br#"# Project journeys: the requests `bregctl test` replays over real
@@ -5640,6 +5683,7 @@ fn init_files() -> BTreeMap<String, Vec<u8>> {
             INIT_RUNTIME_EXAMPLE.to_vec(),
         ),
         (FIXTURE_JOURNEYS_PATH.to_owned(), INIT_JOURNEYS.to_vec()),
+        ("dev-clients.yaml".to_owned(), INIT_DEV_CLIENTS.to_vec()),
     ])
 }
 
@@ -9904,8 +9948,8 @@ mod tests {
 
     #[test]
     fn dev_start_takes_no_detach_flag() {
-        assert!(Cli::try_parse_from(["bregctl", "dev", "--project", "."]).is_ok());
-        assert!(Cli::try_parse_from(["bregctl", "dev", "start", "--project", "."]).is_ok());
+        assert!(Cli::try_parse_from(["bregctl", "dev", "."]).is_ok());
+        assert!(Cli::try_parse_from(["bregctl", "dev", "start", "."]).is_ok());
         for arguments in [
             vec!["bregctl", "dev", "--detach"],
             vec!["bregctl", "dev", "start", "--detach"],
@@ -9915,11 +9959,50 @@ mod tests {
     }
 
     #[test]
+    fn dev_names_its_project_the_way_every_other_command_does() {
+        // `check`, `test`, `generate` and the rest take the project as their
+        // positional argument, so `dev` does too, defaulting to the current
+        // directory when it is absent. The clients file stays a flag because
+        // a first start reads the project's own dev-clients.yaml without it.
+        for arguments in [
+            vec!["bregctl", "dev"],
+            vec!["bregctl", "dev", "tutorial-work/project"],
+            vec!["bregctl", "dev", "start", "tutorial-work/project"],
+            vec!["bregctl", "dev", "stop", "tutorial-work/project"],
+            vec![
+                "bregctl",
+                "dev",
+                "stop",
+                "tutorial-work/project",
+                "--remove",
+            ],
+            vec![
+                "bregctl",
+                "dev",
+                "tutorial-work/project",
+                "--clients-file",
+                "clients.yaml",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(&arguments).is_ok(), "{arguments:?}");
+        }
+        for arguments in [
+            vec!["bregctl", "dev", "--project", "."],
+            vec!["bregctl", "dev", "start", "--project", "."],
+            vec!["bregctl", "dev", "stop", "--project", "."],
+            // A project before the action would stop a different directory
+            // than the one named, so the two forms do not combine.
+            vec!["bregctl", "dev", "tutorial-work/project", "stop"],
+            vec!["bregctl", "dev", "one", "two"],
+        ] {
+            assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
     fn dev_stop_reclaims_only_when_removal_is_explicit() {
-        assert!(Cli::try_parse_from(["bregctl", "dev", "stop", "--project", "."]).is_ok());
-        assert!(
-            Cli::try_parse_from(["bregctl", "dev", "stop", "--project", ".", "--remove"]).is_ok()
-        );
+        assert!(Cli::try_parse_from(["bregctl", "dev", "stop", "."]).is_ok());
+        assert!(Cli::try_parse_from(["bregctl", "dev", "stop", ".", "--remove"]).is_ok());
         for arguments in [
             vec!["bregctl", "dev", "--remove"],
             vec!["bregctl", "dev", "start", "--remove"],

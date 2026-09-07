@@ -53,8 +53,8 @@ const registryLegendFrontmatter = z.object({
   audience: z
     .array(z.enum(['integrator', 'operator', 'maintainer', 'specification editor', 'tooling']))
     .optional(),
-  // Whose tutorial this is, in the deployment roles start/when-to-use.mdx
-  // defines. Optional here for the same reason the seven keys above are;
+  // Whose tutorial this is, in the deployment roles the homepage
+  // (src/content/docs/index.mdx) defines. Optional here for the same reason the seven keys above are;
   // check-doc-frontmatter.mjs requires it for every `doc_type: tutorial` page.
   // Distinct from `audience`, which is the specification-reader axis.
   // The cast only tells Zod the imported list is non-empty, which a plain JS

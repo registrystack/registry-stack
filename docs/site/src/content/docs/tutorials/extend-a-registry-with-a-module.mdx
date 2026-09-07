@@ -1,11 +1,11 @@
 ---
 title: Extend a registry with a module
-description: Create an editable registry project, change a field its module contributes, re-pin the module by content digest, and generate the JSON Schema and OpenAPI that carry the change.
+description: Open the registry project you generated, change a field its module contributes, re-pin the module by content digest, and generate the JSON Schema and OpenAPI that carry the change.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-07"
 doc_type: tutorial
 persona:
   - data publisher
@@ -18,19 +18,18 @@ standards_referenced:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you finished [Create and query your first registry](../first-breg/), you are a data publisher with the
-checkout, the installed binaries, and a `tutorial-work` directory.
-In this tutorial you create a project of your own with `bregctl init`, change a field that a module
-contributes, re-pin the module so the project accepts the change, and generate the JSON Schema and OpenAPI
-that applications read.
-Every command reads and writes files in `tutorial-work`, so the launcher from the first tutorial may be stopped.
+installed binaries and a `tutorial-work` directory holding the project you generated.
+In this tutorial you change a field that a module in that project contributes, re-pin the module so the
+project accepts the change, and generate the JSON Schema and OpenAPI that applications read.
+Every command reads and writes files in `tutorial-work`, so the registry from the first tutorial may be stopped.
 The one place a running registry matters is a comparison at the end of the `explain` step,
-and that comparison holds whether the launcher runs or not.
+and that comparison holds whether the registry runs or not.
 
 <QuickstartMeta
   outcome="An edited module re-pinned by content digest, a passing project check, and generated JSON Schema and OpenAPI that carry the changed field."
   time="About 20 minutes"
   level="Local authoring with synthetic data"
-  prerequisites={['The checkout, binaries, and tutorial-work directory from Create and query your first registry', 'An editor', 'Python 3']}
+  prerequisites={['The binaries and tutorial-work directory from Create and query your first registry', 'An editor', 'Python 3']}
 />
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files(), project_lock(), and ExplainSubject;
@@ -38,40 +37,35 @@ and that comparison holds whether the launcher runs or not.
 
 ## Before you start
 
-Open a terminal at the root of the `breg-tutorial` checkout, where `tutorial-work` already exists,
-and confirm the binaries are still on your `PATH`:
+Open a terminal in the directory that holds `tutorial-work`, and confirm the binaries are still on
+your `PATH`:
 
 ```sh
 bregctl --version
 ```
 
 The version printed is the one the first tutorial installed.
-Nothing in this tutorial touches the launcher's disposable directory under `products/breg/quickstart/.run/`,
+Nothing in this tutorial touches the registry's keys or data under `tutorial-work/project/.breg/`,
 and nothing here needs Docker.
 
-## Create a project
+## Open the project
 
-Create an editable project inside the directory you kept:
+Check the project you generated:
 
 ```sh
-bregctl init tutorial-work/project
+bregctl check tutorial-work/project
 ```
 
 ```text
-init succeeded
+check succeeded
 revision: sha256:<digest>
 finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
 finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
-artifacts: 5
-next: read tutorial-work/project/README.md, then run 'bregctl check tutorial-work/project'
-next: leave the findings above as they are; the example operator profile lists a whole collection and the example evidence-source profile looks up any record, both on purpose, and tutorial-work/project/README.md says where to narrow them
-next: replace canonicalBaseIri in tutorial-work/project/registry.yaml before you build a production package; the example value is a reserved .invalid name that never resolves
 ```
 
-The five artifacts are `registry.yaml`, one module under `modules/`, `tests/journeys.yaml`,
-a `runtime.example.yaml`, and a `README.md` that lists them.
-This is the same project the quickstart launcher started from, so the entity, fields, and profiles are the
-ones you used over HTTP.
+This is the project the first tutorial started as a registry, so the entity, fields, and profiles are
+the ones you used over HTTP: `registry.yaml`, one module under `modules/`, `tests/journeys.yaml`,
+`dev-clients.yaml`, `runtime.example.yaml`, and a `README.md` that lists them.
 The `revision` line is the digest of the compiled project; it changes with every edit you make.
 
 A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a finding does not.
@@ -79,11 +73,8 @@ The first says the `operator` profile can list every row, which is intended for 
 and the second says the `evidence-source` profile can look up any record by its code;
 the project's `record-reader` profile shows the claim-bound row restriction that closes either one.
 Every command in this tutorial repeats both findings, so treat them as expected and read past them to the result.
-The `next:` lines close the same gap for the rest of the output: they name the command to run after
-the README, the findings the example keeps on purpose, and the placeholder `canonicalBaseIri` that has
-to be replaced before a production package. Only `init` prints them.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files(); crates/registry-breg/src/access.rs. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files() and check(); crates/registry-breg/src/access.rs. */}
 
 ## Read the module
 
@@ -223,8 +214,8 @@ In `records.record.operator.list`, the operator's list operation over `record`, 
 
 The same operation's `filterable` entries name only `code` and `status`, each with examples such as `$filter=code eq 'example'`.
 That is the refusal you met in the first tutorial, explained from the project instead of by a `400`.
-This report describes your edited project; if the quickstart launcher is still running, its registry
-serves the original package and knows nothing of `internalNote`.
+This report describes your edited project; if the registry from the first tutorial is still running,
+it serves the package it started with and knows nothing of `internalNote`.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, ExplainSubject; crates/registry-breg/src/query.rs. */}
 
@@ -278,19 +269,20 @@ because `generate` refuses an output directory that already exists.
 
 You have a project of your own whose module contributes a longer `internal-note`, pinned by content digest,
 granted to the operator, and reflected in the JSON Schema and OpenAPI an application would read.
-You compiled an extension, not installed one: no database changed, and the quickstart's registry,
-if it is still running, serves the package it started with.
+You compiled an extension, not installed one: no database changed, and the registry from the first
+tutorial, if it is still running, serves the package it started with.
 Testing a project against a database and packaging it come next.
 
 ## Troubleshooting
 
 | Symptom | Next move |
 | --- | --- |
-| `init` or `generate` reports `output.destination.invalid` | The output directory must not exist yet. Choose a new path, or remove the one left by an earlier run. |
+| `generate` reports `output.destination.invalid` | The output directory must not exist yet. Choose a new path, or remove the one left by an earlier run. |
 | `check` reports `module.lock.digest_mismatch` or `module.lock.version_mismatch` | You edited a module after its last lock. Run `bregctl project lock tutorial-work/project`, then check again. |
 | `check` cannot parse `registry.yaml` after your edit | Compare the indentation of the lines you changed with their neighbours; the grant lists sit eight spaces in. |
 | `bregctl` is not found | Put the installers' directory, `~/.local/bin` unless you changed it, back on `PATH` in this terminal. |
-| The running quickstart does not show `internalNote` | Expected: it serves the package the launcher compiled at start. Activating a changed package is covered in [Deploy a registry](../../operate/breg/). |
+| The running registry does not show `internalNote` | Expected: it serves the package `bregctl dev` built when it first started. Activating a changed package is covered in [Deploy a registry](../../operate/breg/). |
+| `bregctl dev` refuses to start the edited project | Expected while the registry holds records: `dev` keeps the package it started with. Run `bregctl dev stop tutorial-work/project --remove` to discard the records, then `bregctl dev tutorial-work/project` builds the edited project into a fresh registry. To keep the records, copy `tutorial-work/project` without its `.breg/` directory to a new path and start that copy instead. |
 
 ## Next
 

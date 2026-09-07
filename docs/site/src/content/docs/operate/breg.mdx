@@ -85,8 +85,10 @@ bregctl 0.26.1
 
 The installer accepts the platforms in
 [platform support](../../explanation/known-limitations/#platform-support), and refuses any other
-platform rather than guessing. It verifies both downloaded binaries against the release `SHA256SUMS`
-before anything reaches the install directory, and installs both or neither. It does not verify
+platform rather than guessing. It verifies every downloaded binary against the release `SHA256SUMS`
+before anything reaches the install directory, and installs `breg`, `bregctl`, and `mint` together
+or not at all. Registry Mint comes along because a local registry uses it when no identity provider
+is at hand; a production deployment with its own OpenID Connect issuer can ignore it. It does not verify
 release authenticity. The signed checksum chain that does, and the checks behind it, are recorded in
 [OpenSSF and release trust](../../security/openssf-evidence/). Replace `| bash` with `| less` to read
 the installer before you run it on a host you operate. For a higher-assurance installation, follow
@@ -95,7 +97,7 @@ for the pinned tag, then rerun the installer with `BREG_ASSET_DIR` pointing at t
 directory. `BREG_INSTALL_DIR` selects the install directory; the default is `~/.local/bin`.
 
 Testing, packaging, activation, and serving must use one release: `--version` on each binary
-prints it, and the installer keeps the pair together, so reinstalling replaces both. The release
+prints it, and the installer keeps the set together, so reinstalling replaces all three. The release
 also publishes `breg-install.sh` as a movable alias of the pinned installer.
 
 The container image is `ghcr.io/registrystack/breg:v0.26.1`, built on distroless nonroot for

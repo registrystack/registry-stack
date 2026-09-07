@@ -29,7 +29,7 @@ Continue with the copied Evidence README to bind a target, import, run fixtures 
 build. For live development, first add the source client's explicit absolute
 `clientIdFile` and `assertionKeyFile` output paths to the local clients file, pointing
 to `evidence/secrets/registry-client-id` and `evidence/secrets/registry-client-key`.
-Then start `bregctl dev --project ./registry --clients-file ./registry/clients.yaml`.
+Then start `bregctl dev ./registry --clients-file ./registry/clients.yaml`.
 The starter's connection uses its default BReg and Mint ports, 8090 and 8091.
 
 The source profile intentionally permits registry-wide exact lookups in this

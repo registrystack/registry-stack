@@ -1020,8 +1020,13 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('init "${breg_project}"', assemble)
         self.assertIn('check "${breg_project}"', assemble)
         self.assertIn(
-            "binaries=(breg bregctl)", installer_text
+            "binaries=(breg bregctl mint)", installer_text
         )
+        self.assertIn(
+            '"mint-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n                > SHA256SUMS',
+            assemble,
+        )
+        self.assertIn("for breg_binary in breg bregctl mint; do", assemble)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1043,7 +1048,7 @@ class RegistryReleaseTest(TestCase):
             else:
                 raise SkipTest(f"installer has no release asset for {os_name}/{architecture}")
             checksums = []
-            for binary in ("breg", "bregctl"):
+            for binary in ("breg", "bregctl", "mint"):
                 name = f"{binary}-v0.26.0-{platform_name}"
                 body = f"{binary} fixture\n".encode()
                 (assets / name).write_bytes(body)
@@ -1065,7 +1070,7 @@ class RegistryReleaseTest(TestCase):
                 check=False,
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            for binary in ("breg", "bregctl"):
+            for binary in ("breg", "bregctl", "mint"):
                 installed = destination / binary
                 self.assertEqual(f"{binary} fixture\n", installed.read_text())
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)

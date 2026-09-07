@@ -9,7 +9,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const TEST_VERSION: &str = "v9.8.7";
-const BINARIES: [&str; 2] = ["breg", "bregctl"];
+const BINARIES: [&str; 3] = ["breg", "bregctl", "mint"];
 
 // Distinguishes fixture roots built within the same process. The wall clock alone is not
 // enough: macOS reports CLOCK_REALTIME at 1 microsecond resolution, so two fixtures built in
@@ -57,6 +57,44 @@ fn failed_atomic_pointer_switch_preserves_the_previous_toolset() {
         );
     }
     fixture.assert_active_toolset_is_traversable();
+}
+
+#[test]
+fn failed_atomic_pointer_switch_preserves_a_command_the_pointer_does_not_carry() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_pointer_toolset_without_mint();
+
+    // The pointer is already a symbolic link, so no migration precedes the
+    // switch and the switch is the first rename onto it.
+    let output = fixture.run_failing_pointer_switch(1);
+
+    assert!(!output.status.success());
+    for binary in BINARIES {
+        assert_eq!(
+            fs::read_to_string(fixture.install_dir.join(binary)).unwrap(),
+            format!("{binary} previous binary\n"),
+            "{binary} must still resolve to the file it resolved to before"
+        );
+    }
+}
+
+#[test]
+fn a_command_the_pointer_does_not_carry_is_adopted_after_the_switch() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_pointer_toolset_without_mint();
+
+    let output = fixture.run(false);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_release_toolset_active();
+    assert!(
+        fixture.install_dir.join("mint").is_symlink(),
+        "an adopted command must become a stable command link"
+    );
 }
 
 #[test]
@@ -259,6 +297,30 @@ exec /bin/mv "${arguments[@]}"
         }
     }
 
+    /// A machine an earlier toolset installed through the pointer, carrying a
+    /// `mint` that another product's installer wrote directly. The pointer is
+    /// already a symbolic link, so the one-time migration does not run.
+    fn preinstall_pointer_toolset_without_mint(&self) {
+        let toolset = self.install_dir.join(".breg-toolset.earlier");
+        fs::create_dir_all(&toolset).unwrap();
+        for binary in ["breg", "bregctl"] {
+            let path = toolset.join(binary);
+            fs::write(&path, format!("{binary} previous binary\n")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            std::os::unix::fs::symlink(
+                format!(".breg-current/{binary}"),
+                self.install_dir.join(binary),
+            )
+            .unwrap();
+        }
+        std::os::unix::fs::symlink(
+            ".breg-toolset.earlier",
+            self.install_dir.join(".breg-current"),
+        )
+        .unwrap();
+        fs::write(self.install_dir.join("mint"), "mint previous binary\n").unwrap();
+    }
+
     fn command(&self) -> Command {
         let path = format!(
             "{}:{}",
@@ -281,14 +343,23 @@ exec /bin/mv "${arguments[@]}"
     }
 
     fn run(&self, fail_final_pointer_switch: bool) -> Output {
-        let mut command = self.command();
         if fail_final_pointer_switch {
-            self.install_failing_mv();
-            command
-                .env("REAL_MV", "/bin/mv")
-                .env("FAKE_MV_COUNT", self.root.join("mv-count"));
+            // Migrating direct binaries renames the pointer once before the
+            // switch, so on such a fixture the switch is the second rename.
+            return self.run_failing_pointer_switch(2);
         }
-        command.output().unwrap()
+        self.command().output().unwrap()
+    }
+
+    /// Runs an install whose `nth` rename onto the toolset pointer fails.
+    fn run_failing_pointer_switch(&self, nth: u32) -> Output {
+        self.install_failing_mv();
+        self.command()
+            .env("REAL_MV", "/bin/mv")
+            .env("FAKE_MV_COUNT", self.root.join("mv-count"))
+            .env("FAKE_MV_FAIL_AT", nth.to_string())
+            .output()
+            .unwrap()
     }
 
     fn install_failing_mv(&self) {
@@ -304,7 +375,7 @@ if [[ "$destination" == */.breg-current ]]; then
   fi
   count=$((count + 1))
   printf '%s\n' "$count" > "$FAKE_MV_COUNT"
-  if [[ "$count" -eq 2 ]]; then
+  if [[ "$count" -eq "$FAKE_MV_FAIL_AT" ]]; then
     exit 73
   fi
 fi

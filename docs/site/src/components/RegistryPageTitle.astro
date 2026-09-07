@@ -43,11 +43,11 @@ const isWide = starlightRoute.entry.data.wide === true;
 // read by the client script so the script doesn't need to recompute it.
 const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
 
-// Whose page this is, in the deployment roles start/when-to-use.mdx defines.
+// Whose page this is, in the deployment roles the homepage defines.
 // Required on tutorials by scripts/check-doc-frontmatter.mjs, so every tutorial
 // says who it is for before the reader starts it; other pages may omit it.
 const personas = starlightRoute.entry.data.persona ?? [];
-const personaHref = `${import.meta.env.BASE_URL}start/when-to-use/#who-does-what`;
+const personaHref = `${import.meta.env.BASE_URL}#who-does-what`;
 ---
 
 {isWide && (

@@ -1,0 +1,140 @@
+---
+title: What you need to run Base Registry Engine
+description: The database, token issuer, signing process, and people a production Base Registry Engine deployment needs, what it does not depend on, and what stays your job once it runs.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-07"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+If you are planning a production Base Registry Engine (BReg) deployment, this is what you provide,
+what the product does not depend on, and what stays your job once it runs. None of it is needed for
+[your first registry](../../tutorials/first-breg/), which starts disposable versions of everything
+on your machine.
+
+## What you provide
+
+- **PostgreSQL 15 or newer**, with two login roles: a migration role that owns the schema and
+  applies packages, and a runtime role the serving process uses. A registry with spatial fields
+  needs PostgreSQL 16 and PostGIS 3.5 or newer. Your administrator installs the extensions the
+  runtime checks for; neither role creates a schema, an extension, or a role. SQLite is not a
+  target.
+- **A host for one process.** The runtime is a single binary that verifies one package and serves
+  its REST API against one database. It runs on the platforms in
+  [platform support](../../explanation/known-limitations/#platform-support).
+- **HTTPS in front of it.** The process trusts no host or forwarded header; your reverse proxy or
+  ingress terminates TLS, and generated links use the public origin you configure.
+- **A token issuer.** BReg verifies bearer tokens from one OpenID Connect issuer and issues none.
+  Your identity provider fills this role, or [Registry Mint](../../configure/mint/) does when you
+  have none.
+- **A signer who is not the author.** A production package is published only after an external
+  signer produces a detached Ed25519 signature over it, and the runtime accepts a package only when
+  enough of the keys in its trust anchor have signed. Who holds those keys, and how they sign, is
+  your decision.
+- **A backup of the database before every activation.** The product restores nothing itself.
+
+{/* Evidence: crates/registry-breg/src/postgres/schema.rs; crates/registry-breg/src/postgres/roles.rs,
+    verify_postgres_16_or_newer and postgis_version_supported;
+    crates/registry-breg/src/runtime_config.rs, SqlRoles and PublicOrigin;
+    crates/registry-breg/src/auth.rs, RegistryAuthenticator;
+    crates/registry-breg/src/package.rs, validate_signature_policy; products/breg/README.md;
+    products/breg/DECISIONS.md. */}
+
+## What it does not need
+
+The process keeps no local state: the records, their history, the audit journal, the pending
+change requests, and the outbox of undelivered events all live in PostgreSQL. Webhook delivery
+runs inside the process from that outbox, so there is no message broker. No cache, object store,
+or second service takes part in a request. Registry Relay and Evidence Gateway are separate
+products, not dependencies.
+
+The modeling loop needs none of this. Authoring commands check, explain, and generate a project
+with no database open, so an author can work on a laptop until the project is ready to test.
+
+{/* Evidence: crates/registry-breg/src/outbox.rs; crates/registry-breg/src/webhook.rs;
+    release/docker/Dockerfile.breg; crates/registry-bregctl/src/lib.rs, Command; products/breg/README.md. */}
+
+## How it ships
+
+Each release publishes the `breg` runtime and the `bregctl` authoring tool as reproducible
+binaries, with an installer that verifies them against the release checksums and installs them, and
+the Registry Mint token issuer beside them, together or not at all. Keep the pair on one release:
+both compute the schema fingerprint that a test receipt binds. Each release also publishes a
+container image built on a distroless base with no shell,
+running as a non-root user, that holds the runtime binary and nothing else; configuration, package,
+trust anchor, and secrets mount read-only into it.
+
+The release ships no Helm chart, Compose file, or hosted offering. Scheduling, TLS termination,
+and the proxy in front of the listener are yours. The Docker use in the first tutorial is a
+loopback development path, not a deployment pattern.
+
+{/* Evidence: crates/registry-breg/install.sh; release/docker/Dockerfile.breg;
+    crates/registry-breg/src/postgres/catalog.rs, CatalogFingerprintVersion;
+    products/breg/quickstart/README.md. */}
+
+## What stays your job
+
+**Secrets.** You hold two database credentials, the audit hash key, the cursor secret, one key per
+webhook destination, and the issuer's key material when you pin a static key set. The runtime
+file names each of them by reference and refuses one that carries a value inline. Package signing
+keys stay with the signer and never reach the tooling or the server.
+
+**Every production change.** A one-line access widening takes the same path as a new registry: a
+production check, a test run against a schema-test database with real tokens, packaging, external
+signing, and activation under the migration credential. A change the tooling classifies as
+additive needs no more; one it marks for review needs a reviewed migration with a rehearsal, and a
+destructive one names its backup. A failed activation holds the database in maintenance until you
+reconcile or restore.
+
+**The audit journal.** Every admitted request appends a hash-chained record in PostgreSQL. You
+verify the chain, export it, and prune it; a prune keeps no copy, so export first.
+
+**Retention and erasure.** Erasing a record's history is a bounded operator command with no undo.
+It removes at most 10,000 revisions per transaction, and restoring snapshot coverage afterwards is
+refused for a registry with more than 1,000 live rows, so a large registry cannot regain snapshot
+coverage after an erasure. Retained webhook payloads expire after a configurable number of days,
+at most 30.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, AuditConfig, CursorConfig, DatabaseConfig,
+    and MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS; crates/registry-bregctl/src/lib.rs, ApplyArgs and MigrationCommand;
+    crates/registry-breg/src/migration_reconcile.rs; crates/registry-breg/src/audit_tooling.rs;
+    crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
+    crates/registry-breg/src/history_rebaseline.rs, MAX_REBASELINE_LIVE_ROWS. */}
+
+## Capacity
+
+No throughput or latency figure is committed. A load-test harness ships with the product and its
+own note asks you to run it on a representative Linux host before you cite a number. What is
+bounded by construction is easier to state: every request, lock, and migration runs under an
+operator-set timeout, the connection pool has a maximum size, spatial responses are capped and
+refuse rather than truncate, and metrics label sets are closed. The runtime applies no request rate
+limit of its own, so a registry that admits anonymous reads belongs behind one.
+
+{/* Evidence: products/breg/loadtest/README.md; crates/registry-breg/src/runtime_config.rs, OperationalTimeouts;
+    crates/registry-breg/src/postgres/config.rs, PoolBounds; crates/registry-breg/src/metrics.rs;
+    products/breg/SPATIAL-QUERIES.md. */}
+
+## Stability
+
+Registry Stack is pre-1.0, so a minor release may contain breaking changes, announced in the
+release note, and security fixes land only in the latest release; see
+[API stability](../../reference/api-stability/) and the
+[support window](../../security/support-window/). The runtime configuration format is at its first
+alpha version. The security posture is fixed: the product's invariant matrix names each package,
+role, row, and claim boundary with the negative test that enforces it.
+
+{/* Evidence: docs/site/src/content/docs/reference/api-stability.mdx;
+    docs/site/src/content/docs/security/support-window.mdx;
+    crates/registry-breg/src/runtime_config.rs, RUNTIME_CONFIG_API_VERSION;
+    products/breg/contracts/security-invariant-matrix.yaml. */}
+
+## Next
+
+- [Build a production candidate](../../tutorials/build-a-breg-production-candidate/)
+- [Deploy a registry](../../operate/breg/)
+- [Bind webhook receivers](../breg-webhooks/)
+- [Retain, erase, and audit](../breg-retention/)

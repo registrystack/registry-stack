@@ -105,9 +105,9 @@ block links here instead of repeating a list that drifts.
 ## Base Registry Engine limits
 
 Base Registry Engine serves one governed registry from a PostgreSQL database it owns, under a
-signed package an operator activates deliberately. The full operational posture is in
-[Evaluate Base Registry Engine](../../start/evaluate-breg/); what follows is what the product does
-not do.
+signed package an operator activates deliberately. What it asks of a deployment is in
+[What you need to run Base Registry Engine](../../operate/breg-requirements/); what follows is what
+the product does not do.
 
 - PostgreSQL only: the store is a PostgreSQL database with the `btree_gist` extension installed,
   plus PostGIS where the registry declares spatial fields. There is no SQLite, other SQL engine,

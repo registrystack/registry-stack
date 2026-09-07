@@ -1149,6 +1149,7 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
         artifacts,
         vec![
             ("README.md", "text/markdown"),
+            ("dev-clients.yaml", "text/yaml"),
             ("modules/record-notes/module.yaml", "text/yaml"),
             ("registry.yaml", "text/yaml"),
             ("runtime.example.yaml", "text/yaml"),

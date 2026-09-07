@@ -28,7 +28,7 @@ const validEvidence = new Set(['aspirational', 'partial', 'verified']);
 // layers, audience the reader roles.
 const validLayer = new Set(['metadata', 'consultation', 'evaluation', 'credential', 'federation', 'administration', 'operations']);
 const validAudience = new Set(['integrator', 'operator', 'maintainer', 'specification editor', 'tooling']);
-// Deployment roles, defined for readers in start/when-to-use.mdx. Required on
+// Deployment roles, defined for readers on the homepage. Required on
 // tutorials so a reader can tell whose page it is before starting it, optional
 // elsewhere. Not the same axis as audience; see src/lib/doc-personas.mjs.
 const validPersona = new Set(DOC_PERSONAS);

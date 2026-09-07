@@ -18,7 +18,7 @@ Start or reuse the project's retained local database and services.
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.27.0` and catalog SHA-256 `6e293984a6ecdd4216e2db07611959feb4535618952e34f21b8e152eee72717f`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.27.0` and catalog SHA-256 `13486266e23bda877e696e926d93c2589ed61923d5e66edf4e347953abcae5e8`. Hidden implementation commands are omitted.
 
 ## Description
 
@@ -27,15 +27,20 @@ Start or reuse the project's retained local database and services. A resident su
 ## Usage
 
 ```text
-bregctl dev start [OPTIONS]
+bregctl dev start [OPTIONS] [PROJECT]
 ```
+
+## Arguments
+
+| Argument | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `[PROJECT]` | No | `.` | n/a | n/a | Existing authored registry project. Its package environment must be local. A symbolic link at any component of this path is refused. |
 
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
-| `--project <PROJECT>` | No | `.` | n/a | n/a | Existing authored registry project. Its package environment must be local. A symbolic link at any component of this path is refused. |
-| `--clients-file <CLIENTS_FILE>` | No | n/a | n/a | n/a | Explicit local clients, profile bindings, and optional seed records |
+| `--clients-file <FILE>` | No | n/a | n/a | n/a | Local clients, profile bindings, and optional seed records (default on first start: dev-clients.yaml in the project; retained for restarts). A symbolic link at any component of this path is refused. |
 | `--breg-port <BREG_PORT>` | No | n/a | n/a | n/a | Registry loopback port on first start (default 8090; retained for restarts) |
 | `--mint-port <MINT_PORT>` | No | n/a | n/a | n/a | Local Mint loopback port on first start (default 8091; retained for restarts) |
 | `--database-port <DATABASE_PORT>` | No | n/a | n/a | n/a | PostgreSQL loopback port on first start (default 55432; retained for restarts) |

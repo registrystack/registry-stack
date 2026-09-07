@@ -91,7 +91,7 @@ function hasDocForSlug(slug) {
 }
 
 // Every slug the built site publishes from the hand-authored content
-// collection, in the form the sidebar uses to address it: `start/when-to-use`
+// collection, in the form the sidebar uses to address it: `start/breg-quickstart`
 // for a leaf file, `configure` for a directory index, and the empty string for
 // the homepage. Starlight's `draft: true` is what removes a page from the built
 // site, so a draft page is not published and is not expected to be navigable.
@@ -398,6 +398,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'configure/breg-change-control',
     'configure/breg-journeys',
     'explanation/registry-modeling-patterns',
+    'operate/breg-requirements',
     'tutorials/build-a-breg-production-candidate',
     'operate/breg',
     'operate/breg-webhooks',
@@ -445,19 +446,58 @@ test('keeps the BReg guide and references in one adoption path', () => {
   }
 });
 
-// Base Registry Engine asks an adopter for PostgreSQL, a token issuer, and a
-// package signing policy before it serves anything, so like Evidence Gateway
-// its case is made in Start, before the first command, beside the Evidence
-// evaluation and after it.
-test('evaluates Base Registry Engine in Start beside Evidence Gateway', () => {
+// Both runtime products ask an adopter for infrastructure before they serve
+// anything: PostgreSQL, a token issuer, and a signing process for Base Registry
+// Engine; a Transit proxy, an identity provider, and durable audit storage for
+// Evidence Gateway. That is deployment planning, so it opens each product's
+// Deploy group. It is not a first encounter, so Start carries none of it: a
+// first visit meets the overview, the product chooser, and the glossary, and
+// reaches every product through its own overview. The two retired Start seats
+// redirect to the Deploy pages that replaced them.
+test('keeps operating requirements in each product Deploy group, not in Start', () => {
   const start = topLevelSection(sidebarSource, 'Start');
   assert.ok(start, 'could not isolate Start');
-  assertOrdered(
-    start,
-    ["slug: 'start/evaluate-evidence'", "slug: 'start/evaluate-breg'", "slug: 'reference/glossary'"],
-    'Start',
+  assert.deepEqual(
+    [...start.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]),
+    ['reference/glossary'],
   );
-  assert.ok(hasDocForSlug('start/evaluate-breg'), 'start/evaluate-breg must be a published page');
+
+  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
+  assertOrdered(
+    evidence,
+    [
+      "label: 'Deploy'",
+      "slug: 'operate/evidence-requirements'",
+      "slug: 'tutorials/prove-an-evidence-project'",
+    ],
+    'Evidence Gateway Deploy group',
+  );
+  const breg = topLevelSection(sidebarSource, 'Base Registry Engine');
+  assertOrdered(
+    breg,
+    [
+      "label: 'Deploy'",
+      "slug: 'operate/breg-requirements'",
+      "slug: 'tutorials/build-a-breg-production-candidate'",
+    ],
+    'Base Registry Engine Deploy group',
+  );
+  for (const slug of ['operate/evidence-requirements', 'operate/breg-requirements']) {
+    assert.ok(hasDocForSlug(slug), `${slug} must be a published page`);
+  }
+
+  for (const retired of ['start/evaluate-evidence', 'start/evaluate-breg']) {
+    assert.equal(hasDocForSlug(retired), false, `${retired} must not be a published page`);
+    assert.doesNotMatch(sidebarSource, new RegExp(retired));
+  }
+  assert.match(
+    configSource,
+    /'\/start\/evaluate-evidence\/': internalRedirect\('\/operate\/evidence-requirements\/'\)/,
+  );
+  assert.match(
+    configSource,
+    /'\/start\/evaluate-breg\/': internalRedirect\('\/operate\/breg-requirements\/'\)/,
+  );
 });
 
 test('redirects the retired Server webhook, history, and event pages to their merged pages', () => {
@@ -559,22 +599,20 @@ test('does not publish the retired pre-1.0 cutover page', () => {
   assert.doesNotMatch(homepageSource, /pre-1\.0-cutover/);
 });
 
-// `start/quickstart` was a second chooser beside `start/when-to-use`: both told
-// a reader which of the two products answered their problem, and only one of
-// them had a seat. It is retired rather than repurposed, so the four redirects
-// that pointed at it now land on the chooser that stayed, and so does its own
-// route, which was published and so has readers holding links to it.
-test('does not publish the retired second stack chooser', () => {
-  assert.equal(
-    existsSync(resolve(siteRoot, 'src/content/docs/start/quickstart.mdx')),
-    false,
-  );
-  assert.doesNotMatch(sidebarSource, /start\/quickstart/);
-  assert.doesNotMatch(homepageSource, /start\/quickstart/);
-  assert.match(
-    configSource,
-    /'\/start\/quickstart\/': internalRedirect\('\/start\/when-to-use\/'\)/,
-  );
+// `start/quickstart` and `start/when-to-use` were product choosers: each told
+// a reader which product answered their problem, which the homepage does too.
+// Both are retired rather than repurposed, so their routes, which were
+// published and so have readers holding links to them, land on the homepage,
+// and so do the redirects that used to point at the chooser.
+test('does not publish a product chooser beside the homepage', () => {
+  for (const page of ['start/quickstart.mdx', 'start/when-to-use.mdx']) {
+    assert.equal(existsSync(resolve(siteRoot, 'src/content/docs', page)), false, page);
+  }
+  assert.doesNotMatch(sidebarSource, /start\/(quickstart|when-to-use)/);
+  assert.doesNotMatch(homepageSource, /start\/(quickstart|when-to-use)/);
+  assert.match(configSource, /'\/start\/quickstart\/': internalRedirect\('\/'\)/);
+  assert.match(configSource, /'\/start\/when-to-use\/': internalRedirect\('\/'\)/);
+  assert.doesNotMatch(configSource, /internalRedirect\('\/start\/when-to-use\/'\)/);
 });
 
 test('every hand-authored sidebar slug resolves to a published documentation page', () => {
@@ -625,7 +663,7 @@ test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   assert.match(configSource, /'\/start\/': internalRedirect\('\/'\)/);
   assert.match(
     configSource,
-    /'\/start\/see-it-live\/': internalRedirect\('\/start\/when-to-use\/'\)/,
+    /'\/start\/see-it-live\/': internalRedirect\('\/'\)/,
   );
   assert.match(
     configSource,
@@ -633,7 +671,7 @@ test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   );
   assert.match(
     configSource,
-    /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/start\/when-to-use\/'\)/,
+    /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/'\)/,
   );
   // The retired V1 source tutorials still resolve: their redirects moved into
   // the Relay V2 retirement module, so assert that map rather than the config
