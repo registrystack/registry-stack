@@ -87,24 +87,57 @@ cp -R products/breg/acceptance/asset-site-placement-change-requests tutorial-wor
 bregctl check tutorial-work/asset-corrections
 ```
 
-The check succeeds, prints the compiled configuration's digest, and lists eighteen findings:
-seven `access.profile.no_required_scope` and eleven `access.profile.unrestricted_collection`.
-The block shows the first of each kind and omits the rest:
+The check succeeds, prints the compiled configuration's digest, and lists 26 findings under four
+codes.
+A code reported against more than one path states its sentence once and lists the paths beneath it:
 
 ```text
 Authoring check passed.
   revision  sha256:<configuration-digest>
 
-  finding  access.profile.no_required_scope  entities[id=asset-item].accessProfiles[id=asset-operator].requiredScopes
+  finding  access.profile.no_required_scope  7 paths
            no scope restricts who may select this profile; any authenticated principal
            satisfying its purpose and row claims qualifies. Add a required scope unless
            this is intended
-  finding  access.profile.unrestricted_collection  entities[id=asset-item].accessProfiles[id=asset-operator].rowBoundaries
+             entities[id=asset-item].accessProfiles[id=asset-operator].requiredScopes
+             entities[id=asset-item].accessProfiles[id=site-planner].requiredScopes
+             entities[id=asset-placement].accessProfiles[id=asset-operator].requiredScopes
+             entities[id=asset-placement].accessProfiles[id=site-planner].requiredScopes
+             entities[id=asset-site].accessProfiles[id=asset-operator].requiredScopes
+             entities[id=asset-site].accessProfiles[id=site-planner].requiredScopes
+             entities[id=inspection-event].accessProfiles[id=asset-operator].requiredScopes
+  finding  access.profile.unrestricted_collection  10 paths
            this profile can list all rows, subject only to query bounds; caller filters
            are not authorization. Add a claim-bound row restriction or review this
            registry-wide access
+             entities[id=asset-item].accessProfiles[id=asset-operator].rowBoundaries
+             entities[id=asset-item].accessProfiles[id=site-planner].rowBoundaries
+             entities[id=asset-placement].accessProfiles[id=asset-operator].rowBoundaries
+             entities[id=asset-placement].accessProfiles[id=correction-submitter].rowBoundaries
+             entities[id=asset-placement].accessProfiles[id=site-planner].rowBoundaries
+             entities[id=asset-site].accessProfiles[id=asset-operator].rowBoundaries
+             entities[id=asset-site].accessProfiles[id=correction-submitter].rowBoundaries
+             entities[id=asset-site].accessProfiles[id=site-planner].rowBoundaries
+             entities[id=inspection-event].accessProfiles[id=asset-operator].rowBoundaries
+             entities[id=placement-correction-request].accessProfiles[id=correction-reviewer].rowBoundaries
+  finding  access.profile.unrestricted_rows  4 paths
+           this profile has no claim-bound row restriction for its granted operations;
+           requestVisibility owner limits request reads only, and other lifecycle rules
+           still apply. Review this registry-wide access
+             entities[id=asset-item].accessProfiles[id=correction-submitter].rowBoundaries
+             entities[id=placement-correction-request].accessProfiles[id=correction-applier].rowBoundaries
+             entities[id=placement-correction-request].accessProfiles[id=correction-submitter].rowBoundaries
+             entities[id=placement-correction-request].accessProfiles[id=correction-supervisor].rowBoundaries
+  finding  access.target.unrestricted_rows  5 paths
+           this target grant has no claim-bound row restriction, within its configured
+           operation and field limits. Review this registry-wide target authority
+             entities[id=asset-placement].accessProfiles[id=asset-operator].requestPresence[requestType=placement-correction-request].rowBoundaries
+             entities[id=asset-placement].accessProfiles[id=site-planner].requestPresence[requestType=placement-correction-request].rowBoundaries
+             entities[id=placement-correction-request].accessProfiles[id=correction-applier].applyTargets[entity=asset-placement].rowBoundaries
+             entities[id=placement-correction-request].accessProfiles[id=correction-reviewer].reviewStages[stage=review].targets[entity=asset-placement].rowBoundaries
+             entities[id=placement-correction-request].accessProfiles[id=correction-supervisor].reviewStages[stage=final-approval].targets[entity=asset-placement].rowBoundaries
 
-0 errors, 18 findings.
+0 errors, 26 findings.
 ```
 
 Findings are advisories, not failures.

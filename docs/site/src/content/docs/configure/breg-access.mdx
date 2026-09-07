@@ -188,9 +188,9 @@ The plain-text report lists entity profiles with each grant's row restrictions; 
 For the `record-reader` profile of the project `init` wrote, the block reads:
 
 ```text
-  record (internal)
+  entity record (internal)
 
-    record-reader
+    profile record-reader
       principal claim         registry_principal
       operations              ["get","list"]
       required scopes (all)   ["registry:generic:read"]
