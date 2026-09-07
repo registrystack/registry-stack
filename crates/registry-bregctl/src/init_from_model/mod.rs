@@ -223,7 +223,7 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
             }
         )
     };
-    vec![
+    let mut steps = vec![
         format!(
             "read {}, then run 'bregctl check {}'",
             readme.display(),
@@ -233,6 +233,22 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
             "leave the findings above as they are; {findings}, and {} says where to narrow them",
             readme.display()
         ),
+    ];
+    let unlinked = plan.unlinked_entities();
+    if !unlinked.is_empty() {
+        let quoted: Vec<String> = unlinked.iter().map(|id| format!("`{id}`")).collect();
+        let named = match quoted.as_slice() {
+            [only] => only.clone(),
+            [first, second] => format!("{first} or {second}"),
+            [rest @ .., last] => format!("{}, or {last}", rest.join(", ")),
+            [] => unreachable!("checked above"),
+        };
+        steps.push(format!(
+            "no field connects {named} to another entity; {} names the concepts of the model that would, if the registry should link them",
+            readme.display()
+        ));
+    }
+    steps.extend([
         format!(
             "run 'bregctl dev {}' to start the registry locally and replay {}",
             destination.display(),
@@ -246,7 +262,8 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
             "keep {} beside the project: edit it and pass it back with --selection to derive a fresh project",
             destination.join(render::SELECTION_PATH).display()
         ),
-    ]
+    ]);
+    steps
 }
 
 #[cfg(test)]
@@ -333,6 +350,23 @@ mod tests {
             Ok(_) => panic!("an existing destination is refused"),
             Err(again) => assert_eq!(again.command, "init"),
         }
+    }
+
+    #[test]
+    fn the_next_steps_say_what_no_field_links() {
+        let document = "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
+             kind: ModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
+             entities:\n  - concept: Household\n    properties:\n      - name: name\n\
+             \x20 - concept: School\n    properties:\n      - name: name\n";
+        let selection = selection::Selection::parse("test", document.as_bytes()).expect("parses");
+        let model = publicschema::model().expect("the snapshot reads");
+        let plan = resolve::resolve(&selection, &model).expect("resolves");
+        let steps = next_steps(Path::new("project"), &plan);
+        assert_eq!(steps.len(), 6);
+        assert_eq!(
+            steps[2],
+            "no field connects `household` or `school` to another entity; project/README.md names the concepts of the model that would, if the registry should link them"
+        );
     }
 
     #[test]

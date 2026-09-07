@@ -47,6 +47,16 @@ struct ConceptOption {
     label: String,
 }
 
+/// One concept that would connect the chosen ones, as the connector question
+/// offers it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConnectorOption {
+    concept: String,
+    label: String,
+    /// The chosen concepts its references fit, each once.
+    connects: Vec<String>,
+}
+
 /// One property, as the property question offers it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PropertyOption {
@@ -136,7 +146,18 @@ struct VocabularyOption {
 pub(super) fn gather(model_name: ModelName, model: &Model) -> Result<Selection, Diagnostic> {
     let version = resolve::model_facts(model)?.version;
     let registry = ask_registry()?;
-    let concepts = ask_concepts(model)?;
+    let mut concepts = ask_concepts(model)?;
+
+    // A registry of unrelated collections is a legitimate answer, so the
+    // connectors are offered, not required, and what nothing connects is
+    // said before the offer rather than refused.
+    let options = connector_options(model, &concepts)?;
+    if let Some(line) = unconnected_line(&concepts, &options) {
+        eprintln!("{line}");
+    }
+    if !options.is_empty() {
+        concepts.extend(ask_connectors(&options)?);
+    }
 
     let mut entities = Vec::new();
     for concept in &concepts {
@@ -172,7 +193,8 @@ pub(super) fn gather(model_name: ModelName, model: &Model) -> Result<Selection, 
     };
 
     let selection = assemble(model_name, &version, registry, &entities, vocabularies);
-    if confirm_selection(&selection)? {
+    let plan = resolve::resolve(&selection, model)?;
+    if confirm_selection(&selection, unlinked_line(&plan))? {
         Ok(selection)
     } else {
         Err(cancelled())
@@ -211,6 +233,22 @@ fn ask_concepts(model: &Model) -> Result<Vec<String>, Diagnostic> {
     let chosen = MultiSelect::new("Which concepts become entities?", labels)
         .with_validator(MinLengthValidator::new(1))
         .with_help_message("space to toggle, type to filter, enter to confirm")
+        .raw_prompt()
+        .map_err(prompt_error)?;
+    Ok(chosen
+        .into_iter()
+        .map(|option| options[option.index].concept.clone())
+        .collect())
+}
+
+/// Asks which of the concepts that would connect the chosen ones are added.
+/// None is an answer.
+fn ask_connectors(options: &[ConnectorOption]) -> Result<Vec<String>, Diagnostic> {
+    let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
+    let chosen = MultiSelect::new("Which concepts connect what you chose?", labels)
+        .with_help_message(
+            "space to toggle, type to filter, enter to confirm; enter alone adds none",
+        )
         .raw_prompt()
         .map_err(prompt_error)?;
     Ok(chosen
@@ -361,8 +399,11 @@ fn ask_vocabularies(options: &[VocabularyOption]) -> Result<Vec<usize>, Diagnost
 
 /// Shows the selection the answers describe and asks whether to derive from
 /// it.
-fn confirm_selection(selection: &Selection) -> Result<bool, Diagnostic> {
+fn confirm_selection(selection: &Selection, note: Option<String>) -> Result<bool, Diagnostic> {
     eprintln!("{}", selection.to_yaml());
+    if let Some(note) = note {
+        eprintln!("{note}");
+    }
     Confirm::new("Derive the project from this selection?")
         .with_default(true)
         .with_help_message("the document above is written into the project beside what it derives")
@@ -468,7 +509,7 @@ fn property_offer(
             Ok(()) => offered.push(PropertyOption {
                 name: slot.name.clone(),
                 label: property_label(model, slot, concepts)?,
-                ticked: ticked(slot)?,
+                ticked: ticked(slot)? || refers_to_chosen(model, slot, concepts),
             }),
             Err(reason) => withheld.push(WithheldProperty {
                 name: slot.name.clone(),
@@ -559,6 +600,110 @@ fn ticked(slot: &SlotDef) -> Result<bool, Diagnostic> {
     }
     Ok(convergence(slot)?
         .is_some_and(|convergence| convergence.share() >= TICKED_CONVERGENCE_SHARE))
+}
+
+/// True when the property becomes a reference to a chosen concept, which is
+/// offered ticked: a link between the chosen concepts is what the concept
+/// carrying it was most likely chosen for.
+fn refers_to_chosen(model: &Model, slot: &SlotDef, concepts: &[String]) -> bool {
+    match &slot.range {
+        Range::Class(range) => {
+            !slot.multivalued
+                && concepts
+                    .iter()
+                    .any(|concept| resolve::fits_range(model, concept, range))
+        }
+        _ => false,
+    }
+}
+
+/// The concepts that would connect the chosen ones, each offered by the
+/// concepts its references fit.
+fn connector_options(
+    model: &Model,
+    concepts: &[String],
+) -> Result<Vec<ConnectorOption>, Diagnostic> {
+    let mut options = Vec::new();
+    for connector in resolve::connectors(model, concepts)? {
+        let class = &model.classes[&connector.concept];
+        let mut connects: Vec<String> = Vec::new();
+        let links: Vec<String> = connector
+            .links
+            .iter()
+            .map(|link| {
+                for concept in &link.fits {
+                    if !connects.contains(concept) {
+                        connects.push(concept.clone());
+                    }
+                }
+                let titles: Vec<String> = link
+                    .fits
+                    .iter()
+                    .map(|concept| format!("a {}", title(&model.classes[concept])))
+                    .collect();
+                format!("{} is {}", link.property, titles.join(" or "))
+            })
+            .collect();
+        options.push(ConnectorOption {
+            label: format!("{} ({}): {}", title(class), class.schema, links.join(", ")),
+            concept: connector.concept,
+            connects,
+        });
+    }
+    Ok(options)
+}
+
+/// The one line printed before the connector question when some of the
+/// chosen concepts have nothing in the model to connect them, so the adopter
+/// knows the offer that follows leaves them apart.
+fn unconnected_line(concepts: &[String], options: &[ConnectorOption]) -> Option<String> {
+    if concepts.len() < 2 {
+        return None;
+    }
+    let apart: Vec<&str> = concepts
+        .iter()
+        .filter(|concept| {
+            !options
+                .iter()
+                .any(|option| option.connects.contains(concept))
+        })
+        .map(String::as_str)
+        .collect();
+    if apart.is_empty() {
+        return None;
+    }
+    if apart.len() == concepts.len() {
+        return Some(
+            "Nothing in the model connects the concepts you chose to one another.".to_owned(),
+        );
+    }
+    Some(format!(
+        "Nothing in the model connects {} to the other concepts you chose.",
+        list(&apart, "and")
+    ))
+}
+
+/// The one line printed under the review when the derived project has
+/// entities no field connects to another.
+fn unlinked_line(plan: &resolve::Plan) -> Option<String> {
+    let unlinked = plan.unlinked_entities();
+    if unlinked.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "No field connects {} to another entity; the project's README names the concepts that would.",
+        list(&unlinked, "or")
+    ))
+}
+
+/// `a`, `a and b`, `a, b, and c`.
+fn list(items: &[&str], conjunction: &str) -> String {
+    match items {
+        [] => String::new(),
+        [only] => (*only).to_owned(),
+        [first, second] => format!("{first} {conjunction} {second}"),
+        [rest @ .., last] => format!("{}, {conjunction} {last}", rest.join(", ")),
+    }
 }
 
 fn convergence(slot: &SlotDef) -> Result<Option<publicschema::Convergence>, Diagnostic> {
@@ -982,6 +1127,85 @@ mod tests {
             offered(&beside, "location").label,
             "location: reference (2 of 4 systems)"
         );
+    }
+
+    #[test]
+    fn a_reference_to_a_chosen_concept_is_offered_ticked() {
+        let alone = offer("Household", &["Household"]);
+        assert!(!offered(&alone, "location").ticked);
+        let beside = offer("Household", &["Household", "Location"]);
+        assert!(offered(&beside, "location").ticked);
+    }
+
+    #[test]
+    fn the_concepts_that_would_connect_the_chosen_ones_are_offered_by_what_they_link() {
+        let chosen = [
+            "Household".to_owned(),
+            "Person".to_owned(),
+            "School".to_owned(),
+        ];
+        let options = connector_options(model(), &chosen).expect("computed");
+        assert_eq!(
+            options[0].label,
+            "Group Membership (publicschema-misc): group is a Household, person is a Person"
+        );
+        assert_eq!(options[0].concept, "GroupMembership");
+        let profile = options
+            .iter()
+            .find(|option| option.concept == "FunctioningProfile")
+            .expect("offered");
+        assert_eq!(
+            profile.label,
+            "Functioning Profile (publicschema-assessment): respondent is a Person, subject is a Household or a Person"
+        );
+        assert_eq!(
+            unconnected_line(&chosen, &options),
+            Some(
+                "Nothing in the model connects School to the other concepts you chose.".to_owned()
+            )
+        );
+        assert_eq!(unconnected_line(&chosen[..2], &options), None);
+        assert!(connector_options(model(), &chosen[2..])
+            .expect("computed")
+            .is_empty());
+    }
+
+    #[test]
+    fn the_review_names_the_entities_no_field_connects() {
+        let entities = [
+            chosen("Household", &["name"]),
+            chosen("Person", &["given_name"]),
+            chosen("School", &["name"]),
+        ];
+        let selection = assemble(
+            ModelName::Publicschema,
+            "0.3.0",
+            registry(),
+            &entities,
+            Vec::new(),
+        );
+        let plan = resolve::resolve(&selection, model()).expect("resolves");
+        assert_eq!(
+            unlinked_line(&plan),
+            Some(
+                "No field connects household, person, or school to another entity; the project's README names the concepts that would."
+                    .to_owned()
+            )
+        );
+        let linked = [
+            chosen("Household", &["name"]),
+            chosen("Person", &["given_name"]),
+            chosen("GroupMembership", &["group", "person"]),
+        ];
+        let selection = assemble(
+            ModelName::Publicschema,
+            "0.3.0",
+            registry(),
+            &linked,
+            Vec::new(),
+        );
+        let plan = resolve::resolve(&selection, model()).expect("resolves");
+        assert_eq!(unlinked_line(&plan), None);
     }
 
     #[test]

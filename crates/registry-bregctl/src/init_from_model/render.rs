@@ -817,6 +817,110 @@ fn selection_echo(selection: &Selection) -> String {
     yaml.finish()
 }
 
+/// The README section naming the entities no field connects to another,
+/// and the concepts of the model that would connect them. Nothing is
+/// written when every entity is linked.
+fn write_unlinked(out: &mut String, plan: &Plan) {
+    let unlinked = plan.unlinked_entities();
+    if unlinked.is_empty() {
+        return;
+    }
+    let model = plan.model.display_name;
+    let _ = writeln!(out, "## What is not linked");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "No field connects {} to another entity. A registry of unrelated collections is a \
+         legitimate choice; to link them instead, select a concept that refers to both sides \
+         and derive again: add it under `entities` in `{}` with the referring properties, and \
+         pass the file back with `--selection`.",
+        quoted_list(&unlinked, "or"),
+        SELECTION_PATH
+    );
+    let _ = writeln!(out);
+    let entity_of = |concept: &str| -> Vec<&str> {
+        plan.entities
+            .iter()
+            .filter(|entity| entity.concept == concept)
+            .map(|entity| entity.id.as_str())
+            .collect()
+    };
+    // Only the connectors that would reach an entity nothing links are
+    // named; one that only joins entities already linked is not the point.
+    let mut touched: Vec<&str> = Vec::new();
+    let mut named = false;
+    for connector in &plan.connectors {
+        let links: Vec<(Vec<&str>, &str)> = connector
+            .links
+            .iter()
+            .map(|link| {
+                let ids: Vec<&str> = link
+                    .fits
+                    .iter()
+                    .flat_map(|concept| entity_of(concept))
+                    .collect();
+                (ids, link.property.as_str())
+            })
+            .collect();
+        let reaches: Vec<&str> = links
+            .iter()
+            .flat_map(|(ids, _)| ids.iter().copied())
+            .filter(|id| unlinked.contains(id))
+            .collect();
+        if reaches.is_empty() {
+            continue;
+        }
+        for id in reaches {
+            if !touched.contains(&id) {
+                touched.push(id);
+            }
+        }
+        let phrases: Vec<String> = links
+            .iter()
+            .map(|(ids, property)| format!("{} through `{property}`", quoted_list(ids, "or")))
+            .collect();
+        let _ = writeln!(
+            out,
+            "- `{}` links {}.",
+            connector.concept,
+            list(&phrases, "and")
+        );
+        named = true;
+    }
+    let apart: Vec<&str> = unlinked
+        .iter()
+        .copied()
+        .filter(|id| !touched.contains(id))
+        .collect();
+    if !apart.is_empty() {
+        if named {
+            let _ = writeln!(out);
+        }
+        let _ = writeln!(
+            out,
+            "Nothing in {model} connects {} to the others.",
+            quoted_list(&apart, "or")
+        );
+    }
+    let _ = writeln!(out);
+}
+
+/// `a`, `a and b`, `a, b, and c`.
+fn list(items: &[String], conjunction: &str) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.clone(),
+        [first, second] => format!("{first} {conjunction} {second}"),
+        [rest @ .., last] => format!("{}, {conjunction} {last}", rest.join(", ")),
+    }
+}
+
+/// [`list`] with each item in backticks.
+fn quoted_list(items: &[&str], conjunction: &str) -> String {
+    let quoted: Vec<String> = items.iter().map(|item| format!("`{item}`")).collect();
+    list(&quoted, conjunction)
+}
+
 fn readme(plan: &Plan) -> String {
     let mut out = String::new();
     let model = plan.model.display_name;
@@ -876,6 +980,7 @@ fn readme(plan: &Plan) -> String {
         }
         let _ = writeln!(out);
     }
+    write_unlinked(&mut out, plan);
     let _ = writeln!(out, "## How the project was derived");
     let _ = writeln!(out);
     let _ = writeln!(
@@ -1512,6 +1617,77 @@ mod tests {
             .join(" ");
         assert!(!comments.contains("registry assigns"));
         assert!(comments.contains("the caller supplies"), "{comments}");
+    }
+
+    #[test]
+    fn the_readme_names_what_no_field_links_and_the_concepts_that_would() {
+        let document = "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
+             kind: ModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
+             entities:\n  - concept: Household\n    properties:\n      - name: name\n\
+             \x20 - concept: Person\n    properties:\n      - name: given_name\n\
+             \x20 - concept: School\n    properties:\n      - name: name\n";
+        let selection = Selection::parse("test", document.as_bytes()).expect("parses");
+        let model = publicschema::model().expect("the snapshot reads");
+        let plan = resolve(&selection, &model).expect("resolves");
+        let text = readme(&plan);
+        let section = text
+            .split("## What is not linked")
+            .nth(1)
+            .expect("the section is written")
+            .split("## How the project was derived")
+            .next()
+            .expect("the section ends");
+        assert!(
+            section.contains(
+                "No field connects `household`, `person`, or `school` to another entity."
+            ),
+            "{section}"
+        );
+        assert!(
+            section.contains("- `GroupMembership` links `household` through `group` and `person` through `person`."),
+            "{section}"
+        );
+        assert!(
+            section.contains("- `FunctioningProfile` links `person` through `respondent` and `household` or `person` through `subject`."),
+            "{section}"
+        );
+        assert!(
+            section.contains("Nothing in PublicSchema connects `school` to the others."),
+            "{section}"
+        );
+        assert!(section.contains("`model/selection.yaml`"), "{section}");
+
+        let (linked, _) = starter_plan("household");
+        assert!(!readme(&linked).contains("## What is not linked"));
+
+        let document = "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
+             kind: ModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
+             entities:\n  - concept: Household\n    properties:\n      - name: name\n\
+             \x20 - concept: Person\n    properties:\n      - name: given_name\n\
+             \x20 - concept: GroupMembership\n    properties:\n      - name: person\n      - name: group\n\
+             \x20 - concept: School\n    properties:\n      - name: name\n";
+        let selection = Selection::parse("test", document.as_bytes()).expect("parses");
+        let plan = resolve(&selection, &model).expect("resolves");
+        let text = readme(&plan);
+        let section = text
+            .split("## What is not linked")
+            .nth(1)
+            .expect("the section is written")
+            .split("## How the project was derived")
+            .next()
+            .expect("the section ends");
+        assert!(
+            section.contains("No field connects `school` to another entity."),
+            "{section}"
+        );
+        assert!(
+            !section.contains("- `"),
+            "a connector joining only linked entities is not named: {section}"
+        );
+        assert!(
+            section.contains("Nothing in PublicSchema connects `school` to the others."),
+            "{section}"
+        );
     }
 
     #[test]

@@ -105,6 +105,114 @@ pub(crate) struct Plan {
     /// The highest classification any entity or field carries, which is what
     /// the Registry Manifest projection must be allowed to describe.
     pub classification_ceiling: Classification,
+    /// The concepts of the model that were not selected and would connect
+    /// the selected ones, for the README to name beside an entity nothing
+    /// links.
+    pub connectors: Vec<Connector>,
+}
+
+impl Plan {
+    /// The entities no reference field connects to another entity, in plan
+    /// order. Empty when the plan has one entity, since there is nothing to
+    /// link it to.
+    pub(crate) fn unlinked_entities(&self) -> Vec<&str> {
+        if self.entities.len() < 2 {
+            return Vec::new();
+        }
+        let targeted: BTreeSet<&str> = self
+            .entities
+            .iter()
+            .flat_map(|entity| entity.fields.iter())
+            .filter_map(|field| match &field.kind {
+                FieldKind::Reference { target } => Some(target.as_str()),
+                _ => None,
+            })
+            .collect();
+        self.entities
+            .iter()
+            .filter(|entity| {
+                !targeted.contains(entity.id.as_str())
+                    && !entity
+                        .fields
+                        .iter()
+                        .any(|field| matches!(field.kind, FieldKind::Reference { .. }))
+            })
+            .map(|entity| entity.id.as_str())
+            .collect()
+    }
+}
+
+/// A concept that was not selected and refers, through single-valued
+/// properties, to the selected concepts at least twice, so that selecting it
+/// too would connect them: a membership between a person and a group, say.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Connector {
+    pub concept: String,
+    /// The referring properties, in name order.
+    pub links: Vec<ConnectorLink>,
+}
+
+impl Connector {
+    /// True when every reference fits exactly one selected concept, so the
+    /// links need no further answer.
+    pub(crate) fn settled(&self) -> bool {
+        self.links.iter().all(|link| link.fits.len() == 1)
+    }
+}
+
+/// One reference a connector carries, and the selected concepts it fits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConnectorLink {
+    pub property: String,
+    /// In selection order, each concept once.
+    pub fits: Vec<String>,
+}
+
+/// The connectors of `concepts` among the concepts not in it: the settled
+/// ones first, then by name.
+pub(crate) fn connectors(model: &Model, concepts: &[String]) -> Result<Vec<Connector>, Diagnostic> {
+    let mut found = Vec::new();
+    for class in model.classes.values() {
+        if class.is_abstract || concepts.contains(&class.name) {
+            continue;
+        }
+        let slots = model
+            .induced_slots(&class.name)
+            .map_err(|error| model_error("model", &error))?;
+        let mut links = Vec::new();
+        for slot in slots {
+            let Range::Class(range) = &slot.range else {
+                continue;
+            };
+            if slot.multivalued {
+                continue;
+            }
+            let mut fits: Vec<String> = Vec::new();
+            for concept in concepts {
+                if fits_range(model, concept, range) && !fits.contains(concept) {
+                    fits.push(concept.clone());
+                }
+            }
+            if !fits.is_empty() {
+                links.push(ConnectorLink {
+                    property: slot.name.clone(),
+                    fits,
+                });
+            }
+        }
+        if links.len() < 2 {
+            continue;
+        }
+        links.sort_by(|left, right| left.property.cmp(&right.property));
+        found.push(Connector {
+            concept: class.name.clone(),
+            links,
+        });
+    }
+    found.sort_by(|left, right| {
+        (!left.settled(), &left.concept).cmp(&(!right.settled(), &right.concept))
+    });
+    Ok(found)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -359,6 +467,13 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         .max()
         .unwrap_or(Classification::Internal);
 
+    let concepts: Vec<String> = selection
+        .entities
+        .iter()
+        .map(|entity| entity.concept.clone())
+        .collect();
+    let connectors = connectors(model, &concepts)?;
+
     Ok(Plan {
         registry_id: selection.registry.id.clone(),
         registry_title: selection.registry.title.trim().to_owned(),
@@ -366,6 +481,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         entities,
         vocabularies,
         classification_ceiling,
+        connectors,
     })
 }
 
@@ -1400,6 +1516,95 @@ mod tests {
         assert!(resolve(&selection, model()).is_ok());
         assert!(registry_identifier_refusal(&"a".repeat(55)).is_some());
         assert!(registry_identifier_refusal("example").is_none());
+    }
+
+    #[test]
+    fn a_concept_that_refers_to_the_chosen_concepts_twice_connects_them() {
+        let chosen = ["Household".to_owned(), "Person".to_owned()];
+        let found = connectors(model(), &chosen).expect("computed");
+        let membership = found
+            .iter()
+            .find(|connector| connector.concept == "GroupMembership")
+            .expect("the membership concept connects a person to a group");
+        assert_eq!(
+            membership.links,
+            vec![
+                ConnectorLink {
+                    property: "group".to_owned(),
+                    fits: vec!["Household".to_owned()],
+                },
+                ConnectorLink {
+                    property: "person".to_owned(),
+                    fits: vec!["Person".to_owned()],
+                },
+            ]
+        );
+        // A connector with one reference fitting several chosen concepts
+        // says so, and is offered after the ones whose references are
+        // settled.
+        let profile = found
+            .iter()
+            .find(|connector| connector.concept == "FunctioningProfile")
+            .expect("a profile has a subject and a respondent");
+        assert_eq!(
+            profile.links[1].fits,
+            vec!["Household".to_owned(), "Person".to_owned()]
+        );
+        let names: Vec<&str> = found
+            .iter()
+            .map(|connector| connector.concept.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "GroupMembership",
+                "Relationship",
+                "ConsentRecord",
+                "FunctioningProfile",
+                "SocioEconomicProfile",
+                "Voucher",
+            ]
+        );
+        // A chosen concept is never its own connector, and a concept nothing
+        // refers to twice has none.
+        let with_membership = [
+            "Household".to_owned(),
+            "Person".to_owned(),
+            "GroupMembership".to_owned(),
+        ];
+        assert!(connectors(model(), &with_membership)
+            .expect("computed")
+            .iter()
+            .all(|connector| connector.concept != "GroupMembership"));
+        assert!(connectors(model(), &["School".to_owned()])
+            .expect("computed")
+            .is_empty());
+    }
+
+    #[test]
+    fn an_entity_no_field_connects_to_another_is_reported_with_what_would() {
+        let plan = resolved(
+            "entities:\n  - concept: Household\n    properties:\n      - name: address\n  - concept: Person\n    properties:\n      - name: given_name\n  - concept: School\n    properties:\n      - name: name\n",
+        );
+        assert_eq!(plan.unlinked_entities(), ["household", "person", "school"]);
+        let membership = plan
+            .connectors
+            .iter()
+            .find(|connector| connector.concept == "GroupMembership")
+            .expect("suggested");
+        assert_eq!(membership.links[0].fits, ["Household"]);
+
+        let linked = resolved(
+            "entities:\n  - concept: Household\n    properties:\n      - name: address\n  - concept: Person\n    properties:\n      - name: given_name\n  - concept: GroupMembership\n    properties:\n      - name: person\n      - name: group\n  - concept: School\n    properties:\n      - name: name\n",
+        );
+        assert_eq!(linked.unlinked_entities(), ["school"]);
+
+        let alone =
+            resolved("entities:\n  - concept: School\n    properties:\n      - name: name\n");
+        assert!(
+            alone.unlinked_entities().is_empty(),
+            "one entity has nothing to link to"
+        );
     }
 
     #[test]
