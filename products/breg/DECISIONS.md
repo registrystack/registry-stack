@@ -85,3 +85,9 @@
   migration database credential. The clean adopter proof uses distinct schema
   test databases for the initial and successor candidates plus a third
   production database.
+- `bregctl init --from <MODEL>` derives a project from a reference model
+  snapshot embedded in the tooling, behind an explicit flag. The derivation is
+  import only: nothing exports back from a derived project to the model.
+  PublicSchema is the first model. The derived project is ordinary source; the
+  model never becomes a runtime type, and the snapshot itself is a pinned
+  external input recorded in `external/README.md`.
