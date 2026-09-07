@@ -710,9 +710,13 @@ mod tests {
         let destination = SafeEntry::resolve(&output).expect("the destination resolves");
 
         // The name now holds a file this process never created, which is what
-        // the identity comparison exists to refuse.
-        fs::remove_file(&output).expect("the guarded file removes");
-        fs::write(&output, b"operator-owned").expect("another writer takes the name");
+        // the identity comparison exists to refuse. The other file is created
+        // while the guarded one still exists, so its identity differs even on
+        // filesystems that hand a freed inode number straight to the next
+        // creation under the same name.
+        let other = directory.path.join("other.json");
+        fs::write(&other, b"operator-owned").expect("another writer creates its file");
+        fs::rename(&other, &output).expect("another writer takes the name");
         let refused = remove_exact_file(&destination, &identity)
             .expect_err("a name holding another file is refused");
 
