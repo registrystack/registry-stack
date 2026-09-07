@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.27.0
+
+- Documented the order and authority of `fields[].concepts`: the first entry
+  supplies the generated property identifier, while the catalog preserves
+  every entry in author order. An empty list uses a deterministic manifest URI.
+- Added a semantic-concepts example without asserting equivalence between the
+  referenced vocabularies. Generated output is unchanged.
+
 ## 0.26.1
 
 - Registry Manifest has no user-visible format or rendering changes in this
