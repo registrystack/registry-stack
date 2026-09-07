@@ -45,7 +45,7 @@ async function liftFunction(source, name) {
 }
 
 function extractBashArray(source, name) {
-  const match = source.match(new RegExp(`\\n${name}=\\(([\\s\\S]*?)\\n\\)`, 'u'));
+  const match = source.match(new RegExp(`\\n[ \\t]*${name}=\\(([\\s\\S]*?)\\n[ \\t]*\\)`, 'u'));
   assert.ok(match, `${name} array must exist in the gate`);
   return match[1]
     .split('\n')
@@ -64,91 +64,116 @@ test('the dry-run gate resolves every registered Base Registry Engine tutorial',
 });
 
 // The unexecuted surface is information a reviewer needs, not a rule. The
-// install one-liner reaches the network, the clone fetches the checkout this
-// gate stages instead, and the token recovery block is documented for a reader
-// who comes back after a pause. The gate says so rather than pinning them.
+// install one-liner reaches the network, and it is the only fence the journey
+// leaves alone: everything after it is what the gate proves.
 test('the gate names the sh fences it did not execute', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /not executed: fence \d+ under "Install Base Registry Engine"/u);
-  assert.match(output, /not executed: fence \d+ under "Get the quickstart files"/u);
-  assert.match(output, /not executed: fence \d+ under "Troubleshooting"/u);
+  const unexecuted = output.match(/not executed: fence \d+ under "[^"]+"/gu) ?? [];
+  assert.equal(unexecuted.length, 1, output);
+  assert.match(unexecuted[0], /under "Install Base Registry Engine"/u);
 });
 
-// The journey has to start the launcher the page leaves running in the first
-// terminal and stop it where the page says to press Ctrl+C. A replay that
-// leaked the launcher would hold a database container after the gate exits.
-test('the registered journey starts and stops the launcher', async () => {
+// The journey has to start the registry the page leaves running and stop it
+// where the page says to. A replay that skipped either end would leave the
+// middle untested or hold a database container after the gate exits.
+test('the registered journey starts and stops the registry', async () => {
   const source = await readFile(gate, 'utf8');
   const branch = source.match(/\n\ttutorials\/first-breg\)[\s\S]*?\n\t\t;;/u)?.[0];
   assert.ok(branch, 'the first Base Registry Engine replay spec must exist');
-  assert.match(branch, /background:Start the registry/u);
-  assert.match(branch, /wait-launcher:/u);
-  assert.match(branch, /stop-background/u);
+  const steps = extractBashArray(branch, 'SPEC_STEPS').map((step) => step.replaceAll('"', ''));
+  assert.equal(steps[0], 'run:Create a project');
+  assert.equal(steps[1], 'run:Start the registry');
+  assert.equal(steps.at(-1), 'run:Stop the registry');
 });
 
-// The registry answers /ready before the launcher has minted the reader's token
-// and seeded the record the page reads first, so the journey waits for the line
-// the page tells the reader to wait for, and that line has to stay on the page.
-test('the journey waits for the ready line the page shows', async () => {
+// Run the outer cleanup's session stop against a stand-in bregctl that records
+// what it was asked to do, over a reader directory holding the given state
+// files.
+async function runStopDevSessions({ stateFiles, stub }) {
   const source = await readFile(gate, 'utf8');
-  const branch = source.match(/\n\ttutorials\/first-breg\)[\s\S]*?\n\t\t;;/u)?.[0];
-  assert.ok(branch, 'the first Base Registry Engine replay spec must exist');
-  const line = branch.match(/"wait-launcher:([^"]+)"/u)?.[1];
-  assert.ok(line, 'the journey must wait for a launcher line');
-  const page = await readFile(firstBreg, 'utf8');
-  assert.ok(page.includes(line), `the page must still show "${line}"`);
-});
-
-// Run the emitted wait step against a stand-in launcher: a background sleep
-// whose log a writer fills, or does not.
-async function runWaitStep({ attempts, line, writer }) {
-  const source = await readFile(gate, 'utf8');
-  const root = await mkdtemp(join(tmpdir(), 'breg-wait-test-'));
-  const log = join(root, 'background.log');
-  const harness = join(root, 'wait.sh');
+  const root = await mkdtemp(join(tmpdir(), 'breg-stop-test-'));
+  const readerDir = join(root, 'reader');
+  const shimDir = join(root, 'bin');
+  const calls = join(root, 'calls.log');
+  await mkdir(shimDir);
+  await writeFile(
+    join(shimDir, 'bregctl'),
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >>'${calls}'\n${stub}\n`,
+    { mode: 0o755 },
+  );
+  for (const relative of stateFiles) {
+    await mkdir(dirname(join(readerDir, relative)), { recursive: true });
+    await writeFile(join(readerDir, relative), '{}\n');
+  }
+  const harness = join(root, 'stop.sh');
   await writeFile(
     harness,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
-      `WAIT_LAUNCHER_ATTEMPTS=${attempts}`,
-      await liftFunction(source, 'emit_wait_launcher_step'),
-      `BACKGROUND_LOG='${log}'`,
-      ': >"$BACKGROUND_LOG"',
-      'BACKGROUND_PIDS=()',
-      'sleep 30 >/dev/null 2>&1 &',
-      'BACKGROUND_PIDS+=("$!")',
-      'trap \'kill "${BACKGROUND_PIDS[@]}" >/dev/null 2>&1 || true\' EXIT',
-      writer,
-      `eval "$(emit_wait_launcher_step tutorial '${line}')"`,
+      `READER_DIR='${readerDir}'`,
+      `SHIM_DIR='${shimDir}'`,
+      await liftFunction(source, 'stop_dev_sessions'),
+      'stop_dev_sessions',
       '',
     ].join('\n'),
   );
   try {
-    return await runShell(`bash ${harness}`);
+    const result = await runShell(`bash ${harness}`);
+    let recorded = '';
+    try {
+      recorded = await readFile(calls, 'utf8');
+    } catch {
+      recorded = '';
+    }
+    return { ...result, readerDir, calls: recorded.split('\n').filter(Boolean) };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }
 
-test('the wait step returns once the launcher prints its ready line', async () => {
-  const { code, output } = await runWaitStep({
-    attempts: 10,
-    line: 'launcher is ready.',
-    writer: '( sleep 1; printf "launcher is ready.\\n" >>"$BACKGROUND_LOG" ) >/dev/null 2>&1 &',
+// A journey that fails halfway leaves `bregctl dev` running with a database
+// container behind it, and deleting the work root alone would orphan that
+// container. The outer cleanup stops every session the replay started, with
+// the toolset under test, and reclaims the container and volume.
+test('the cleanup stops every local development session the replay started', async () => {
+  const { code, output, readerDir, calls } = await runStopDevSessions({
+    stateFiles: [
+      'first-breg/tutorial-work/project/.breg/dev/state.json',
+      'another/registry/.breg/dev/state.json',
+    ],
+    stub: 'exit 0',
   });
   assert.equal(code, 0, output);
+  assert.deepEqual(
+    calls.sort(),
+    [
+      `dev stop --project ${join(readerDir, 'another/registry')} --remove`,
+      `dev stop --project ${join(readerDir, 'first-breg/tutorial-work/project')} --remove`,
+    ],
+  );
 });
 
-test('the wait step fails when the launcher never prints its ready line', async () => {
-  const { code, output } = await runWaitStep({
-    attempts: 2,
-    line: 'launcher is ready.',
-    writer: 'printf "still starting\\n" >>"$BACKGROUND_LOG"',
+test('the cleanup leaves a stopped session alone', async () => {
+  const { code, output, calls } = await runStopDevSessions({
+    stateFiles: [],
+    stub: 'exit 0',
   });
-  assert.notEqual(code, 0, 'a silent launcher must fail the step');
-  assert.match(output, /did not print/u);
+  assert.equal(code, 0, output);
+  assert.deepEqual(calls, []);
+});
+
+// A session that will not stop is reported rather than hidden: the reader of
+// the gate log has to know a container was left behind.
+test('the cleanup reports a session it could not stop', async () => {
+  const { code, output, readerDir } = await runStopDevSessions({
+    stateFiles: ['first-breg/tutorial-work/project/.breg/dev/state.json'],
+    stub: 'exit 1',
+  });
+  assert.equal(code, 0, output);
+  assert.match(output, /could not stop the local development session/u);
+  assert.ok(output.includes(join(readerDir, 'first-breg/tutorial-work/project')), output);
 });
 
 // Every documented refusal on this page prints its status and exits zero, so a
@@ -292,34 +317,6 @@ test('a renamed heading fails the gate by name', async () => {
   }
 });
 
-// A heading holding more than one sh fence cannot answer a step that runs
-// exactly one command, so the gate says which suffix is missing.
-test('a one-fence step under a multi-fence heading names the missing occurrence', async () => {
-  const source = await readFile(gate, 'utf8');
-  const root = await mkdtemp(join(tmpdir(), 'breg-occurrence-test-'));
-  try {
-    await writeFile(join(root, 'index.tsv'), '01\t1\tStart the registry\n02\t2\tStart the registry\n');
-    const harness = join(root, 'resolve.sh');
-    await writeFile(
-      harness,
-      [
-        '#!/usr/bin/env bash',
-        'set -euo pipefail',
-        await liftFunction(source, 'resolve_fences'),
-        await liftFunction(source, 'resolve_one_fence'),
-        'resolve_one_fence tutorial "Start the registry" "$1" background',
-        '',
-      ].join('\n'),
-    );
-    const { code, output } = await runShell(`bash ${harness} ${root}`);
-    assert.notEqual(code, 0, 'an ambiguous one-fence step must fail');
-    assert.match(output, /names 2/u);
-    assert.match(output, /\|<occurrence>/u);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 // A registered page with no replay spec would otherwise be skipped in silence.
 test('a registered page without a replay spec fails by name', async () => {
   const source = await readFile(gate, 'utf8');
@@ -421,46 +418,6 @@ test('the dry run reaches neither a container runtime nor a compiler', async () 
     const { code, output } = await runGate({ PATH: `${root}:${process.env.PATH}` });
     assert.equal(code, 0, output);
     assert.doesNotMatch(output, /the dry run reached/u);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-// The replay begins where the reader begins: in the checkout the page tells
-// them to clone. The gate stages that checkout instead of cloning it, and the
-// launcher the journey starts resolves its own repository root and the Mint
-// key helper relative to it, so both have to be there and both have to be
-// writable.
-test('the staged reader checkout carries what the launcher resolves', async () => {
-  const source = await readFile(gate, 'utf8');
-  const root = await mkdtemp(join(tmpdir(), 'breg-stage-test-'));
-  try {
-    const readerDir = join(root, 'breg-tutorial');
-    const harness = join(root, 'stage.sh');
-    await writeFile(
-      harness,
-      [
-        '#!/usr/bin/env bash',
-        'set -euo pipefail',
-        `REPO_ROOT=${resolve(scriptDir, '../../..')}`,
-        await liftFunction(source, 'stage_reader_checkout'),
-        `stage_reader_checkout '${readerDir}'`,
-        '',
-      ].join('\n'),
-    );
-    const { code, output } = await runShell(`bash ${harness}`);
-    assert.equal(code, 0, output);
-    for (const path of [
-      'products/breg/quickstart/run.sh',
-      'products/breg/quickstart/support/quickstart.py',
-      'crates/registry-mint/demo/support/key_material.py',
-    ]) {
-      const probe = await runShell(`test -w '${join(readerDir, path)}'`);
-      assert.equal(probe.code, 0, `${path} must be staged and writable`);
-    }
-    // The launcher refuses a run directory it did not create itself.
-    const stale = await runShell(`test -e '${join(readerDir, 'products/breg/quickstart/.run')}'`);
-    assert.notEqual(stale.code, 0, 'a stale run directory must not be staged');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

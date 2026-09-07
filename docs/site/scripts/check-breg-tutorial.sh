@@ -5,8 +5,8 @@
 #
 # What this gate is for: proving that the commands the BReg tutorials document
 # still run, and that a short list of behaviours a successful exit does not
-# already prove still holds. A read that still returns the seeded record, a
-# refusal that still refuses, a concurrent write that is still rejected.
+# already prove still holds. A read that still answers, a refusal that still
+# refuses, a concurrent write that is still rejected.
 #
 # What this gate is NOT for: policing what a page says. It pins no fence count,
 # no command string and no documented output. Prose, the text around a heading,
@@ -17,18 +17,18 @@
 # deliberately does not do.
 #
 # This gate builds the BReg toolset from the checked-out source unless BREG_BIN,
-# BREGCTL_BIN and MINT_BIN select exact candidate or released bytes, stages the
-# checkout the page tells a reader to clone, then replays the registered
-# tutorial's own shell fences in a reader directory of its own. What CI runs is
-# what a reader copies.
+# BREGCTL_BIN and MINT_BIN select exact candidate or released bytes, then replays
+# the registered tutorial's own shell fences from an empty reader directory, the
+# way a reader starts after installing the binaries. What CI runs is what a
+# reader copies.
 #
 # Usage:
 #   scripts/check-breg-tutorial.sh              replay every registered tutorial
 #   scripts/check-breg-tutorial.sh --dry-run    resolve the journeys only
 #
-# The full run needs Docker, because the quickstart launcher the tutorial starts
-# runs PostgreSQL in a disposable container. The dry run needs neither Docker
-# nor a compiler, which is what lets it run in the docs checks.
+# The full run needs Docker, because `bregctl dev`, which the tutorial starts,
+# runs PostgreSQL in a container. The dry run needs neither Docker nor a
+# compiler, which is what lets it run in the docs checks.
 #
 # Registering a tutorial means adding its slug to BREG_TUTORIALS and a branch to
 # load_spec. Each spec holds two things:
@@ -41,16 +41,6 @@
 #                                              that heading, in document order
 #                   run:<Heading>|<n>          execute the nth sh fence under
 #                                              that heading
-#                   background:<Heading>|<n>   run a one-line sh fence the page
-#                                              leaves running in a second
-#                                              terminal
-#                   stop-background            stop the most recently started
-#                                              background fence, where the page
-#                                              says to press Ctrl-C
-#                   wait-launcher:<line>       block until the most recently
-#                                              started background fence has
-#                                              printed that line, the one the
-#                                              page tells the reader to wait for
 #                 The |<n> suffix is optional wherever a heading holds a single
 #                 sh fence. Skipping is implicit: a fence under no listed
 #                 heading is simply not run, and the summary names it so a
@@ -62,7 +52,7 @@
 #                 pages are read with curl --write-out rather than
 #                 --fail-with-body, so they exit zero whatever the registry
 #                 answers, which is exactly the kind of regression only an
-#                 assertion catches. Startup chatter and "created" lines fail
+#                 assertion catches. Startup reports and "created" lines fail
 #                 that test, because the next command would have failed without
 #                 them. Do not grow this back into a transcript pin.
 #
@@ -84,11 +74,6 @@ REPO_ROOT="$(cd "$SITE_ROOT/../.." && pwd)"
 DOCS_ROOT="${BREG_TUTORIAL_DOCS_ROOT:-$SITE_ROOT/src/content/docs}"
 BUILD_PROFILE="${BREG_TUTORIAL_CARGO_PROFILE:-ci}"
 TARGET_DIR="$REPO_ROOT/target/breg-tutorial-source"
-
-# How long the launcher may take to say it is ready. It pulls a PostgreSQL
-# image, issues TLS material, mints a token and seeds a record before it prints
-# its ready line, so this is minutes rather than seconds on a cold machine.
-WAIT_LAUNCHER_ATTEMPTS=300
 
 # ---------------------------------------------------------------------------
 # Registered tutorials
@@ -112,7 +97,7 @@ BREG_TUTORIALS=(
 EXCLUDED_BREG_TUTORIALS=(
 	tutorials/evidence-from-breg                 # native composition uses its own Docker registry; maintained offline verifier plus independent archive-only live reader execution
 	tutorials/build-a-breg-production-candidate  # needs a reader-supplied signing key and a production database; product CI builds the candidate
-	tutorials/extend-a-registry-with-a-module    # authoring journey with editor steps on the quickstart project; replayable, not yet specified as a journey here
+	tutorials/extend-a-registry-with-a-module    # authoring journey with editor steps on the project first-breg generates; replayable, not yet specified as a journey here
 	tutorials/query-a-spatial-registry-from-qgis # needs QGIS on a desktop; product CI runs the spatial quickstart smoke
 	tutorials/query-breg-client                  # BReg client journey; depends on the released unified packages, like query-relay-client
 	tutorials/review-registry-changes            # needs psql against the quickstart database and an editor step on change-control configuration; replayable, not yet specified as a journey here
@@ -196,26 +181,29 @@ load_spec() {
 
 	case "$1" in
 	tutorials/first-breg)
-		# The page opens with an install one-liner and a clone, which this gate
-		# replaces with the toolset under test and a staged checkout, then keeps
-		# one launcher running while the reader works in a second terminal.
+		# The page opens with an install one-liner, which this gate replaces
+		# with the toolset under test. Everything after it runs in the
+		# foreground: `bregctl dev` returns once the registry is ready and
+		# leaves its services running, and the page stops them at the end.
 		SPEC_STEPS=(
-			"background:Start the registry"
-			"wait-launcher:Base Registry Engine generic quickstart is ready."
-			"run:Read the first record"
+			"run:Create a project"
+			"run:Start the registry"
+			"run:Get a token"
+			"run:Read the registry"
 			"run:Create a record"
 			"run:Choose which fields to read"
 			"run:Update the record"
 			"run:Try an invalid record"
-			"stop-background"
+			"run:Stop the registry"
 		)
 		# Every documented refusal on this page is read with curl --write-out
 		# and no --fail-with-body, so the fence exits zero whether the registry
 		# refuses or answers. A boundary that stopped refusing, an ETag that
-		# stopped being enforced or a read that started returning nothing would
-		# leave the whole journey green. These are the assertions that catch it.
+		# stopped being enforced or a first read that stopped answering with
+		# the envelope would leave the whole journey green. These are the
+		# assertions that catch it.
 		SPEC_ASSERTS=(
-			'"code": "QS-001"'
+			'"items": []'
 			"HTTP 404"
 			"HTTP 400"
 			'"revisionIdentifier": "2"'
@@ -254,9 +242,28 @@ done
 # TMPDIR is itself a link. Resolving the work root once puts the whole reader
 # journey on the physical path the registry accepts.
 WORK_ROOT="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/breg-tutorial.XXXXXX")" && pwd -P)"
+READER_DIR="$WORK_ROOT/reader"
+SHIM_DIR="$WORK_ROOT/bin"
+
+# Stop every local development session the replay started, and reclaim its
+# container and volume. A journey that fails halfway leaves `bregctl dev`
+# running with a database container behind it, and deleting the work root
+# alone would orphan that container. Stopping with --remove is idempotent, so
+# a journey that already stopped its own session costs nothing here.
+stop_dev_sessions() {
+	local state project
+	[[ -d "$READER_DIR" && -x "$SHIM_DIR/bregctl" ]] || return 0
+	while IFS= read -r state; do
+		project="$(dirname "$(dirname "$(dirname "$state")")")"
+		"$SHIM_DIR/bregctl" dev stop --project "$project" --remove >/dev/null 2>&1 ||
+			printf 'could not stop the local development session in %s\n' "$project" >&2
+	done < <(find "$READER_DIR" -path '*/.breg/dev/state.json' 2>/dev/null)
+}
+
 cleanup() {
 	local exit_code=$?
 	set +e
+	stop_dev_sessions
 	chmod -R u+w "$WORK_ROOT" 2>/dev/null
 	rm -rf "$WORK_ROOT"
 	if ((exit_code == 0)); then
@@ -283,14 +290,12 @@ resolve_profile_dir() {
 	esac
 }
 
-SHIM_DIR="$WORK_ROOT/bin"
-
 prepare_toolset() {
 	if [[ -z "${BREG_BIN:-}" || -z "${BREGCTL_BIN:-}" || -z "${MINT_BIN:-}" ]]; then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		# The registry binary sits behind the runtime feature, exactly as the
-		# quickstart launcher builds it when a reader has no release install.
+		# release build enables it.
 		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
 			cargo build --locked --profile "$BUILD_PROFILE" \
 			-p registry-breg --features registry-breg/runtime \
@@ -315,37 +320,12 @@ prepare_toolset() {
 		fi
 	done
 
-	# The tutorial calls the binaries by name, and the launcher resolves them
-	# from PATH under --installed, so serve them from a shim dir.
+	# The tutorial calls the binaries by name, and `bregctl dev` resolves
+	# `breg` and `mint` from PATH, so serve them from a shim dir.
 	mkdir -p "$SHIM_DIR"
 	ln -s "$BREG_BIN" "$SHIM_DIR/breg"
 	ln -s "$BREGCTL_BIN" "$SHIM_DIR/bregctl"
 	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
-}
-
-# Stage the checkout the page tells the reader to clone.
-#
-# The documented clone resolves a tag from a public remote at the installed
-# version, which is the right instruction for a reader and the wrong one for
-# this gate: it needs the network, and it would replay a released quickstart
-# rather than the one in this checkout. The clone fence it stands in for is
-# reported as unexecuted, so its version selector stays a reviewer's call
-# rather than this gate's.
-#
-# The launcher resolves its repository root from its own location and reads the
-# Registry Mint key helper from there, so the staged tree keeps both at the
-# paths the launcher expects. It must be writable: the launcher owns a run
-# directory inside its own tree and refuses one anywhere else.
-stage_reader_checkout() {
-	local reader_dir="$1"
-	mkdir -p "$reader_dir/products/breg" "$reader_dir/crates/registry-mint/demo"
-	cp -R "$REPO_ROOT/products/breg/quickstart" "$reader_dir/products/breg/quickstart"
-	cp -R "$REPO_ROOT/crates/registry-mint/demo/support" \
-		"$reader_dir/crates/registry-mint/demo/support"
-	# A run directory from an earlier local run is not the reader's starting
-	# point, and the launcher refuses to reuse one.
-	rm -rf "$reader_dir/products/breg/quickstart/.run"
-	chmod -R u+w "$reader_dir"
 }
 
 # ---------------------------------------------------------------------------
@@ -392,21 +372,6 @@ resolve_fences() {
 	printf '%s\n' "$matched"
 }
 
-# Resolve a heading address that must name exactly one sh fence.
-resolve_one_fence() {
-	local slug="$1" address="$2" fence_dir="$3" step_kind="$4"
-	local matched
-	matched="$(resolve_fences "$slug" "$address" "$fence_dir")" || exit $?
-	local -a numbers
-	read -r -a numbers <<<"$matched"
-	if ((${#numbers[@]} != 1)); then
-		printf 'tutorial spec error in %s: a %s step runs one fence, but "%s" names %d; add |<occurrence>\n' \
-			"$slug" "$step_kind" "$address" "${#numbers[@]}" >&2
-		exit 2
-	fi
-	printf '%s\n' "${numbers[0]}"
-}
-
 # Emit the sh fences named by a run: step, in document order.
 emit_run_step() {
 	local slug="$1" address="$2" fence_dir="$3"
@@ -421,75 +386,14 @@ emit_run_step() {
 	done
 }
 
-emit_background_step() {
-	local slug="$1" address="$2" fence_dir="$3"
-	local number
-	number="$(resolve_one_fence "$slug" "$address" "$fence_dir" background)" || exit $?
-	local fence="$fence_dir/fence-$number.sh"
-	if [[ "$(wc -l <"$fence")" -ne 1 ]]; then
-		printf 'tutorial spec error in %s: a background step needs one sh line, but fence %s under "%s" holds more\n' \
-			"$slug" "$number" "$address" >&2
-		exit 2
-	fi
-	local command
-	IFS= read -r command <"$fence"
-	printf '\nprintf "==> %s fence %s (background)\\n"\n' "$slug" "$number"
-	printf '%s > >(tee "$BACKGROUND_LOG") 2>&1 &\n' "$command"
-	printf 'BACKGROUND_PIDS+=("$!")\n'
-}
-
-# Stop the foreground command the page told the reader to leave running in
-# another terminal. This models Ctrl-C without adding a shell fence that a
-# reader would never type.
-emit_stop_background_step() {
-	local slug="$1"
-	printf '\nprintf "==> %s stop the previous background fence\\n"\n' "$slug"
-	printf 'if ((${#BACKGROUND_PIDS[@]} == 0)); then printf "tutorial spec error in %s: no background fence to stop\\n" >&2; exit 2; fi\n' "$slug"
-	printf 'background_index=$((${#BACKGROUND_PIDS[@]} - 1))\n'
-	printf 'background_pid="${BACKGROUND_PIDS[$background_index]}"\n'
-	printf 'kill "$background_pid" >/dev/null 2>&1 || true\n'
-	printf 'wait "$background_pid" >/dev/null 2>&1 || true\n'
-	printf 'unset "BACKGROUND_PIDS[$background_index]"\n'
-}
-
-# Block until the launcher the page leaves running has printed the line the
-# page tells the reader to wait for.
-#
-# The registry answers /ready before the launcher has minted the reader's
-# token and seeded the record the page reads first, so answering is not
-# readiness; the launcher prints its ready line after both.
-emit_wait_launcher_step() {
-	local slug="$1" line="$2"
-	printf '\nprintf "==> %s wait for the launcher to say it is ready\\n"\n' "$slug"
-	printf 'if ((${#BACKGROUND_PIDS[@]} == 0)); then printf "tutorial spec error in %s: no background fence to wait for\\n" >&2; exit 2; fi\n' "$slug"
-	printf 'ready_attempt=0\n'
-	printf 'while ! grep -qF -- %q "$BACKGROUND_LOG"; do\n' "$line"
-	printf '  ready_attempt=$((ready_attempt + 1))\n'
-	printf '  if ((ready_attempt == %d)); then printf %q >&2; exit 1; fi\n' \
-		"$WAIT_LAUNCHER_ATTEMPTS" "the launcher did not print its ready line\n"
-	printf '  sleep 1\n'
-	printf 'done\n'
-}
-
 emit_journey() {
 	local slug="$1" fence_dir="$2"
 	printf 'set -euo pipefail\n'
-	printf 'BACKGROUND_PIDS=()\n'
-	printf 'BACKGROUND_LOG="$(mktemp)"\n'
-	printf 'cleanup_journey() {\n'
-	printf '  local pid\n'
-	printf '  for pid in "${BACKGROUND_PIDS[@]}"; do kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; done\n'
-	printf '  rm -f "$BACKGROUND_LOG"\n'
-	printf '}\n'
-	printf 'trap cleanup_journey EXIT\n'
 	printf 'trap "exit 130" HUP INT TERM\n'
 	local step
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
 		case "$step" in
 		run:*) emit_run_step "$slug" "${step#run:}" "$fence_dir" ;;
-		background:*) emit_background_step "$slug" "${step#background:}" "$fence_dir" ;;
-		stop-background) emit_stop_background_step "$slug" ;;
-		wait-launcher:*) emit_wait_launcher_step "$slug" "${step#wait-launcher:}" ;;
 		*)
 			printf 'tutorial spec error in %s: unknown step: %s\n' "$slug" "$step" >&2
 			exit 2
@@ -510,9 +414,6 @@ resolve_journey_fences() {
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
 		case "$step" in
 		run:*) matched="$(resolve_fences "$slug" "${step#run:}" "$fence_dir")" || exit $? ;;
-		background:*)
-			matched="$(resolve_one_fence "$slug" "${step#background:}" "$fence_dir" background)" || exit $?
-			;;
 		*) continue ;;
 		esac
 		read -r -a numbers <<<"$matched"
@@ -526,10 +427,9 @@ resolve_journey_fences() {
 
 # Name the sh fences the journey never runs.
 #
-# This is information for a reviewer, not a rule: an install one-liner, a clone
-# this gate stages instead, and a token recovery block a reader only reaches on
-# a bad day are documented and unverified, and saying so is more use than
-# pinning their text would be.
+# This is information for a reviewer, not a rule: an install one-liner that
+# reaches the network is documented and unverified, and saying so is more use
+# than pinning its text would be.
 report_unexecuted_fences() {
 	local slug="$1" fence_dir="$2"
 	local number occurrence heading first_line
@@ -617,10 +517,11 @@ for slug in "${BREG_TUTORIALS[@]}"; do
 		continue
 	fi
 
-	# Replay the journey in one shell so `cd` persists exactly as a reader
-	# experiences it, from the checkout the page tells them to clone.
-	reader_dir="$WORK_ROOT/reader/breg-tutorial"
-	stage_reader_checkout "$reader_dir"
+	# Replay the journey in one shell so variables and `umask` persist exactly
+	# as a reader experiences them, from the empty directory the page tells
+	# them to open a terminal in.
+	reader_dir="$READER_DIR/$(basename "$slug")"
+	mkdir -p "$reader_dir"
 	run_script="$WORK_ROOT/run-$(basename "$slug").sh"
 	emit_journey "$slug" "$fence_dir" >"$run_script"
 

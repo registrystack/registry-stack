@@ -1,11 +1,11 @@
 ---
 title: Create and query your first registry
-description: Start a local registry, create and update a record over HTTP, and see which requests the server refuses and why.
+description: Start a local registry from a generated project, create and update a record over HTTP, and see which requests the server refuses and why.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-07"
 doc_type: tutorial
 persona:
   - data publisher
@@ -18,26 +18,27 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 If you are a data publisher evaluating
 [Base Registry Engine](../../reference/glossary/#base-registry-engine) (BReg), start with a small
 business directory.
-You will start a local registry, create a business record, change its label, and try requests the server refuses.
+You will generate a registry project, start it as a working registry on your machine, create a
+business record, change its label, and try requests the server refuses.
 The records use two required fields, `code` and `label`, plus an optional group and status;
 the business directory is the example you supply, not a built-in type.
 Everything you keep goes into one directory, `tutorial-work`, and the next tutorial,
-[Extend a registry with a module](../extend-a-registry-with-a-module/), continues in that directory.
+[Extend a registry with a module](../extend-a-registry-with-a-module/), edits the project inside it.
 
 <QuickstartMeta
   outcome="A record created and updated over HTTP, with refused requests showing authentication, field permissions, version checks, and required fields at work."
-  time="About 20 minutes, plus the image download"
+  time="About 15 minutes, plus the image download"
   level="Local evaluation only"
-  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'Git and a Bash shell', 'Running Docker', 'OpenSSL', 'Python 3.11 or later and uv', 'curl 7.76 or later', 'An editor and two terminals']}
+  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'A Bash or zsh shell', 'Running Docker', 'curl 7.76 or later', 'Python 3, to format JSON responses', 'An editor']}
 />
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
-    products/breg/quickstart/run.sh;
-    crates/registry-mint/demo/support/key_material.py. */}
+    crates/registry-bregctl/src/dev/mod.rs, start();
+    crates/registry-mint/src/main.rs. */}
 
 ## Install Base Registry Engine
 
-Install `breg`, `bregctl`, and `mint`. Registry Mint issues the local access tokens the launcher
+Install `breg`, `bregctl`, and `mint`. Registry Mint issues the local access tokens this tutorial
 uses, standing in for the identity provider a deployment would have:
 
 ```sh
@@ -50,7 +51,7 @@ The URL names `latest`, which this tutorial takes on purpose so an evaluation st
 release; a deployment pins a version instead, so the binary that was tested is the binary that runs.
 The installer checks the three binaries against the release `SHA256SUMS` before anything reaches
 `~/.local/bin`, and installs them together or not at all.
-Keep that directory on your `PATH` in both terminals.
+Keep that directory on your `PATH`.
 
 The command pipes a script from GitHub straight into `bash`; replace `| bash` with `| less` to read it first.
 Before these binaries reach a host that serves anyone else, verify the release as described in
@@ -59,65 +60,132 @@ Before these binaries reach a host that serves anyone else, verify the release a
 
 {/* Evidence: crates/registry-breg/install.sh, binaries. */}
 
-## Get the quickstart files
+## Create a project
 
-The launcher and its fixtures live in the repository.
-Clone it at the version you installed:
+Open a terminal in a directory of your choice and generate a project:
 
 ```sh
-installed="$(bregctl --version | awk '{print $2}')"
-git clone --depth 1 --branch "v$installed" https://github.com/registrystack/registry-stack.git breg-tutorial
-cd breg-tutorial
+mkdir -p tutorial-work
+bregctl init tutorial-work/project
 ```
 
-The project is pre-1.0, so the default branch may carry changes the installed binaries do not implement;
-pinning the checkout keeps the launcher and the binaries on one contract.
-Run the commands from this checkout's root in both terminals.
+```text
+init succeeded
+revision: sha256:<digest>
+finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+artifacts: 6
+next: read tutorial-work/project/README.md, then run 'bregctl check tutorial-work/project'
+next: leave the findings above as they are; the example operator profile lists a whole collection and the example evidence-source profile looks up any record, both on purpose, and tutorial-work/project/README.md says where to narrow them
+next: replace canonicalBaseIri in tutorial-work/project/registry.yaml before you build a production package; the example value is a reserved .invalid name that never resolves
+```
+
+A registry project is a directory of YAML files that declares one registry, and `init` compiled
+this one before printing its `revision`, the digest of the compiled model.
+The six artifacts are `registry.yaml` with the entities, fields, and access profiles; one module
+under `modules/`; `tests/journeys.yaml`, the requests a test run replays; `dev-clients.yaml`, the
+local callers described below; `runtime.example.yaml` for an operator; and a `README.md` that lists
+them.
+The `record` entity in `registry.yaml` carries the `code` and `label` fields you will write, and its
+`operator` access profile names what a caller's token must carry to reach them.
+
+A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a
+finding does not.
+Both findings here are expected, as the second `next:` line says, and every command on this project
+repeats them; read past them to the result.
+
+Open `tutorial-work/project/dev-clients.yaml`.
+Its first client is the caller you will act as:
+
+```yaml
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims:
+      registry_principal: generic-registry-operator
+      registry_purpose: registry-operations
+```
+
+A client is a caller the local token issuer will issue tokens to, and its scope and claims are the
+ones the `operator` profile in `registry.yaml` requires.
+The file holds no secret: keys are generated when the registry starts.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files() and INIT_DEV_CLIENTS. */}
 
 ## Start the registry
 
 :::caution[Use synthetic data only]
-The launcher creates a disposable database and local keys.
-Stopping it removes the database container.
-Starting it again replaces `products/breg/quickstart/.run/`, including its keys, tokens, and logs.
+The registry stores its records in a Docker volume on your machine, and the private keys it
+generates live in `tutorial-work/project/.breg/dev/`, an owner-only directory that stays out of
+version control.
+Nothing here is configured for anyone else's data.
 :::
 
-In the first terminal, start the services:
+Start the project as a registry:
 
 ```sh
-products/breg/quickstart/run.sh --installed
+bregctl dev --project tutorial-work/project \
+  --clients-file tutorial-work/project/dev-clients.yaml
 ```
 
-The flag tells the launcher to use the `breg`, `bregctl`, and `mint` on your `PATH` rather than
-compiling them from the checkout.
-Wait for this line; setup output is omitted:
+The first start downloads the pinned PostgreSQL image, so it takes longer than the later ones.
+The command returns once the registry answers, with a report like this one:
 
 ```text
-Base Registry Engine generic quickstart is ready.
+dev succeeded
+status: ready
+project: <path>/tutorial-work/project
+breg url: http://127.0.0.1:8090
+token endpoint: http://127.0.0.1:8091/token
+audience: urn:breg:dev:<uuid>
+package revision: sha256:<digest>
+state file: <path>/tutorial-work/project/.breg/dev/state.json
+runtime config: <path>/tutorial-work/project/.breg/dev/runtime.yaml
+client operator
+    client id file: <path>/tutorial-work/project/.breg/dev/credentials/operator/client-id
+    assertion key file: <path>/tutorial-work/project/.breg/dev/credentials/operator/assertion-key.jwk
+client reader
+    client id file: <path>/tutorial-work/project/.breg/dev/credentials/reader/client-id
+    assertion key file: <path>/tutorial-work/project/.breg/dev/credentials/reader/assertion-key.jwk
 ```
 
-Leave this terminal running.
-The launcher has created one record with code `QS-001`, and BReg and Mint listen on loopback addresses
-it printed, with ports chosen for this run.
+What happened: `dev` started PostgreSQL in a container, started Registry Mint with the two clients
+from `dev-clients.yaml` and a fresh private key for each, built a package from the project, replayed
+`tests/journeys.yaml` against a throwaway database, activated the package, and started BReg on the
+address the report shows.
+The services keep running after the command returns, so this one terminal is enough.
+Run the same command again at any time to print the report again.
 
-{/* Evidence: products/breg/quickstart/run.sh;
-    products/breg/quickstart/support/quickstart.py, prepare() and enrich_local_package(). */}
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, start() and bind_journey_profiles();
+    crates/registry-bregctl/src/dev/config.rs; products/breg/DEV.md. */}
 
-## Read the first record
+## Get a token
 
-In the second terminal, save the address and prepare an authorization header file:
+Save the registry address, then ask Mint for a token as the `operator` client and write it into an
+authorization header file:
 
 ```sh
-registry_run="$PWD/products/breg/quickstart/.run"
-registry_url=$(cat "$registry_run/breg-origin")
+registry_url=http://127.0.0.1:8090
+credentials=tutorial-work/project/.breg/dev/credentials/operator
 umask 077
-mkdir tutorial-work
-sed 's/^/Authorization: Bearer /' "$registry_run/secrets/operator-token" \
-  > tutorial-work/authorization.header
+mint token --url http://127.0.0.1:8091/token \
+  --client-id "$(cat "$credentials/client-id")" --key "$credentials/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/authorization.header
 ```
 
-The header file holds a token and is readable only by your user; keep it out of version control and support messages.
+Success prints nothing.
+`mint token` signs a request with the client's private key and posts it to the token endpoint, the
+way an application would; the token it returns carries the scope and claims from `dev-clients.yaml`
+and lasts five minutes.
+The header file holds that token and is readable only by your user; keep it out of version control
+and support messages.
 If a request returns `401` after a pause, [renew the token](#renew-an-expired-token) and retry.
+
+{/* Evidence: crates/registry-mint/src/cli.rs; crates/registry-mint/src/main.rs;
+    crates/registry-bregctl/src/dev/config.rs. */}
+
+## Read the registry
 
 Read the records using the `operator` access profile:
 
@@ -127,24 +195,28 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records?accessProfile=operator" | python3 -m json.tool
 ```
 
-The `items` array contains one record, and its `domainData` object holds the configured fields:
-
 ```json
 {
-  "code": "QS-001",
-  "group": null,
-  "label": "Quickstart example record",
-  "status": null
+    "items": [],
+    "meta": {
+        "datasetIdentifier": "generic-registry",
+        "entityTypeIdentifier": "record",
+        "registryIdentifier": "generic-registry"
+    },
+    "pageInfo": {
+        "nextCursor": null
+    }
 }
 ```
 
-`group` and `status` are optional fields of the same entity and read as `null` until a record supplies them.
-Beside `domainData`, `recordIdentifier` and `revisionIdentifier` identify the record and its version,
-and `meta` names the registry, dataset, and entity type.
+The registry is empty, and the empty list is a successful read: the server verified your token,
+selected the profile, and ran the query.
 
-What happened: you read a Registry Record envelope, the shape every response on this API shares,
-with the record's fields and identifiers in the item and `meta` saying where the record lives.
-You chose an access profile, a named set of permissions a token may use, with the `accessProfile` query parameter.
+What happened: you read a Registry Record envelope, the shape every response on this API shares.
+`items` holds the records, `meta` names the registry, dataset, and entity type they live in, and
+`pageInfo` says whether there is another page.
+You chose an access profile, a named set of permissions a token may use, with the `accessProfile`
+query parameter.
 
 Try the same request without the header:
 
@@ -214,6 +286,7 @@ The server generates the identifier, shown as `<record-id>`:
 ```
 
 A single record sits under `data`; a list carries the same fields in each item.
+`group` and `status` are optional fields of the same entity and read as `null` until a record supplies them.
 `data.snapshot` appears only on create, patch, and tombstone responses: an opaque token for a later
 `:snapshot` read, described in the [Base Registry Engine API reference](../../reference/breg-api/).
 
@@ -260,7 +333,7 @@ HTTP 400
 ```
 
 The problem code is `query.invalid`.
-Open `products/breg/quickstart/.run/project/registry.yaml` and find the `operator` grant for `record`:
+Open `tutorial-work/project/registry.yaml` and find the `operator` grant for `record`:
 
 ```yaml
 readableFields: [code, label, group, status]
@@ -372,7 +445,7 @@ HTTP 400
 ```
 
 The problem code is `request.invalid`; no record was created.
-In the project's `registry.yaml`, find `required: true` on the `code` field.
+In `tutorial-work/project/registry.yaml`, find `required: true` on the `code` field.
 
 What happened: the same `required: true` that validated this request also shapes the project's
 generated request schema, so the model decides what a record needs, not application code.
@@ -380,63 +453,59 @@ generated request schema, so the model decides what a record needs, not applicat
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
     crates/registry-breg/src/mutation.rs; crates/registry-breg/src/artifacts.rs. */}
 
-## Stop the services
+## Stop the registry
 
-:::caution[Stopping deletes the demo database]
-Pressing `Ctrl+C` in the first terminal stops BReg and Mint and removes the PostgreSQL container,
-including the records you created.
-:::
+Stop the services:
 
-Stop the launcher now.
-The `.run/` files remain until the next launch and contain disposable secrets.
-Keep `tutorial-work/`: the next tutorial creates a project inside it, and the checkout's `.gitignore`
-excludes the directory, so the header file stays out of commits.
+```sh
+bregctl dev stop --project tutorial-work/project
+```
 
-{/* Evidence: products/breg/quickstart/run.sh, cleanup(). */}
+The report ends with `status: stopped`.
+The container and its volume stay, with your records and audit history, and the start command from
+[Start the registry](#start-the-registry) brings the same registry back.
+To discard the records as well, stop with `--remove`:
+
+```sh
+bregctl dev stop --project tutorial-work/project --remove
+```
+
+Either way, keep `tutorial-work/`: the next tutorial edits the project inside it, and the keys,
+credentials, and package under `.breg/dev/` serve the next start.
+
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, stop(); products/breg/DEV.md. */}
 
 ## What you built
 
-You created and updated a record, retried a write, narrowed a read, and saw authentication,
-query permissions, version checks, and required fields affect real requests.
-All of that came from one project the launcher compiled; the next tutorial puts a copy in your hands.
+You generated a project, started it as a registry, created and updated a record, retried a write,
+narrowed a read, and saw authentication, query permissions, version checks, and required fields
+affect real requests.
+All of that came from the YAML in `tutorial-work/project`; the next tutorial changes it.
 
 ## Troubleshooting
 
 ### Renew an expired token
 
 The local token lasts five minutes.
-While Mint is still running, renew it and replace the header file:
-
-```sh
-umask 077
-mint token \
-  --url "$(cat "$registry_run/mint-origin")/token" \
-  --client-id generic-quickstart \
-  --key "$registry_run/keys/operator/signing-p256-private-jwk" \
-  > "$registry_run/secrets/operator-token" &&
-sed 's/^/Authorization: Bearer /' "$registry_run/secrets/operator-token" \
-  > tutorial-work/authorization.header
-```
-
-Success prints nothing; retry the request.
-If renewal fails, check that the first terminal is still running.
-
-{/* Evidence: products/breg/quickstart/support/quickstart.py, prepare();
-    crates/registry-mint/src/main.rs. */}
+While the registry is running, run the command from [Get a token](#get-a-token) again; it replaces
+the header file.
+If it fails, the registry is stopped; start it again with the command from
+[Start the registry](#start-the-registry), then renew.
 
 ### Other problems
 
 | Symptom | Next move |
 | --- | --- |
-| The launcher stops because `breg`, `bregctl`, or `mint` is not on `PATH` | Add the installers' directory, `~/.local/bin` unless you changed it, to `PATH` in that terminal. |
-| A service does not become ready | Inspect `.run/logs/` under the quickstart directory. Do not share tokens, keys, or database URL files. |
+| `bregctl`, `breg`, or `mint` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
+| `bregctl dev` refuses a port | Something else listens on 8090, 8091, or 55432. Pass `--breg-port`, `--mint-port`, or `--database-port` on the first start; later starts keep the ports you chose. |
+| `bregctl dev` fails before it reports `ready` | Check that Docker is running. The private logs are under `tutorial-work/project/.breg/dev/logs/`; do not share the credential or secret files beside them. |
 | A create returns `409` with code `idempotency.conflict` | The key was already used with a different body. Reuse the exact body, or choose a new key for a new write. |
 | A create returns `409` with code `mutation.conflict` | The code is already taken; codes are unique in this project. Choose a new code and a new key. |
-| You opened a fresh second terminal | Run the `registry_run` and `registry_url` assignments again. Keep the existing `tutorial-work` directory. |
+| You opened a fresh terminal | Run the `registry_url` and `credentials` assignments from [Get a token](#get-a-token) again. The header file and `tutorial-work` directory are still there. |
 
 ## Next
 
-- [Extend a registry with a module](../extend-a-registry-with-a-module/) to create a project of your own and change a field.
+- [Extend a registry with a module](../extend-a-registry-with-a-module/) to change a field in the project you generated.
 - [Review changes before updating a registry](../review-registry-changes/) to test a configurable approval workflow.
 - [How a configured registry works](../../explanation/configuration-defined-registry/) for the compile model behind what you saw.
 - [Query a registry from Python and Node](../query-breg-client/) to make the same requests from an application.

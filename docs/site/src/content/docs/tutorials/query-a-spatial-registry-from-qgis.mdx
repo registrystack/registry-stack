@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-07"
 doc_type: tutorial
 persona:
   - data publisher
@@ -31,7 +31,7 @@ normal API, and see the new Point after QGIS renews its Registry Mint credential
   time="About 35 minutes, plus the PostGIS image download"
   level="Local evaluation with synthetic data on loopback"
   prerequisites={[
-    'The checkout and binaries from Create and query your first registry',
+    'The binaries from Create and query your first registry, and git',
     'QGIS 4.2.1 with GDAL 3.12.4',
     'Running Docker, and two terminals',
     'OpenSSL, Python 3.11 or later, and uv',
@@ -41,9 +41,19 @@ normal API, and see the new Point after QGIS renews its Registry Mint credential
 
 ## Before you start
 
-[Create and query your first registry](../first-breg/) installs `breg`, `bregctl`, and `mint` and clones
-the repository at the tag that matches them. Open a terminal at the root of that `breg-tutorial`
-checkout and confirm the binaries answer:
+[Create and query your first registry](../first-breg/) installs `breg`, `bregctl`, and `mint`.
+The spatial launcher and its fixtures live in the repository, so clone it at the version you installed:
+
+```sh
+installed="$(bregctl --version | awk '{print $2}')"
+git clone --depth 1 --branch "v$installed" https://github.com/registrystack/registry-stack.git breg-tutorial
+cd breg-tutorial
+```
+
+The project is pre-1.0, so the default branch may carry changes the installed binaries do not
+implement; pinning the checkout keeps the launcher and the binaries on one contract.
+
+Confirm the binaries answer from that checkout:
 
 ```sh
 bregctl --version

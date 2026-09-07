@@ -56,6 +56,7 @@ The command writes a working example project rather than a blank one:
 | `registry.yaml` | Registry and package identity, a Registry Manifest projection, one closed vocabulary, two entities, and three access profiles. |
 | `modules/record-notes/module.yaml` | One module adding an optional field to an entity the project owns, pinned by content digest in the project's `modules` list. |
 | `tests/journeys.yaml` | A journey that creates a group and a record, reads it under both profiles, patches it, and lists it. |
+| `dev-clients.yaml` | Two local clients bound to the `operator` and `record-reader` profiles, for `bregctl dev` to issue tokens to. It holds no secret. |
 | `runtime.example.yaml` | An example of the runtime configuration an operator supplies. No command reads it; copy it out of the project and replace every value. |
 | `README.md` | What each file holds and which command to run next. |
 
@@ -69,7 +70,7 @@ init succeeded
 revision: sha256:<digest>
 finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
 finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
-artifacts: 5
+artifacts: 6
 next: read ./my-registry/README.md, then run 'bregctl check ./my-registry'
 next: leave the findings above as they are; the example operator profile lists a whole collection and the example evidence-source profile looks up any record, both on purpose, and ./my-registry/README.md says where to narrow them
 next: replace canonicalBaseIri in ./my-registry/registry.yaml before you build a production package; the example value is a reserved .invalid name that never resolves

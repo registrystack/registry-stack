@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-07"
 doc_type: tutorial
 persona:
   - data publisher
@@ -16,8 +16,7 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you finished [Create and query your first registry](../first-breg/), you are a data publisher with the
-checkout, the installed binaries, and a `tutorial-work` directory, and you want to know what leaves a
-registry when a record changes.
+installed binaries, and you want to know what leaves a registry when a record changes.
 In this tutorial you run the business demo, whose launcher starts a local receiver that verifies signatures,
 read the event the project declares, cause one delivery yourself, and inspect an automatic retry,
 a dead letter, and its replay in the receiver's report.
@@ -27,13 +26,33 @@ You write no receiver and edit no project.
   outcome="One signed CloudEvents delivery you caused, plus a receiver report showing an automatic retry, a dead letter, and its replay."
   time="About 15 minutes"
   level="Local evaluation only"
-  prerequisites={['The checkout, binaries, and tutorial-work directory from Create and query your first registry', 'Running Docker', 'Python 3', 'curl 7.76 or later', 'Two terminals']}
+  prerequisites={['The binaries from Create and query your first registry', 'git', 'Running Docker', 'Python 3', 'curl 7.76 or later', 'Two terminals']}
 />
 
 {/* Evidence: products/breg/demo/run.sh;
     products/breg/demo/support/demo.py, WEBHOOK_MODULE_SOURCE and WebhookReceiver;
     crates/registry-bregctl/src/lib.rs, WebhookCommand;
     crates/registry-breg/src/outbox.rs; crates/registry-breg/src/webhook.rs. */}
+
+## Get the demo files
+
+Open a terminal in a directory of your choice.
+The demo launcher and its receiver live in the repository, so clone it at the version you installed:
+
+```sh
+installed="$(bregctl --version | awk '{print $2}')"
+git clone --depth 1 --branch "v$installed" https://github.com/registrystack/registry-stack.git breg-tutorial
+cd breg-tutorial
+```
+
+The project is pre-1.0, so the default branch may carry changes the installed binaries do not
+implement; pinning the checkout keeps the launcher and the binaries on one contract.
+Create a directory inside the checkout for the files this tutorial keeps; the checkout's `.gitignore`
+covers it:
+
+```sh
+mkdir -p tutorial-work
+```
 
 ## Start the demo with a receiver
 
@@ -42,7 +61,7 @@ The demo replaces `products/breg/demo/.run/` on each launch, and stopping it rem
 Use synthetic records only, and keep anything you want to keep in `tutorial-work/`.
 :::
 
-In the first terminal, at the root of the `breg-tutorial` checkout and with the quickstart from the first
+In the first terminal, at the root of the `breg-tutorial` checkout and with the registry from the first
 tutorial stopped, run:
 
 ```sh
