@@ -1,8 +1,8 @@
 id: https://publicschema.org/linkml/publicschema
 name: publicschema
 title: PublicSchema
-description: Top-level composite LinkML schema for PublicSchema. Auto-generated from schema/**/*.yaml
-  by build/migrate_to_linkml.py. Do not edit by hand.
+description: Top-level authored LinkML schema for PublicSchema. Imports the maintained domain
+  modules and declares shared prefixes and release metadata.
 license: CC-BY-4.0
 version: 0.3.0
 default_prefix: publicschema

@@ -47,7 +47,7 @@ imports:
 - misc
 classes:
   BenefitSchedule:
-    class_uri: publicschema:BenefitSchedule
+    class_uri: publicschema:sp/BenefitSchedule
     title: Benefit Schedule
     description: 'A program-level definition of a benefit stream that specifies the modality, amount,
       frequency, and time period over which benefits are provided. A program may have one or more benefit
@@ -84,7 +84,7 @@ classes:
         "system_count": 4, "total_systems": 6}'
       bibliography_refs: '["rfc-5545"]'
   EligibilityDecision:
-    class_uri: publicschema:EligibilityDecision
+    class_uri: publicschema:sp/EligibilityDecision
     title: Eligibility Decision
     description: 'A formal determination of whether a subject meets a program''s criteria based on assessed
       conditions. A single scoring event or profile can support multiple eligibility decisions across
@@ -116,7 +116,7 @@ classes:
       bibliography_refs: '["barca-2017-integrating-data", "fhir-coverage-eligibility", "semic-cccev",
         "wb-sp-delivery-framework"]'
   Enrollment:
-    class_uri: publicschema:Enrollment
+    class_uri: publicschema:sp/Enrollment
     title: Enrollment
     description: 'The administrative process of registering an eligible person or household as an active
       beneficiary of a program. Budget constraints and capacity limits mean that eligibility does not
@@ -160,7 +160,7 @@ classes:
       bibliography_refs: '["barca-2017-integrating-data", "barca-2021-inclusive-information-systems",
         "ebsi-portable-doc-a1", "fhir-episode-of-care-status", "spdci-ibr", "wb-sp-delivery-framework"]'
   Entitlement:
-    class_uri: publicschema:Entitlement
+    class_uri: publicschema:sp/Entitlement
     title: Entitlement
     description: 'An instance of a recognized right of a specific beneficiary to receive a benefit. Each
       entitlement typically corresponds to one disbursement period, but multiple entitlements may exist
@@ -210,7 +210,7 @@ classes:
       bibliography_refs: '["barca-2017-integrating-data", "ebsi-portable-doc-a1", "fhir-fm-status", "spdci-ibr",
         "wb-sp-delivery-framework"]'
   Grievance:
-    class_uri: publicschema:Grievance
+    class_uri: publicschema:sp/Grievance
     title: Grievance
     description: 'A record of a complaint, appeal, correction request, or misconduct allegation raised
       through a program''s grievance redress mechanism. It captures formal issues about eligibility, enrollment,
@@ -244,7 +244,7 @@ classes:
       convergence_json: '{"system_count": 5, "total_systems": 6}'
       bibliography_refs: '["iso-10002", "wb-grm-guidance", "wb-sourcebook-ch8"]'
   Program:
-    class_uri: publicschema:Program
+    class_uri: publicschema:sp/Program
     title: Program
     description: 'A government or institutional social protection intervention that provides benefits
       to eligible individuals or households based on defined criteria. A program has a name, implementing
@@ -280,7 +280,7 @@ classes:
       convergence_json: '{"system_count": 4, "total_systems": 6}'
       bibliography_refs: '["barca-2017-integrating-data", "semic-cpov", "spdci-ibr"]'
   Referral:
-    class_uri: publicschema:Referral
+    class_uri: publicschema:sp/Referral
     title: Referral
     description: 'A structured process of linking a subject to an external program, service, or provider
       to address identified needs. Referrals span a spectrum from passive information sharing to active
@@ -338,7 +338,7 @@ slots:
       description_fr: La personne ou le groupe inscrit dans le programme.
       convergence_json: '{"system_count": 5, "total_systems": 6}'
   benefit_description:
-    slot_uri: publicschema:benefit_description
+    slot_uri: publicschema:sp/benefit_description
     title: Benefit description
     description: A free-text description of the specific benefit.
     range: string
@@ -357,7 +357,7 @@ slots:
       convergence_json: '{"system_count": 0, "total_systems": 5}'
       bibliography_refs: '["spdci-ibr"]'
   benefit_modality:
-    slot_uri: publicschema:benefit_modality
+    slot_uri: publicschema:sp/benefit_modality
     title: Benefit modality
     description: The form of benefit the entitlement specifies (cash, voucher, in-kind, service, fee waiver).
     range: BenefitModality
@@ -379,7 +379,7 @@ slots:
       convergence_json: '{"system_count": 1, "total_systems": 5}'
       bibliography_refs: '["calp-glossary", "spdci-ibr", "wfp-transfer-modality"]'
   complainant:
-    slot_uri: publicschema:complainant
+    slot_uri: publicschema:sp/complainant
     title: Complainant
     description: The person who submitted the grievance. The complainant need not be the enrolled beneficiary;
       community members, rejected applicants, or caretakers may also file grievances.
@@ -397,7 +397,7 @@ slots:
         déposer des griefs.
       convergence_json: '{"system_count": 3, "total_systems": 5}'
   conditionality_type:
-    slot_uri: publicschema:conditionality_type
+    slot_uri: publicschema:sp/conditionality_type
     title: Conditionality type
     description: Whether the program requires beneficiaries to meet behavioral conditions to receive benefits
       (unconditional, conditional, soft conditional, labelled).
@@ -415,7 +415,7 @@ slots:
         classify their conditionality approach. Common in cash transfer program registries.", "system_count":
         3, "total_systems": 6}'
   coverage_area:
-    slot_uri: publicschema:coverage_area
+    slot_uri: publicschema:sp/coverage_area
     title: Coverage area
     description: The geographic or administrative scope of program coverage.
     range: Location
@@ -428,7 +428,7 @@ slots:
       description_fr: L'étendue géographique ou administrative de la couverture du programme.
       convergence_json: '{"system_count": 0, "total_systems": 4}'
   coverage_period_end:
-    slot_uri: publicschema:coverage_period_end
+    slot_uri: publicschema:sp/coverage_period_end
     title: Coverage period end
     description: The end date of the period this entitlement covers.
     range: date
@@ -441,7 +441,7 @@ slots:
       description_fr: La date de fin de la période couverte par ce droit.
       convergence_json: '{"system_count": 0, "total_systems": 6}'
   coverage_period_start:
-    slot_uri: publicschema:coverage_period_start
+    slot_uri: publicschema:sp/coverage_period_start
     title: Coverage period start
     description: The start date of the period this entitlement covers.
     range: date
@@ -485,7 +485,7 @@ slots:
       description_fr: La date à laquelle la décision d'admissibilité a été enregistrée.
       convergence_json: '{"system_count": 1, "total_systems": 2}'
   document_expiry_date:
-    slot_uri: publicschema:document_expiry_date
+    slot_uri: publicschema:sp/document_expiry_date
     title: Document expiry date
     description: The date on which the document or credential representing the entitlement expires, which
       may differ from the entitlement period itself.
@@ -503,7 +503,7 @@ slots:
         schema analysis.", "system_count": 0, "total_systems": 6}'
       bibliography_refs: '["ebsi-portable-doc-a1"]'
   eligibility_decision_ref:
-    slot_uri: publicschema:eligibility_decision_ref
+    slot_uri: publicschema:sp/eligibility_decision_ref
     title: Eligibility decision reference
     description: Reference to the eligibility decision that authorized this enrollment.
     range: uri
@@ -574,7 +574,7 @@ slots:
       convergence_json: '{"system_count": 5, "total_systems": 6}'
       bibliography_refs: '["fhir-episode-of-care-status", "spdci-ibr", "wb-sp-delivery-framework"]'
   entitlement_status:
-    slot_uri: publicschema:entitlement_status
+    slot_uri: publicschema:sp/entitlement_status
     title: Entitlement status
     description: The lifecycle state of this entitlement instance.
     range: EntitlementStatus
@@ -662,7 +662,7 @@ slots:
       convergence_json: '{"system_count": 0, "total_systems": 5}'
       bibliography_refs: '["rfc-5545"]'
   governing_jurisdiction:
-    slot_uri: publicschema:governing_jurisdiction
+    slot_uri: publicschema:sp/governing_jurisdiction
     title: Governing jurisdiction
     description: The country or subdivision whose legislation governs this enrollment. Implicit in domestic
       programs, but must be explicit in cross-border or federated contexts such as social security coordination
@@ -683,7 +683,7 @@ slots:
         schema analysis.", "system_count": 0, "total_systems": 6}'
       bibliography_refs: '["ebsi-portable-doc-a1"]'
   grievance_status:
-    slot_uri: publicschema:grievance_status
+    slot_uri: publicschema:sp/grievance_status
     title: Grievance status
     description: The current processing state of the grievance.
     range: GrievanceStatus
@@ -697,7 +697,7 @@ slots:
       convergence_json: '{"system_count": 4, "total_systems": 5}'
       bibliography_refs: '["wb-grm-guidance"]'
   grievance_subject:
-    slot_uri: publicschema:grievance_subject
+    slot_uri: publicschema:sp/grievance_subject
     title: Grievance subject
     description: The identifier, URI, or local reference for the person, enrollment, payment event, or
       other record that the grievance concerns.
@@ -713,7 +713,7 @@ slots:
         l'événement de paiement ou d'un autre dossier concerné par la réclamation.
       convergence_json: '{"system_count": 3, "total_systems": 5}'
   grievance_type:
-    slot_uri: publicschema:grievance_type
+    slot_uri: publicschema:sp/grievance_type
     title: Grievance type
     description: The primary category of issue recorded for the grievance, such as an appeal, payment
       complaint, correction request, or misconduct allegation.
@@ -731,7 +731,7 @@ slots:
       convergence_json: '{"system_count": 3, "total_systems": 5}'
       bibliography_refs: '["wb-grm-guidance", "wb-sourcebook-ch8"]'
   implementing_agency:
-    slot_uri: publicschema:implementing_agency
+    slot_uri: publicschema:sp/implementing_agency
     title: Implementing agency
     description: The government ministry or organization responsible for program administration.
     range: string
@@ -747,7 +747,7 @@ slots:
       convergence_json: '{"system_count": 2, "total_systems": 4}'
       bibliography_refs: '["semic-cpov"]'
   is_enrolled:
-    slot_uri: publicschema:is_enrolled
+    slot_uri: publicschema:sp/is_enrolled
     title: Is enrolled
     description: Whether the person is currently enrolled in a program. Designed for verifiable credentials
       where enrollment status must be disclosed without revealing the specific program or detailed enrollment
@@ -766,7 +766,7 @@ slots:
         spécifique ou l'état détaillé de l'inscription. Pour les requêtes opérationnelles, utiliser enrollment_status.
       bibliography_refs: '["w3c-vc-data-model-2"]'
   program_ref:
-    slot_uri: publicschema:program_ref
+    slot_uri: publicschema:sp/program_ref
     title: Program
     description: A link to the program under which this enrollment, entitlement, eligibility decision,
       or benefit schedule exists.
@@ -885,7 +885,7 @@ slots:
       description_fr: La date à laquelle une décision de résolution a été rendue pour le grief.
       convergence_json: '{"system_count": 1, "total_systems": 5}'
   schedule_ref:
-    slot_uri: publicschema:schedule_ref
+    slot_uri: publicschema:sp/schedule_ref
     title: Schedule reference
     description: Reference to the benefit schedule that this entitlement corresponds to.
     range: BenefitSchedule
@@ -913,7 +913,7 @@ slots:
       description_fr: La date à laquelle le grief a été soumis ou enregistré.
       convergence_json: '{"system_count": 4, "total_systems": 5}'
   targeting_approach:
-    slot_uri: publicschema:targeting_approach
+    slot_uri: publicschema:sp/targeting_approach
     title: Targeting approach
     description: The method used to identify eligible beneficiaries.
     range: TargetingApproach

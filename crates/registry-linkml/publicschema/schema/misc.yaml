@@ -702,7 +702,7 @@ slots:
       description_es: Programas cuyas operaciones o beneficiarios se ven afectados por este evento.
       description_fr: Les programmes dont les opérations ou les bénéficiaires sont affectés par cet événement.
   age_at_event:
-    slot_uri: publicschema:age_at_event
+    slot_uri: publicschema:crvs/age_at_event
     title: Age at event
     description: The stated age of the person at the time of the vital event. Used in low-completeness
       settings where date of birth is unknown and stated age is the only age data available.
@@ -1374,7 +1374,7 @@ slots:
       convergence_json: '{"system_count": 4, "total_systems": 6}'
       bibliography_refs: '["govstack-payments", "mojaloop-fspiop"]'
   place_of_usual_residence:
-    slot_uri: publicschema:place_of_usual_residence
+    slot_uri: publicschema:crvs/place_of_usual_residence
     title: Place of usual residence
     description: The usual place of residence of the person at the time of the vital event. Used by national
       statistics offices to allocate vital events to the place where people live, not only where events

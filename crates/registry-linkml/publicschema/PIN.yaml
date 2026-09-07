@@ -1,7 +1,7 @@
 # Written by sync-snapshot.sh; do not edit by hand.
 repository: https://github.com/PublicSchema/publicschema.org
-commit: ca9861a13391aa8c20f8b2a1d4b470a99d01ee7d
-commitDate: 2026-05-19
+commit: 5fa11e869d73c5ee4fa78dc6c80ccd0422741f9e
+commitDate: 2026-09-07
 version: "0.3.0"
 license: CC-BY-4.0
 licenseUrl: https://creativecommons.org/licenses/by/4.0/

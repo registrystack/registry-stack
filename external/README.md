@@ -36,7 +36,7 @@ historical manifests that record earlier release inputs.
 `crates/registry-linkml/publicschema/` vendors a snapshot of the
 [PublicSchema](https://publicschema.org) reference model: repository
 `https://github.com/PublicSchema/publicschema.org`, commit
-`ca9861a13391aa8c20f8b2a1d4b470a99d01ee7d` from 2026-05-19, version 0.3.0,
+`5fa11e869d73c5ee4fa78dc6c80ccd0422741f9e` from 2026-09-07, version 0.3.0,
 licensed Creative Commons Attribution 4.0 International. It is a current
 vendored input, not a historical one.
 

@@ -166,6 +166,7 @@ enums:
         title: Self-report
         description: The subject answered the items about themselves. Preferred mode for WG-SS and WG-ES.
         annotations:
+          standard_code: self
           label_es: Autoinforme
           label_fr: Auto-déclaration
           description_es: El sujeto respondió los ítems sobre sí mismo. Modo preferido para WG-SS y WG-ES.
@@ -6041,6 +6042,7 @@ enums:
           The most common value for adult program participants who are legally competent. No delegation
           document is required.
         annotations:
+          standard_code: self
           label_es: Uno mismo
           label_fr: Soi-même
           description_es: El interesado indicó el consentimiento en su propio nombre con plena capacidad
