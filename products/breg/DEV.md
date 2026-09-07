@@ -6,12 +6,14 @@ Python launcher, shell script or OpenSSL installation. Mint is a local issuer
 chosen by this development tool; an operated BReg runtime remains an independent
 OAuth resource server.
 
-Prepare the project with `bregctl init ./registry`, then explicitly set its
-`package.environment` to `local` and keep `package.sequence: 1`. Finish the model,
+Prepare the project with `bregctl init ./registry`. The generated package
+already declares `package.environment: local` and `package.sequence: 1`, and the
+generated `dev-clients.yaml` binds two local clients to the `operator` and
+`record-reader` profiles, so the project starts unchanged. Finish the model,
 access profiles, journey fixtures and local clients before the first start.
 
 ```sh
-bregctl dev --project ./registry --clients-file ./dev-clients.yaml
+bregctl dev --project ./registry --clients-file ./registry/dev-clients.yaml
 bregctl dev stop --project ./registry
 bregctl dev start --project ./registry
 ```
