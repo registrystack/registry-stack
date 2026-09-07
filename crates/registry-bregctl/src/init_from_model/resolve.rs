@@ -11,9 +11,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use registry_breg::logical_names::{default_api_name, default_sql_name, reserved_logical_name};
 use registry_breg::Diagnostic;
 use registry_linkml::publicschema::{self, Sensitivity, LANGUAGES};
 use registry_linkml::{ClassDef, EnumDef, Model, Range, SlotDef};
+use registry_manifest_core::MAX_CODELIST_CONCEPTS;
 use serde_json::{json, Value};
 
 use super::selection::{EntitySelection, PropertySelection, Selection, VocabularyMode};
@@ -35,20 +37,17 @@ const LIST_MAX_ITEMS: u32 = 50;
 const LIST_MAX_BYTES: u32 = 4096;
 const OBJECT_MAX_BYTES: u32 = 16384;
 const GEOMETRY_MAX_BYTES: u32 = 65536;
+const TEMPORAL_MAX_LENGTH: u32 = 64;
+/// A calendar date, as the compiler's own date type accepts it.
+const DATE_PATTERN: &str = r"^\d{4}-\d{2}-\d{2}$";
+/// A date and time with an offset, as the compiler's timestamp type accepts
+/// it.
+const TIMESTAMP_PATTERN: &str =
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$";
+/// A time of day, with an optional offset.
+const TIME_PATTERN: &str = r"^\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})?$";
 const DECIMAL_PRECISION: u8 = 18;
 const DECIMAL_SCALE: u8 = 6;
-
-/// Logical field identifiers the compiler reserves, in the kebab form the
-/// derivation produces. A property carrying one of these names is prefixed so
-/// the field keeps its concept without shadowing a system column.
-const RESERVED_FIELD_IDS: &[&str] = &[
-    "id",
-    "record-id",
-    "revision",
-    "created-at",
-    "updated-at",
-    "deleted-at",
-];
 
 /// Text in one or more of the model's languages, keyed by language.
 pub(crate) type Text = BTreeMap<String, String>;
@@ -122,10 +121,11 @@ impl Plan {
         let targeted: BTreeSet<&str> = self
             .entities
             .iter()
-            .flat_map(|entity| entity.fields.iter())
-            .filter_map(|field| match &field.kind {
-                FieldKind::Reference { target } => Some(target.as_str()),
-                _ => None,
+            .flat_map(|entity| {
+                entity
+                    .fields
+                    .iter()
+                    .filter_map(move |field| outward_target(entity, field))
             })
             .collect();
         self.entities
@@ -135,16 +135,27 @@ impl Plan {
                     && !entity
                         .fields
                         .iter()
-                        .any(|field| matches!(field.kind, FieldKind::Reference { .. }))
+                        .any(|field| outward_target(entity, field).is_some())
             })
             .map(|entity| entity.id.as_str())
             .collect()
     }
 }
 
+/// The entity a reference field points at, unless it points back at the
+/// entity carrying it. A self-reference joins two records of one entity, so
+/// it neither links that entity to another nor makes another reachable.
+fn outward_target<'a>(entity: &'a PlannedEntity, field: &'a PlannedField) -> Option<&'a str> {
+    match &field.kind {
+        FieldKind::Reference { target } if target != &entity.id => Some(target.as_str()),
+        _ => None,
+    }
+}
+
 /// A concept that was not selected and refers, through single-valued
-/// properties, to the selected concepts at least twice, so that selecting it
-/// too would connect them: a membership between a person and a group, say.
+/// properties, to two of the selected concepts, so that selecting it too
+/// would connect them: a membership between a person and a group, say. When
+/// one concept is selected, two references to it connect two of its records.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Connector {
     pub concept: String,
@@ -171,6 +182,7 @@ pub(crate) struct ConnectorLink {
 /// The connectors of `concepts` among the concepts not in it: the settled
 /// ones first, then by name.
 pub(crate) fn connectors(model: &Model, concepts: &[String]) -> Result<Vec<Connector>, Diagnostic> {
+    let selected: BTreeSet<&str> = concepts.iter().map(String::as_str).collect();
     let mut found = Vec::new();
     for class in model.classes.values() {
         if class.is_abstract || concepts.contains(&class.name) {
@@ -200,7 +212,13 @@ pub(crate) fn connectors(model: &Model, concepts: &[String]) -> Result<Vec<Conne
                 });
             }
         }
-        if links.len() < 2 {
+        // Counting references is not enough: two references that fit the
+        // same one concept leave the others as far apart as before.
+        let reached: BTreeSet<&str> = links
+            .iter()
+            .flat_map(|link| link.fits.iter().map(String::as_str))
+            .collect();
+        if links.len() < 2 || reached.len() < selected.len().min(2) {
             continue;
         }
         links.sort_by(|left, right| left.property.cmp(&right.property));
@@ -429,12 +447,24 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
             &mut enums,
         )?);
     }
-    for name in vocabulary_modes.keys() {
+    for (name, mode) in &vocabulary_modes {
         if !enums.drawn.contains(name) {
             return Err(diagnostic(
                 "init.selection.vocabulary_unused",
                 &format!("selection.vocabularies[{name}]"),
                 &format!("no selected property draws from enumeration `{name}`"),
+            ));
+        }
+        let values = model.enums[name].values.len();
+        if *mode == VocabularyMode::Inline && values > MAX_CODELIST_CONCEPTS {
+            return Err(diagnostic(
+                "init.selection.vocabulary_size",
+                &format!("selection.vocabularies[{name}]"),
+                &format!(
+                    "enumeration `{name}` has {values} values, and a project carries at most \
+                     {MAX_CODELIST_CONCEPTS} of them; drop the `inline` override to carry the \
+                     code without listing the values"
+                ),
             ));
         }
     }
@@ -531,6 +561,16 @@ fn resolve_entity(
         &format!("{path}.identifierField"),
         "a field identifier",
     )?;
+    if reserved_field_id(&identifier_id) {
+        return Err(diagnostic(
+            "init.selection.field_reserved",
+            &format!("{path}.identifierField"),
+            &format!(
+                "`{identifier_id}` is a name the compiler keeps for a system column of every \
+                 record; name the identifying field something else"
+            ),
+        ));
+    }
     let identifier = PlannedField {
         id: identifier_id.clone(),
         property: "identifier".to_owned(),
@@ -552,7 +592,9 @@ fn resolve_entity(
         .induced_slots(&class.name)
         .map_err(|error| model_error(&path, &error))?;
     let mut fields = Vec::new();
-    let mut field_ids = BTreeSet::from([identifier_id]);
+    let mut field_ids = BTreeSet::from([identifier_id.clone()]);
+    let mut api_names = BTreeSet::from([default_api_name(&identifier_id)]);
+    let mut sql_names = BTreeSet::from([default_sql_name(&identifier_id)]);
     let mut properties = BTreeSet::new();
     for property in &entity.properties {
         let property_path = format!("{path}.properties[{}]", property.name);
@@ -579,6 +621,17 @@ fn resolve_entity(
                     ),
                 )
             })?;
+        if property.target.is_some() && !matches!(slot.range, Range::Class(_)) {
+            return Err(diagnostic(
+                "init.selection.property_target",
+                &property_path,
+                &format!(
+                    "`target` names the selected entity a reference points at, and `{}` does not \
+                     hold records of a concept",
+                    slot.name
+                ),
+            ));
+        }
         let ResolvedKind {
             kind,
             classification: floor,
@@ -601,6 +654,20 @@ fn resolve_entity(
                 "init.selection.field_duplicate",
                 &property_path,
                 &format!("two fields of this entity would share the identifier `{id}`"),
+            ));
+        }
+        // The compiler derives an API name and a SQL name from every field
+        // identifier and holds each to be unique within the entity, so two
+        // identifiers that differ only in their separators collide there.
+        let api_name = default_api_name(&id);
+        if !api_names.insert(api_name.clone()) || !sql_names.insert(default_sql_name(&id)) {
+            return Err(diagnostic(
+                "init.selection.field_name_collision",
+                &property_path,
+                &format!(
+                    "two fields of this entity would derive the same API name `{api_name}` from \
+                     their identifiers"
+                ),
             ));
         }
         let classification = slot_classification(slot)
@@ -845,11 +912,19 @@ fn scalar_schema(name: &str) -> Result<Value, String> {
         "integer" => json!({"type": "integer"}),
         "boolean" => json!({"type": "boolean"}),
         "float" | "double" | "decimal" => json!({"type": "number"}),
-        "date" | "datetime" | "date_or_datetime" | "time" => {
-            json!({"type": "string", "maxLength": 64})
-        }
+        "date" => temporal_schema(DATE_PATTERN),
+        "datetime" => temporal_schema(TIMESTAMP_PATTERN),
+        "date_or_datetime" => temporal_schema(&format!("{DATE_PATTERN}|{TIMESTAMP_PATTERN}")),
+        "time" => temporal_schema(TIME_PATTERN),
         other => return Err(format!("its value type `{other}` has no field type")),
     })
+}
+
+/// The schema of one temporal value inside a structured field. The compiler
+/// checks a structured value against its schema without asserting `format`,
+/// so the shape a value type carries is written as a pattern instead.
+fn temporal_schema(pattern: &str) -> Value {
+    json!({"type": "string", "maxLength": TEMPORAL_MAX_LENGTH, "pattern": pattern})
 }
 
 /// The schema of one value of `definition`: every code listed, or a bounded
@@ -954,18 +1029,50 @@ fn slot_classification(slot: &SlotDef) -> Result<Classification, publicschema::C
     })
 }
 
+/// The schema of a GeoJSON geometry: the object shape every geometry shares,
+/// and one branch per geometry type carrying the coordinate nesting that type
+/// requires, so a well-formed object holding coordinates of the wrong shape is
+/// refused with the rest.
 fn geometry_schema() -> Value {
+    let position = json!({
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 3,
+        "items": {"type": "number"}
+    });
+    let line = json!({"type": "array", "minItems": 2, "items": position.clone()});
+    let ring = json!({"type": "array", "minItems": 4, "items": position.clone()});
+    let polygon = json!({"type": "array", "minItems": 1, "items": ring});
+    let shapes = [
+        ("Point", position.clone()),
+        ("MultiPoint", json!({"type": "array", "items": position})),
+        ("LineString", line.clone()),
+        ("MultiLineString", json!({"type": "array", "items": line})),
+        ("Polygon", polygon.clone()),
+        ("MultiPolygon", json!({"type": "array", "items": polygon})),
+    ];
+    let types: Vec<&str> = shapes.iter().map(|(name, _)| *name).collect();
+    let branches: Vec<Value> = shapes
+        .iter()
+        .map(|(name, coordinates)| {
+            json!({
+                "additionalProperties": false,
+                "properties": {
+                    "type": {"const": name},
+                    "coordinates": coordinates
+                }
+            })
+        })
+        .collect();
     json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["type", "coordinates"],
         "properties": {
-            "type": {
-                "type": "string",
-                "enum": ["Point", "LineString", "Polygon", "MultiPoint", "MultiLineString", "MultiPolygon"]
-            },
+            "type": {"type": "string", "enum": types},
             "coordinates": {"type": "array"}
-        }
+        },
+        "oneOf": branches
     })
 }
 
@@ -1059,11 +1166,17 @@ fn collapse_whitespace(text: &str) -> String {
 /// case, prefixed when it would shadow a name the compiler reserves.
 pub(crate) fn field_id(property: &str) -> String {
     let id = kebab_case(property);
-    if RESERVED_FIELD_IDS.contains(&id.as_str()) {
+    if reserved_field_id(&id) {
         format!("declared-{id}")
     } else {
         id
     }
+}
+
+/// True when the compiler reserves one of the logical names it derives from
+/// `id`, so a field carrying it would shadow a system column.
+fn reserved_field_id(id: &str) -> bool {
+    reserved_logical_name(&default_api_name(id)) || reserved_logical_name(&default_sql_name(id))
 }
 
 /// `ServicePoint` to `service-point`, `given_name` to `given-name`,
@@ -1229,6 +1342,16 @@ mod tests {
         resolve(&selection(body), model()).expect_err("the selection is refused")
     }
 
+    /// Whether `schema` accepts `value` under the options the compiler
+    /// checks a structured value with, which do not assert `format`.
+    fn accepts(schema: &Value, value: Value) -> bool {
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(schema)
+            .expect("the schema compiles")
+            .is_valid(&value)
+    }
+
     fn field<'a>(plan: &'a Plan, entity: &str, id: &str) -> &'a PlannedField {
         plan.entities
             .iter()
@@ -1319,16 +1442,31 @@ mod tests {
         );
         assert!(plan.vocabularies.is_empty());
         let plan = resolved(
-            "entities:\n  - concept: Person\n    properties:\n      - name: preferred_language\n\
-             vocabularies:\n  - enum: Language\n    mode: inline\n",
+            "entities:\n  - concept: Person\n    properties:\n      - name: occupation\n\
+             vocabularies:\n  - enum: Occupation\n    mode: inline\n",
         );
         assert_eq!(
-            field(&plan, "person", "preferred-language").kind,
+            field(&plan, "person", "occupation").kind,
             FieldKind::VocabularyCode {
-                vocabulary: "language".to_owned()
+                vocabulary: "occupation".to_owned()
             }
         );
         assert!(plan.vocabularies[0].values.len() > INLINE_VOCABULARY_THRESHOLD);
+    }
+
+    #[test]
+    fn an_inline_override_above_the_code_list_bound_is_refused() {
+        let error = refused(
+            "entities:\n  - concept: Person\n    properties:\n      - name: preferred_language\n\
+             vocabularies:\n  - enum: Language\n    mode: inline\n",
+        );
+        assert_eq!(error.code, "init.selection.vocabulary_size");
+        assert_eq!(error.path, "selection.vocabularies[Language]");
+        assert!(
+            error.message.contains(&MAX_CODELIST_CONCEPTS.to_string()),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
@@ -1460,16 +1598,10 @@ mod tests {
         let plan = resolved(body);
         let item = items(&plan, "instrument", "language-of-administration");
         assert!(item["enum"].is_null(), "{item}");
-        let plan = resolved(&format!(
+        let error = refused(&format!(
             "{body}vocabularies:\n  - enum: Language\n    mode: inline\n"
         ));
-        let item = items(&plan, "instrument", "language-of-administration");
-        assert!(
-            item["enum"]
-                .as_array()
-                .is_some_and(|codes| codes.len() > INLINE_VOCABULARY_THRESHOLD),
-            "{item}"
-        );
+        assert_eq!(error.code, "init.selection.vocabulary_size");
     }
 
     #[test]
@@ -1554,11 +1686,12 @@ mod tests {
             .iter()
             .map(|connector| connector.concept.as_str())
             .collect();
+        // A concept whose references all fit one chosen concept is absent:
+        // a relationship between two people leaves the household apart.
         assert_eq!(
             names,
             [
                 "GroupMembership",
-                "Relationship",
                 "ConsentRecord",
                 "FunctioningProfile",
                 "SocioEconomicProfile",
@@ -1716,6 +1849,140 @@ mod tests {
         assert_eq!(plan.entities[0].id, "citizen");
         assert_eq!(plan.entities[0].route, "citizenry");
         assert_eq!(plan.entities[0].identifier.id, "national-number");
+    }
+
+    #[test]
+    fn an_identifier_field_the_compiler_keeps_for_itself_is_refused() {
+        for name in ["id", "revision", "created_at", "record-id", "deleted-at"] {
+            let error = refused(&format!(
+                "entities:\n  - concept: Person\n    identifierField: {name}\n"
+            ));
+            assert_eq!(error.code, "init.selection.field_reserved", "{name}");
+            assert_eq!(error.path, "selection.entities[Person].identifierField");
+        }
+        let plan = resolved("entities:\n  - concept: Person\n    identifierField: person-number\n");
+        assert_eq!(plan.entities[0].identifier.id, "person-number");
+    }
+
+    #[test]
+    fn field_identifiers_deriving_one_api_name_are_refused() {
+        let error = refused(
+            "entities:\n  - concept: Person\n    identifierField: given_name\n    properties:\n      - name: given_name\n",
+        );
+        assert_eq!(error.code, "init.selection.field_name_collision");
+        assert_eq!(
+            error.path,
+            "selection.entities[Person].properties[given_name]"
+        );
+        assert!(error.message.contains("givenName"), "{}", error.message);
+        assert!(resolve(
+            &selection(
+                "entities:\n  - concept: Person\n    identifierField: person-number\n    properties:\n      - name: given_name\n",
+            ),
+            model()
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn a_target_on_a_property_that_holds_no_records_is_refused() {
+        let others = "  - concept: Household\n    properties:\n      - name: name\n";
+        for property in ["given_name", "sex"] {
+            let error = refused(&format!(
+                "entities:\n  - concept: Person\n    properties:\n      - name: {property}\n        target: household\n{others}"
+            ));
+            assert_eq!(error.code, "init.selection.property_target", "{property}");
+            assert_eq!(
+                error.path,
+                format!("selection.entities[Person].properties[{property}]")
+            );
+        }
+    }
+
+    #[test]
+    fn an_entity_only_its_own_records_link_is_reported_as_unlinked() {
+        let plan = resolved(
+            "entities:\n  - concept: Location\n    properties:\n      - name: parent_location\n  - concept: School\n    properties:\n      - name: name\n",
+        );
+        assert_eq!(
+            field(&plan, "location", "parent-location").kind,
+            FieldKind::Reference {
+                target: "location".to_owned()
+            }
+        );
+        assert_eq!(plan.unlinked_entities(), ["location", "school"]);
+    }
+
+    #[test]
+    fn a_connector_reaches_two_of_the_selected_concepts() {
+        // Both of the references a registered event carries fit the same one
+        // selected concept, so selecting it would leave the other apart.
+        let chosen = ["Location".to_owned(), "ServicePoint".to_owned()];
+        let names: Vec<String> = connectors(model(), &chosen)
+            .expect("computed")
+            .into_iter()
+            .map(|connector| connector.concept)
+            .collect();
+        assert!(!names.iter().any(|name| name == "Birth"), "{names:?}");
+        // With one concept selected, two references to it connect two of its
+        // records, which is all there is to connect.
+        let alone = ["Location".to_owned()];
+        assert!(connectors(model(), &alone)
+            .expect("computed")
+            .iter()
+            .any(|connector| connector.concept == "Birth"));
+    }
+
+    #[test]
+    fn a_geometry_refuses_coordinates_its_type_does_not_carry() {
+        let plan =
+            resolved("entities:\n  - concept: Location\n    properties:\n      - name: geometry\n");
+        let FieldKind::Structured { schema, .. } = &field(&plan, "location", "geometry").kind
+        else {
+            panic!("geometry is structured");
+        };
+        assert!(accepts(
+            schema,
+            json!({"type": "Point", "coordinates": [12.5, -1.25]})
+        ));
+        assert!(accepts(
+            schema,
+            json!({"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]})
+        ));
+        assert!(!accepts(
+            schema,
+            json!({"type": "Point", "coordinates": []})
+        ));
+        assert!(!accepts(
+            schema,
+            json!({"type": "Point", "coordinates": [[12.5, -1.25]]})
+        ));
+        assert!(!accepts(
+            schema,
+            json!({"type": "Polygon", "coordinates": [[0, 0], [1, 1]]})
+        ));
+        assert!(!accepts(
+            schema,
+            json!({"type": "Circle", "coordinates": [12.5, -1.25]})
+        ));
+    }
+
+    #[test]
+    fn an_inlined_concept_keeps_the_shape_of_its_temporal_values() {
+        let plan = resolved(
+            "entities:\n  - concept: FunctioningProfile\n    properties:\n      - name: respondent\n",
+        );
+        let FieldKind::Structured { schema, .. } =
+            &field(&plan, "functioning-profile", "respondent").kind
+        else {
+            panic!("respondent is structured");
+        };
+        let born = &schema["properties"]["date_of_birth"];
+        assert_eq!(born["type"], "string");
+        assert_eq!(born["maxLength"], TEMPORAL_MAX_LENGTH);
+        assert!(accepts(born, json!("2019-04-01")));
+        assert!(!accepts(born, json!("not-a-date")));
+        assert!(!accepts(born, json!("2019-04-01T09:30:00Z")));
     }
 
     #[test]

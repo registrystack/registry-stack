@@ -353,6 +353,40 @@ mod tests {
     }
 
     #[test]
+    fn a_selection_the_compiler_would_refuse_leaves_no_destination_behind() {
+        // Every name the compiler holds to a rule is checked while the
+        // selection resolves, because the destination is written before the
+        // project is compiled and an existing directory is refused a second
+        // time.
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let root = directory.path().canonicalize().expect("a canonical path");
+        let selections = [
+            "entities:\n  - concept: Person\n    identifierField: created_at\n",
+            "entities:\n  - concept: Person\n    identifierField: given_name\n    properties:\n      - name: given_name\n",
+            "entities:\n  - concept: Person\n    properties:\n      - name: preferred_language\n\
+             vocabularies:\n  - enum: Language\n    mode: inline\n",
+        ];
+        for (index, body) in selections.iter().enumerate() {
+            let path = root.join(format!("selection-{index}.yaml"));
+            std::fs::write(
+                &path,
+                format!(
+                    "apiVersion: {}\nkind: {}\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n{body}",
+                    selection::API_VERSION,
+                    selection::KIND,
+                ),
+            )
+            .expect("written");
+            let destination = root.join(format!("project-{index}"));
+            match run(&destination, ModelName::Publicschema, Source::File(&path)) {
+                Ok(_) => panic!("selection {index} is refused"),
+                Err(failure) => assert_eq!(failure.command, "init"),
+            }
+            assert!(!destination.exists(), "{}", destination.display());
+        }
+    }
+
+    #[test]
     fn the_next_steps_say_what_no_field_links() {
         let document = "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
              kind: ModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\

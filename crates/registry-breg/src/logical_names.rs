@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-pub(crate) fn default_api_name(id: &str) -> String {
+pub fn default_api_name(id: &str) -> String {
     let mut result = String::new();
     let mut upper_next = false;
     for byte in id.bytes() {
@@ -16,7 +16,7 @@ pub(crate) fn default_api_name(id: &str) -> String {
     result
 }
 
-pub(crate) fn default_sql_name(id: &str) -> String {
+pub fn default_sql_name(id: &str) -> String {
     id.replace('-', "_")
 }
 
@@ -30,7 +30,7 @@ pub(crate) fn valid_api_name(value: &str) -> bool {
         && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
-pub(crate) fn reserved_logical_name(value: &str) -> bool {
+pub fn reserved_logical_name(value: &str) -> bool {
     matches!(
         value,
         "id" | "record_id"

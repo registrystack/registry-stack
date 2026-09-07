@@ -31,6 +31,7 @@ registry-platform-httputil.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-breg = { workspace = true, features = ["runtime", "tooling"] }
 registry-linkml.workspace = true
+registry-manifest-core.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
 serde.workspace = true
@@ -45,4 +46,5 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 registry-platform-crypto.workspace = true
