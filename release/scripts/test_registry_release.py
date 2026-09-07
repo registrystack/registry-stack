@@ -2931,7 +2931,6 @@ def write_manifest(
     }
     if version_tuple >= (0, 19, 1):
         catalog_relative_path = "products/identifiers/generated/catalog.v1.json"
-        repository = directory
         repository_result = subprocess.run(
             ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
             check=False,
