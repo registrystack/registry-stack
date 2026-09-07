@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
