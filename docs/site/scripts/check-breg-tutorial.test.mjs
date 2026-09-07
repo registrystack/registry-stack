@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -115,7 +116,8 @@ async function runStopDevSessions({ stateFiles, stub }) {
       `READER_DIR='${readerDir}'`,
       `SHIM_DIR='${shimDir}'`,
       await liftFunction(source, 'stop_dev_sessions'),
-      'stop_dev_sessions',
+      'if stop_dev_sessions; then status=0; else status=$?; fi',
+      'printf "stop_dev_sessions: %d\\n" "$status"',
       '',
     ].join('\n'),
   );
@@ -165,7 +167,8 @@ test('the cleanup leaves a stopped session alone', async () => {
 });
 
 // A session that will not stop is reported rather than hidden: the reader of
-// the gate log has to know a container was left behind.
+// the gate log has to know a container was left behind. It is also reported to
+// the caller, which is what keeps the work root from being deleted.
 test('the cleanup reports a session it could not stop', async () => {
   const { code, output, readerDir } = await runStopDevSessions({
     stateFiles: ['first-breg/tutorial-work/project/.breg/dev/state.json'],
@@ -174,6 +177,53 @@ test('the cleanup reports a session it could not stop', async () => {
   assert.equal(code, 0, output);
   assert.match(output, /could not stop the local development session/u);
   assert.ok(output.includes(join(readerDir, 'first-breg/tutorial-work/project')), output);
+  assert.match(output, /stop_dev_sessions: 1/u);
+});
+
+// Run the outer cleanup over a work root that exists, with the session stop
+// forced to succeed or to fail, and report whether the work root survived.
+async function runCleanup({ sessionsStopped }) {
+  const source = await readFile(gate, 'utf8');
+  const root = await mkdtemp(join(tmpdir(), 'breg-cleanup-test-'));
+  const workRoot = join(root, 'work');
+  await mkdir(join(workRoot, 'reader'), { recursive: true });
+  await writeFile(join(workRoot, 'reader', 'state.json'), '{}\n');
+  const harness = join(root, 'cleanup.sh');
+  await writeFile(
+    harness,
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      `WORK_ROOT='${workRoot}'`,
+      await liftFunction(source, 'cleanup'),
+      `stop_dev_sessions() { return ${sessionsStopped ? 0 : 1}; }`,
+      'cleanup',
+      '',
+    ].join('\n'),
+  );
+  try {
+    const result = await runShell(`bash ${harness}`);
+    return { ...result, workRoot, survived: existsSync(workRoot) };
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test('the cleanup removes the work root once every session is stopped', async () => {
+  const { code, output, survived } = await runCleanup({ sessionsStopped: true });
+  assert.equal(code, 0, output);
+  assert.equal(survived, false, output);
+  assert.match(output, /tutorial gate: PASS/u);
+});
+
+// The state document under the work root is what `bregctl dev stop --remove`
+// reads, so deleting the work root after a failed stop would strand the
+// container and the volume with no way left to reclaim them.
+test('the cleanup keeps the work root when a session could not be stopped', async () => {
+  const { code, output, workRoot, survived } = await runCleanup({ sessionsStopped: false });
+  assert.equal(code, 0, output);
+  assert.equal(survived, true, output);
+  assert.ok(output.includes(workRoot), output);
 });
 
 // Every documented refusal on this page prints its status and exits zero, so a

@@ -249,23 +249,35 @@ SHIM_DIR="$WORK_ROOT/bin"
 # container and volume. A journey that fails halfway leaves `bregctl dev`
 # running with a database container behind it, and deleting the work root
 # alone would orphan that container. Stopping with --remove is idempotent, so
-# a journey that already stopped its own session costs nothing here.
+# a journey that already stopped its own session costs nothing here. Returns
+# non-zero when a session was left behind, which is what keeps its project
+# under the work root for a second attempt.
 stop_dev_sessions() {
-	local state project
+	local state project status=0
 	[[ -d "$READER_DIR" && -x "$SHIM_DIR/bregctl" ]] || return 0
 	while IFS= read -r state; do
 		project="$(dirname "$(dirname "$(dirname "$state")")")"
-		"$SHIM_DIR/bregctl" dev stop "$project" --remove >/dev/null 2>&1 ||
+		if ! "$SHIM_DIR/bregctl" dev stop "$project" --remove >/dev/null 2>&1; then
 			printf 'could not stop the local development session in %s\n' "$project" >&2
+			status=1
+		fi
 	done < <(find "$READER_DIR" -path '*/.breg/dev/state.json' 2>/dev/null)
+	return "$status"
 }
 
 cleanup() {
 	local exit_code=$?
 	set +e
-	stop_dev_sessions
-	chmod -R u+w "$WORK_ROOT" 2>/dev/null
-	rm -rf "$WORK_ROOT"
+	if stop_dev_sessions; then
+		chmod -R u+w "$WORK_ROOT" 2>/dev/null
+		rm -rf "$WORK_ROOT"
+	else
+		# `bregctl dev stop --remove` reads the project's own state document, so
+		# removing the work root now would strand the container and its volume
+		# with nothing left to reclaim them from.
+		printf 'keeping %s: rerun the stop above against each project it holds\n' \
+			"$WORK_ROOT" >&2
+	fi
 	if ((exit_code == 0)); then
 		printf 'Base Registry Engine tutorial gate: PASS\n'
 	else
