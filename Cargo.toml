@@ -44,6 +44,7 @@ members = [
     "crates/registry-bregctl",
     "crates/registry-stack-client",
     "crates/registry-language-server",
+    "crates/registry-linkml",
 ]
 exclude = [
     "products/platform/fuzz",
@@ -78,6 +79,7 @@ registry-evidence-oid4vci = { path = "crates/registry-evidence-oid4vci", version
 registry-evidence-verifier = { path = "crates/registry-evidence-verifier", version = "0.27.0" }
 registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.27.0" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.27.0" }
+registry-linkml = { path = "crates/registry-linkml", version = "0.27.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.27.0" }
 registry-mint = { path = "crates/registry-mint", version = "0.27.0" }
 registry-record = { path = "crates/registry-record", version = "0.27.0" }

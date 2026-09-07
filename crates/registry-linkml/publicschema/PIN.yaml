@@ -1,0 +1,22 @@
+# Written by sync-snapshot.sh; do not edit by hand.
+repository: https://github.com/PublicSchema/publicschema.org
+commit: ca9861a13391aa8c20f8b2a1d4b470a99d01ee7d
+commitDate: 2026-05-19
+version: "0.3.0"
+license: CC-BY-4.0
+files:
+  - schema/publicschema.yaml
+  - schema/assessment.yaml
+  - schema/biometric.yaml
+  - schema/categories.yaml
+  - schema/civil_status.yaml
+  - schema/common.yaml
+  - schema/consent.yaml
+  - schema/core.yaml
+  - schema/credentials.yaml
+  - schema/document.yaml
+  - schema/identity.yaml
+  - schema/misc.yaml
+  - schema/payment.yaml
+  - schema/program.yaml
+  - schema/vocabularies.yaml

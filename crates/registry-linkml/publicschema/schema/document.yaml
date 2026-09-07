@@ -1,0 +1,133 @@
+id: https://publicschema.org/linkml/document
+name: publicschema-document
+title: PublicSchema document domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- vocabularies
+classes:
+  IdentityDocument:
+    class_uri: publicschema:IdentityDocument
+    title: Identity Document
+    description: 'A physical or digital document that asserts one or more identifiers about a party (person,
+      household, or group). Distinct from the identifier itself: the number on a passport is an Identifier;
+      the passport book is an IdentityDocument. Documents have their own lifecycle (issue date, expiry,
+      issuing authority) independent of the identifier value, and the same identifier may appear on successive
+      documents. Distinct from Certificate (a re-issuable extract of a civil-status record under CIEC
+      conventions) and from IdentityCredential (the Verifiable Credential envelope that may attest an
+      IdentityDocument in digital form).
+
+      '
+    slots:
+    - identifiers
+    - document_type
+    - issued_to
+    - issuing_authority
+    - issuing_jurisdiction
+    - issue_date
+    - expiry_date
+    status: bibo:status/forthcoming
+    close_mappings:
+    - https://hl7.org/fhir/R4/documentreference.html
+    - https://www.icao.int/publications/pages/publication.aspx?docnum=9303
+    annotations:
+      label_es: Documento de identidad
+      label_fr: Document d'identité
+      description_es: 'Un documento físico o digital que acredita uno o más identificadores sobre una
+        parte (persona, hogar o grupo). Distinto del identificador en sí: el número del pasaporte es un
+        Identifier; la libreta del pasaporte es un IdentityDocument. Los documentos tienen su propio ciclo
+        de vida (fecha de emisión, expiración, autoridad emisora) independiente del valor del identificador,
+        y el mismo identificador puede aparecer en documentos sucesivos. Distinto de Certificate (un extracto
+        reeditable de un acta de estado civil bajo las convenciones CIEC) y de IdentityCredential (la
+        envoltura de credencial verificable que puede acreditar un IdentityDocument en forma digital).'
+      description_fr: 'Un document physique ou numérique qui atteste d''un ou plusieurs identifiants concernant
+        une partie (personne, ménage ou groupe). Distinct de l''identifiant lui-même: le numéro sur un
+        passeport est un Identifier; le livret du passeport est un IdentityDocument. Les documents ont
+        leur propre cycle de vie (date de délivrance, expiration, autorité émettrice) indépendamment de
+        la valeur de l''identifiant, et le même identifiant peut apparaître sur des documents successifs.
+        Distinct de Certificate (un extrait d''acte d''état civil rééditable selon les conventions CIEC)
+        et d''IdentityCredential (l''enveloppe d''attestation vérifiable qui peut attester un IdentityDocument
+        sous forme numérique).'
+      external_alignments_json: '[{"label": "Machine-Readable Travel Document", "match": "broad", "note":
+        "ICAO 9303 distinguishes the document (passport book) from the number it carries, matching the
+        split between IdentityDocument and Identifier.", "uri": "https://www.icao.int/publications/pages/publication.aspx?docnum=9303",
+        "vocabulary": "ICAO Doc 9303", "vocabulary_id": "icao"}, {"label": "DocumentReference", "match":
+        "broad", "note": "FHIR DocumentReference is a generic clinical document reference; IdentityDocument
+        is narrower and focused on documents that bear party identifiers.", "uri": "https://hl7.org/fhir/R4/documentreference.html",
+        "vocabulary": "FHIR R4", "vocabulary_id": "fhir"}]'
+      convergence_json: '{"notes": "Not modeled as a distinct entity in the mapped systems, which typically
+        embed issue/expiry dates and authority alongside the identifier value. Introduced here to align
+        with Verifiable Credential envelopes and ICAO 9303 document semantics, and to keep Identifier
+        generic for use on non-party entities such as Location.\n", "system_count": 0, "total_systems":
+        6}'
+      bibliography_refs: '["fhir-r4", "icao-doc-9303", "w3c-vc-data-model-2"]'
+slots:
+  document_type:
+    slot_uri: publicschema:document_type
+    title: Document type
+    description: The category of identity document (passport, national ID card, beneficiary card, etc.).
+    range: DocumentType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de documento
+      label_fr: Type de document
+      description_es: La categoría del documento de identidad (pasaporte, tarjeta de identidad nacional,
+        tarjeta de beneficiario, etc.).
+      description_fr: La catégorie du document d'identité (passeport, carte d'identité nationale, carte
+        de bénéficiaire, etc.).
+  issuing_jurisdiction:
+    slot_uri: publicschema:issuing_jurisdiction
+    title: Issuing jurisdiction
+    description: The geographic jurisdiction under which the document or credential was issued, expressed
+      as an ISO 3166-2 subdivision code or ISO 3166-1 country code.
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Jurisdicción emisora
+      label_fr: Juridiction d'émission
+      description_es: La jurisdicción geográfica bajo la cual se emitió el documento o la credencial,
+        expresada como un código de subdivisión ISO 3166-2 o un código de país ISO 3166-1.
+      description_fr: La juridiction géographique sous laquelle le document ou l'attestation a été délivré,
+        exprimée sous forme de code de subdivision ISO 3166-2 ou de code de pays ISO 3166-1.
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["iso-3166-1", "iso-3166-2"]'

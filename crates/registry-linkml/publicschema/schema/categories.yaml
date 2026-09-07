@@ -1,0 +1,234 @@
+id: https://publicschema.org/linkml/categories
+name: publicschema-categories
+title: PublicSchema categories domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+enums:
+  PropertyCategory:
+    enum_uri: publicschema:PropertyCategory
+    title: Property category
+    description: UI taxonomy referenced by property_groups[].category on concept files. Sourced from schema/categories.yaml.
+    permissible_values:
+      administrative:
+        meaning: publicschema:Category/administrative
+        title: Administrative
+        annotations:
+          label_es: Administrativo
+          label_fr: Administratif
+      agriculture:
+        meaning: publicschema:Category/agriculture
+        title: Agriculture
+        annotations:
+          label_es: Agricultura
+          label_fr: Agriculture
+      assets:
+        meaning: publicschema:Category/assets
+        title: Assets
+        annotations:
+          label_es: Activos
+          label_fr: Actifs
+      biometrics:
+        meaning: publicschema:Category/biometrics
+        title: Biometrics
+        annotations:
+          label_es: Biometría
+          label_fr: Biométrie
+      child_functioning:
+        meaning: publicschema:Category/child_functioning
+        title: Child Functioning
+        annotations:
+          label_es: Funcionamiento infantil
+          label_fr: Fonctionnement de l'enfant
+      classification:
+        meaning: publicschema:Category/classification
+        title: Classification
+        annotations:
+          label_es: Clasificación
+          label_fr: Classification
+      consent_evidence:
+        meaning: publicschema:Category/consent_evidence
+        title: Collection evidence
+        annotations:
+          label_es: Prueba de recolección
+          label_fr: Preuve de collecte
+      consent_lifecycle:
+        meaning: publicschema:Category/consent_lifecycle
+        title: Status and withdrawal
+        annotations:
+          label_es: Estado y retiro
+          label_fr: Statut et retrait
+      consent_notice:
+        meaning: publicschema:Category/consent_notice
+        title: Notice
+        annotations:
+          label_es: Aviso
+          label_fr: Information
+      consent_parties:
+        meaning: publicschema:Category/consent_parties
+        title: Parties
+        annotations:
+          label_es: Partes
+          label_fr: Parties
+      consent_processing:
+        meaning: publicschema:Category/consent_processing
+        title: Processing
+        annotations:
+          label_es: Tratamiento
+          label_fr: Traitement
+      consent_retention:
+        meaning: publicschema:Category/consent_retention
+        title: Retention
+        annotations:
+          label_es: Conservación
+          label_fr: Conservation
+      consent_validity:
+        meaning: publicschema:Category/consent_validity
+        title: Validity and jurisdiction
+        annotations:
+          label_es: Validez y jurisdicción
+          label_fr: Validité et juridiction
+      contact:
+        meaning: publicschema:Category/contact
+        title: Contact
+        annotations:
+          label_es: Contacto
+          label_fr: Contact
+      data_governance:
+        meaning: publicschema:Category/data_governance
+        title: Data governance
+        annotations:
+          label_es: Gobernanza de datos
+          label_fr: Gouvernance des données
+      demographics:
+        meaning: publicschema:Category/demographics
+        title: Demographics
+        annotations:
+          label_es: Demografía
+          label_fr: Démographie
+      economic:
+        meaning: publicschema:Category/economic
+        title: Economic
+        annotations:
+          label_es: Económico
+          label_fr: Économique
+      education:
+        meaning: publicschema:Category/education
+        title: Education
+        annotations:
+          label_es: Educación
+          label_fr: Éducation
+      employment:
+        meaning: publicschema:Category/employment
+        title: Employment
+        annotations:
+          label_es: Empleo
+          label_fr: Emploi
+      energy:
+        meaning: publicschema:Category/energy
+        title: Energy
+        annotations:
+          label_es: Energía
+          label_fr: Énergie
+      event:
+        meaning: publicschema:Category/event
+        title: Event
+        annotations:
+          label_es: Evento
+          label_fr: Événement
+      food_security:
+        meaning: publicschema:Category/food_security
+        title: Food Security
+        annotations:
+          label_es: Seguridad alimentaria
+          label_fr: Sécurité alimentaire
+      functioning:
+        meaning: publicschema:Category/functioning
+        title: Functioning
+        annotations:
+          label_es: Funcionamiento
+          label_fr: Fonctionnement
+      governance:
+        meaning: publicschema:Category/governance
+        title: Governance
+        annotations:
+          label_es: Gobernanza
+          label_fr: Gouvernance
+      housing:
+        meaning: publicschema:Category/housing
+        title: Housing
+        annotations:
+          label_es: Vivienda
+          label_fr: Logement
+      ict:
+        meaning: publicschema:Category/ict
+        title: ICT Access
+        annotations:
+          label_es: Acceso a TIC
+          label_fr: Accès aux TIC
+      identity:
+        meaning: publicschema:Category/identity
+        title: Identity
+        annotations:
+          label_es: Identidad
+          label_fr: Identité
+      location:
+        meaning: publicschema:Category/location
+        title: Location
+        annotations:
+          label_es: Ubicación
+          label_fr: Localisation
+      other:
+        meaning: publicschema:Category/other
+        title: Other
+        annotations:
+          label_es: Otro
+          label_fr: Autre
+      vital_event:
+        meaning: publicschema:Category/vital_event
+        title: Vital event
+        annotations:
+          label_es: Evento vital
+          label_fr: Événement d'état civil
+      wash:
+        meaning: publicschema:Category/wash
+        title: Water & Sanitation
+        annotations:
+          label_es: Agua y saneamiento
+          label_fr: Eau et assainissement

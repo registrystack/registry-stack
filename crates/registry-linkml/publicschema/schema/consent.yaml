@@ -1,0 +1,750 @@
+id: https://publicschema.org/linkml/consent
+name: publicschema-consent
+title: PublicSchema consent domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- core
+- identity
+- misc
+- vocabularies
+classes:
+  ConsentRecord:
+    class_uri: publicschema:ConsentRecord
+    title: Consent Record
+    description: 'ConsentRecord documents the lawful basis for processing a data subject''s personal data.
+      Despite the name, consent is only one of six possible legal bases under GDPR Article 6(1); records
+      with legal_basis other than consent still use this concept because the standards (W3C DPV, ISO/IEC
+      TS 27560) converge on the name. Records are produced individually in office workflows and in bulk
+      during community intake sessions; the schema does not distinguish these at v1.
+
+      '
+    slots:
+    - identifier
+    - identifiers
+    - external_id
+    - consent_record_type
+    - schema_version
+    - conforms_to
+    - created_at
+    - collection_session_ref
+    - data_subject
+    - controllers
+    - recipients
+    - recipient_role
+    - allowed_recipient_categories
+    - indicated_by
+    - delegation_type
+    - witnessed_by
+    - purposes
+    - personal_data_categories
+    - processing_operations
+    - legal_basis
+    - special_category_basis
+    - legal_basis_reference
+    - joint_controller_arrangement_ref
+    - notice_ref
+    - notice_version
+    - notice_presentation_language
+    - effective_date
+    - signed_date
+    - expiry_date
+    - jurisdiction
+    - collection_medium
+    - consent_expression
+    - evidence_ref
+    - verified_by
+    - verified_date
+    - status
+    - withdrawal_channel
+    - withdrawal_uri
+    - withdrawal_reason
+    - refusal_reason
+    - storage_duration_days
+    status: bibo:draft
+    exact_mappings:
+    - dpv:ConsentRecord
+    close_mappings:
+    - fhir:StructureDefinition/Consent
+    annotations:
+      label_es: Registro de consentimiento
+      label_fr: Enregistrement de consentement
+      description_es: ConsentRecord documenta la base jurídica del tratamiento de los datos personales
+        de un interesado. A pesar de su nombre, el consentimiento es solo una de las seis bases jurídicas
+        posibles en virtud del artículo 6, apartado 1, del RGPD; los registros cuya base jurídica no es
+        el consentimiento también utilizan este concepto porque las normas (W3C DPV, ISO/IEC TS 27560)
+        convergen en este nombre. Los registros se producen individualmente en los flujos de oficina y
+        en masa durante las sesiones de captación comunitaria; el esquema no distingue ambos casos en
+        v1.
+      description_fr: ConsentRecord documente la base juridique du traitement des données personnelles
+        d'une personne concernée. Malgré son nom, le consentement n'est qu'une des six bases juridiques
+        possibles au titre de l'article 6, paragraphe 1, du RGPD; les enregistrements dont la base juridique
+        n'est pas le consentement utilisent aussi ce concept parce que les normes (W3C DPV, ISO/IEC TS
+        27560) convergent sur ce nom. Les enregistrements sont produits individuellement dans les circuits
+        de bureau et en masse lors des sessions d'enregistrement communautaire; le schéma ne distingue
+        pas ces deux cas en v1.
+      external_alignments_json: '[{"label": "Consent Record", "match": "exact", "note": "W3C Data Privacy
+        Vocabulary 2.0 defines dpv:ConsentRecord as a record of consent and provides predicates (hasDataSubject,
+        hasDataController, hasPurpose, etc.) that align with our properties. Our ConsentRecord is the
+        direct equivalent; ours adds field-workflow fields (signed_date, witnessed_by, collection_medium)
+        that DPV does not name.", "uri": "https://w3id.org/dpv#ConsentRecord", "vocabulary": "W3C DPV
+        v2", "vocabulary_id": "dpv"}, {"label": "Consent", "match": "close", "note": "FHIR R4 Consent
+        is the canonical health-sector consent record. Scope is close but narrower: FHIR Consent is health-centric,
+        single-controller, and does not model receipt-as-record-type. Our ConsentRecord generalises across
+        domains; fields verified_by, verified_date map to FHIR verification, verificationDate.", "uri":
+        "http://hl7.org/fhir/StructureDefinition/Consent", "vocabulary": "FHIR R4", "vocabulary_id": "fhir-r4"},
+        {"label": "Consent", "match": "close", "note": "FHIR R5 revises Consent and introduces the separate
+        Permission resource for controller-side authorization. Mapping is primarily to R5 Consent; our
+        evidence_ref maps to sourceAttachment and verified_by / verified_date map to verification.verifiedWith
+        / verificationDate.", "uri": "http://hl7.org/fhir/StructureDefinition/Consent", "vocabulary":
+        "FHIR R5", "vocabulary_id": "fhir-r5"}]'
+      convergence_json: '{"notes": "Consent record structure converges across OpenSPP (spp.consent.record),
+        OpenIMIS insuree consent records, openCRVS permission tracking, GovStack Consent Building Block,
+        W3C DPV, ISO/IEC TS 27560, and Kantara Consent Receipt v1.1. Variation is mainly in scope (single
+        vs joint controller, digital vs paper workflow, consent-only vs full legal-basis coverage). This
+        concept takes the broader scope; narrower profiles are available via external_equivalents on specific
+        properties.\n", "system_count": 4, "total_systems": 6}'
+      property_groups_json: '[{"category": "administrative", "properties": ["identifier", "identifiers",
+        "external_id", "consent_record_type", "schema_version", "conforms_to", "created_at", "collection_session_ref"]},
+        {"category": "consent_parties", "properties": ["data_subject", "controllers", "recipients", "recipient_role",
+        "allowed_recipient_categories", "indicated_by", "delegation_type", "witnessed_by"]}, {"category":
+        "consent_processing", "properties": ["purposes", "personal_data_categories", "processing_operations",
+        "legal_basis", "special_category_basis", "legal_basis_reference", "joint_controller_arrangement_ref"]},
+        {"category": "consent_notice", "properties": ["notice_ref", "notice_version", "notice_presentation_language"]},
+        {"category": "consent_validity", "properties": ["effective_date", "signed_date", "expiry_date",
+        "jurisdiction"]}, {"category": "consent_evidence", "properties": ["collection_medium", "consent_expression",
+        "evidence_ref", "verified_by", "verified_date"]}, {"category": "consent_lifecycle", "properties":
+        ["status", "withdrawal_channel", "withdrawal_uri", "withdrawal_reason", "refusal_reason"]}, {"category":
+        "consent_retention", "properties": ["storage_duration_days"]}]'
+      bibliography_refs: '["fhir-r4", "govstack-consent", "iso-27560", "kantara-ancr", "kantara-consent-receipt",
+        "w3c-dpv"]'
+slots:
+  allowed_recipient_categories:
+    slot_uri: publicschema:allowed_recipient_categories
+    title: Allowed recipient categories
+    description: Categories of organizations permitted to receive the data, as described to the data subject
+      in the notice. Complements 'recipients', which names specific organizations. Use when specific recipient
+      organizations are not pre-identified at the time of consent.
+    range: OrganizationType
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Categorías de destinatarios permitidos
+      label_fr: Catégories de destinataires autorisées
+      description_es: Categorías de organizaciones autorizadas a recibir los datos, tal como se describen
+        a la persona interesada en el aviso. Complementa 'recipients', que nombra organizaciones específicas.
+        Se usa cuando las organizaciones destinatarias específicas no están preidentificadas en el momento
+        del consentimiento.
+      description_fr: Catégories d'organisations autorisées à recevoir les données, telles que décrites
+        à la personne concernée dans l'avis. Complète 'recipients', qui désigne des organisations spécifiques.
+        À utiliser lorsque les organisations destinataires spécifiques ne sont pas préidentifiées au moment
+        du consentement.
+      category: consent_parties
+      immutable_after_status: given
+  collection_medium:
+    slot_uri: publicschema:collection_medium
+    title: Collection medium
+    description: 'The medium through which consent was collected: paper, electronic, verbal, or mixed.
+      Paper is the dominant medium in humanitarian and rural social-protection programs; electronic systems
+      that ignore paper workflows exclude real practice. Field-critical: populate even if the system defaults
+      to assuming electronic.'
+    range: CollectionMedium
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Medio de recopilación
+      label_fr: Support de collecte
+      description_es: 'El medio a través del cual se recopiló el consentimiento: papel, electrónico, verbal
+        o mixto. El papel es el medio dominante en programas humanitarios y de protección social en zonas
+        rurales; los sistemas electrónicos que ignoran los flujos en papel excluyen la práctica real.
+        Crítico para la recolección: registrar aunque el sistema asuma por defecto el medio electrónico.'
+      description_fr: 'Le support par lequel le consentement a été recueilli: papier, électronique, verbal
+        ou mixte. Le papier est le support dominant dans les programmes humanitaires et de protection
+        sociale en milieu rural; les systèmes électroniques qui ignorent les flux papier excluent la pratique
+        réelle. Critique pour la collecte: à renseigner même si le système suppose par défaut un support
+        électronique.'
+      category: consent_evidence
+      immutable_after_status: given
+  collection_session_ref:
+    slot_uri: publicschema:collection_session_ref
+    title: Collection session reference
+    description: Opaque correlation key for records produced in the same intake session. A 'CollectionSession'
+      concept is planned in ADR-013 and will formalize this; in v1 adopters use a free-form session id
+      (e.g., a field-visit id).
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Referencia de sesión de recopilación
+      label_fr: Référence de session de collecte
+      description_es: Clave de correlación opaca para los registros producidos en la misma sesión de registro.
+        Un concepto 'CollectionSession' está planificado en ADR-013 y lo formalizará; en la versión 1,
+        los adoptantes utilizan un identificador de sesión de forma libre (por ejemplo, un identificador
+        de visita de campo).
+      description_fr: Clé de corrélation opaque pour les enregistrements produits lors de la même session
+        d'enregistrement. Un concept 'CollectionSession' est prévu dans ADR-013 et formalisera cela ;
+        dans la version 1, les adoptants utilisent un identifiant de session libre (par exemple, un identifiant
+        de visite sur le terrain).
+      category: administrative
+  consent_expression:
+    slot_uri: publicschema:consent_expression
+    title: Consent expression
+    description: 'The form in which consent was expressed: explicit opt-in, signed opt-in, witnessed opt-in,
+      biometric opt-in, opt-out, or implied. IMPORTANT cross-reference: opt-in-biometric refers to the
+      capture method (for example, fingerprint as signature), not to the data category. Processing biometric
+      data is expressed via personal_data_categories (a URI from dpv-pd or equivalent).'
+    range: ConsentExpression
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Expresión del consentimiento
+      label_fr: Expression du consentement
+      description_es: 'La forma en que se expresó el consentimiento: opt-in explícito, opt-in firmado,
+        opt-in con testigo, opt-in biométrico, opt-out o implícito. Referencia cruzada importante: opt-in-biometric
+        se refiere al método de captura (por ejemplo, huella dactilar como firma), no a la categoría de
+        datos. El tratamiento de datos biométricos se expresa mediante personal_data_categories (un URI
+        de dpv-pd o equivalente).'
+      description_fr: 'La forme sous laquelle le consentement a été exprimé: opt-in explicite, opt-in
+        signé, opt-in avec témoin, opt-in biométrique, opt-out ou implicite. Référence croisée importante:
+        opt-in-biometric désigne la méthode de capture (par exemple, empreinte digitale comme signature),
+        et non la catégorie de données. Le traitement de données biométriques est exprimé via personal_data_categories
+        (un URI de dpv-pd ou équivalent).'
+      category: consent_evidence
+      immutable_after_status: given
+  consent_record_type:
+    slot_uri: publicschema:consent_record_type
+    title: Consent record type
+    description: Whether this record is an internal storage record or an externally-issued consent receipt.
+      Internal records are the controller's working state; receipts are artefacts delivered to the data
+      subject.
+    range: ConsentRecordType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de registro de consentimiento
+      label_fr: Type d'enregistrement de consentement
+      description_es: Indica si este registro es un registro de almacenamiento interno o un recibo de
+        consentimiento emitido externamente. Los registros internos representan el estado de trabajo del
+        responsable del tratamiento; los recibos son artefactos entregados a la persona interesada.
+      description_fr: Indique si cet enregistrement est un enregistrement de stockage interne ou un reçu
+        de consentement émis de manière externe. Les enregistrements internes constituent l'état de travail
+        du responsable du traitement ; les reçus sont des artefacts remis à la personne concernée.
+      category: administrative
+      bibliography_refs: '["iso-27560", "kantara-consent-receipt"]'
+  data_subject:
+    slot_uri: publicschema:data_subject
+    title: Data subject
+    description: 'The natural person (or occasionally group) whose personal data is being processed under
+      this record. Party is the abstract supertype covering Person and Group. Farm is excluded: farms
+      are not natural persons or legal beneficiaries under any data protection law. When ''data_subject''
+      is a Group, ''delegation_type'' must not be ''self''.'
+    range: Party
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - dpv:hasDataSubject
+    annotations:
+      label_es: Persona interesada
+      label_fr: Personne concernée
+      description_es: 'La persona física (o en ocasiones el grupo) cuyos datos personales se tratan bajo
+        este registro. Party es el supertipo abstracto que abarca Person y Group. Farm está excluido:
+        las explotaciones agrícolas no son personas físicas ni beneficiarias legales bajo ninguna ley
+        de protección de datos. Cuando ''data_subject'' es un Group, ''delegation_type'' no debe ser ''self''.'
+      description_fr: 'La personne physique (ou parfois le groupe) dont les données personnelles sont
+        traitées dans le cadre de cet enregistrement. Party est le supertype abstrait couvrant Person
+        et Group. Farm est exclu : les exploitations agricoles ne sont pas des personnes physiques ni
+        des bénéficiaires légaux au titre d''aucune loi sur la protection des données. Lorsque ''data_subject''
+        est un Group, ''delegation_type'' ne doit pas être ''self''.'
+      category: consent_parties
+      immutable_after_status: given
+      external_alignments_json: '[{"label": "has data subject", "match": "close", "note": "DPV models
+        this as a predicate (hasDataSubject) linking a record to a subject; we model it as a property
+        on ConsentRecord. Semantically equivalent.", "uri": "https://w3id.org/dpv#hasDataSubject", "vocabulary":
+        "DPV v2", "vocabulary_id": "dpv"}]'
+      bibliography_refs: '["iso-27560", "kantara-consent-receipt", "w3c-dpv"]'
+  delegation_type:
+    slot_uri: publicschema:delegation_type
+    title: Delegation type
+    description: 'The basis under which ''indicated_by'' acts on behalf of ''data_subject''. The value
+      ''self'' indicates no delegation: the data subject indicated their own consent. All other values
+      indicate that a third party acted on the data subject''s behalf.'
+    range: DelegationType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de delegación
+      label_fr: Type de délégation
+      description_es: 'La base bajo la cual ''indicated_by'' actúa en nombre de ''data_subject''. El valor
+        ''self'' indica que no hay delegación: la persona interesada indicó su propio consentimiento.
+        Todos los demás valores indican que un tercero actuó en nombre de la persona interesada.'
+      description_fr: 'La base selon laquelle ''indicated_by'' agit au nom de ''data_subject''. La valeur
+        ''self'' indique l''absence de délégation : la personne concernée a indiqué son propre consentement.
+        Toutes les autres valeurs indiquent qu''un tiers a agi au nom de la personne concernée.'
+      category: consent_parties
+  evidence_ref:
+    slot_uri: publicschema:evidence_ref
+    title: Evidence reference
+    description: 'References to the evidence artefact(s) backing this record. Values are typically URIs
+      (for example, a signed object-store URL) but a local identifier is acceptable when a URI is not
+      applicable. Artefact types include: PDF scans of signed paper forms, photographs of consent records,
+      audio recordings of witnessed verbal consent, and signed digital documents. At least one evidence_ref
+      is strongly recommended for collection_medium in {paper, verbal, mixed}. Field-critical: capture
+      even when the artefact URI is only available after upload.'
+    range: string
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Referencia a evidencias
+      label_fr: Référence aux pièces justificatives
+      description_es: 'Referencias a los artefactos de evidencia que respaldan este registro. Los valores
+        son típicamente URIs (por ejemplo, una URL firmada de almacenamiento de objetos), pero un identificador
+        local es aceptable cuando no aplica una URI. Los tipos de artefactos incluyen: escaneos PDF de
+        formularios en papel firmados, fotografías de registros de consentimiento, grabaciones de audio
+        de consentimientos verbales con testigo, y documentos digitales firmados. Se recomienda al menos
+        un evidence_ref cuando collection_medium es {paper, verbal, mixed}. Crítico para la recolección:
+        registrar aunque la URI del artefacto solo esté disponible tras la carga.'
+      description_fr: 'Références aux artefacts de preuve appuyant cet enregistrement. Les valeurs sont
+        généralement des URI (par exemple, une URL signée vers un objet stocké) mais un identifiant local
+        est acceptable si un URI n''est pas applicable. Les types d''artefacts comprennent: scans PDF
+        de formulaires papier signés, photos de registres de consentement, enregistrements audio de consentements
+        verbaux avec témoin, et documents numériques signés. Au moins un evidence_ref est fortement recommandé
+        pour collection_medium dans {papier, verbal, mixte}. Critique pour la collecte: à renseigner même
+        si l''URI de l''artefact n''est disponible qu''après le téléversement.'
+      category: consent_evidence
+      bibliography_refs: '["iso-27560", "kantara-consent-receipt"]'
+  external_id:
+    slot_uri: publicschema:external_id
+    title: External ID
+    description: Identifiers assigned by external systems (CRM, case management, etc.). Multiple allowed
+      because a record may carry identifiers from several systems.
+    range: string
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Identificador externo
+      label_fr: Identifiant externe
+      description_es: Identificadores asignados por sistemas externos (CRM, gestión de casos, etc.). Se
+        permiten múltiples valores porque un registro puede tener identificadores de varios sistemas.
+      description_fr: Identifiants attribués par des systèmes externes (CRM, gestion de cas, etc.). Plusieurs
+        valeurs sont autorisées car un enregistrement peut porter des identifiants provenant de plusieurs
+        systèmes.
+      category: administrative
+  indicated_by:
+    slot_uri: publicschema:indicated_by
+    title: Indicated by
+    description: The agent (usually a Person, sometimes a SoftwareAgent) who indicated the consent act.
+      For self-consent, the same Person as 'data_subject'. For delegated consent, a legal guardian, parent,
+      or representative. See 'delegation_type' to describe the delegation basis.
+    range: Agent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Indicado por
+      label_fr: Indiqué par
+      description_es: El agente (generalmente una Person, a veces un SoftwareAgent) que indicó el acto
+        de consentimiento. Para el consentimiento propio, la misma Person que 'data_subject'. Para el
+        consentimiento delegado, un tutor legal, padre o representante. Véase 'delegation_type' para describir
+        la base de la delegación.
+      description_fr: L'agent (généralement une Person, parfois un SoftwareAgent) qui a indiqué l'acte
+        de consentement. Pour le consentement propre, la même Person que 'data_subject'. Pour le consentement
+        délégué, un tuteur légal, un parent ou un représentant. Voir 'delegation_type' pour décrire la
+        base de la délégation.
+      category: consent_parties
+      bibliography_refs: '["w3c-dpv"]'
+  joint_controller_arrangement_ref:
+    slot_uri: publicschema:joint_controller_arrangement_ref
+    title: Joint controller arrangement
+    description: Reference to the joint-controllership arrangement between the parties listed in `controllers`
+      (GDPR Art 26). Typically a URI to a published arrangement; a local identifier is acceptable if URI
+      is not applicable. Populated when cardinality of `controllers` is greater than one.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Acuerdo de corresponsabilidad
+      label_fr: Accord de responsabilité conjointe
+      description_es: Referencia al acuerdo de corresponsabilidad entre las partes listadas en `controllers`
+        (RGPD Art 26). Típicamente un URI hacia un acuerdo publicado; un identificador local es aceptable
+        si no aplica un URI. Completar cuando la cardinalidad de `controllers` es mayor que uno.
+      description_fr: Référence à l'accord de responsabilité conjointe entre les parties listées dans
+        `controllers` (RGPD Art 26). Généralement un URI vers un accord publié ; un identifiant local
+        est acceptable si un URI n'est pas applicable. À renseigner lorsque la cardinalité de `controllers`
+        est supérieure à un.
+      category: consent_processing
+  legal_basis_reference:
+    slot_uri: publicschema:legal_basis_reference
+    title: Legal basis reference
+    description: 'Jurisdiction-specific legal reference (e.g., a national act, article, or case citation)
+      supporting `legal_basis`. Free-form string; use per-jurisdiction norms. Example: ''Ley 1581 de 2012,
+      Art 6(a)'' in Colombia.'
+    range: string
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Referencia de la base legal
+      label_fr: Référence de la base juridique
+      description_es: 'Referencia legal específica de la jurisdicción (por ejemplo, una ley nacional,
+        artículo o cita jurisprudencial) que sustenta `legal_basis`. Texto libre; usar las normas de la
+        jurisdicción correspondiente. Ejemplo: ''Ley 1581 de 2012, Art 6(a)'' en Colombia.'
+      description_fr: 'Référence juridique propre à une juridiction (par exemple, une loi nationale, un
+        article ou une citation jurisprudentielle) étayant `legal_basis`. Chaîne libre ; utiliser les
+        normes de la juridiction concernée. Exemple : ''Ley 1581 de 2012, Art 6(a)'' en Colombie.'
+      category: consent_processing
+  notice_presentation_language:
+    slot_uri: publicschema:notice_presentation_language
+    title: Notice presentation language
+    description: 'The ISO 639-3 language code in which the notice was presented to the data subject at
+      the time of consent. Field-critical: populate even if the UI does not require it. When the notice
+      is available in multiple languages (see PrivacyNotice `available_languages`), this records which
+      one the data subject actually saw. For witnessed verbal consent, this records the language of the
+      verbal delivery.'
+    range: Language
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Idioma de presentación del aviso
+      label_fr: Langue de présentation de l'avis
+      description_es: 'El código de idioma ISO 639-3 en que el aviso fue presentado a la persona interesada
+        en el momento del consentimiento. Campo crítico: completar incluso si la interfaz no lo exige.
+        Cuando el aviso está disponible en varios idiomas (véase PrivacyNotice `available_languages`),
+        este campo registra cuál vio realmente la persona interesada. Para el consentimiento verbal presenciado,
+        registra el idioma de la entrega verbal.'
+      description_fr: 'Le code de langue ISO 639-3 dans lequel l''avis a été présenté à la personne concernée
+        au moment du consentement. Champ critique : à renseigner même si l''interface ne l''exige pas.
+        Lorsque l''avis est disponible en plusieurs langues (voir PrivacyNotice `available_languages`),
+        ce champ enregistre celle que la personne concernée a effectivement vue. Pour le consentement
+        verbal avec témoin, il enregistre la langue de la délivrance verbale.'
+      category: consent_notice
+  notice_ref:
+    slot_uri: publicschema:notice_ref
+    title: Privacy notice
+    description: The PrivacyNotice record that was presented to the data subject at the time of consent.
+      Anchors the record to a specific notice version.
+    range: PrivacyNotice
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Aviso de privacidad
+      label_fr: Avis de confidentialité
+      description_es: El registro PrivacyNotice que fue presentado a la persona interesada en el momento
+        del consentimiento. Vincula el registro a una versión específica del aviso.
+      description_fr: L'enregistrement PrivacyNotice qui a été présenté à la personne concernée au moment
+        du consentement. Ancre l'enregistrement à une version précise de l'avis.
+      category: consent_notice
+      immutable_after_status: given
+      bibliography_refs: '["iso-27560"]'
+  notice_version:
+    slot_uri: publicschema:notice_version
+    title: Notice version
+    description: 'Denormalized snapshot of the PrivacyNotice `version` at the time of consent. Pinned
+      by design: if the PrivacyNotice is later corrected or reversioned, this value MUST NOT be updated.
+      Enables demonstrating which notice text the data subject actually saw (GDPR Art 7(1) demonstrability).'
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Versión del aviso
+      label_fr: Version de l'avis
+      description_es: 'Instantánea desnormalizada de la `version` del PrivacyNotice en el momento del
+        consentimiento. Fijada por diseño: si el PrivacyNotice es corregido o reversionado posteriormente,
+        este valor NO DEBE actualizarse. Permite demostrar qué texto del aviso vio realmente la persona
+        interesada (RGPD Art 7(1), demostrabilidad).'
+      description_fr: 'Instantané dénormalisé de la valeur `version` du PrivacyNotice au moment du consentement.
+        Épinglé par conception : si le PrivacyNotice est ultérieurement corrigé ou reversionné, cette
+        valeur NE DOIT PAS être mise à jour. Permet de démontrer quel texte de l''avis la personne concernée
+        a effectivement vu (RGPD Art 7(1), démontabilité).'
+      category: consent_notice
+      immutable_after_status: given
+      bibliography_refs: '["iso-27560"]'
+  recipient_role:
+    slot_uri: publicschema:recipient_role
+    title: Recipient role
+    description: 'The role each recipient plays: processor, joint-controller, independent-controller,
+      or sub-processor. Known limitation: v1 uses positional alignment with ''recipients'' (the Nth recipient_role
+      value corresponds to the Nth recipient). A future ADR will reify per-link roles. Adopters that cannot
+      guarantee positional alignment should use only one recipient and one role per record, or represent
+      the relationship externally.'
+    range: RecipientRole
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Rol del destinatario
+      label_fr: Rôle du destinataire
+      description_es: 'El rol que desempeña cada destinatario: encargado del tratamiento, corresponsable
+        del tratamiento, responsable independiente del tratamiento o subencargado del tratamiento. Limitación
+        conocida: la versión 1 usa alineación posicional con ''recipients'' (el N-ésimo valor de recipient_role
+        corresponde al N-ésimo destinatario). Un futuro ADR reificará los roles por enlace. Los adoptantes
+        que no puedan garantizar la alineación posicional deben usar un único destinatario y un único
+        rol por registro, o representar la relación externamente.'
+      description_fr: 'Le rôle joué par chaque destinataire : sous-traitant, responsable conjoint du traitement,
+        responsable indépendant du traitement ou sous-traitant de rang inférieur. Limitation connue :
+        la version 1 utilise un alignement positionnel avec ''recipients'' (la Nième valeur de recipient_role
+        correspond au Nième destinataire). Un futur ADR réifiera les rôles par lien. Les adoptants qui
+        ne peuvent pas garantir l''alignement positionnel devraient utiliser un seul destinataire et un
+        seul rôle par enregistrement, ou représenter la relation de manière externe.'
+      category: consent_parties
+      immutable_after_status: given
+  recipients:
+    slot_uri: publicschema:recipients
+    title: Recipients
+    description: Organizations that receive the data or its derivatives. Includes processors, joint controllers,
+      and independent controllers. See the parallel property 'recipient_role' for the role of each recipient.
+    range: Organization
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - dpv:hasRecipient
+    annotations:
+      label_es: Destinatarios
+      label_fr: Destinataires
+      description_es: Organizaciones que reciben los datos o sus derivados. Incluye encargados del tratamiento,
+        corresponsables del tratamiento y responsables del tratamiento independientes. Véase la propiedad
+        paralela 'recipient_role' para conocer el rol de cada destinatario.
+      description_fr: Organisations qui reçoivent les données ou leurs dérivés. Comprend les sous-traitants,
+        les responsables conjoints du traitement et les responsables indépendants du traitement. Voir
+        la propriété parallèle 'recipient_role' pour le rôle de chaque destinataire.
+      category: consent_parties
+      immutable_after_status: given
+      external_alignments_json: '[{"label": "has recipient", "match": "close", "note": "DPV models this
+        as a predicate (hasRecipient) linking a record to a recipient; we model it as a property on ConsentRecord.
+        Semantically equivalent.", "uri": "https://w3id.org/dpv#hasRecipient", "vocabulary": "DPV v2",
+        "vocabulary_id": "dpv"}]'
+      bibliography_refs: '["w3c-dpv"]'
+  refusal_reason:
+    slot_uri: publicschema:refusal_reason
+    title: Refusal reason
+    description: Free-form reason for refusal when the data subject declined to consent (status = refused).
+      Distinct from withdrawal_reason, which applies after consent was initially given and later withdrawn.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Motivo de rechazo
+      label_fr: Motif de refus
+      description_es: Motivo de rechazo en texto libre cuando la persona afectada declinó consentir (estado
+        = refused). Distinto de withdrawal_reason, que se aplica después de que el consentimiento fue
+        otorgado inicialmente y luego retirado.
+      description_fr: Motif de refus en texte libre lorsque la personne concernée a décliné le consentement
+        (statut = refused). À distinguer de withdrawal_reason, qui s'applique après qu'un consentement
+        a été initialement accordé puis retiré ultérieurement.
+      category: consent_lifecycle
+  signed_date:
+    slot_uri: publicschema:signed_date
+    title: Signed date
+    description: 'The day the data subject indicated consent. For paper workflows, the day the paper form
+      was signed; for witnessed verbal, the day of the verbal indication; for digital, the day of the
+      click-through. MUST NOT be confused with created_at (the digitisation timestamp, which may be days
+      or weeks later in paper-first programs) or effective_date (when the record becomes operative). Field-critical:
+      populate even if the UI only captures created_at.'
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de firma
+      label_fr: Date de signature
+      description_es: 'El día en que la persona afectada indicó su consentimiento. En flujos en papel,
+        el día en que se firmó el formulario; para consentimiento verbal con testigo, el día de la indicación
+        verbal; en digital, el día del clic de aceptación. NO debe confundirse con created_at (la marca
+        de tiempo de digitalización, que puede ser días o semanas posterior en programas con soporte papel)
+        ni con effective_date (cuando el registro se vuelve operativo). Crítico para la recolección: registrar
+        aunque la interfaz solo capture created_at.'
+      description_fr: 'Le jour où la personne concernée a indiqué son consentement. Pour les flux sur
+        support papier, le jour de la signature du formulaire papier; pour le consentement verbal avec
+        témoin, le jour de l''indication verbale; pour le numérique, le jour du clic de validation. NE
+        PAS confondre avec created_at (l''horodatage de numérisation, qui peut intervenir plusieurs jours
+        ou semaines plus tard dans les programmes prioritairement sur papier) ni avec effective_date (la
+        date d''entrée en vigueur de l''enregistrement). Critique pour la collecte: à renseigner même
+        si l''interface ne capture que created_at.'
+      category: consent_validity
+      bibliography_refs: '["iso-27560", "kantara-consent-receipt"]'
+  status:
+    slot_uri: publicschema:status
+    title: Status
+    description: 'The current lifecycle state of the record: requested, given, renewed, refused, withdrawn,
+      revoked, expired, invalidated, or unknown. Transitions follow the state machine documented in docs/consent-lifecycle.md.
+      given triggers the immutability of terms-fields (data_subject, controllers, recipients, purposes,
+      etc.); see the per-property immutable_after_status annotation.'
+    range: ConsentStatus
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - dpv:hasConsentStatus
+    annotations:
+      label_es: Estado
+      label_fr: Statut
+      description_es: 'El estado actual del ciclo de vida del registro: solicitado, otorgado, renovado,
+        rechazado, retirado, revocado, expirado, invalidado o desconocido. Las transiciones siguen la
+        máquina de estados documentada en docs/consent-lifecycle.md. given activa la inmutabilidad de
+        los campos de condiciones (data_subject, controllers, recipients, purposes, etc.); consulte la
+        anotación immutable_after_status en cada propiedad correspondiente.'
+      description_fr: 'L''état actuel du cycle de vie de l''enregistrement: demandé, accordé, renouvelé,
+        refusé, retiré, révoqué, expiré, invalidé ou inconnu. Les transitions suivent la machine d''état
+        documentée dans docs/consent-lifecycle.md. given déclenche l''immutabilité des champs de conditions
+        (data_subject, controllers, recipients, purposes, etc.); voir l''annotation immutable_after_status
+        sur chaque propriété concernée.'
+      category: consent_lifecycle
+      external_alignments_json: '[{"label": "hasConsentStatus", "match": "close", "note": "dpv:hasConsentStatus
+        has range dpv:ConsentStatus; our status field covers the full ConsentRecord lifecycle including
+        non-consent legal bases, which is slightly broader.", "uri": "https://w3id.org/dpv#hasConsentStatus",
+        "vocabulary": "DPV v2", "vocabulary_id": "dpv"}]'
+      bibliography_refs: '["iso-27560", "w3c-dpv"]'
+  verified_by:
+    slot_uri: publicschema:verified_by
+    title: Verified by
+    description: Person who verified the consent record (for example, a case worker reviewing a scanned
+      paper form, or an auditor confirming a sample of records). Distinct from witnessed_by (who observed
+      the consent act) and from indicated_by (who expressed the consent). Optional but valuable for auditable
+      workflows.
+    range: Person
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Verificado por
+      label_fr: Vérifié par
+      description_es: Persona que verificó el registro de consentimiento (por ejemplo, un trabajador social
+        que revisa un formulario en papel escaneado, o un auditor que confirma una muestra de registros).
+        Distinto de witnessed_by (quien observó el acto de consentimiento) y de indicated_by (quien expresó
+        el consentimiento). Opcional pero valioso para flujos de trabajo auditables.
+      description_fr: Personne ayant vérifié l'enregistrement de consentement (par exemple, un travailleur
+        social examinant un formulaire papier numérisé, ou un auditeur confirmant un échantillon d'enregistrements).
+        À distinguer de witnessed_by (qui a observé l'acte de consentement) et de indicated_by (qui a
+        exprimé le consentement). Facultatif mais précieux pour les flux de travail auditables.
+      category: consent_evidence
+  verified_date:
+    slot_uri: publicschema:verified_date
+    title: Verification date
+    description: Date of the verification act performed by verified_by. Typically after signed_date.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de verificación
+      label_fr: Date de vérification
+      description_es: Fecha del acto de verificación realizado por verified_by. Típicamente posterior
+        a signed_date.
+      description_fr: Date de l'acte de vérification effectué par verified_by. Généralement postérieure
+        à signed_date.
+      category: consent_evidence
+  withdrawal_channel:
+    slot_uri: publicschema:withdrawal_channel
+    title: Withdrawal channel
+    description: 'The channel through which the data subject withdrew consent: web, mobile, api, paper,
+      verbal, in-person-office, community-worker, or other. Recorded when status transitions to withdrawn.
+      Field-critical: adopters should record the channel even when the withdrawal arrives through a non-digital
+      path.'
+    range: WithdrawalChannel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Canal de retiro
+      label_fr: Canal de retrait
+      description_es: 'El canal por el que la persona afectada retiró su consentimiento: web, móvil, api,
+        papel, verbal, en-persona-oficina, agente-comunitario u otro. Se registra cuando el estado pasa
+        a withdrawn. Crítico para la recolección: los adoptantes deben registrar el canal incluso cuando
+        el retiro llega por una vía no digital.'
+      description_fr: 'Le canal par lequel la personne concernée a retiré son consentement: web, mobile,
+        api, papier, verbal, en-personne-bureau, agent-communautaire ou autre. À renseigner lorsque le
+        statut passe à withdrawn. Critique pour la collecte: les adoptants doivent enregistrer le canal
+        même lorsque le retrait arrive par une voie non numérique.'
+      category: consent_lifecycle
+  withdrawal_reason:
+    slot_uri: publicschema:withdrawal_reason
+    title: Withdrawal reason
+    description: Free-form reason for withdrawal, if disclosed by the data subject. The data subject is
+      not required to give a reason; this field exists for when they do, for the controller's service-improvement
+      purposes.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Motivo de retiro
+      label_fr: Motif de retrait
+      description_es: Motivo de retiro en texto libre, si la persona afectada lo comunica. La persona
+        afectada no está obligada a dar un motivo; este campo existe para cuando lo hace, con fines de
+        mejora del servicio por parte del responsable del tratamiento.
+      description_fr: Motif de retrait en texte libre, si la personne concernée le communique. La personne
+        concernée n'est pas tenue de donner un motif; ce champ existe pour les cas où elle le fait, à
+        des fins d'amélioration du service par le responsable du traitement.
+      category: consent_lifecycle
+  withdrawal_uri:
+    slot_uri: publicschema:withdrawal_uri
+    title: Withdrawal URI
+    description: URI exposed to the data subject for self-service withdrawal of consent. Required by GDPR
+      Art 7(3) ('it shall be as easy to withdraw as to give consent'). Populated on the ConsentRecord
+      when the controller offers a self-service endpoint.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: URI de retiro
+      label_fr: URI de retrait
+      description_es: URI expuesta a la persona afectada para el retiro autónomo de su consentimiento.
+        Requerida por el Art. 7(3) del RGPD ('debe ser tan fácil retirar el consentimiento como otorgarlo').
+        Se rellena en el ConsentRecord cuando el responsable del tratamiento ofrece un punto de acceso
+        de autoservicio.
+      description_fr: URI exposée à la personne concernée pour le retrait autonome de son consentement.
+        Exigée par l'article 7(3) du RGPD ('il doit être aussi facile de retirer son consentement que
+        de le donner'). À renseigner sur le ConsentRecord lorsque le responsable du traitement propose
+        un point d'accès en libre-service.
+      category: consent_lifecycle
+  witnessed_by:
+    slot_uri: publicschema:witnessed_by
+    title: Witnessed by
+    description: Persons who witnessed the data subject's indication of consent. Field-critical for verbal
+      consent ('collection_medium = verbal') and for biometric-as-signature ('consent_expression = opt-in-biometric')
+      and witnessed signatures ('consent_expression = opt-in-witnessed'); adopters should populate this
+      field even when the data-entry UI does not require it.
+    range: Person
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Atestiguado por
+      label_fr: Témoigné par
+      description_es: Personas que fueron testigos de la indicación de consentimiento de la persona interesada.
+        Crítico en el campo para el consentimiento verbal ('collection_medium = verbal') y para la biometría
+        como firma ('consent_expression = opt-in-biometric') y las firmas presenciadas ('consent_expression
+        = opt-in-witnessed'); los adoptantes deben completar este campo incluso cuando la interfaz de
+        entrada de datos no lo requiera.
+      description_fr: Personnes qui ont été témoins de l'indication du consentement par la personne concernée.
+        Essentiel sur le terrain pour le consentement verbal ('collection_medium = verbal') et pour la
+        biométrie en tant que signature ('consent_expression = opt-in-biometric') et les signatures témoignées
+        ('consent_expression = opt-in-witnessed') ; les adoptants devraient renseigner ce champ même si
+        l'interface de saisie de données ne l'exige pas.
+      category: consent_parties

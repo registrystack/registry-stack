@@ -1,0 +1,1847 @@
+id: https://publicschema.org/linkml/misc
+name: publicschema-misc
+title: PublicSchema misc domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- assessment
+- civil_status
+- common
+- core
+- identity
+- payment
+- program
+- vocabularies
+- external/dhs
+- external/ocha_cod_ab
+- external/openimis
+classes:
+  Farm:
+    class_uri: publicschema:Farm
+    title: Farm
+    description: 'An economic unit of agricultural production under single management, comprising all
+      livestock kept and all land used wholly or partly for agricultural production, without regard to
+      title, legal form, or size. Aligns with the FAO "agricultural holding" (World Census of Agriculture
+      2020). Farm records appear across agricultural registries, land administration, social protection,
+      and climate adaptation programs.
+
+      '
+    is_a: Group
+    slots:
+    - farm_area_hectares
+    - primary_crop
+    - livestock_type
+    - land_tenure
+    - location
+    status: bibo:draft
+    annotations:
+      label_es: Finca
+      label_fr: Exploitation agricole
+      description_es: Una unidad económica de producción agrícola bajo gestión única, que comprende todo
+        el ganado que se posee y toda la tierra utilizada total o parcialmente para la producción agrícola,
+        sin consideración del título, la forma jurídica o el tamaño. Equivale a la "explotación agrícola"
+        de la FAO (Censo Agropecuario Mundial 2020). Los registros de explotaciones agrícolas aparecen
+        en registros agrícolas, administración de tierras, protección social y programas de adaptación
+        climática.
+      description_fr: Une unité économique de production agricole sous gestion unique, comprenant tout
+        le cheptel détenu et toutes les terres utilisées en tout ou en partie à des fins de production
+        agricole, sans tenir compte du titre, de la forme juridique ou de la taille. Équivaut à l'"exploitation
+        agricole" de la FAO (Recensement mondial de l'agriculture 2020). Les données sur les exploitations
+        agricoles apparaissent dans les registres agricoles, l'administration foncière, la protection
+        sociale et les programmes d'adaptation climatique.
+      convergence_json: '{"notes": "Low coverage. Only DHIS2 (workaround) and OpenSPP have farm data models.",
+        "system_count": 2, "total_systems": 6}'
+      bibliography_refs: '["fao-vggt", "fao-wca-2020-vol1", "lsms-isa"]'
+  GroupMembership:
+    class_uri: publicschema:GroupMembership
+    title: Group Membership
+    description: 'The link between a Person and a Group, carrying the role the person plays within that
+      group membership (such as head, spouse, child, owner, operator, or worker). Applicable role values
+      depend on the kind of group. This link allows a person to belong to multiple groups at the same
+      time.
+
+      '
+    slots:
+    - person
+    - group
+    - role
+    - start_date
+    - end_date
+    - is_active
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/Member
+    annotations:
+      label_es: Membresía de grupo
+      label_fr: Appartenance à un groupe
+      description_es: El vínculo entre una persona y un grupo, que indica el rol que la persona desempeña
+        dentro de esa membresía de grupo (como jefe, cónyuge, hijo, propietario, operador o trabajador).
+        Los valores de rol aplicables dependen del tipo de grupo. Este vínculo permite que una persona
+        pertenezca a varios grupos al mismo tiempo.
+      description_fr: Le lien entre une personne et un groupe, indiquant le rôle que la personne joue
+        dans cette appartenance au groupe (tel que chef, conjoint, enfant, propriétaire, exploitant ou
+        travailleur). Les valeurs de rôle applicables dépendent du type de groupe. Ce lien permet à une
+        personne d'appartenir à plusieurs groupes simultanément.
+      external_alignments_json: '[{"label": "Member", "match": "broad", "note": "DCI Member conflates
+        group membership with an extended person profile (demographics, disability, employment); PublicSchema
+        separates the join (GroupMembership) from the person record (Person)", "uri": "https://schema.spdci.org/core/v1/data/Member",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 5, "total_systems": 6}'
+      bibliography_refs: '["spdci-common-standards", "un-census-rev3"]'
+  HazardEvent:
+    class_uri: publicschema:HazardEvent
+    title: Hazard Event
+    description: 'An event or condition that may disrupt the delivery of public services or affect the
+      well-being of a population. Covers natural hazards (floods, droughts, earthquakes), health emergencies,
+      conflict, and economic shocks. Aligned with the Sendai Framework''s broad definition of hazard,
+      and mappable to OASIS CAP v1.2 for alert interoperability.
+
+      '
+    is_a: Event
+    slots:
+    - hazard_type
+    - severity
+    - certainty
+    - description
+    - start_date
+    - end_date
+    - affected_locations
+    - affected_programs
+    - data_sources
+    status: bibo:draft
+    annotations:
+      label_es: Evento de peligro
+      label_fr: Événement dangereux
+      description_es: Un evento o condición que puede interrumpir la prestación de servicios públicos
+        o afectar el bienestar de una población. Cubre riesgos naturales (inundaciones, sequías, terremotos),
+        emergencias sanitarias, conflictos y choques económicos. Alineado con la definición amplia del
+        Marco de Sendai y compatible con OASIS CAP v1.2 para la interoperabilidad de alertas.
+      description_fr: Un événement ou une condition pouvant perturber la prestation de services publics
+        ou affecter le bien-être d'une population. Couvre les risques naturels (inondations, sécheresses,
+        tremblements de terre), les urgences sanitaires, les conflits et les chocs économiques. Conforme
+        à la définition élargie du Cadre de Sendai et compatible avec OASIS CAP v1.2 pour l'interopérabilité
+        des alertes.
+      bibliography_refs: '["oasis-cap-v1-2", "rfc-7946"]'
+  InKindDelivery:
+    class_uri: publicschema:InKindDelivery
+    title: In-Kind Delivery
+    description: 'A record of a direct physical distribution of goods or services from a program to a
+      beneficiary, with no financial instrument involved. Covers food distribution, supply kits, agricultural
+      inputs, school feeding, and direct service provision. Multiple in-kind deliveries may fulfill a
+      single entitlement.
+
+      '
+    is_a: Event
+    slots:
+    - entitlement_ref
+    - enrollment_ref
+    - recipient
+    - items
+    - delivery_date
+    - delivery_location
+    - delivery_status
+    status: bibo:draft
+    annotations:
+      label_es: Prestación en especie
+      label_fr: Prestation en nature
+      description_es: Un registro de una distribución física directa de bienes o servicios de un programa
+        a un beneficiario, sin instrumento financiero involucrado. Cubre la distribución de alimentos,
+        kits de suministros, insumos agrícolas, alimentación escolar y prestación directa de servicios.
+        Varias entregas en especie pueden cumplir un solo derecho.
+      description_fr: Un enregistrement d'une distribution physique directe de biens ou de services d'un
+        programme vers un bénéficiaire, sans recours à un instrument financier. Couvre la distribution
+        alimentaire, les kits de fournitures, les intrants agricoles, l'alimentation scolaire et la prestation
+        directe de services. Plusieurs livraisons en nature peuvent s'acquitter d'un seul droit.
+      convergence_json: '{"notes": "No direct analog in the six mapped SP systems. In-kind distribution
+        tracking is common in humanitarian programs (WFP General Food Distribution, UNICEF supply programs)
+        but these are not among the currently mapped targets.\n", "system_count": 0, "total_systems":
+        6}'
+  Instrument:
+    class_uri: publicschema:Instrument
+    title: Instrument
+    description: 'A defined tool used to collect information about a subject: a survey form, questionnaire,
+      screening protocol, or measurement procedure. Instruments are the catalog entries that Profile records
+      reference to declare which tool was administered. Examples include the Washington Group Short Set
+      on Functioning (WG-SS), the UNICEF Child Functioning Module (CFM 2-4, CFM 5-17), a proxy means test
+      questionnaire, the SMART anthropometry protocol, and a national social registry registration form.
+      Instrument entries are persistent registry records, not administration events; a single instrument
+      is typically administered many times.
+
+      '
+    slots:
+    - name
+    - version
+    - publisher
+    - publication_url
+    - item_set
+    - language_of_administration
+    status: bibo:draft
+    close_mappings:
+    - fhir:Questionnaire
+    annotations:
+      label_es: Instrumento
+      label_fr: Instrument
+      description_es: 'Una herramienta definida utilizada para recopilar información sobre un sujeto:
+        formulario de encuesta, cuestionario, protocolo de detección o procedimiento de medición. Los
+        instrumentos son las entradas de registro que los registros Profile referencian para declarar
+        qué herramienta se administró. Los ejemplos incluyen el conjunto corto del Washington Group sobre
+        funcionamiento (WG-SS), el Módulo de Funcionamiento Infantil de UNICEF (CFM 2-4, CFM 5-17), un
+        cuestionario de prueba proxy de medios de vida, el protocolo de antropometría SMART y un formulario
+        nacional de registro al registro social. Las entradas de instrumento son registros persistentes,
+        no eventos de administración; un mismo instrumento se administra generalmente muchas veces.'
+      description_fr: 'Un outil défini utilisé pour collecter des informations sur un sujet : formulaire
+        d''enquête, questionnaire, protocole de dépistage ou procédure de mesure. Les instruments sont
+        les entrées de registre que les enregistrements Profile référencent pour déclarer quel outil a
+        été administré. Les exemples incluent l''ensemble court du Washington Group sur le fonctionnement
+        (WG-SS), le Module de fonctionnement de l''enfant de l''UNICEF (CFM 2-4, CFM 5-17), un questionnaire
+        de test de substitution des ressources, le protocole d''anthropométrie SMART et un formulaire
+        national d''enregistrement au registre social. Les entrées d''instrument sont des enregistrements
+        de registre persistants, pas des événements d''administration ; un même instrument est généralement
+        administré de nombreuses fois.'
+      external_alignments_json: '[{"label": "Questionnaire", "match": "close", "note": "FHIR Questionnaire
+        is the canonical peer for a data-collection instrument; our Instrument also covers measurement
+        protocols and screening forms beyond survey questionnaires", "uri": "http://hl7.org/fhir/Questionnaire",
+        "vocabulary": "FHIR R4", "vocabulary_id": "fhir"}]'
+      convergence_json: '{"notes": "Only FHIR carries a first-class instrument registry (Questionnaire).
+        DHIS2, OpenCRVS, OpenSPP, openIMIS, and DCI Core do not catalog instruments. In practice, standards
+        bodies publish the instruments themselves (Washington Group, UNICEF MICS, WHO, SMART), and adopters
+        reference them by name and version. This concept gives those references a citable home so Profile
+        records can declare exactly which tool and version produced them.\n", "system_count": 1, "total_systems":
+        6}'
+      bibliography_refs: '["fhir-r4"]'
+  Location:
+    class_uri: publicschema:Location
+    title: Location
+    description: 'A named geographic or administrative area, such as a region, district, commune, or village.
+      Location captures where a household or event is situated within an administrative hierarchy, distinct
+      from a street address.
+
+      '
+    slots:
+    - location_name
+    - latitude
+    - longitude
+    - geometry
+    - administrative_level
+    - level_name
+    - parent_location
+    - geocodes
+    status: bibo:status/published
+    close_mappings:
+    - cpov:AdminUnit
+    - dci:data/Place
+    - dct:Location
+    annotations:
+      label_es: Ubicación
+      label_fr: Localisation
+      description_es: Un área geográfica o administrativa con nombre, como una región, distrito, municipio
+        o aldea. La ubicación indica dónde se sitúa un hogar o evento dentro de una jerarquía administrativa,
+        distinta de una dirección postal.
+      description_fr: Une zone géographique ou administrative nommée, telle qu'une région, un district,
+        une commune ou un village. La localisation précise où se situe un ménage ou un événement dans
+        une hiérarchie administrative, distincte d'une adresse postale.
+      featured: true
+      external_alignments_json: '[{"label": "Location", "match": "close", "note": "SEMIC dc:Location is
+        a generic spatial thing; ours is a hierarchical administrative node with level and parent", "uri":
+        "http://purl.org/dc/terms/Location", "vocabulary": "Core Location", "vocabulary_id": "semic"},
+        {"label": "Administrative Unit", "match": "broad", "note": "SEMIC AdminUnit is strictly an administrative
+        hierarchy node; ours also covers non-administrative boundaries like flood zones and program coverage
+        areas", "uri": "http://data.europa.eu/m8g/AdminUnit", "vocabulary": "Core Location", "vocabulary_id":
+        "semic-adminunit"}, {"label": "Place", "match": "close", "note": "Both are hierarchical named
+        locations with coordinates; DCI uses contained_in_place/contains_place for hierarchy while PublicSchema
+        uses parent_location and administrative_level", "uri": "https://schema.spdci.org/core/v1/data/Place",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 6, "total_systems": 6}'
+      property_groups_json: '[{"category": "location", "properties": ["location_name", "latitude", "longitude",
+        "geometry"]}, {"category": "administrative", "properties": ["administrative_level", "level_name",
+        "parent_location", "geocodes"]}]'
+      bibliography_refs: '["hdx-p-codes", "rfc-7946", "schema-org", "semic-core-location", "spdci-common-standards"]'
+  PaymentEvent:
+    class_uri: publicschema:PaymentEvent
+    title: Payment Event
+    description: 'A record of a direct monetary transfer from a program to a beneficiary. Covers bank
+      transfer, mobile money, cash, agent network, and prepaid card channels. Multiple payment events
+      may fulfill a single entitlement (e.g., split payments, multi-tranche disbursements, or retries
+      after failure).
+
+      '
+    is_a: Event
+    slots:
+    - entitlement_ref
+    - enrollment_ref
+    - recipient
+    - payment_amount
+    - payment_currency
+    - payment_date
+    - payment_status
+    - delivery_channel
+    - failure_reason
+    - is_reconciled
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Evento de pago
+      label_fr: Événement de paiement
+      description_es: Un registro de una transferencia monetaria directa de un programa a un beneficiario.
+        Cubre los canales de transferencia bancaria, dinero móvil, efectivo, red de agentes y tarjeta
+        prepaga. Varios eventos de pago pueden cumplir un solo derecho (por ej., pagos fraccionados, desembolsos
+        en múltiples cuotas o reintentos tras un error).
+      description_fr: 'Un enregistrement d''un transfert monétaire direct d''un programme vers un bénéficiaire.
+        Couvre les canaux suivants : virement bancaire, argent mobile, espèces, réseau d''agents et carte
+        prépayée. Plusieurs événements de paiement peuvent honorer un seul droit (par ex., paiements fractionnés,
+        versements à tranches multiples ou nouvelles tentatives après échec).'
+      featured: true
+      external_alignments_json: '[{"label": "N/A", "match": "none", "note": "DCI does not define a standalone
+        payment event entity. Payment data is tracked as properties on Beneficiary (disbursement history).",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 6, "total_systems": 6}'
+      bibliography_refs: '["govstack-payments", "gsma-mobile-money", "mojaloop-fspiop", "wb-sp-delivery-framework"]'
+  PrivacyNotice:
+    class_uri: publicschema:PrivacyNotice
+    title: Privacy Notice
+    description: 'PrivacyNotice is the artefact presented to a data subject describing which personal
+      data will be processed, by whom, for what purposes, under which legal basis, and with what rights.
+      It bounds the scope of each ConsentRecord anchored to it: a record''s processing scope must fall
+      within the notice''s declared scope, or the notice must be updated and re-consent obtained. Notice
+      versioning is deliberate; a substantive change (new purposes, new recipients, new data categories)
+      triggers re-consent, while editorial changes (typos, translation fixes, contact refresh) do not.
+
+      '
+    slots:
+    - identifier
+    - identifiers
+    - name
+    - version
+    - schema_version
+    - conforms_to
+    - created_at
+    - supersedes_ref
+    - controllers
+    - dpo_contact
+    - complaint_authority_contact
+    - purposes
+    - personal_data_categories
+    - processing_operations
+    - legal_basis
+    - special_category_basis
+    - recipient_categories
+    - recipients_described
+    - available_languages
+    - transfer_description
+    - automated_decision_description
+    - rights_description
+    - source_of_data
+    - withdrawal_description
+    - retention_description
+    - storage_duration_days
+    - effective_date
+    - expiry_date
+    - jurisdiction
+    status: bibo:draft
+    exact_mappings:
+    - dpv:PrivacyNotice
+    close_mappings:
+    - dpv:ConsentNotice
+    annotations:
+      label_es: Aviso de privacidad
+      label_fr: Notice d'information
+      description_es: 'PrivacyNotice es el artefacto presentado al interesado que describe qué datos personales
+        se tratarán, por quién, con qué fines, bajo qué base jurídica y con qué derechos. Delimita el
+        alcance de cada ConsentRecord que lo referencia: el alcance de tratamiento de un registro debe
+        permanecer dentro del declarado por el aviso; de lo contrario, el aviso debe actualizarse y obtenerse
+        un nuevo consentimiento. El versionado del aviso es deliberado; un cambio sustantivo (nuevas finalidades,
+        nuevos destinatarios, nuevas categorías de datos) desencadena un nuevo consentimiento, mientras
+        que un cambio editorial (correcciones, traducciones, datos de contacto) no lo hace.'
+      description_fr: 'PrivacyNotice est l''artefact présenté à une personne concernée décrivant quelles
+        données personnelles seront traitées, par qui, à quelles fins, sur quelle base juridique et avec
+        quels droits. Elle délimite le périmètre de chaque ConsentRecord qui y est rattaché: le périmètre
+        de traitement d''un enregistrement doit rester dans celui déclaré par l''avis, sinon l''avis doit
+        être mis à jour et un nouveau consentement recueilli. Le versionnage de l''avis est délibéré;
+        un changement substantiel (nouvelles finalités, nouveaux destinataires, nouvelles catégories de
+        données) déclenche un nouveau consentement, alors qu''un changement rédactionnel (corrections,
+        traductions, coordonnées) ne le déclenche pas.'
+      external_alignments_json: '[{"label": "Privacy Notice", "match": "exact", "note": "W3C DPV 2.0 defines
+        dpv:PrivacyNotice as a notice of privacy practices. When legal_basis includes consent, the notice
+        is also a dpv:ConsentNotice (same class, narrower role).", "uri": "https://w3id.org/dpv#PrivacyNotice",
+        "vocabulary": "W3C DPV v2", "vocabulary_id": "dpv"}, {"label": "Consent Notice", "match": "related",
+        "note": "dpv:ConsentNotice is the consent-focused specialisation of dpv:PrivacyNotice. Our PrivacyNotice
+        is the supertype; records with legal_basis = consent are anchored against notices that also satisfy
+        the ConsentNotice specialisation.", "uri": "https://w3id.org/dpv#ConsentNotice", "vocabulary":
+        "W3C DPV v2", "vocabulary_id": "dpv-consent-notice"}]'
+      convergence_json: '{"notes": "PrivacyNotice as a first-class artefact is less widespread than ConsentRecord.
+        ISO/IEC 29184 specifies notice structure; W3C DPV models it as dpv:PrivacyNotice. Most delivery
+        systems handle notice text as prose in program documentation rather than as a structured record.
+        This concept exists so adopters can version notices alongside records, trace re-consent triggers,
+        and generate jurisdiction-aware notice text from structured inputs.\n", "system_count": 2, "total_systems":
+        6}'
+      property_groups_json: '[{"category": "administrative", "properties": ["identifier", "identifiers",
+        "name", "version", "schema_version", "conforms_to", "created_at"]}, {"category": "consent_parties",
+        "properties": ["controllers", "dpo_contact", "complaint_authority_contact", "recipient_categories",
+        "recipients_described"]}, {"category": "consent_processing", "properties": ["purposes", "personal_data_categories",
+        "processing_operations", "legal_basis", "special_category_basis"]}, {"category": "consent_notice",
+        "properties": ["supersedes_ref", "available_languages", "transfer_description", "automated_decision_description",
+        "rights_description", "source_of_data"]}, {"category": "consent_validity", "properties": ["effective_date",
+        "expiry_date", "jurisdiction"]}, {"category": "consent_lifecycle", "properties": ["withdrawal_description"]},
+        {"category": "consent_retention", "properties": ["retention_description", "storage_duration_days"]}]'
+      bibliography_refs: '["iso-29184", "kantara-ancr", "w3c-dpv"]'
+  ScoringEvent:
+    class_uri: publicschema:ScoringEvent
+    title: Scoring Event
+    description: 'A discrete event in which a scoring rule is applied to inputs about a subject to produce
+      a score or a band. Inputs may be one or more Profile records (a functioning profile scored against
+      a Washington Group cutoff, an anthropometric profile scored against WHO thresholds, a socio-economic
+      profile scored with a PMT formula) or inline data packaged for the scoring run. A scoring event
+      is distinct from the instrument administration that produced its inputs: scoring can be re-done
+      against a different rule without collecting new data.
+
+      '
+    is_a: Event
+    slots:
+    - subject
+    - rule_applied
+    - evaluation_date
+    - evaluator
+    - software_used
+    - inputs
+    - raw_score
+    - assessment_band
+    status: bibo:draft
+    annotations:
+      label_es: Evento de puntuación
+      label_fr: Événement de notation
+      description_es: 'Un evento discreto en el que se aplica una regla de puntuación a datos de entrada
+        sobre un sujeto para producir una puntuación o banda. Las entradas pueden ser uno o más registros
+        Profile (un perfil de funcionamiento puntuado con un corte del Washington Group, un perfil antropométrico
+        puntuado con los umbrales de la OMS, un perfil socioeconómico puntuado con una fórmula PMT) o
+        datos en línea preparados para la ejecución de la puntuación. Un evento de puntuación es distinto
+        de la administración del instrumento que produjo sus entradas: la puntuación puede rehacerse con
+        una regla diferente sin recolectar nuevos datos.'
+      description_fr: 'Un événement discret au cours duquel une règle de notation est appliquée à des
+        données d''entrée concernant un sujet pour produire un score ou une bande. Les entrées peuvent
+        être un ou plusieurs enregistrements Profile (un profil de fonctionnement scoré selon un seuil
+        du Washington Group, un profil anthropométrique scoré selon les seuils de l''OMS, un profil socio-économique
+        scoré par une formule PMT) ou des données en ligne préparées pour l''exécution de la notation.
+        Un événement de notation est distinct de l''administration d''instrument qui a produit ses entrées
+        : la notation peut être refaite selon une règle différente sans recollecter de données.'
+      convergence_json: '{"notes": "Three of six v1 systems represent a scoring run as a first-class record:
+        OpenSPP (proxy means test evaluation), DCI IBR (assessment event linked to a framework), and FHIR
+        (RiskAssessment). DHIS2, OpenCRVS, and openIMIS do not carry a distinct scoring event in core
+        and rely on computed fields on the subject record. Separating the scoring event from the instrument
+        administration lets a single Profile be re-scored against different rules without new data collection.\n",
+        "system_count": 3, "total_systems": 6}'
+      bibliography_refs: '["barca-2017-integrating-data", "barca-2021-inclusive-information-systems",
+        "dhs-recode7"]'
+  ScoringRule:
+    class_uri: publicschema:ScoringRule
+    title: Scoring Rule
+    description: 'A persistent set of rules, formulas, or cutoffs used to turn input data into a score
+      or a band. Scoring rules include proxy means test (PMT) formulas, the Progress out of Poverty Index
+      (PPI), multidimensional poverty indices, Washington Group disability cutoffs (cutoff 3, cutoff 4,
+      domain-specific), and WHO anthropometric band thresholds. Scoring rules are registry entries: they
+      exist independently of any particular administration and can be applied to data collected through
+      different instruments.
+
+      '
+    slots:
+    - name
+    - scoring_method
+    - data_sources
+    - cutoff_score
+    - publication_url
+    status: bibo:draft
+    close_mappings:
+    - cpov:ReferenceFramework
+    annotations:
+      label_es: Regla de puntuación
+      label_fr: Règle de notation
+      description_es: 'Un conjunto persistente de reglas, fórmulas o cortes utilizados para transformar
+        datos de entrada en una puntuación o banda. Las reglas de puntuación incluyen las fórmulas de
+        prueba proxy de medios de vida (PMT), el Índice de Progreso fuera de la Pobreza (PPI), los índices
+        de pobreza multidimensional, los cortes de discapacidad del Washington Group (corte 3, corte 4,
+        específicos por dominio) y los umbrales de bandas antropométricas de la OMS. Las reglas de puntuación
+        son entradas de registro: existen con independencia de cualquier administración particular y pueden
+        aplicarse a datos recolectados mediante distintos instrumentos.'
+      description_fr: 'Un ensemble persistant de règles, formules ou seuils utilisés pour transformer
+        des données d''entrée en un score ou une bande. Les règles de notation incluent les formules de
+        test de substitution des ressources (PMT), l''indice de progression hors de la pauvreté (PPI),
+        les indices de pauvreté multidimensionnelle, les seuils d''incapacité du Washington Group (seuil
+        3, seuil 4, spécifique à un domaine) et les seuils des bandes anthropométriques de l''OMS. Les
+        règles de notation sont des entrées de registre : elles existent indépendamment de toute administration
+        particulière et peuvent être appliquées à des données collectées via différents instruments.'
+      external_alignments_json: '[{"label": "Reference Framework", "match": "close", "note": "SEMIC ReferenceFramework
+        is legislation or policy from which requirements derive; ours is narrower: a scoring methodology
+        (PMT, WG cutoff, growth-standard thresholds)", "uri": "http://data.europa.eu/m8g/ReferenceFramework",
+        "vocabulary": "CCCEV", "vocabulary_id": "semic"}]'
+      convergence_json: '{"notes": "Four of six v1 systems (DHIS2, FHIR via RiskAssessment reference frameworks,
+        OpenSPP, DCI IBR) carry a concept that plays the ScoringRule role: a persistent methodology definition
+        referenced by per-subject scoring runs. OpenCRVS and openIMIS do not model scoring rules directly,
+        relying on out-of-band documentation. SEMIC CCCEV ReferenceFramework is the broader upstream peer
+        covering any policy or legislation from which requirements derive; our ScoringRule is the narrower
+        subset used for scoring.\n", "system_count": 4, "total_systems": 6}'
+      bibliography_refs: '["barca-2017-integrating-data", "semic-cccev"]'
+  SoftwareAgent:
+    class_uri: publicschema:SoftwareAgent
+    title: Software Agent
+    description: 'A software product or system that performed a step in a delivery process, such as a
+      scoring engine that computed a proxy means test score or a rule engine that evaluated eligibility.
+      SoftwareAgent records the identity and version of the software so that a result can be reproduced
+      or audited later. SoftwareAgent is a subtype of Agent, alongside Person and Organization. It is
+      distinct from the Person or Organization accountable for the action (recorded in properties such
+      as performed_by or evaluator) and from an Instrument (the questionnaire or measurement tool administered
+      to a subject).
+
+      '
+    is_a: Agent
+    slots:
+    - name
+    - version
+    - publisher
+    - publication_url
+    status: bibo:draft
+    exact_mappings:
+    - prov:SoftwareAgent
+    close_mappings:
+    - foaf:Agent
+    annotations:
+      label_es: Agente de software
+      label_fr: Agent logiciel
+      description_es: Un producto o sistema de software que realizó un paso en un proceso de prestación,
+        por ejemplo un motor de puntuación que calculó una puntuación de prueba proxy de medios de vida
+        o un motor de reglas que evaluó la elegibilidad. SoftwareAgent registra la identidad y la versión
+        del software para que un resultado pueda reproducirse o auditarse posteriormente. SoftwareAgent
+        es un subtipo de Agent, junto con Person y Organization. Es distinto de la Person u Organization
+        responsable de la acción (registrada en propiedades como performed_by o evaluator) y de un Instrument
+        (el cuestionario o la herramienta de medición administrada a un sujeto).
+      description_fr: Un produit ou système logiciel ayant effectué une étape dans un processus de prestation,
+        par exemple un moteur de notation qui a calculé un score de test de substitution des ressources
+        ou un moteur de règles qui a évalué l'admissibilité. SoftwareAgent enregistre l'identité et la
+        version du logiciel afin qu'un résultat puisse être reproduit ou audité ultérieurement. SoftwareAgent
+        est un sous-type d'Agent, au même titre que Person et Organization. Il est distinct de la Person
+        ou de l'Organization responsable de l'action (consignée dans des propriétés comme performed_by
+        ou evaluator) et d'un Instrument (le questionnaire ou l'outil de mesure administré à un sujet).
+      external_alignments_json: '[{"label": "SoftwareAgent", "match": "exact", "note": "Direct W3C PROV-O
+        equivalent: a software agent that played a role in an activity. Our SoftwareAgent is scoped to
+        recording the software that acted within a public delivery process.", "uri": "http://www.w3.org/ns/prov#SoftwareAgent",
+        "vocabulary": "PROV-O", "vocabulary_id": "prov"}, {"label": "Agent", "match": "broad", "note":
+        "foaf:Agent is the broad supertype covering persons, organisations, and software. SoftwareAgent
+        is narrower: software specifically. Our Agent concept is the local peer for foaf:Agent and is
+        the shared supertype of Person, Organization, and SoftwareAgent.", "uri": "http://xmlns.com/foaf/0.1/Agent",
+        "vocabulary": "FOAF", "vocabulary_id": "foaf"}]'
+      convergence_json: '{"notes": "No mapped system currently models scoring engines or rule engines
+        as structured entities. Software identity is typically left implicit or stored as a free-text
+        log entry, which makes audit and reproducibility difficult.\n", "system_count": 0, "total_systems":
+        6}'
+      bibliography_refs: '["foaf", "w3c-prov-o"]'
+  VoucherRedemption:
+    class_uri: publicschema:VoucherRedemption
+    title: Voucher Redemption
+    description: 'A record of a single redemption transaction against a voucher. Each VoucherRedemption
+      captures one visit to a vendor or agent where part or all of a voucher''s value or entitled commodities
+      were collected. For single-use vouchers, there is one VoucherRedemption. For incremental redemption
+      (common in WFP value voucher programs), multiple VoucherRedemption records track each visit.
+
+      '
+    is_a: Event
+    slots:
+    - voucher_ref
+    - redemption_date
+    - redeemed_by
+    - redemption_agent
+    - amount
+    - currency
+    - items
+    status: bibo:draft
+    annotations:
+      label_es: Canje de vale
+      label_fr: Échange de bon
+      description_es: Un registro de una transacción de canje única contra un vale. Cada VoucherRedemption
+        captura una visita a un vendedor o agente donde se recogió parte o la totalidad del valor del
+        vale o de los productos a los que da derecho. Para vales de uso único, hay un solo VoucherRedemption.
+        Para el canje incremental (común en los programas de vales de valor del PMA), múltiples registros
+        VoucherRedemption rastrean cada visita.
+      description_fr: Un enregistrement d'une transaction d'échange unique contre un bon. Chaque VoucherRedemption
+        enregistre une visite chez un vendeur ou un agent, lors de laquelle une partie ou la totalité
+        de la valeur du bon ou des produits auxquels il donne droit a été collectée. Pour les bons à usage
+        unique, il y a un seul VoucherRedemption. Pour l'échange incrémental (fréquent dans les programmes
+        de bons de valeur du PAM), plusieurs enregistrements VoucherRedemption suivent chaque visite.
+      convergence_json: '{"notes": "No direct analog in the six mapped SP systems. The GovStack Payments
+        Building Block models voucher redemption as an API operation but not as a standalone entity. WFP
+        SCOPE tracks individual vendor transactions against value vouchers, which is the closest real-world
+        pattern.\n", "system_count": 0, "total_systems": 6}'
+  Voucher:
+    class_uri: publicschema:Voucher
+    title: Voucher
+    description: 'A redeemable instrument issued to a beneficiary as fulfillment of a benefit entitlement.
+      A voucher has a distinct lifecycle: creation, issuance, redemption, expiry, or cancellation. It
+      may be electronic (digital code, SMS, QR) or paper. Multiple vouchers may fulfill a single entitlement,
+      and a voucher''s face value may differ from the entitlement amount.
+
+      '
+    slots:
+    - entitlement_ref
+    - issued_to
+    - redeemable_by
+    - serial_number
+    - amount
+    - currency
+    - voucher_status
+    - voucher_format
+    - issue_date
+    - expiry_date
+    - redemption_date
+    - redeemed_by
+    - redemption_agent
+    - items
+    status: bibo:draft
+    annotations:
+      label_es: Vale
+      label_fr: Bon
+      description_es: 'Un instrumento canjeable emitido a un beneficiario como cumplimiento de un derecho
+        a prestación. Un vale tiene un ciclo de vida distinto: creación, emisión, canje, vencimiento o
+        cancelación. Puede ser electrónico (código digital, SMS, QR) o en papel. Varios vales pueden cumplir
+        un solo derecho, y el valor nominal de un vale puede diferir del monto del derecho.'
+      description_fr: 'Un instrument échangeable délivré à un bénéficiaire en exécution d''un droit à
+        prestation. Un bon a un cycle de vie propre : création, émission, échange, expiration ou annulation.
+        Il peut être électronique (code numérique, SMS, QR) ou papier. Plusieurs bons peuvent honorer
+        un seul droit, et la valeur nominale d''un bon peut différer du montant du droit.'
+      convergence_json: '{"notes": "None of the six currently mapped SP systems model vouchers as standalone
+        entities. GovStack Payments Building Block (a specification, not a mapped system) models vouchers
+        as first-class entities with a full lifecycle API. Voucher-based delivery is common in humanitarian
+        programs (WFP SCOPE, UNICEF RapidPro). Expect gap-heavy SSSOM mappings initially.\n", "system_count":
+        0, "total_systems": 6}'
+      bibliography_refs: '["govstack-payments"]'
+slots:
+  administrative_level:
+    slot_uri: publicschema:administrative_level
+    title: Administrative level
+    description: 'The numeric tier in the administrative hierarchy, following the OCHA COD-AB convention:
+      0 = country, 1 = first subnational (state, province, region), 2 = second subnational (district,
+      county, department), and so on. No fixed maximum depth.'
+    range: integer
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Nivel administrativo
+      label_fr: Niveau administratif
+      description_es: 'El nivel numérico en la jerarquía administrativa, según la convención OCHA COD-AB:
+        0 = país, 1 = primer nivel subnacional (estado, provincia, región), 2 = segundo nivel subnacional
+        (distrito, condado, departamento), y así sucesivamente. Sin profundidad máxima fija.'
+      description_fr: 'Le niveau numérique dans la hiérarchie administrative, selon la convention OCHA
+        COD-AB : 0 = pays, 1 = premier niveau sous-national (État, province, région), 2 = deuxième niveau
+        sous-national (district, comté, département), et ainsi de suite. Pas de profondeur maximale fixe.'
+      convergence_json: '{"notes": "Present in 3 of 6 mapped systems. Follows the OCHA COD-AB convention:
+        0 = country (Admin0), 1 = first subnational (Admin1), and so on. No fixed maximum depth.", "system_count":
+        3, "total_systems": 6}'
+      system_mappings_json: '{"ocha_cod_ab": {"note": "OCHA COD-AB''s documented nomenclature stops at
+        Admin4 (COD-AB datasets have as many as five administrative levels, ADM0 to ADM4). Values of 5
+        or more on this property are still valid PublicSchema depths but have no OCHA-provided AdminN
+        label.", "values": [{"code": "Admin0", "label": "Country", "maps_to": 0}, {"code": "Admin1", "label":
+        "First subnational", "maps_to": 1}, {"code": "Admin2", "label": "Second subnational", "maps_to":
+        2}, {"code": "Admin3", "label": "Third subnational", "maps_to": 3}, {"code": "Admin4", "label":
+        "Fourth subnational", "maps_to": 4}], "vocabulary_name": "COD-AB AdminN"}, "openimis": {"unmapped_canonical":
+        ["0 (country)"], "values": [{"code": "R", "label": "Region", "maps_to": 1}, {"code": "D", "label":
+        "District", "maps_to": 2}, {"code": "W", "label": "Ward", "maps_to": 3}, {"code": "V", "label":
+        "Village", "maps_to": 4}], "vocabulary_name": "LocationType"}}'
+  affected_locations:
+    slot_uri: publicschema:affected_locations
+    title: Affected locations
+    description: The geographic or administrative areas affected by this event.
+    range: Location
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Zonas afectadas
+      label_fr: Zones affectées
+      description_es: Las áreas geográficas o administrativas afectadas por este evento.
+      description_fr: Les zones géographiques ou administratives affectées par cet événement.
+  affected_programs:
+    slot_uri: publicschema:affected_programs
+    title: Affected programs
+    description: Programs whose operations or beneficiaries are affected by this event.
+    range: Program
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Programas afectados
+      label_fr: Programmes affectés
+      description_es: Programas cuyas operaciones o beneficiarios se ven afectados por este evento.
+      description_fr: Les programmes dont les opérations ou les bénéficiaires sont affectés par cet événement.
+  age_at_event:
+    slot_uri: publicschema:age_at_event
+    title: Age at event
+    description: The stated age of the person at the time of the vital event. Used in low-completeness
+      settings where date of birth is unknown and stated age is the only age data available.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Edad en el evento
+      label_fr: Âge à l'événement
+      description_es: La edad declarada de la persona al momento del evento vital. Se utiliza en contextos
+        de registro incompleto donde se desconoce la fecha de nacimiento y la edad declarada es el único
+        dato de edad disponible.
+      description_fr: L'âge déclaré de la personne au moment de l'événement d'état civil. Utilisé dans
+        les contextes de faible complétude où la date de naissance est inconnue et l'âge déclaré est la
+        seule donnée d'âge disponible.
+      category: demographics
+      domain_override: crvs
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v1
+        derives age from birthDate on the Person type. No explicit stated-age field exists for low-completeness
+        settings.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+  assessment_band:
+    slot_uri: publicschema:assessment_band
+    title: Assessment band
+    description: The ordinal or categorical classification result of an assessment, such as a wealth quintile,
+      poverty band, or other grouping defined by the assessment framework.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Banda de evaluación
+      label_fr: Tranche d'évaluation
+      description_es: El resultado de clasificación ordinal o categórica de una evaluación, como un quintil
+        de riqueza, una banda de pobreza u otro agrupamiento definido por el marco de evaluación.
+      description_fr: Le résultat de classification ordinale ou catégorielle d'une évaluation, tel qu'un
+        quintile de richesse, une tranche de pauvreté ou tout autre regroupement défini par le cadre d'évaluation.
+      system_mappings_json: '{"dhs": {"note": "DHS Recode7 hv270. Wealth index quintile classification
+        based on the DHS wealth index factor score (hv271). Quintile boundaries are survey-specific.",
+        "values": [{"code": "1", "label": "Poorest", "maps_to": "1"}, {"code": "2", "label": "Poorer",
+        "maps_to": "2"}, {"code": "3", "label": "Middle", "maps_to": "3"}, {"code": "4", "label": "Richer",
+        "maps_to": "4"}, {"code": "5", "label": "Richest", "maps_to": "5"}], "vocabulary_name": "hv270
+        - Wealth index"}}'
+      bibliography_refs: '["dhs-recode7"]'
+  automated_decision_description:
+    slot_uri: publicschema:automated_decision_description
+    title: Automated decision description
+    description: PrivacyNotice-only. Prose description of any automated decision-making, including profiling,
+      that produces legal effects or similarly significant effects on the data subject (GDPR Art 22).
+      Include the logic involved, the significance, and the envisaged consequences. Empty when no such
+      processing occurs.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Descripción de la decisión automatizada
+      label_fr: Description de la décision automatisée
+      description_es: Solo para PrivacyNotice. Descripción en prosa de cualquier toma de decisiones automatizada,
+        incluida la elaboración de perfiles, que produzca efectos jurídicos o efectos significativos similares
+        sobre la persona interesada (RGPD Art 22). Incluir la lógica empleada, la importancia y las consecuencias
+        previstas. Vacío cuando no ocurre tal tratamiento.
+      description_fr: Réservé au PrivacyNotice. Description en texte libre de toute prise de décision
+        automatisée, y compris le profilage, produisant des effets juridiques ou des effets significatifs
+        similaires sur la personne concernée (RGPD Art 22). Décrire la logique utilisée, la portée et
+        les conséquences envisagées. Vide si aucun tel traitement n'a lieu.
+      category: consent_notice
+      bibliography_refs: '["iso-29184"]'
+  available_languages:
+    slot_uri: publicschema:available_languages
+    title: Available languages
+    description: PrivacyNotice-only. ISO 639-3 codes of all languages in which this notice is available.
+      See `notice_presentation_language` on the ConsentRecord for which one was actually presented to
+      a given data subject.
+    range: Language
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Idiomas disponibles
+      label_fr: Langues disponibles
+      description_es: Solo para PrivacyNotice. Códigos ISO 639-3 de todos los idiomas en que este aviso
+        está disponible. Consulte `notice_presentation_language` en el ConsentRecord para saber cuál fue
+        presentado realmente a una persona interesada concreta.
+      description_fr: Réservé au PrivacyNotice. Codes ISO 639-3 de toutes les langues dans lesquelles
+        cet avis est disponible. Voir `notice_presentation_language` sur le ConsentRecord pour savoir
+        laquelle a été effectivement présentée à une personne concernée donnée.
+      category: consent_notice
+      bibliography_refs: '["iso-29184"]'
+  certainty:
+    slot_uri: publicschema:certainty
+    title: Certainty
+    description: The confidence that the event has occurred or will occur.
+    range: EventCertainty
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Certeza
+      label_fr: Degré de certitude
+      description_es: La confianza de que el evento ha ocurrido o ocurrirá.
+      description_fr: Le degré de certitude que l'événement s'est produit ou se produira.
+      bibliography_refs: '["oasis-cap-v1-2"]'
+  complaint_authority_contact:
+    slot_uri: publicschema:complaint_authority_contact
+    title: Complaint authority contact
+    description: Contact details for the relevant data protection authority where the data subject can
+      lodge a complaint (e.g., in EU jurisdictions, the national DPA). Required by GDPR Arts 13/14 for
+      notices in EU jurisdictions.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Contacto de la autoridad de reclamación
+      label_fr: Contact de l'autorité de réclamation
+      description_es: Datos de contacto de la autoridad de protección de datos competente ante la que
+        la persona interesada puede presentar una reclamación (por ejemplo, en jurisdicciones de la UE,
+        la AEPD nacional). Requerido por los Arts. 13/14 del RGPD para avisos en jurisdicciones de la
+        UE.
+      description_fr: Coordonnées de l'autorité de protection des données compétente auprès de laquelle
+        la personne concernée peut déposer une réclamation (par exemple, dans les juridictions de l'UE,
+        la CNIL nationale). Requis par les articles 13/14 du RGPD pour les avis dans les juridictions
+        de l'UE.
+      category: consent_parties
+      bibliography_refs: '["iso-29184"]'
+  cutoff_score:
+    slot_uri: publicschema:cutoff_score
+    title: Cutoff score
+    description: The threshold score below or above which an applicant is considered eligible.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Puntaje de corte
+      label_fr: Score seuil
+      description_es: La puntuación umbral por debajo o por encima de la cual un solicitante se considera
+        elegible.
+      description_fr: Le score seuil en dessous ou au-dessus duquel un demandeur est considéré admissible.
+      convergence_json: '{"system_count": 0, "total_systems": 4}'
+  data_sources:
+    slot_uri: publicschema:data_sources
+    title: Data sources
+    description: The administrative, survey, or collected data sources that feed into the assessment calculation.
+    range: string
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Fuentes de datos
+      label_fr: Sources de données
+      description_es: Las fuentes de datos administrativos, de encuesta o recopilados que alimentan el
+        cálculo de la evaluación.
+      description_fr: Les sources de données administratives, d'enquête ou collectées qui alimentent le
+        calcul de l'évaluation.
+      convergence_json: '{"system_count": 0, "total_systems": 4}'
+  delivery_channel:
+    slot_uri: publicschema:delivery_channel
+    title: Delivery channel
+    description: The mechanism through which the transfer reaches the beneficiary.
+    range: DeliveryChannel
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Canal de distribución
+      label_fr: Canal de distribution
+      description_es: El mecanismo a través del cual la transferencia llega al beneficiario.
+      description_fr: Le mécanisme par lequel le transfert parvient au bénéficiaire.
+      convergence_json: '{"system_count": 1, "total_systems": 6}'
+      bibliography_refs: '["govstack-payments", "gsma-mobile-money"]'
+  delivery_date:
+    slot_uri: publicschema:delivery_date
+    title: Delivery date
+    description: The date on which the goods or services were distributed to the beneficiary.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de distribución
+      label_fr: Date de distribution
+      description_es: La fecha en que los bienes o servicios fueron distribuidos al beneficiario.
+      description_fr: La date à laquelle les biens ou services ont été distribués au bénéficiaire.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  delivery_location:
+    slot_uri: publicschema:delivery_location
+    title: Delivery location
+    description: The location where the distribution took place, such as a distribution point, school,
+      or health facility.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Lugar de distribución
+      label_fr: Lieu de distribution
+      description_es: El lugar donde se realizó la distribución, como un punto de distribución, escuela
+        o centro de salud.
+      description_fr: Le lieu où la distribution a eu lieu, comme un point de distribution, une école
+        ou un établissement de santé.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  delivery_status:
+    slot_uri: publicschema:delivery_status
+    title: Delivery status
+    description: The status of this in-kind delivery.
+    range: PaymentStatus
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado de la entrega
+      label_fr: Statut de la livraison
+      description_es: El estado de esta entrega en especie.
+      description_fr: Le statut de cette livraison en nature.
+      convergence_json: '{"notes": "Reuses the payment-status vocabulary. Not all values apply equally
+        (e.g., ''returned'' may be less common for in-kind deliveries). A dedicated vocabulary may be
+        warranted in future.", "system_count": 0, "total_systems": 6}'
+  dpo_contact:
+    slot_uri: publicschema:dpo_contact
+    title: DPO contact
+    description: Contact details (email, phone, postal) for the data protection officer or equivalent
+      privacy-contact role of the controller(s). Free-form string; typically an email address or a postal
+      block. Required by GDPR Arts 13/14 for notices issued in EU jurisdictions.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Contacto DPD
+      label_fr: Contact DPD
+      description_es: Datos de contacto (correo electrónico, teléfono, dirección postal) del delegado
+        de protección de datos o del rol equivalente de contacto de privacidad del o los responsable(s)
+        del tratamiento. Cadena libre; generalmente una dirección de correo electrónico o un bloque postal.
+        Requerido por los Arts. 13/14 del RGPD para avisos emitidos en jurisdicciones de la UE.
+      description_fr: Coordonnées (courriel, téléphone, adresse postale) du délégué à la protection des
+        données ou du rôle équivalent de contact pour la protection de la vie privée des responsables
+        du traitement. Chaîne libre ; généralement une adresse courriel ou un bloc postal. Requis par
+        les articles 13/14 du RGPD pour les avis émis dans les juridictions de l'UE.
+      category: consent_parties
+  entitlement_ref:
+    slot_uri: publicschema:entitlement_ref
+    title: Entitlement reference
+    description: Reference to the entitlement that this payment or voucher fulfills.
+    range: Entitlement
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Referencia al derecho
+      label_fr: Référence au droit
+      description_es: Referencia al derecho al que corresponde este pago o vale.
+      description_fr: Référence au droit que ce paiement ou bon honore.
+      bespoke_type: uri
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  evaluation_date:
+    slot_uri: publicschema:evaluation_date
+    title: Evaluation date
+    description: The date on which a scoring rule was applied to produce a score or band.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de evaluación
+      label_fr: Date d'évaluation
+      description_es: La fecha en que se aplicó una regla de puntuación para producir una puntuación o
+        banda.
+      description_fr: La date à laquelle une règle de notation a été appliquée pour produire un score
+        ou une bande.
+      convergence_json: '{"system_count": 2, "total_systems": 3}'
+  evaluator:
+    slot_uri: publicschema:evaluator
+    title: Evaluator
+    description: The agent (field officer or agency) accountable for the scoring. Typically a Person or
+      an Organization. When the computation was executed by software, record the tool separately as software_used;
+      evaluator identifies who is responsible, not what ran the calculation.
+    range: Agent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Evaluador
+      label_fr: Évaluateur
+      description_es: El agente (agente de campo u organismo) responsable de la puntuación. Normalmente
+        una Person o una Organization. Cuando el cálculo fue ejecutado por software, registre la herramienta
+        por separado mediante software_used; evaluator identifica quién es responsable, no qué ejecutó
+        el cálculo.
+      description_fr: L'agent (agent de terrain ou organisme) responsable de la notation. Généralement
+        une Person ou une Organization. Lorsque le calcul a été effectué par un logiciel, enregistrez
+        l'outil séparément via software_used ; evaluator identifie qui est responsable, et non ce qui
+        a exécuté le calcul.
+      convergence_json: '{"system_count": 1, "total_systems": 3}'
+  failure_reason:
+    slot_uri: publicschema:failure_reason
+    title: Failure reason
+    description: A description of why the payment failed, was returned, or was rejected.
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Motivo del fallo
+      label_fr: Motif d'échec
+      description_es: Una descripción de por qué el pago falló, fue devuelto o fue rechazado.
+      description_fr: Une description de la raison pour laquelle le paiement a échoué, a été retourné
+        ou a été rejeté.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  farm_area_hectares:
+    slot_uri: publicschema:farm_area_hectares
+    title: Farm area (hectares)
+    description: The total area of the farm in hectares.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Superficie de la explotación (hectáreas)
+      label_fr: Superficie de l'exploitation (hectares)
+      description_es: La superficie total de la explotación agrícola en hectáreas.
+      description_fr: La superficie totale de l'exploitation agricole en hectares.
+      convergence_json: '{"system_count": 1, "total_systems": 2}'
+      bibliography_refs: '["fao-wca-2020-vol1"]'
+  geocodes:
+    slot_uri: publicschema:geocodes
+    title: Geocodes
+    description: Administrative or statistical codes that identify this area within a coding system (FIPS,
+      P-code, postal code, etc.).
+    range: Identifier
+    multivalued: true
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Geocódigos
+      label_fr: Géocodes
+      description_es: Códigos administrativos o estadísticos que identifican esta área dentro de un sistema
+        de codificación (FIPS, P-code, código postal, etc.).
+      description_fr: Codes administratifs ou statistiques identifiant cette zone dans un système de codification
+        (FIPS, P-code, code postal, etc.).
+  geometry:
+    slot_uri: publicschema:geometry
+    title: Geometry
+    description: The geographic boundary or shape, expressed as a GeoJSON Geometry object (Point, Polygon,
+      MultiPolygon, etc.).
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    close_mappings:
+    - locn:geometry
+    annotations:
+      label_es: Geometría
+      label_fr: Géométrie
+      bespoke_type: geojson_geometry
+      description_es: El límite o forma geográfica, expresado como un objeto GeoJSON Geometry (Point,
+        Polygon, MultiPolygon, etc.).
+      description_fr: La limite ou forme géographique, exprimée sous forme d'objet GeoJSON Geometry (Point,
+        Polygon, MultiPolygon, etc.).
+      external_alignments_json: '[{"label": "geometry", "match": "close", "note": "SEMIC locn:geometry
+        is encoding-agnostic (WKT, GML, GeoSPARQL); ours is specifically GeoJSON", "uri": "http://www.w3.org/ns/locn#geometry",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}, {"confidence": "medium", "label": "geometry",
+        "match": "close", "note": "SEMIC locn:geometry is encoding-agnostic, while PublicSchema geometry
+        is specifically GeoJSON, so this is close rather than exact.", "predicate": "http://www.w3.org/2004/02/skos/core#closeMatch",
+        "review_status": "accepted", "source_id": "semic-core-location", "source_version": "2.1.1", "uri":
+        "http://www.w3.org/ns/locn#geometry", "vocabulary": "SEMIC Core Location alignments"}]'
+      bibliography_refs: '["rfc-7946", "semic-core-location"]'
+  group:
+    slot_uri: publicschema:group
+    title: Group
+    description: The group to which the person belongs.
+    range: Group
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Grupo
+      label_fr: Groupe
+      description_es: El grupo al que pertenece la persona.
+      description_fr: Le groupe auquel la personne appartient.
+      convergence_json: '{"notes": "Present in 2 of 5 mapped systems as an explicit reference. Often implicit
+        in the membership table structure rather than recorded as a named field.", "system_count": 2,
+        "total_systems": 5}'
+  hazard_type:
+    slot_uri: publicschema:hazard_type
+    title: Hazard type
+    description: The category of hazard or disruptive event.
+    range: HazardType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de peligro
+      label_fr: Type de risque
+      description_es: La categoría de peligro o evento perturbador.
+      description_fr: La catégorie de risque ou d'événement perturbateur.
+      bibliography_refs: '["oasis-cap-v1-2"]'
+  inputs:
+    slot_uri: publicschema:inputs
+    title: Scoring inputs
+    description: The profile records that provided the data scored in this scoring event. A PMT scoring
+      event typically takes a SocioEconomicProfile as input; a Washington Group disability identifier
+      takes a FunctioningProfile; a wasting classification takes an anthropometric profile published in
+      a sibling schema (see ADR-011).
+    range: Profile
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Entradas de puntuación
+      label_fr: Données d'entrée pour la notation
+      description_es: Los registros de perfil que proporcionaron los datos puntuados en este evento de
+        puntuación. Un evento de puntuación PMT típicamente toma un SocioEconomicProfile como entrada;
+        un identificador de discapacidad del Washington Group toma un FunctioningProfile; una clasificación
+        de emaciación toma un perfil antropométrico publicado en un esquema hermano (véase ADR-011).
+      description_fr: Les enregistrements de profil ayant fourni les données notées lors de cet événement
+        de notation. Un événement de notation PMT prend typiquement un SocioEconomicProfile en entrée
+        ; un identifiant de handicap du Washington Group prend un FunctioningProfile ; une classification
+        d'émaciation prend un profil anthropométrique publié dans un schéma frère (voir ADR-011).
+  is_active:
+    slot_uri: publicschema:is_active
+    title: Is active
+    description: Whether the membership or relationship is currently in effect, as opposed to expired,
+      suspended, or terminated.
+    range: boolean
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Está activo
+      label_fr: Est actif
+      description_es: Indica si la membresía o relación está actualmente vigente, en contraposición a
+        expirada, suspendida o terminada.
+      description_fr: Indique si l'adhésion ou la relation est actuellement en vigueur, par opposition
+        à expirée, suspendue ou résiliée.
+      convergence_json: '{"system_count": 3, "total_systems": 6}'
+  is_reconciled:
+    slot_uri: publicschema:is_reconciled
+    title: Is reconciled
+    description: Whether this payment has been matched and verified against financial system records.
+    range: boolean
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Está conciliado
+      label_fr: Est rapproché
+      description_es: Si este pago ha sido cotejado y verificado con los registros del sistema financiero.
+      description_fr: Si ce paiement a été rapproché et vérifié par rapport aux registres du système financier.
+  item_set:
+    slot_uri: publicschema:item_set
+    title: Item set
+    description: The property IDs that an instrument expects to be populated when administered in full.
+      Declared once on the Instrument registry entry; individual Profile records may override with items_asked
+      when the instrument is deployed in a modular subset.
+    range: string
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Conjunto de ítems
+      label_fr: Ensemble d'items
+      description_es: Los identificadores de las propiedades que un instrumento espera que se completen
+        cuando se administra en su totalidad. Se declara una vez en la entrada de registro Instrument;
+        los registros Profile individuales pueden anular con items_asked cuando el instrumento se despliega
+        en un subconjunto modular.
+      description_fr: Les identifiants des propriétés qu'un instrument s'attend à voir renseignées lorsqu'il
+        est administré intégralement. Déclaré une fois sur l'entrée de registre Instrument ; les enregistrements
+        Profile individuels peuvent le surcharger avec items_asked lorsque l'instrument est déployé en
+        sous-ensemble modulaire.
+  items:
+    slot_uri: publicschema:items
+    title: Items
+    description: The list of commodity line items in this delivery or voucher.
+    range: DeliveryItem
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Artículos
+      label_fr: Articles
+      description_es: La lista de líneas de productos en esta entrega o vale.
+      description_fr: La liste des articles dans cette livraison ou ce bon.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  land_tenure:
+    slot_uri: publicschema:land_tenure
+    title: Land tenure
+    description: The legal or customary tenure arrangement under which the farm's land is held.
+    range: LandTenure
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tenencia de la tierra
+      label_fr: Régime foncier
+      description_es: El régimen de tenencia legal o consuetudinario bajo el cual se mantiene la tierra
+        de la explotación.
+      description_fr: Le régime foncier légal ou coutumier sous lequel les terres agricoles sont détenues.
+      category: agriculture
+      bibliography_refs: '["fao-vggt", "lsms-isa"]'
+  language_of_administration:
+    slot_uri: publicschema:language_of_administration
+    title: Language of administration
+    description: The language(s) in which the instrument was administered to the subject. Washington Group
+      analytical guidance notes that translation fidelity affects response patterns and recommends that
+      the language of administration be recorded alongside the responses.
+    range: Language
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Idioma de administración
+      label_fr: Langue d'administration
+      description_es: El o los idiomas en los que se administró el instrumento al sujeto. Las directrices
+        analíticas del Washington Group señalan que la fidelidad de la traducción influye en los patrones
+        de respuesta y recomiendan registrar el idioma de administración junto a las respuestas.
+      description_fr: La ou les langues dans lesquelles l'instrument a été administré au sujet. Les lignes
+        directrices analytiques du Washington Group notent que la fidélité de la traduction influe sur
+        les schémas de réponse et recommandent d'enregistrer la langue d'administration aux côtés des
+        réponses.
+  latitude:
+    slot_uri: publicschema:latitude
+    title: Latitude
+    description: The geographic latitude in decimal degrees (WGS84).
+    range: decimal
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - cpov:latitude
+    - dci:data/latitude
+    - schema:latitude
+    annotations:
+      label_es: Latitud
+      label_fr: Latitude
+      description_es: La latitud geográfica en grados decimales (WGS84).
+      description_fr: La latitude géographique en degrés décimaux (WGS84).
+      external_alignments_json: '[{"label": "latitude", "match": "exact", "uri": "http://data.europa.eu/m8g/latitude",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}, {"label": "latitude", "match": "exact",
+        "uri": "https://schema.spdci.org/core/v1/data/latitude", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"notes": "Present in 1 of 6 mapped systems. Geospatial coordinates are rarely
+        stored at the location record level; GPS capture is growing in newer deployments.", "system_count":
+        1, "total_systems": 6}'
+      bibliography_refs: '["schema-org", "semic-core-location", "spdci-common-standards"]'
+  level_name:
+    slot_uri: publicschema:level_name
+    title: Level name
+    description: The country-specific name for this administrative tier (e.g., state, department, commune,
+      ward).
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Nombre del nivel
+      label_fr: Nom du niveau
+      description_es: El nombre especifico del pais para este nivel administrativo (p. ej., estado, departamento,
+        comuna, barrio).
+      description_fr: Le nom spécifique au pays pour ce niveau administratif (p. ex., état, département,
+        commune, quartier).
+      convergence_json: '{"notes": "Not present as a separate field in any mapped system. Systems typically
+        embed the level name in the location record or derive it from a country-specific configuration.",
+        "system_count": 0, "total_systems": 6}'
+  livestock_type:
+    slot_uri: publicschema:livestock_type
+    title: Livestock type
+    description: Types of livestock kept by the agricultural holding.
+    range: LivestockType
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de ganado
+      label_fr: Type de bétail
+      description_es: Tipos de ganado criados por la explotación agrícola.
+      description_fr: Types de bétail élevés par l'exploitation agricole.
+      category: agriculture
+      bibliography_refs: '["dhs-recode7", "fao-wca-2020-vol1", "lsms-isa"]'
+  location_name:
+    slot_uri: publicschema:location_name
+    title: Location name
+    description: A human-readable place name for the location.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/Place/name
+    - locn:geographicName
+    annotations:
+      label_es: Nombre del lugar
+      label_fr: Nom du lieu
+      description_es: Un nombre de lugar legible por humanos para la ubicación.
+      description_fr: Un nom de lieu en langage naturel pour cette localisation.
+      external_alignments_json: '[{"label": "geographicName", "match": "close", "note": "SEMIC geographicName
+        is the official geographic name; ours is a general location display name", "uri": "http://www.w3.org/ns/locn#geographicName",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}, {"label": "name", "match": "close",
+        "note": "Both are human-readable location names; DCI uses Place.name", "uri": "https://schema.spdci.org/core/v1/data/Place/name",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Universal across all 6 mapped systems. The most consistently captured
+        location property.", "system_count": 6, "total_systems": 6}'
+      bibliography_refs: '["semic-core-location", "spdci-common-standards"]'
+  longitude:
+    slot_uri: publicschema:longitude
+    title: Longitude
+    description: The geographic longitude in decimal degrees (WGS84).
+    range: decimal
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - cpov:longitude
+    - dci:data/longitude
+    - schema:longitude
+    annotations:
+      label_es: Longitud
+      label_fr: Longitude
+      description_es: La longitud geografica en grados decimales (WGS84).
+      description_fr: La longitude géographique en degrés décimaux (WGS84).
+      external_alignments_json: '[{"label": "longitude", "match": "exact", "uri": "http://data.europa.eu/m8g/longitude",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}, {"label": "longitude", "match": "exact",
+        "uri": "https://schema.spdci.org/core/v1/data/longitude", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"notes": "Present in 1 of 6 mapped systems. Typically captured alongside latitude;
+        geospatial support is an emerging capability in social protection systems.", "system_count": 1,
+        "total_systems": 6}'
+      bibliography_refs: '["schema-org", "semic-core-location", "spdci-common-standards"]'
+  parent_location:
+    slot_uri: publicschema:parent_location
+    title: Parent location
+    description: The parent location in the administrative hierarchy.
+    range: Location
+    multivalued: false
+    status: bibo:status/forthcoming
+    close_mappings:
+    - dci:data/contained_in_place
+    annotations:
+      label_es: Ubicación superior
+      label_fr: Zone administrative parente
+      description_es: La ubicación superior en la jerarquía administrativa.
+      description_fr: La zone administrative parente dans la hiérarchie administrative.
+      external_alignments_json: '[{"label": "contained_in_place", "match": "close", "note": "Both represent
+        hierarchical containment; DCI uses ''contained_in_place'', PublicSchema uses ''parent_location''",
+        "uri": "https://schema.spdci.org/core/v1/data/contained_in_place", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"notes": "Universal across all 6 mapped systems. All systems model location
+        as a tree structure with parent references to represent the administrative hierarchy.", "system_count":
+        6, "total_systems": 6}'
+      bibliography_refs: '["spdci-common-standards"]'
+  payment_amount:
+    slot_uri: publicschema:payment_amount
+    title: Payment amount
+    description: The monetary value of this payment.
+    range: decimal
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Monto del pago
+      label_fr: Montant du paiement
+      description_es: El valor monetario de este pago.
+      description_fr: La valeur monétaire de ce paiement.
+      convergence_json: '{"system_count": 5, "total_systems": 6}'
+  payment_currency:
+    slot_uri: publicschema:payment_currency
+    title: Payment currency
+    description: The ISO 4217 currency code for this payment.
+    range: Currency
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Moneda del pago
+      label_fr: Devise du paiement
+      description_es: El código de moneda ISO 4217 para este pago.
+      description_fr: Le code de devise ISO 4217 pour ce paiement.
+      convergence_json: '{"system_count": 1, "total_systems": 6}'
+      bibliography_refs: '["iso-4217"]'
+  payment_date:
+    slot_uri: publicschema:payment_date
+    title: Payment date
+    description: The date on which the payment was made or processed.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Fecha del pago
+      label_fr: Date du paiement
+      description_es: La fecha en que el pago fue realizado o procesado.
+      description_fr: La date à laquelle le paiement a été effectué ou traité.
+      convergence_json: '{"system_count": 5, "total_systems": 6}'
+  payment_status:
+    slot_uri: publicschema:payment_status
+    title: Payment status
+    description: The processing state of the payment.
+    range: PaymentStatus
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Estado del pago
+      label_fr: Statut du paiement
+      description_es: El estado de procesamiento del pago.
+      description_fr: L'état de traitement du paiement.
+      convergence_json: '{"system_count": 4, "total_systems": 6}'
+      bibliography_refs: '["govstack-payments", "mojaloop-fspiop"]'
+  place_of_usual_residence:
+    slot_uri: publicschema:place_of_usual_residence
+    title: Place of usual residence
+    description: The usual place of residence of the person at the time of the vital event. Used by national
+      statistics offices to allocate vital events to the place where people live, not only where events
+      occur.
+    range: Location
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Lugar de residencia habitual
+      label_fr: Lieu de résidence habituelle
+      description_es: El lugar de residencia habitual de la persona al momento del evento vital. Usado
+        por las oficinas nacionales de estadística para asignar los eventos vitales al lugar donde viven
+        las personas, no solo donde ocurren los eventos.
+      description_fr: Le lieu de résidence habituelle de la personne au moment de l'événement d'état civil.
+        Utilisé par les bureaux nationaux de statistiques pour attribuer les événements d'état civil au
+        lieu de vie des personnes, et non uniquement au lieu où l'événement s'est produit.
+      category: location
+      domain_override: crvs
+      bibliography_refs: '["semic-core-person"]'
+  primary_crop:
+    slot_uri: publicschema:primary_crop
+    title: Primary crop
+    description: The primary crop or agricultural activity of the farm.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Cultivo principal
+      label_fr: Culture principale
+      description_es: El cultivo o actividad agrícola principal de la explotación agrícola.
+      description_fr: La principale culture ou activité agricole de l'exploitation.
+      convergence_json: '{"notes": "Even OpenSPP models crops as activities on a farm, not as a single
+        attribute.", "system_count": 0, "total_systems": 2}'
+      bibliography_refs: '["fao-wca-2020-vol1"]'
+  publication_url:
+    slot_uri: publicschema:publication_url
+    title: Publication URL
+    description: A canonical URL where the instrument, software agent, or scoring rule is published (typically
+      a documentation page, a source repository, or a PDF hosted by the publisher).
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: URL de publicación
+      label_fr: URL de publication
+      description_es: Una URL canónica donde se publica el instrumento, el agente de software o la regla
+        de puntuación (normalmente una página de documentación, un repositorio de código o un PDF alojado
+        por el editor).
+      description_fr: Une URL canonique à laquelle l'instrument, l'agent logiciel ou la règle de notation
+        est publié (généralement une page de documentation, un dépôt de code ou un PDF hébergé par l'éditeur).
+  publisher:
+    slot_uri: publicschema:publisher
+    title: Publisher
+    description: 'The agent that publishes or maintains the instrument, software agent, or scoring rule.
+      Typically an Organization (for example, the Washington Group on Disability Statistics, UNICEF, the
+      SMART initiative, the openIMIS Initiative, or a national statistics office), but may be a named
+      Person for standards methodologies and individual research publications. A SoftwareAgent is not
+      expected to appear here: the publisher of a SoftwareAgent record is the Person or Organization that
+      publishes the software, not another piece of software. The type system admits SoftwareAgent via
+      the Agent supertype, but that case is excluded by convention.'
+    range: Agent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Editor
+      label_fr: éditeur
+      description_es: 'El agente que publica o mantiene el instrumento, el agente de software o la regla
+        de puntuación. Normalmente una Organization (por ejemplo, el Washington Group on Disability Statistics,
+        UNICEF, la iniciativa SMART, la iniciativa openIMIS o una oficina nacional de estadística), pero
+        puede ser una Person nombrada para metodologías normativas o publicaciones de investigación individuales.
+        No se espera que aparezca un SoftwareAgent en esta posición: el editor de un registro SoftwareAgent
+        es la Person o la Organization que publica el software, no otro software. El sistema de tipos
+        admite SoftwareAgent a través del supertipo Agent, pero ese caso queda excluido por convención.'
+      description_fr: 'L''agent qui publie ou maintient l''instrument, l''agent logiciel ou la règle de
+        notation. Généralement une Organization (par exemple, le Washington Group on Disability Statistics,
+        l''UNICEF, l''initiative SMART, l''initiative openIMIS ou un institut national de statistique),
+        mais peut être une Person nommée pour des méthodologies normatives ou des publications de recherche
+        individuelles. Un SoftwareAgent n''est pas attendu à cet emplacement : l''éditeur d''un enregistrement
+        SoftwareAgent est la Person ou l''Organization qui publie le logiciel, et non un autre logiciel.
+        Le système de types admet SoftwareAgent via le supertype Agent, mais ce cas est exclu par convention.'
+  raw_score:
+    slot_uri: publicschema:raw_score
+    title: Raw score
+    description: The numeric score produced by the assessment instrument.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Puntaje bruto
+      label_fr: Score brut
+      description_es: La puntuación numérica producida por el instrumento de evaluación.
+      description_fr: Le score numérique produit par l'instrument d'évaluation.
+      convergence_json: '{"system_count": 0, "total_systems": 3}'
+  recipient:
+    slot_uri: publicschema:recipient
+    title: Recipient
+    description: The person or group that received or is intended to receive the payment. The recipient
+      may differ from the enrolled beneficiary, for example when a guardian, payment proxy, or survivor
+      collects on behalf of the beneficiary.
+    range: Party
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Beneficiario
+      label_fr: Destinataire du paiement
+      description_es: La persona o el grupo que recibió o está destinado a recibir el pago. El destinatario
+        puede diferir del beneficiario inscrito, por ejemplo cuando un tutor, apoderado de pago o sobreviviente
+        cobra en nombre del beneficiario.
+      description_fr: La personne ou le groupe qui a reçu ou est destiné à recevoir le paiement. Le destinataire
+        peut différer du bénéficiaire inscrit, par exemple lorsqu'un tuteur, un mandataire de paiement
+        ou un survivant perçoit au nom du bénéficiaire.
+      convergence_json: '{"system_count": 2, "total_systems": 6}'
+  recipient_categories:
+    slot_uri: publicschema:recipient_categories
+    title: Recipient categories
+    description: 'Categories of recipients described to the data subject in the notice. PrivacyNotice-scoped:
+      the notice describes categories; the ConsentRecord names specific recipients via ''recipients''
+      and ''allowed_recipient_categories''.'
+    range: OrganizationType
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Categorías de destinatarios
+      label_fr: Catégories de destinataires
+      description_es: 'Categorías de destinatarios descritas a la persona interesada en el aviso. Con
+        alcance de PrivacyNotice: el aviso describe las categorías; el ConsentRecord nombra destinatarios
+        específicos a través de ''recipients'' y ''allowed_recipient_categories''.'
+      description_fr: 'Catégories de destinataires décrites à la personne concernée dans l''avis. Limité
+        à PrivacyNotice : l''avis décrit les catégories ; le ConsentRecord désigne des destinataires spécifiques
+        via ''recipients'' et ''allowed_recipient_categories''.'
+      category: consent_parties
+      bibliography_refs: '["iso-29184"]'
+  recipients_described:
+    slot_uri: publicschema:recipients_described
+    title: Recipients described
+    description: Free-prose description of recipients used in the notice, complementing the coded 'recipient_categories'.
+      Enables the notice to describe a recipient that does not fit the coded vocabulary.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Destinatarios descritos
+      label_fr: Destinataires décrits
+      description_es: Descripción en prosa libre de los destinatarios utilizada en el aviso, como complemento
+        de las 'recipient_categories' codificadas. Permite que el aviso describa a un destinatario que
+        no encaja en el vocabulario codificado.
+      description_fr: Description en texte libre des destinataires utilisée dans l'avis, en complément
+        des 'recipient_categories' codées. Permet à l'avis de décrire un destinataire qui ne correspond
+        pas au vocabulaire codé.
+      category: consent_parties
+      bibliography_refs: '["iso-29184"]'
+  redeemable_by:
+    slot_uri: publicschema:redeemable_by
+    title: Redeemable by
+    description: The person or group authorized to redeem this voucher on behalf of the beneficiary.
+    range: Party
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Canjeable por
+      label_fr: Échangeable par
+      description_es: La persona o grupo autorizado para canjear este vale en nombre del beneficiario.
+      description_fr: La personne ou le groupe autorisé à échanger ce bon au nom du bénéficiaire.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  redeemed_by:
+    slot_uri: publicschema:redeemed_by
+    title: Redeemed by
+    description: The person who presented the voucher for redemption.
+    range: Person
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Canjeado por
+      label_fr: Échangé par
+      description_es: La persona que presentó el vale para el canje.
+      description_fr: La personne qui a présenté le bon pour l'échange.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  redemption_agent:
+    slot_uri: publicschema:redemption_agent
+    title: Redemption agent
+    description: The merchant, vendor, or agent who accepted the voucher for redemption.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Agente de canje
+      label_fr: Agent de remboursement
+      description_es: El comerciante, vendedor o agente que aceptó el vale para el canje.
+      description_fr: Le commerçant, vendeur ou agent qui a accepté le bon pour l'échange.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  redemption_date:
+    slot_uri: publicschema:redemption_date
+    title: Redemption date
+    description: The date on which the voucher was redeemed at a vendor or agent.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de canje
+      label_fr: Date d'échange
+      description_es: La fecha en que el vale fue canjeado ante un vendedor o agente.
+      description_fr: La date à laquelle le bon a été échangé auprès d'un vendeur ou d'un agent.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  retention_description:
+    slot_uri: publicschema:retention_description
+    title: Retention description
+    description: PrivacyNotice-only. Prose description of the retention period for personal data (GDPR
+      Art 13(2)(a)). Use when the period cannot be expressed as a fixed number of days (for example, 'for
+      the duration of program enrollment plus six years after program exit').
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Descripción de la retención
+      label_fr: Description de la conservation
+      description_es: Solo para PrivacyNotice. Descripción en prosa del período de retención de los datos
+        personales (Art. 13(2)(a) del RGPD). Usar cuando el período no puede expresarse como un número
+        fijo de días (por ejemplo, 'durante la duración de la inscripción en el programa más seis años
+        tras la salida del programa').
+      description_fr: Réservé aux PrivacyNotice. Description en prose de la période de conservation des
+        données personnelles (article 13(2)(a) du RGPD). À utiliser lorsque la période ne peut pas être
+        exprimée en nombre fixe de jours (par exemple, 'pour la durée de l'inscription au programme plus
+        six ans après la sortie du programme').
+      category: consent_retention
+      bibliography_refs: '["iso-29184"]'
+  rights_description:
+    slot_uri: publicschema:rights_description
+    title: Rights description
+    description: PrivacyNotice-only. Prose description of the data subject's rights (access, rectification,
+      erasure, objection, portability, restriction of processing, withdrawal of consent). Typically a
+      paragraph covering the full rights bundle under the relevant jurisdiction.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Descripción de los derechos
+      label_fr: Description des droits
+      description_es: Solo para PrivacyNotice. Descripción en prosa de los derechos de la persona interesada
+        (acceso, rectificación, supresión, oposición, portabilidad, limitación del tratamiento, retirada
+        del consentimiento). Típicamente un párrafo que cubre el conjunto completo de derechos aplicables
+        en la jurisdicción correspondiente.
+      description_fr: Réservé au PrivacyNotice. Description en texte libre des droits de la personne concernée
+        (accès, rectification, effacement, opposition, portabilité, limitation du traitement, retrait
+        du consentement). Généralement un paragraphe couvrant l'ensemble des droits applicables dans la
+        juridiction concernée.
+      category: consent_notice
+      bibliography_refs: '["iso-29184"]'
+  role:
+    slot_uri: publicschema:role
+    title: Role
+    description: The role recorded for the person within the group membership. Applicable values depend
+      on the kind of group (for example head, spouse, child, owner, operator, or worker).
+    range: GroupRole
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Rol
+      label_fr: Rôle
+      description_es: El rol registrado para la persona dentro de la membresía del grupo. Los valores
+        aplicables dependen del tipo de grupo (por ejemplo jefe, cónyuge, hijo, propietario, operador
+        o trabajador).
+      description_fr: Le rôle enregistré pour la personne dans l'appartenance au groupe. Les valeurs applicables
+        dépendent du type de groupe (par exemple chef, conjoint, enfant, propriétaire, exploitant ou travailleur).
+      convergence_json: '{"notes": "Present in 2 of 5 mapped systems. Role value sets vary across group
+        types and systems. The vocabulary documents intended applicability per value, but the schema does
+        not enforce it.", "system_count": 2, "total_systems": 5}'
+  rule_applied:
+    slot_uri: publicschema:rule_applied
+    title: Rule applied
+    description: Reference to the scoring rule that was applied in this scoring event.
+    range: ScoringRule
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Regla aplicada
+      label_fr: Règle appliquée
+      description_es: Referencia a la regla de puntuación aplicada en este evento de puntuación.
+      description_fr: Référence à la règle de notation appliquée lors de cet événement de notation.
+      convergence_json: '{"system_count": 2, "total_systems": 3}'
+  scoring_method:
+    slot_uri: publicschema:scoring_method
+    title: Scoring method
+    description: The computational approach used to generate a welfare score from collected data.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Método de puntuación
+      label_fr: Méthode de notation
+      description_es: El enfoque computacional utilizado para generar una puntuación de bienestar a partir
+        de los datos recopilados.
+      description_fr: L'approche de calcul utilisée pour générer un score de bien-être à partir des données
+        collectées.
+      convergence_json: '{"system_count": 0, "total_systems": 4}'
+  serial_number:
+    slot_uri: publicschema:serial_number
+    title: Serial number
+    description: A public identifier for the voucher, printed on the physical document or communicated
+      via SMS or application.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Número de serie
+      label_fr: Numéro de série
+      description_es: Un identificador público para el vale, impreso en el documento físico o comunicado
+        por SMS o aplicación.
+      description_fr: Un identifiant public pour le bon, imprimé sur le document physique ou communiqué
+        par SMS ou application.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  severity:
+    slot_uri: publicschema:severity
+    title: Severity
+    description: The observed or expected severity of the event's impact.
+    range: EventSeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Gravedad
+      label_fr: Gravité
+      description_es: La gravedad observada o esperada del impacto del evento.
+      description_fr: La gravité observée ou attendue de l'impact de l'événement.
+      bibliography_refs: '["oasis-cap-v1-2"]'
+  source_of_data:
+    slot_uri: publicschema:source_of_data
+    title: Source of data
+    description: 'PrivacyNotice-only. Prose description of the source(s) from which personal data is obtained
+      when not collected directly from the data subject (GDPR Art 14). Example: ''A government beneficiary
+      registry maintained by the Ministry of Social Protection.'''
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fuente de los datos
+      label_fr: Source des données
+      description_es: 'Solo para PrivacyNotice. Descripción en prosa de la(s) fuente(s) de las que se
+        obtienen los datos personales cuando no son recogidos directamente de la persona interesada (RGPD
+        Art 14). Ejemplo: ''Un registro gubernamental de beneficiarios administrado por el Ministerio
+        de Protección Social.'''
+      description_fr: 'Réservé au PrivacyNotice. Description en texte libre de la ou des sources auprès
+        desquelles les données personnelles sont obtenues lorsqu''elles ne sont pas collectées directement
+        auprès de la personne concernée (RGPD Art 14). Exemple : ''Un registre gouvernemental des bénéficiaires
+        géré par le Ministère de la Protection sociale.'''
+      category: consent_notice
+      bibliography_refs: '["iso-29184"]'
+  supersedes_ref:
+    slot_uri: publicschema:supersedes_ref
+    title: Supersedes
+    description: PrivacyNotice-only. The prior notice version that this notice replaces. Enables tracing
+      the notice evolution chain. A re-consent campaign is triggered by a substantive change (new purposes,
+      new recipients, new data categories); a version bump without these changes does not require re-consent.
+      See `docs/consent-lifecycle.md` for the distinction.
+    range: PrivacyNotice
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Reemplaza a
+      label_fr: Remplace
+      description_es: Solo para PrivacyNotice. La versión anterior del aviso que este aviso reemplaza.
+        Permite rastrear la cadena de evolución de avisos. Una campaña de recaptación de consentimiento
+        es desencadenada por un cambio sustancial (nuevas finalidades, nuevos destinatarios, nuevas categorías
+        de datos); un cambio de versión sin estos cambios no requiere nuevo consentimiento. Consulte `docs/consent-lifecycle.md`
+        para la distinción.
+      description_fr: Réservé au PrivacyNotice. La version précédente de l'avis que cet avis remplace.
+        Permet de retracer la chaîne d'évolution des avis. Une campagne de recueil de nouveau consentement
+        est déclenchée par une modification substantielle (nouvelles finalités, nouveaux destinataires,
+        nouvelles catégories de données) ; une mise à jour de version sans ces changements ne requiert
+        pas de nouveau consentement. Voir `docs/consent-lifecycle.md` pour la distinction.
+      category: consent_notice
+  transfer_description:
+    slot_uri: publicschema:transfer_description
+    title: Transfer description
+    description: PrivacyNotice-only. Prose description of international or third-country data transfers
+      (GDPR Chapter V). Free-form; should name destination countries, adequacy decision status, and safeguards
+      (standard contractual clauses, binding corporate rules, etc.) where applicable.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Descripción de la transferencia
+      label_fr: Description du transfert
+      description_es: Solo para PrivacyNotice. Descripción en prosa de las transferencias internacionales
+        o a terceros países de datos (RGPD Capítulo V). Texto libre; debe nombrar los países de destino,
+        el estado de la decisión de adecuación y las salvaguardas (cláusulas contractuales tipo, normas
+        corporativas vinculantes, etc.) cuando corresponda.
+      description_fr: Réservé au PrivacyNotice. Description en texte libre des transferts de données internationaux
+        ou vers des pays tiers (RGPD Chapitre V). À renseigner librement ; doit nommer les pays de destination,
+        le statut de la décision d'adéquation et les garanties (clauses contractuelles types, règles d'entreprise
+        contraignantes, etc.) le cas échéant.
+      category: consent_notice
+      bibliography_refs: '["iso-29184"]'
+  version:
+    slot_uri: publicschema:version
+    title: Version
+    description: The version identifier of an artefact such as an instrument, software agent, scoring
+      rule, or privacy notice (for example, a release date such as 2022-10-11 or a semantic version like
+      6.2).
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Versión
+      label_fr: Version
+      description_es: El identificador de versión de un artefacto como un instrumento, agente de software,
+        regla de puntuación o aviso de privacidad (por ejemplo, una fecha de publicación como 2022-10-11
+        o una versión semántica como 6.2).
+      description_fr: L'identifiant de version d'un artefact tel qu'un instrument, un agent logiciel,
+        une règle de notation ou une notice d'information (par exemple, une date de publication comme
+        2022-10-11 ou une version sémantique comme 6.2).
+      bibliography_refs: '["iso-29184"]'
+  voucher_format:
+    slot_uri: publicschema:voucher_format
+    title: Voucher format
+    description: The physical or digital form of the voucher.
+    range: VoucherFormat
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Formato del vale
+      label_fr: Format du bon
+      description_es: La forma fisica o digital del vale.
+      description_fr: La forme physique ou numérique du bon.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  voucher_ref:
+    slot_uri: publicschema:voucher_ref
+    title: Voucher reference
+    description: A reference to the voucher that this record relates to.
+    range: Voucher
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Referencia del vale
+      label_fr: Référence du bon
+      description_es: Una referencia al vale al que se refiere este registro.
+      description_fr: Une référence au bon auquel cet enregistrement se rapporte.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  voucher_status:
+    slot_uri: publicschema:voucher_status
+    title: Voucher status
+    description: The lifecycle state of the voucher.
+    range: VoucherStatus
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado del vale
+      label_fr: Statut du bon
+      description_es: El estado del ciclo de vida del vale.
+      description_fr: L'état du cycle de vie du bon.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["govstack-payments"]'
+  withdrawal_description:
+    slot_uri: publicschema:withdrawal_description
+    title: Withdrawal description
+    description: PrivacyNotice-only. Prose description of how the data subject can withdraw consent. Should
+      reference withdrawal_uri if available, and describe any paper or verbal channels. Required by GDPR
+      Art 7(3).
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Descripción del retiro
+      label_fr: Description du retrait
+      description_es: Solo para PrivacyNotice. Descripción en prosa de cómo la persona afectada puede
+        retirar su consentimiento. Debe referenciar withdrawal_uri si está disponible, y describir los
+        canales en papel o verbales si los hubiera. Requerido por el Art. 7(3) del RGPD.
+      description_fr: Réservé aux PrivacyNotice. Description en prose de la manière dont la personne concernée
+        peut retirer son consentement. Doit référencer withdrawal_uri si disponible, et décrire les canaux
+        papier ou verbaux le cas échéant. Exigé par l'article 7(3) du RGPD.
+      category: consent_lifecycle
+      bibliography_refs: '["iso-29184"]'

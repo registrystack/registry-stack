@@ -1,0 +1,80 @@
+id: https://publicschema.org/linkml/publicschema
+name: publicschema
+title: PublicSchema
+description: Top-level composite LinkML schema for PublicSchema. Auto-generated from schema/**/*.yaml
+  by build/migrate_to_linkml.py. Do not edit by hand.
+license: CC-BY-4.0
+version: 0.3.0
+default_prefix: publicschema
+default_range: string
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- assessment
+- bibliography
+- biometric
+- categories
+- civil_status
+- common
+- consent
+- core
+- credentials
+- document
+- identity
+- metrics
+- misc
+- payment
+- program
+- vocabularies
+- external/dci
+- external/dhis2
+- external/dhs
+- external/dhs-8
+- external/fhir_r4
+- external/fhir_r5
+- external/govstack_payments
+- external/lsms_isa
+- external/mics
+- external/ocha_cod_ab
+- external/opencrvs
+- external/openimis
+- external/openspp
+- external/semic
+- external/semic-core-business
+- external/semic-core-location
+- external/semic-core-person
+- external/wg_es

@@ -1,0 +1,941 @@
+id: https://publicschema.org/linkml/program
+name: publicschema-program
+title: PublicSchema program domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- civil_status
+- common
+- core
+- identity
+- misc
+classes:
+  BenefitSchedule:
+    class_uri: publicschema:BenefitSchedule
+    title: Benefit Schedule
+    description: 'A program-level definition of a benefit stream that specifies the modality, amount,
+      frequency, and time period over which benefits are provided. A program may have one or more benefit
+      schedules (e.g., a monthly cash transfer and an annual school supplies kit).
+
+      '
+    slots:
+    - program_ref
+    - benefit_modality
+    - benefit_description
+    - amount
+    - currency
+    - frequency
+    - frequency_rule
+    - start_date
+    - end_date
+    status: bibo:draft
+    annotations:
+      label_es: Calendario de prestaciones
+      label_fr: Calendrier des prestations
+      description_es: Una definición a nivel de programa de un flujo de beneficios que especifica la modalidad,
+        el monto, la frecuencia y el período durante el cual se proporcionan los beneficios. Un programa
+        puede tener uno o más calendarios de beneficios (por ej., una transferencia monetaria mensual
+        y un kit de útiles escolares anual).
+      description_fr: Une définition au niveau du programme d'une série de prestations qui spécifie la
+        modalité, le montant, la fréquence et la période pendant laquelle les prestations sont fournies.
+        Un programme peut avoir un ou plusieurs calendriers de prestations (par ex., un transfert monétaire
+        mensuel et un kit de fournitures scolaires annuel).
+      featured: true
+      source_domain: sp
+      convergence_json: '{"notes": "openIMIS has BenefitPlan, OpenSPP has entitlement managers, DCI has
+        BenefitType. The separation between program-level benefit design and per-instance entitlement
+        is present in most systems, though often as configuration rather than a first-class entity.\n",
+        "system_count": 4, "total_systems": 6}'
+      bibliography_refs: '["rfc-5545"]'
+  EligibilityDecision:
+    class_uri: publicschema:EligibilityDecision
+    title: Eligibility Decision
+    description: 'A formal determination of whether a subject meets a program''s criteria based on assessed
+      conditions. A single scoring event or profile can support multiple eligibility decisions across
+      different programs.
+
+      '
+    is_a: Event
+    slots:
+    - applicant
+    - program_ref
+    - eligibility_status
+    - decision_date
+    - decision_basis
+    - software_used
+    - valid_until
+    status: bibo:draft
+    annotations:
+      label_es: Decisión de elegibilidad
+      label_fr: Décision d'éligibilité
+      description_es: Una determinación formal de si un sujeto cumple los criterios de un programa en
+        función de las condiciones evaluadas. Un mismo evento de puntuación o perfil puede sustentar múltiples
+        decisiones de elegibilidad para diferentes programas.
+      description_fr: Une détermination formelle indiquant si un sujet satisfait aux critères d'un programme
+        sur la base des conditions évaluées. Un même événement de notation ou profil peut fonder plusieurs
+        décisions d'admissibilité pour différents programmes.
+      featured: true
+      source_domain: sp
+      convergence_json: '{"system_count": 2, "total_systems": 6}'
+      bibliography_refs: '["barca-2017-integrating-data", "fhir-coverage-eligibility", "semic-cccev",
+        "wb-sp-delivery-framework"]'
+  Enrollment:
+    class_uri: publicschema:Enrollment
+    title: Enrollment
+    description: 'The administrative process of registering an eligible person or household as an active
+      beneficiary of a program. Budget constraints and capacity limits mean that eligibility does not
+      guarantee enrollment.
+
+      '
+    is_a: Event
+    slots:
+    - beneficiary
+    - program_ref
+    - eligibility_decision_ref
+    - enrollment_status
+    - enrollment_date
+    - exit_date
+    - exit_reason
+    - is_enrolled
+    - governing_jurisdiction
+    status: bibo:status/forthcoming
+    close_mappings:
+    - https://schema.spdci.org/extensions/ibr/v1/data/Beneficiary
+    annotations:
+      label_es: Inscripción
+      label_fr: Inscription
+      description_es: El proceso administrativo de inscripción de una persona u hogar elegible como beneficiario
+        activo de un programa. Las restricciones presupuestarias y los límites de capacidad significan
+        que la elegibilidad no garantiza la inscripción.
+      description_fr: Le processus administratif d'inscription d'une personne ou d'un ménage admissible
+        en tant que bénéficiaire actif d'un programme. Les contraintes budgétaires et les limites de capacité
+        font que l'admissibilité ne garantit pas l'inscription.
+      featured: true
+      source_domain: sp
+      external_alignments_json: '[{"label": "Beneficiary", "match": "broad", "note": "DCI Beneficiary
+        bundles enrollment status, benefit history, and beneficiary identity into one object; PublicSchema
+        separates these into Enrollment (status), Entitlement (what is owed), and PaymentEvent (what was
+        paid)", "uri": "https://schema.spdci.org/extensions/ibr/v1/data/Beneficiary", "vocabulary": "DCI
+        IBR", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Universal across all 6 mapped systems. EBSI PDA1 (Portable Document
+        A1 for cross-border social security coordination) informed the governing_jurisdiction property
+        for explicit jurisdiction tracking in federated or cross-border contexts.\n", "system_count":
+        6, "total_systems": 6}'
+      bibliography_refs: '["barca-2017-integrating-data", "barca-2021-inclusive-information-systems",
+        "ebsi-portable-doc-a1", "fhir-episode-of-care-status", "spdci-ibr", "wb-sp-delivery-framework"]'
+  Entitlement:
+    class_uri: publicschema:Entitlement
+    title: Entitlement
+    description: 'An instance of a recognized right of a specific beneficiary to receive a benefit. Each
+      entitlement typically corresponds to one disbursement period, but multiple entitlements may exist
+      for the same enrollment and overlapping periods (e.g., base transfer plus top-up, multi-tranche
+      payments, or emergency supplements). The entitlement references both the enrollment (who) and the
+      benefit schedule (what was promised).
+
+      '
+    slots:
+    - enrollment_ref
+    - schedule_ref
+    - benefit_modality
+    - benefit_description
+    - amount
+    - currency
+    - coverage_period_start
+    - coverage_period_end
+    - entitlement_status
+    - document_expiry_date
+    status: bibo:status/forthcoming
+    close_mappings:
+    - https://schema.spdci.org/extensions/ibr/v1/data/Benefit
+    annotations:
+      label_es: Derecho
+      label_fr: Droit
+      description_es: Una instancia de un derecho reconocido de un beneficiario específico a recibir un
+        beneficio. Cada derecho corresponde típicamente a un período de desembolso, pero pueden existir
+        múltiples derechos para la misma inscripción y períodos superpuestos (por ej., transferencia base
+        más complemento, pagos en múltiples cuotas o suplementos de emergencia). El derecho hace referencia
+        tanto a la inscripción (quién) como al calendario de beneficios (lo que se prometió).
+      description_fr: Une instance d'un droit reconnu d'un bénéficiaire spécifique à recevoir une prestation.
+        Chaque droit correspond généralement à une période de versement, mais plusieurs droits peuvent
+        exister pour la même inscription et des périodes qui se chevauchent (par ex., transfert de base
+        plus complément, paiements à tranches multiples ou suppléments d'urgence). Le droit renvoie à
+        la fois à l'inscription (qui) et au calendrier de prestations (ce qui a été promis).
+      featured: true
+      source_domain: sp
+      external_alignments_json: '[{"label": "Benefit", "match": "broad", "note": "DCI Benefit records
+        what was delivered (type, value, date); PublicSchema Entitlement records the recognized right
+        to receive. DCI has no equivalent of the promise-to-delivery separation, so entitled-but-not-yet-paid
+        states cannot be represented", "uri": "https://schema.spdci.org/extensions/ibr/v1/data/Benefit",
+        "vocabulary": "DCI IBR", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 5 of 6 mapped systems. EBSI PRC (Provisional Replacement
+        Certificate for the European Health Insurance Card) informed the document_expiry_date property,
+        distinguishing credential expiry from entitlement period.\n", "system_count": 5, "total_systems":
+        6}'
+      bibliography_refs: '["barca-2017-integrating-data", "ebsi-portable-doc-a1", "fhir-fm-status", "spdci-ibr",
+        "wb-sp-delivery-framework"]'
+  Grievance:
+    class_uri: publicschema:Grievance
+    title: Grievance
+    description: 'A record of a complaint, appeal, correction request, or misconduct allegation raised
+      through a program''s grievance redress mechanism. It captures formal issues about eligibility, enrollment,
+      payments, service delivery, or program conduct.
+
+      '
+    is_a: Event
+    slots:
+    - complainant
+    - grievance_subject
+    - grievance_type
+    - grievance_status
+    - submission_date
+    - resolution_date
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Reclamación
+      label_fr: Réclamation
+      description_es: Un registro de una queja, recurso, solicitud de corrección o alegación de mala conducta
+        planteada a través del mecanismo de reclamaciones de un programa. Captura problemas formales sobre
+        elegibilidad, inscripción, pagos, prestación de servicios o conducta del programa.
+      description_fr: Un enregistrement d'une plainte, d'un recours, d'une demande de correction ou d'une
+        allégation de manquement professionnel soulevé dans le cadre du mécanisme de recours d'un programme.
+        Il capture des problèmes formels liés à l'admissibilité, à l'inscription, aux paiements, à la
+        prestation des services ou à la conduite du programme.
+      featured: true
+      source_domain: sp
+      external_alignments_json: '[{"label": "N/A", "match": "none", "note": "DCI does not define a grievance
+        or complaint entity. Grievance handling is outside the scope of the data exchange layer.", "vocabulary":
+        "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 5, "total_systems": 6}'
+      bibliography_refs: '["iso-10002", "wb-grm-guidance", "wb-sourcebook-ch8"]'
+  Program:
+    class_uri: publicschema:Program
+    title: Program
+    description: 'A government or institutional social protection intervention that provides benefits
+      to eligible individuals or households based on defined criteria. A program has a name, implementing
+      agency, targeting approach, and coverage area.
+
+      '
+    slots:
+    - name
+    - implementing_agency
+    - coverage_area
+    - targeting_approach
+    - conditionality_type
+    - start_date
+    - end_date
+    status: bibo:draft
+    close_mappings:
+    - https://schema.spdci.org/extensions/ibr/v1/Programme
+    annotations:
+      label_es: Programa
+      label_fr: Programme
+      description_es: Una intervención gubernamental o institucional de protección social que proporciona
+        beneficios a individuos u hogares elegibles según criterios definidos. Un programa tiene un nombre,
+        una agencia implementadora, un enfoque de focalización y un área de cobertura.
+      description_fr: Une intervention gouvernementale ou institutionnelle de protection sociale qui fournit
+        des prestations aux individus ou aux ménages admissibles selon des critères définis. Un programme
+        a un nom, une agence de mise en oeuvre, une approche de ciblage et une zone de couverture.
+      featured: true
+      source_domain: sp
+      external_alignments_json: '[{"label": "Programme", "match": "close", "note": "Both describe a social
+        protection program; DCI emphasizes benefit modalities and institutional classification while PublicSchema
+        emphasizes coverage area and targeting approach", "uri": "https://schema.spdci.org/extensions/ibr/v1/Programme",
+        "vocabulary": "DCI IBR", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 4, "total_systems": 6}'
+      bibliography_refs: '["barca-2017-integrating-data", "semic-cpov", "spdci-ibr"]'
+  Referral:
+    class_uri: publicschema:Referral
+    title: Referral
+    description: 'A structured process of linking a subject to an external program, service, or provider
+      to address identified needs. Referrals span a spectrum from passive information sharing to active
+      service linkage with follow-up.
+
+      '
+    is_a: Event
+    slots:
+    - referred_person
+    - referring_program
+    - receiving_program
+    - referral_date
+    - referral_reason
+    - referral_status
+    status: bibo:draft
+    annotations:
+      label_es: Derivación
+      label_fr: Orientation
+      description_es: Un proceso estructurado de vinculación de un sujeto con un programa, servicio o
+        proveedor externo para abordar las necesidades identificadas. Las derivaciones abarcan un espectro
+        que va desde el intercambio pasivo de información hasta la vinculación activa con servicios y
+        el seguimiento posterior.
+      description_fr: Un processus structuré de mise en relation d'un sujet avec un programme, un service
+        ou un prestataire externe pour répondre aux besoins identifiés. Les orientations vont d'un simple
+        partage d'informations à une mise en relation active avec suivi.
+      source_domain: sp
+      convergence_json: '{"system_count": 3, "total_systems": 6}'
+slots:
+  applicant:
+    slot_uri: publicschema:applicant
+    title: Applicant
+    description: The person or group that applied for and received this eligibility decision.
+    range: Person
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Solicitante
+      label_fr: Demandeur
+      domain_override: "null"
+      description_es: La persona o grupo que solicitó y recibió esta decisión de elegibilidad.
+      description_fr: La personne ou le groupe ayant demandé et obtenu cette décision d'admissibilité.
+      convergence_json: '{"system_count": 2, "total_systems": 2}'
+  beneficiary:
+    slot_uri: publicschema:beneficiary
+    title: Beneficiary
+    description: The person or group enrolled in the program.
+    range: Party
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Beneficiario
+      label_fr: Bénéficiaire
+      domain_override: "null"
+      description_es: La persona o grupo inscrito en el programa.
+      description_fr: La personne ou le groupe inscrit dans le programme.
+      convergence_json: '{"system_count": 5, "total_systems": 6}'
+  benefit_description:
+    slot_uri: publicschema:benefit_description
+    title: Benefit description
+    description: A free-text description of the specific benefit.
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    close_mappings:
+    - https://schema.spdci.org/extensions/ibr/v1/data/benefit_description
+    annotations:
+      label_es: Descripción del beneficio
+      label_fr: Description de la prestation
+      description_es: Una descripción en texto libre del beneficio específico.
+      description_fr: Une description en texte libre de la prestation spécifique.
+      external_alignments_json: '[{"label": "benefit_description", "match": "close", "note": "Same concept
+        and name; DCI uses this for in-kind benefit descriptions (e.g. ''sacks of rice'')", "uri": "https://schema.spdci.org/extensions/ibr/v1/data/benefit_description",
+        "vocabulary": "DCI IBR", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 0, "total_systems": 5}'
+      bibliography_refs: '["spdci-ibr"]'
+  benefit_modality:
+    slot_uri: publicschema:benefit_modality
+    title: Benefit modality
+    description: The form of benefit the entitlement specifies (cash, voucher, in-kind, service, fee waiver).
+    range: BenefitModality
+    multivalued: true
+    status: bibo:status/published
+    close_mappings:
+    - https://schema.spdci.org/extensions/ibr/v1/data/benefit_type
+    annotations:
+      label_es: Modalidad del beneficio
+      label_fr: Modalité de prestation
+      description_es: La forma de beneficio que especifica el derecho (efectivo, vale, en especie, servicio,
+        exención de tarifa).
+      description_fr: La forme de prestation précisée par le droit (espèces, bon, en nature, service,
+        exonération de frais).
+      external_alignments_json: '[{"label": "benefit_type", "match": "broad", "note": "Both classify the
+        form of benefit; DCI uses BenefitTypeEnum, PublicSchema uses benefit-modality vocabulary", "uri":
+        "https://schema.spdci.org/extensions/ibr/v1/data/benefit_type", "vocabulary": "DCI IBR", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"system_count": 1, "total_systems": 5}'
+      bibliography_refs: '["calp-glossary", "spdci-ibr", "wfp-transfer-modality"]'
+  complainant:
+    slot_uri: publicschema:complainant
+    title: Complainant
+    description: The person who submitted the grievance. The complainant need not be the enrolled beneficiary;
+      community members, rejected applicants, or caretakers may also file grievances.
+    range: Person
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Reclamante
+      label_fr: Plaignant
+      description_es: La persona que presentó la queja. El reclamante no tiene que ser el beneficiario
+        inscrito; miembros de la comunidad, solicitantes rechazados o cuidadores también pueden presentar
+        quejas.
+      description_fr: La personne qui a soumis le grief. Le plaignant n'est pas nécessairement le bénéficiaire
+        inscrit; des membres de la communauté, des demandeurs rejetés ou des aidants peuvent également
+        déposer des griefs.
+      convergence_json: '{"system_count": 3, "total_systems": 5}'
+  conditionality_type:
+    slot_uri: publicschema:conditionality_type
+    title: Conditionality type
+    description: Whether the program requires beneficiaries to meet behavioral conditions to receive benefits
+      (unconditional, conditional, soft conditional, labelled).
+    range: ConditionalityType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de condicionalidad
+      label_fr: Type de conditionnalité
+      description_es: Si el programa requiere que los beneficiarios cumplan condiciones de comportamiento
+        para recibir beneficios (incondicional, condicional, condicional flexible, etiquetado).
+      description_fr: Si le programme exige que les bénéficiaires remplissent des conditions comportementales
+        pour recevoir des prestations (inconditionnel, conditionnel, conditionnel souple, étiqueté).
+      convergence_json: '{"notes": "Present in 3 of 6 mapped systems. Most social protection programs
+        classify their conditionality approach. Common in cash transfer program registries.", "system_count":
+        3, "total_systems": 6}'
+  coverage_area:
+    slot_uri: publicschema:coverage_area
+    title: Coverage area
+    description: The geographic or administrative scope of program coverage.
+    range: Location
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Área de cobertura
+      label_fr: Zone de couverture
+      description_es: El alcance geográfico o administrativo de la cobertura del programa.
+      description_fr: L'étendue géographique ou administrative de la couverture du programme.
+      convergence_json: '{"system_count": 0, "total_systems": 4}'
+  coverage_period_end:
+    slot_uri: publicschema:coverage_period_end
+    title: Coverage period end
+    description: The end date of the period this entitlement covers.
+    range: date
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Fin del período de cobertura
+      label_fr: Fin de la période de couverture
+      description_es: La fecha de fin del periodo que cubre este derecho.
+      description_fr: La date de fin de la période couverte par ce droit.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  coverage_period_start:
+    slot_uri: publicschema:coverage_period_start
+    title: Coverage period start
+    description: The start date of the period this entitlement covers.
+    range: date
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Inicio del período de cobertura
+      label_fr: Début de la période de couverture
+      description_es: La fecha de inicio del periodo que cubre este derecho.
+      description_fr: La date de début de la période couverte par ce droit.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  decision_basis:
+    slot_uri: publicschema:decision_basis
+    title: Decision basis
+    description: The scoring event, profile, score, or administrative rule that formed the basis for the
+      decision.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Base de la decisión
+      label_fr: Base de la décision
+      domain_override: "null"
+      description_es: El evento de puntuación, perfil, puntuación o regla administrativa que fundamentó
+        la decisión.
+      description_fr: L'événement de notation, le profil, le score ou la règle administrative ayant constitué
+        la base de la décision.
+      convergence_json: '{"system_count": 1, "total_systems": 2}'
+  decision_date:
+    slot_uri: publicschema:decision_date
+    title: Decision date
+    description: The date on which the eligibility decision was recorded.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de decisión
+      label_fr: Date de décision
+      domain_override: "null"
+      description_es: La fecha en que se registró la decisión de elegibilidad.
+      description_fr: La date à laquelle la décision d'admissibilité a été enregistrée.
+      convergence_json: '{"system_count": 1, "total_systems": 2}'
+  document_expiry_date:
+    slot_uri: publicschema:document_expiry_date
+    title: Document expiry date
+    description: The date on which the document or credential representing the entitlement expires, which
+      may differ from the entitlement period itself.
+    range: date
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Fecha de vencimiento del documento
+      label_fr: Date d'expiration du document
+      description_es: La fecha en que el documento o credencial que representa el derecho expira, la cual
+        puede diferir del período del derecho en sí.
+      description_fr: La date à laquelle le document ou le justificatif représentant le droit expire,
+        qui peut différer de la période du droit elle-même.
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["ebsi-portable-doc-a1"]'
+  eligibility_decision_ref:
+    slot_uri: publicschema:eligibility_decision_ref
+    title: Eligibility decision reference
+    description: Reference to the eligibility decision that authorized this enrollment.
+    range: uri
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Referencia a decisión de elegibilidad
+      label_fr: Référence à la décision d'admissibilité
+      description_es: Referencia a la decisión de elegibilidad que autorizó esta inscripción.
+      description_fr: Référence à la décision d'admissibilité qui a autorisé cette inscription.
+      convergence_json: '{"notes": "PDMC forward-looking design making eligibility-to-enrollment chain
+        explicit.", "system_count": 0, "total_systems": 6}'
+  eligibility_status:
+    slot_uri: publicschema:eligibility_status
+    title: Eligibility status
+    description: The outcome of the eligibility determination.
+    range: EligibilityStatus
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado de elegibilidad
+      label_fr: Statut d'admissibilité
+      domain_override: "null"
+      description_es: El resultado de la determinación de elegibilidad.
+      description_fr: Le résultat de la détermination de l'admissibilité.
+      sensitivity: sensitive
+      convergence_json: '{"system_count": 2, "total_systems": 2}'
+      bibliography_refs: '["fhir-coverage-eligibility"]'
+  enrollment_date:
+    slot_uri: publicschema:enrollment_date
+    title: Enrollment date
+    description: The date on which the enrollment became active and benefit delivery was authorized.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - https://schema.spdci.org/extensions/ibr/v1/data/enrollment_date
+    annotations:
+      label_es: Fecha de inscripción
+      label_fr: Date d'inscription
+      domain_override: "null"
+      description_es: La fecha en que la inscripción se activó y se autorizó la entrega de beneficios.
+      description_fr: La date à laquelle l'inscription est devenue active et la distribution des prestations
+        a été autorisée.
+      external_alignments_json: '[{"label": "enrollment_date", "match": "close", "note": "Same concept
+        and name; DCI defines this on the Beneficiary entity", "uri": "https://schema.spdci.org/extensions/ibr/v1/data/enrollment_date",
+        "vocabulary": "DCI IBR", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 3, "total_systems": 6}'
+      bibliography_refs: '["spdci-ibr"]'
+  enrollment_status:
+    slot_uri: publicschema:enrollment_status
+    title: Enrollment status
+    description: The current lifecycle state of the enrollment.
+    range: EnrollmentStatus
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - https://schema.spdci.org/extensions/ibr/v1/data/enrollment_status
+    annotations:
+      label_es: Estado de inscripción
+      label_fr: Statut d'inscription
+      domain_override: "null"
+      description_es: El estado actual del ciclo de vida de la inscripción.
+      description_fr: L'état actuel du cycle de vie de l'inscription.
+      external_alignments_json: '[{"label": "enrollment_status", "match": "close", "note": "Same concept
+        and name; DCI defines this on the Beneficiary entity", "uri": "https://schema.spdci.org/extensions/ibr/v1/data/enrollment_status",
+        "vocabulary": "DCI IBR", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 5, "total_systems": 6}'
+      bibliography_refs: '["fhir-episode-of-care-status", "spdci-ibr", "wb-sp-delivery-framework"]'
+  entitlement_status:
+    slot_uri: publicschema:entitlement_status
+    title: Entitlement status
+    description: The lifecycle state of this entitlement instance.
+    range: EntitlementStatus
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Estado del derecho
+      label_fr: Statut du droit
+      description_es: El estado del ciclo de vida de esta instancia de derecho.
+      description_fr: L'état du cycle de vie de cette instance de droit.
+      convergence_json: '{"system_count": 1, "total_systems": 6}'
+      bibliography_refs: '["fhir-fm-status"]'
+  exit_date:
+    slot_uri: publicschema:exit_date
+    title: Exit date
+    description: The date the enrollment ceased to be active, whether through closure or graduation. Does
+      not apply to temporary suspension.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - https://schema.spdci.org/extensions/ibr/v1/data/status_change_date
+    annotations:
+      label_es: Fecha de salida
+      label_fr: Date de sortie
+      domain_override: "null"
+      description_es: La fecha en que la inscripción dejó de estar activa, ya sea por cierre o graduación.
+        No se aplica a la suspensión temporal.
+      description_fr: La date à laquelle l'inscription a cessé d'être active, que ce soit par clôture
+        ou graduation. Ne s'applique pas à la suspension temporaire.
+      external_alignments_json: '[{"label": "status_change_date", "match": "broad", "note": "DCI ''status_change_date''
+        covers any enrollment status change; PublicSchema ''exit_date'' is specifically the exit event",
+        "uri": "https://schema.spdci.org/extensions/ibr/v1/data/status_change_date", "vocabulary": "DCI
+        IBR", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 2, "total_systems": 6}'
+      bibliography_refs: '["spdci-ibr"]'
+  exit_reason:
+    slot_uri: publicschema:exit_reason
+    title: Exit reason
+    description: The reason the enrollment was permanently closed. Applies when enrollment status is closed,
+      not when graduated.
+    range: EnrollmentExitReason
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Motivo de salida
+      label_fr: Motif de sortie
+      domain_override: "null"
+      description_es: La razón por la cual la inscripción fue cerrada permanentemente. Se aplica cuando
+        el estado de inscripción es "cerrado", no cuando es "graduado".
+      description_fr: La raison pour laquelle l'inscription a été définitivement clôturée. S'applique
+        lorsque le statut d'inscription est clos, pas lorsqu'il est gradué.
+  frequency:
+    slot_uri: publicschema:frequency
+    title: Delivery frequency
+    description: How often the entitlement is delivered (monthly, quarterly, annual, one-time).
+    range: BenefitFrequency
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Frecuencia de entrega
+      label_fr: Fréquence de versement
+      domain_override: "null"
+      description_es: Con qué frecuencia se entrega el derecho (mensual, trimestral, anual, única vez).
+      description_fr: La fréquence à laquelle la prestation est versée (mensuelle, trimestrielle, annuelle,
+        unique).
+      convergence_json: '{"system_count": 0, "total_systems": 5}'
+      bibliography_refs: '["iso-20022-frequency", "rfc-5545"]'
+  frequency_rule:
+    slot_uri: publicschema:frequency_rule
+    title: Frequency rule
+    description: An iCalendar recurrence rule (RFC 5545 RRULE) specifying a custom schedule. Used when
+      the frequency property is set to 'custom'.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Regla de frecuencia
+      label_fr: Règle de fréquence
+      domain_override: "null"
+      description_es: Una regla de recurrencia iCalendar (RRULE RFC 5545) que especifica un calendario
+        personalizado. Se utiliza cuando la propiedad frequency se establece en 'custom'.
+      description_fr: Une règle de récurrence iCalendar (RRULE RFC 5545) spécifiant un calendrier personnalisé.
+        Utilisée lorsque la propriété frequency est définie sur 'custom'.
+      convergence_json: '{"system_count": 0, "total_systems": 5}'
+      bibliography_refs: '["rfc-5545"]'
+  governing_jurisdiction:
+    slot_uri: publicschema:governing_jurisdiction
+    title: Governing jurisdiction
+    description: The country or subdivision whose legislation governs this enrollment. Implicit in domestic
+      programs, but must be explicit in cross-border or federated contexts such as social security coordination
+      between countries.
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Jurisdicción aplicable
+      label_fr: Juridiction compétente
+      description_es: El pais o subdivision cuya legislacion rige esta inscripcion. Implicito en los programas
+        nacionales, pero debe ser explicito en contextos transfronterizos o federados como la coordinacion
+        de la seguridad social entre paises.
+      description_fr: Le pays ou la subdivision dont la législation régit cette inscription. Implicite
+        dans les programmes nationaux, mais doit être explicite dans les contextes transfrontaliers ou
+        fédérés tels que la coordination de la sécurité sociale entre pays.
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["ebsi-portable-doc-a1"]'
+  grievance_status:
+    slot_uri: publicschema:grievance_status
+    title: Grievance status
+    description: The current processing state of the grievance.
+    range: GrievanceStatus
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Estado de la reclamación
+      label_fr: Statut de la réclamation
+      description_es: El estado actual de tramitación de la reclamación.
+      description_fr: L'état actuel de traitement du grief.
+      convergence_json: '{"system_count": 4, "total_systems": 5}'
+      bibliography_refs: '["wb-grm-guidance"]'
+  grievance_subject:
+    slot_uri: publicschema:grievance_subject
+    title: Grievance subject
+    description: The identifier, URI, or local reference for the person, enrollment, payment event, or
+      other record that the grievance concerns.
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Asunto de la reclamación
+      label_fr: Objet de la réclamation
+      description_es: El identificador, URI o referencia local de la persona, la inscripción, el evento
+        de pago u otro registro al que se refiere la reclamación.
+      description_fr: L'identifiant, l'URI ou la référence locale de la personne, de l'inscription, de
+        l'événement de paiement ou d'un autre dossier concerné par la réclamation.
+      convergence_json: '{"system_count": 3, "total_systems": 5}'
+  grievance_type:
+    slot_uri: publicschema:grievance_type
+    title: Grievance type
+    description: The primary category of issue recorded for the grievance, such as an appeal, payment
+      complaint, correction request, or misconduct allegation.
+    range: GrievanceType
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Tipo de reclamación
+      label_fr: Type de réclamation
+      description_es: La categoría principal del problema registrada para la reclamación, como un recurso,
+        una queja de pago, una solicitud de corrección o una alegación de mala conducta.
+      description_fr: La catégorie principale du problème enregistrée pour la réclamation, comme un recours,
+        une plainte de paiement, une demande de correction ou une allégation de manquement professionnel.
+      sensitivity: sensitive
+      convergence_json: '{"system_count": 3, "total_systems": 5}'
+      bibliography_refs: '["wb-grm-guidance", "wb-sourcebook-ch8"]'
+  implementing_agency:
+    slot_uri: publicschema:implementing_agency
+    title: Implementing agency
+    description: The government ministry or organization responsible for program administration.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Agencia ejecutora
+      label_fr: Agence de mise en œuvre
+      description_es: El ministerio gubernamental u organización responsable de la administración del
+        programa.
+      description_fr: Le ministère gouvernemental ou l'organisation responsable de l'administration du
+        programme.
+      convergence_json: '{"system_count": 2, "total_systems": 4}'
+      bibliography_refs: '["semic-cpov"]'
+  is_enrolled:
+    slot_uri: publicschema:is_enrolled
+    title: Is enrolled
+    description: Whether the person is currently enrolled in a program. Designed for verifiable credentials
+      where enrollment status must be disclosed without revealing the specific program or detailed enrollment
+      state. For operational queries, use enrollment_status instead.
+    range: boolean
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Está inscrito
+      label_fr: Est inscrit
+      description_es: Indica si la persona está actualmente inscrita en un programa. Diseñado para credenciales
+        verificables donde el estado de inscripción debe divulgarse sin revelar el programa específico
+        o el estado detallado de inscripción. Para consultas operacionales, usar enrollment_status.
+      description_fr: Indique si la personne est actuellement inscrite dans un programme. Conçu pour les
+        justificatifs vérifiables où le statut d'inscription doit être divulgué sans révéler le programme
+        spécifique ou l'état détaillé de l'inscription. Pour les requêtes opérationnelles, utiliser enrollment_status.
+      bibliography_refs: '["w3c-vc-data-model-2"]'
+  program_ref:
+    slot_uri: publicschema:program_ref
+    title: Program
+    description: A link to the program under which this enrollment, entitlement, eligibility decision,
+      or benefit schedule exists.
+    range: Program
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Programa
+      label_fr: Programme
+      description_es: Un enlace al programa bajo el cual existe esta inscripción, derecho, decisión de
+        elegibilidad o calendario de prestaciones.
+      description_fr: Un lien vers le programme dans le cadre duquel cette inscription, ce droit, cette
+        décision d'éligibilité ou ce calendrier de prestations existe.
+      sensitivity: sensitive
+      bespoke_type: uri
+      convergence_json: '{"system_count": 5, "total_systems": 6}'
+  receiving_program:
+    slot_uri: publicschema:receiving_program
+    title: Receiving program
+    description: Reference to the program or organization to which the referral is directed.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Programa destinatario
+      label_fr: Programme destinataire
+      domain_override: "null"
+      description_es: Referencia al programa u organización al que se dirige la derivación.
+      description_fr: Référence au programme ou à l'organisation vers lesquels l'orientation est dirigée.
+      convergence_json: '{"system_count": 0, "total_systems": 3}'
+  referral_date:
+    slot_uri: publicschema:referral_date
+    title: Referral date
+    description: The date on which the referral was made.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de derivación
+      label_fr: Date d'orientation
+      domain_override: "null"
+      description_es: La fecha en que se realizó la derivación.
+      description_fr: La date à laquelle l'orientation a été effectuée.
+      convergence_json: '{"system_count": 1, "total_systems": 3}'
+  referral_reason:
+    slot_uri: publicschema:referral_reason
+    title: Referral reason
+    description: A free-text explanation of why the person or household was referred from one program
+      to another.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Motivo de derivación
+      label_fr: Motif d'orientation
+      domain_override: "null"
+      description_es: Una explicación en texto libre de por qué la persona u hogar fue derivado de un
+        programa a otro.
+      description_fr: Une explication en texte libre de la raison pour laquelle la personne ou le ménage
+        a été orienté d'un programme vers un autre.
+      convergence_json: '{"system_count": 1, "total_systems": 3}'
+  referral_status:
+    slot_uri: publicschema:referral_status
+    title: Referral status
+    description: The current state of the referral (pending, accepted, declined, completed).
+    range: ReferralStatus
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado de la derivación
+      label_fr: Statut de l'orientation
+      domain_override: "null"
+      description_es: El estado actual de la derivación (pendiente, aceptada, rechazada, completada).
+      description_fr: L'état actuel de l'orientation (en attente, acceptée, refusée, terminée).
+      convergence_json: '{"system_count": 1, "total_systems": 3}'
+  referred_person:
+    slot_uri: publicschema:referred_person
+    title: Referred person
+    description: The person who is being referred.
+    range: Person
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Persona derivada
+      label_fr: Personne orientée
+      domain_override: "null"
+      description_es: La persona que es objeto de la derivación.
+      description_fr: La personne qui fait l'objet de l'orientation.
+      convergence_json: '{"system_count": 1, "total_systems": 3}'
+  referring_program:
+    slot_uri: publicschema:referring_program
+    title: Referring program
+    description: Reference to the program or organization making the referral.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Programa derivador
+      label_fr: Programme orienteur
+      domain_override: "null"
+      description_es: Referencia al programa u organización que realiza la derivación.
+      description_fr: Référence au programme ou à l'organisation effectuant l'orientation.
+      convergence_json: '{"system_count": 0, "total_systems": 3}'
+  resolution_date:
+    slot_uri: publicschema:resolution_date
+    title: Resolution date
+    description: The date on which a resolution decision was issued for the grievance.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Fecha de resolución
+      label_fr: Date de résolution
+      domain_override: "null"
+      description_es: La fecha en que se emitió la decisión de resolución de la queja.
+      description_fr: La date à laquelle une décision de résolution a été rendue pour le grief.
+      convergence_json: '{"system_count": 1, "total_systems": 5}'
+  schedule_ref:
+    slot_uri: publicschema:schedule_ref
+    title: Schedule reference
+    description: Reference to the benefit schedule that this entitlement corresponds to.
+    range: BenefitSchedule
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Referencia al calendario
+      label_fr: Référence au calendrier
+      description_es: Referencia al calendario de beneficios al que corresponde este derecho.
+      description_fr: Référence au calendrier de prestations auquel ce droit correspond.
+      bespoke_type: uri
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  submission_date:
+    slot_uri: publicschema:submission_date
+    title: Submission date
+    description: The date on which the grievance was submitted or registered.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Fecha de presentación
+      label_fr: Date de soumission
+      domain_override: "null"
+      description_es: La fecha en que la queja fue presentada o registrada.
+      description_fr: La date à laquelle le grief a été soumis ou enregistré.
+      convergence_json: '{"system_count": 4, "total_systems": 5}'
+  targeting_approach:
+    slot_uri: publicschema:targeting_approach
+    title: Targeting approach
+    description: The method used to identify eligible beneficiaries.
+    range: TargetingApproach
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Enfoque de focalización
+      label_fr: Méthode de ciblage
+      description_es: El método utilizado para identificar a los beneficiarios elegibles.
+      description_fr: La méthode utilisée pour identifier les bénéficiaires admissibles.
+      convergence_json: '{"system_count": 0, "total_systems": 4}'
+  valid_until:
+    slot_uri: publicschema:valid_until
+    title: Valid until
+    description: The date until which the eligibility decision remains valid.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Válido hasta
+      label_fr: Valide jusqu'au
+      domain_override: "null"
+      description_es: La fecha hasta la cual la decisión de elegibilidad permanece válida.
+      description_fr: La date jusqu'à laquelle la décision d'admissibilité reste valide.
+      convergence_json: '{"system_count": 0, "total_systems": 2}'

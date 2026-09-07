@@ -1,0 +1,1504 @@
+id: https://publicschema.org/linkml/assessment
+name: publicschema-assessment
+title: PublicSchema assessment domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- civil_status
+- common
+- core
+- identity
+- misc
+- vocabularies
+classes:
+  FunctioningProfile:
+    class_uri: publicschema:FunctioningProfile
+    title: Functioning Profile
+    description: 'A point-in-time record of functioning data collected about a person using a defined
+      instrument from the Washington Group family: WG-SS (Short Set), WG-ES (Extended Set), CFM 2-4, or
+      CFM 5-17. Captures the structured item responses (seeing, hearing, walking, cognition, self-care,
+      communication, affect, pain, fatigue, behaviour, and related extended items) alongside the administration
+      context (administration mode, respondent, instrument version). For WG-SS administrations, the profile
+      carries the canonical disability identifier (recommended cutoff: at least one domain reports "a
+      lot of difficulty" or "cannot do at all") and the domains that triggered it. This is a survey-based
+      statistical identifier for population reporting, not a clinical disability determination. Alternate
+      cutoffs are recorded via ScoringEvent. No equivalent derived identifier is yet defined for CFM or
+      WG-ES administrations.
+
+      '
+    is_a: Profile
+    slots:
+    - difficulty_seeing
+    - difficulty_hearing
+    - difficulty_walking
+    - difficulty_walking_100m
+    - difficulty_walking_500m
+    - difficulty_climbing_steps
+    - difficulty_cognition
+    - difficulty_self_care
+    - difficulty_communication
+    - uses_glasses
+    - uses_hearing_aid
+    - uses_mobility_aid
+    - difficulty_learning
+    - difficulty_dexterity
+    - difficulty_playing
+    - difficulty_remembering
+    - difficulty_concentrating
+    - difficulty_accepting_change
+    - difficulty_making_friends
+    - difficulty_controlling_behaviour
+    - difficulty_disruptive_behaviour
+    - difficulty_understanding_others
+    - difficulty_being_understood
+    - difficulty_being_understood_inside_household
+    - difficulty_being_understood_outside_household
+    - anxiety_frequency
+    - anxiety_intensity
+    - anxiety_medication
+    - depression_frequency
+    - depression_intensity
+    - depression_medication
+    - difficulty_upper_body_reach
+    - difficulty_upper_body_fine_motor
+    - uses_sign_language
+    - mobility_aid_types
+    - cognition_remembering_frequency
+    - difficulty_seeing_face_across_room
+    - difficulty_seeing_coin
+    - hearing_aid_use_frequency
+    - difficulty_hearing_quiet_room
+    - difficulty_hearing_noisy_room
+    - cognition_subdomain
+    - remembering_frequency
+    - remembering_extent
+    - pain_frequency
+    - pain_intensity
+    - fatigue_frequency
+    - fatigue_duration
+    - fatigue_intensity
+    - disability_identified
+    - disability_domains_identified
+    status: bibo:status/forthcoming
+    close_mappings:
+    - fhir:QuestionnaireResponse
+    annotations:
+      label_es: Perfil de funcionamiento
+      label_fr: Profil de fonctionnement
+      description_es: 'Un registro puntual de datos de funcionamiento recopilados sobre una persona mediante
+        un instrumento definido de la familia Washington Group: WG-SS (conjunto corto), WG-ES (conjunto
+        extendido), CFM 2-4 o CFM 5-17. Consigna las respuestas estructuradas a los ítems (visión, audición,
+        caminar, cognición, cuidado personal, comunicación, afecto, dolor, fatiga, conducta e ítems extendidos
+        relacionados) junto con el contexto de administración (modo de administración, respondiente, versión
+        del instrumento). Para administraciones WG-SS, el perfil lleva el identificador canónico de discapacidad
+        (corte recomendado: al menos un dominio reporta "mucha dificultad" o "no puede hacerlo") y los
+        dominios que lo activaron. Es un identificador estadístico de encuesta para reporte poblacional,
+        no una determinación clínica de discapacidad. Los cortes alternativos se registran mediante ScoringEvent.
+        Aún no se define un identificador derivado equivalente para administraciones CFM o WG-ES.'
+      description_fr: 'Un enregistrement ponctuel de données de fonctionnement collectées sur une personne
+        à l''aide d''un instrument défini de la famille Washington Group : WG-SS (ensemble court), WG-ES
+        (ensemble étendu), CFM 2-4 ou CFM 5-17. Consigne les réponses structurées aux items (vision, audition,
+        marche, cognition, soins personnels, communication, affect, douleur, fatigue, comportement et
+        items étendus associés) ainsi que le contexte d''administration (mode d''administration, répondant,
+        version de l''instrument). Pour les administrations WG-SS, le profil porte l''identifiant canonique
+        de handicap (seuil recommandé : au moins un domaine rapporte « beaucoup de difficulté » ou « ne
+        peut pas du tout ») et les domaines qui l''ont déclenché. Il s''agit d''un identifiant statistique
+        d''enquête pour le reporting de population, pas d''une détermination clinique du handicap. Les
+        seuils alternatifs sont enregistrés via ScoringEvent. Aucun identifiant dérivé équivalent n''est
+        encore défini pour les administrations CFM ou WG-ES.'
+      external_alignments_json: '[{"label": "QuestionnaireResponse (WG panel)", "match": "close", "note":
+        "WG and CFM administrations serialize naturally as a QuestionnaireResponse whose Questionnaire
+        is the corresponding WG or CFM instrument definition", "uri": "http://hl7.org/fhir/QuestionnaireResponse",
+        "vocabulary": "FHIR R4", "vocabulary_id": "fhir"}]'
+      convergence_json: '{"notes": "Only FHIR directly represents a WG or CFM administration (as a QuestionnaireResponse).
+        The other five v1 systems (DHIS2, OpenCRVS, OpenSPP, openIMIS, DCI) carry a derived disability
+        category on the Person record, not the item-level answers. The Washington Group analytic guidelines
+        require the raw items to derive cutoff-based identifiers, and national surveys that feed disability
+        statistics (DHS, MICS, census long forms) keep the items as separate survey records. This concept
+        gives programs a standards-faithful home for those answers; Person retains a coarse functioning_status
+        flag for operational queries.\n", "system_count": 1, "total_systems": 6}'
+      property_groups_json: '[{"category": "administrative", "properties": ["identifiers", "subject",
+        "observation_date", "performed_by", "instrument_used", "software_used", "administration_mode",
+        "respondent", "respondent_relationship", "items_asked"]}, {"category": "functioning", "properties":
+        ["difficulty_seeing", "difficulty_hearing", "difficulty_walking", "difficulty_walking_100m", "difficulty_walking_500m",
+        "difficulty_climbing_steps", "difficulty_cognition", "difficulty_self_care", "difficulty_communication",
+        "difficulty_dexterity", "uses_glasses", "uses_hearing_aid", "uses_mobility_aid", "anxiety_frequency",
+        "anxiety_intensity", "anxiety_medication", "depression_frequency", "depression_intensity", "depression_medication",
+        "difficulty_upper_body_reach", "difficulty_upper_body_fine_motor", "uses_sign_language", "mobility_aid_types",
+        "cognition_remembering_frequency", "difficulty_seeing_face_across_room", "difficulty_seeing_coin",
+        "hearing_aid_use_frequency", "difficulty_hearing_quiet_room", "difficulty_hearing_noisy_room",
+        "cognition_subdomain", "remembering_frequency", "remembering_extent", "pain_frequency", "pain_intensity",
+        "fatigue_frequency", "fatigue_duration", "fatigue_intensity", "disability_identified", "disability_domains_identified"]},
+        {"category": "child_functioning", "properties": ["difficulty_learning", "difficulty_playing",
+        "difficulty_remembering", "difficulty_concentrating", "difficulty_accepting_change", "difficulty_making_friends",
+        "difficulty_controlling_behaviour", "difficulty_disruptive_behaviour", "difficulty_understanding_others",
+        "difficulty_being_understood", "difficulty_being_understood_inside_household", "difficulty_being_understood_outside_household"]}]'
+      bibliography_refs: '["barca-2021-inclusive-information-systems", "dhs-recode7", "fhir-r4", "mics6",
+        "washington-group-es", "washington-group-ss"]'
+  Profile:
+    class_uri: publicschema:Profile
+    title: Profile
+    description: 'A point-in-time record of data collected about a subject using a defined instrument.
+      Profile is the shared supertype for SocioEconomicProfile and FunctioningProfile within PublicSchema,
+      and for additional profile subtypes published in a sibling schema (see ADR-011). Each profile captures
+      who was observed, when, using which instrument, under which administration mode, and by whom. A
+      profile records the structured responses from a single administration, and may also carry outputs
+      derived from those responses by applying the canonical scoring rule for the instrument. Non-canonical
+      scoring, alternate thresholds, a different rule version, or recomputation after the canonical rule
+      is revised, is captured as a ScoringEvent rather than written back to the profile.
+
+      '
+    is_a: Event
+    slots:
+    - subject
+    - observation_date
+    - performed_by
+    - instrument_used
+    - software_used
+    - administration_mode
+    - respondent
+    - respondent_relationship
+    - items_asked
+    status: bibo:status/forthcoming
+    close_mappings:
+    - fhir:QuestionnaireResponse
+    annotations:
+      label_es: Perfil
+      label_fr: Profil
+      description_es: Un registro puntual de datos recopilados sobre un sujeto mediante un instrumento
+        definido. Profile es el supertipo compartido de SocioEconomicProfile y FunctioningProfile en PublicSchema,
+        y de subtipos adicionales publicados en un esquema hermano (véase ADR-011). Cada perfil consigna
+        quién fue observado, cuándo, con qué instrumento, bajo qué modo de administración y por quién.
+        Un perfil registra las respuestas estructuradas de una administración única, y también puede llevar
+        resultados derivados de esas respuestas aplicando la regla de puntuación canónica del instrumento.
+        La puntuación no canónica, los umbrales alternativos, una versión diferente de la regla o el recálculo
+        tras la revisión de la regla canónica se registran como un ScoringEvent en lugar de reescribirse
+        en el perfil.
+      description_fr: Un enregistrement ponctuel de données collectées sur un sujet à l'aide d'un instrument
+        défini. Profile est le supertype partagé de SocioEconomicProfile et FunctioningProfile dans PublicSchema,
+        et de sous-types supplémentaires publiés dans un schéma frère (voir ADR-011). Chaque profil consigne
+        qui a été observé, quand, avec quel instrument, selon quel mode d'administration et par qui. Un
+        profil enregistre les réponses structurées d'une administration unique et peut aussi porter les
+        résultats dérivés de ces réponses en appliquant la règle de notation canonique de l'instrument.
+        La notation non canonique, les seuils alternatifs, une version différente de la règle ou un recalcul
+        après révision de la règle canonique sont consignés dans un ScoringEvent plutôt que réécrits sur
+        le profil.
+      external_alignments_json: '[{"label": "QuestionnaireResponse", "match": "close", "note": "FHIR QuestionnaireResponse
+        is the canonical peer for a single administration of a data-collection instrument. Our Profile
+        is abstract and splits by instrument family; FunctioningProfile and SocioEconomicProfile align
+        most closely because they serialize as a single QuestionnaireResponse.", "uri": "http://hl7.org/fhir/QuestionnaireResponse",
+        "vocabulary": "FHIR R4", "vocabulary_id": "fhir"}]'
+      convergence_json: '{"notes": "Profile is a PublicSchema abstract supertype; no mapped system exposes
+        a profile supertype by that name, so system_count is reported as 0/6 per the convention stated
+        in design-principles.md section 3. FHIR models instrument administration as a first-class record
+        (QuestionnaireResponse, Observation), which is the closest supertype-level analogue; the other
+        five mapped cores (DHIS2, OpenCRVS, OpenSPP, openIMIS, DCI Core) flatten observation data into
+        the subject record. The observation pattern is nonetheless how domain tools model this data outside
+        MIS cores: DHS and MICS store responses as separate survey records, CommCare CMAM keeps nutrition
+        measurements on a visit form, and Washington Group analytics tabulate from raw item responses,
+        not Person flags. DCI''s SocioEconomicProfile is the closest peer in social protection and names
+        the pattern explicitly. Convergence evidence for the abstract sits with the concrete Profile subtypes
+        (FunctioningProfile, SocioEconomicProfile, and domain-specific extensions in sibling schemas).\n",
+        "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["fhir-r4", "spdci-social-registry"]'
+    abstract: true
+slots:
+  administration_mode:
+    slot_uri: publicschema:administration_mode
+    title: Administration mode
+    description: 'How the instrument was administered to the subject: self-report, proxy-report (someone
+      else answering about the subject), assisted (the subject answering with help), or mixed. Washington
+      Group analytical guidance recommends disaggregating prevalence by administration mode because proxy
+      responses systematically underreport difficulty.'
+    range: AdministrationMode
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Modo de administración
+      label_fr: Mode d'administration
+      description_es: 'Cómo se administró el instrumento al sujeto: autoinforme, informe por terceros
+        (otra persona responde sobre el sujeto), asistido (el sujeto responde con ayuda) o mixto. Las
+        directrices analíticas del Washington Group recomiendan desagregar la prevalencia por modo de
+        administración, ya que las respuestas por terceros subestiman sistemáticamente la dificultad.'
+      description_fr: 'Comment l''instrument a été administré au sujet : auto-déclaration, déclaration
+        par procuration (quelqu''un d''autre répondant au sujet du sujet), assisté (le sujet répondant
+        avec aide) ou mixte. Les lignes directrices analytiques du Washington Group recommandent de désagréger
+        la prévalence par mode d''administration, car les réponses par procuration sous-déclarent systématiquement
+        la difficulté.'
+  anxiety_frequency:
+    slot_uri: publicschema:anxiety_frequency
+    title: Anxiety frequency
+    description: How often the person feels worried, nervous, or anxious. Applies to adults (WG-ES ANX_1)
+      and to children ages 5-17 (CFM CF23, phrased as 'seems very anxious, nervous, or worried').
+    range: CfmSymptomFrequency
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Frecuencia de la ansiedad
+      label_fr: Fréquence de l'anxiété
+      description_es: Con qué frecuencia la persona se siente preocupada, nerviosa o ansiosa. Se aplica
+        a adultos (WG-ES ANX_1) y a niños de 5 a 17 años (CFM CF23, formulado como 'parece muy ansioso,
+        nervioso o preocupado').
+      description_fr: À quelle fréquence la personne se sent inquiète, nerveuse ou anxieuse. S'applique
+        aux adultes (WG-ES ANX_1) et aux enfants de 5 à 17 ans (CFM CF23, formulé comme 'semble très anxieux,
+        nerveux ou inquiet').
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17", "wg_es"]'
+      age_applicability_json: '["adult", "child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm", "washington-group-es"]'
+  anxiety_intensity:
+    slot_uri: publicschema:anxiety_intensity
+    title: Anxiety intensity
+    description: The intensity of the person's last feeling of worry, nervousness, or anxiety. Applies
+      to adults (WG-ES ANX_3). Asked of respondents who reported feeling anxious at least a few times
+      a year.
+    range: FunctionalIntensity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Intensidad de la ansiedad
+      label_fr: Intensité de l'anxiété
+      description_es: La intensidad del último sentimiento de preocupación, nerviosismo o ansiedad de
+        la persona. Se aplica a adultos (WG-ES ANX_3). Se pregunta a los encuestados que reportaron sentirse
+        ansiosos al menos algunas veces al año.
+      description_fr: L'intensité du dernier sentiment d'inquiétude, de nervosité ou d'anxiété de la personne.
+        S'applique aux adultes (WG-ES ANX_3). Posée aux répondants ayant déclaré se sentir anxieux au
+        moins quelques fois par an.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17", "wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  anxiety_medication:
+    slot_uri: publicschema:anxiety_medication
+    title: Anxiety medication
+    description: Whether the person takes medication for anxiety or worry. Applies to adults (WG-ES ANX_2).
+      This filter is used to interpret anxiety_frequency answers, which are asked about symptoms while
+      on medication if the person takes any.
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Medicación para la ansiedad
+      label_fr: Médicament pour l'anxiété
+      description_es: Si la persona toma medicación para la ansiedad o la preocupación. Se aplica a adultos
+        (WG-ES ANX_2). Este filtro se usa para interpretar las respuestas de anxiety_frequency, que se
+        formulan sobre los síntomas bajo medicación si la persona la toma.
+      description_fr: Si la personne prend un traitement pour l'anxiété ou l'inquiétude. S'applique aux
+        adultes (WG-ES ANX_2). Ce filtre sert à interpréter les réponses à anxiety_frequency, qui sont
+        posées à propos des symptômes sous traitement si la personne en prend un.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  cognition_remembering_frequency:
+    slot_uri: publicschema:cognition_remembering_frequency
+    title: Frequency of difficulty remembering
+    description: How often the person has difficulty remembering. Applies to adults (WG-ES COG_3). Asked
+      only of respondents whose cognition difficulty includes remembering (COG_2 result is not concentrating_only).
+    range: CognitionRememberingFrequency
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Frecuencia de dificultad para recordar
+      label_fr: Fréquence des difficultés à se souvenir
+      description_es: Con qué frecuencia la persona tiene dificultad para recordar. Se aplica a adultos
+        (WG-ES COG_3). Se pregunta solo a los encuestados cuya dificultad cognitiva incluye recordar (el
+        resultado COG_2 no es solo concentrarse).
+      description_fr: À quelle fréquence la personne a des difficultés à se souvenir. S'applique aux adultes
+        (WG-ES COG_3). Posée uniquement aux répondants dont la difficulté cognitive inclut la mémoire
+        (le résultat COG_2 n'est pas concentration uniquement).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+  cognition_subdomain:
+    slot_uri: publicschema:cognition_subdomain
+    title: Cognition subdomain
+    description: Whether the person's cognition difficulty is with remembering, concentrating, or both.
+      Applies to adults (WG-ES COG_2). Asked of respondents who reported cognition difficulty.
+    range: CognitionSubdomain
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Subdominio cognitivo
+      label_fr: Sous-domaine cognitif
+      description_es: Si la dificultad cognitiva de la persona es para recordar, concentrarse, o ambos.
+        Se aplica a adultos (WG-ES COG_2). Se pregunta a los encuestados que reportaron dificultades cognitivas.
+      description_fr: Si la difficulté cognitive de la personne concerne la mémoire, la concentration
+        ou les deux. S'applique aux adultes (WG-ES COG_2). Posée aux répondants ayant déclaré des difficultés
+        cognitives.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  depression_frequency:
+    slot_uri: publicschema:depression_frequency
+    title: Depression frequency
+    description: How often the person feels depressed. Applies to adults (WG-ES DEP_1) and to children
+      ages 5-17 (CFM CF24, phrased as 'seems very sad or depressed').
+    range: CfmSymptomFrequency
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Frecuencia de la depresión
+      label_fr: Fréquence de la dépression
+      description_es: Con qué frecuencia la persona se siente deprimida. Se aplica a adultos (WG-ES DEP_1)
+        y a niños de 5 a 17 años (CFM CF24, formulado como 'parece muy triste o deprimido').
+      description_fr: À quelle fréquence la personne se sent déprimée. S'applique aux adultes (WG-ES DEP_1)
+        et aux enfants de 5 à 17 ans (CFM CF24, formulé comme 'semble très triste ou déprimé').
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17", "wg_es"]'
+      age_applicability_json: '["adult", "child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm", "washington-group-es"]'
+  depression_intensity:
+    slot_uri: publicschema:depression_intensity
+    title: Depression intensity
+    description: The intensity of the person's last feeling of depression. Applies to adults (WG-ES DEP_3).
+      Asked of respondents who reported feeling depressed at least a few times a year.
+    range: FunctionalIntensity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Intensidad de la depresión
+      label_fr: Intensité de la dépression
+      description_es: La intensidad del último sentimiento de depresión de la persona. Se aplica a adultos
+        (WG-ES DEP_3). Se pregunta a los encuestados que reportaron sentirse deprimidos al menos algunas
+        veces al año.
+      description_fr: L'intensité du dernier sentiment de dépression de la personne. S'applique aux adultes
+        (WG-ES DEP_3). Posée aux répondants ayant déclaré se sentir déprimés au moins quelques fois par
+        an.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17", "wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  depression_medication:
+    slot_uri: publicschema:depression_medication
+    title: Depression medication
+    description: Whether the person takes medication for depression. Applies to adults (WG-ES DEP_2).
+      This filter is used to interpret depression_frequency answers, which are asked about symptoms while
+      on medication if the person takes any.
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Medicación para la depresión
+      label_fr: Médicament contre la dépression
+      description_es: Si la persona toma medicación para la depresión. Se aplica a adultos (WG-ES DEP_2).
+        Este filtro se usa para interpretar las respuestas de depression_frequency, que se formulan sobre
+        los síntomas bajo medicación si la persona la toma.
+      description_fr: Si la personne prend un traitement pour la dépression. S'applique aux adultes (WG-ES
+        DEP_2). Ce filtre sert à interpréter les réponses à depression_frequency, qui sont posées à propos
+        des symptômes sous traitement si la personne en prend un.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  difficulty_accepting_change:
+    slot_uri: publicschema:difficulty_accepting_change
+    title: Difficulty accepting change
+    description: The degree of difficulty the child experiences accepting changes in routine. Applies
+      to children ages 5-17 (CFM).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para aceptar cambios
+      label_fr: Difficulté à accepter le changement
+      description_es: El grado de dificultad que el niño experimenta para aceptar cambios en la rutina.
+        Se aplica a niños de 5 a 17 años (CFM).
+      description_fr: Le degré de difficulté que l'enfant éprouve à accepter les changements de routine.
+        S'applique aux enfants de 5 à 17 ans (CFM).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17"]'
+      age_applicability_json: '["child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_being_understood:
+    slot_uri: publicschema:difficulty_being_understood
+    title: Difficulty being understood
+    description: The degree of difficulty others have understanding the child when (name) speaks (expressive
+      communication), compared to children of the same age. Applies to children ages 2-4 (CFM CF13).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para hacerse entender
+      label_fr: Difficulté à se faire comprendre
+      description_es: El grado de dificultad que tienen los demás para entender al niño cuando habla (comunicación
+        expresiva), en comparación con niños de la misma edad. Se aplica a niños de 2 a 4 años (CFM CF13).
+      description_fr: Le degré de difficulté qu'ont les autres à comprendre l'enfant lorsqu'il parle (communication
+        expressive), par rapport aux enfants du même âge. S'applique aux enfants de 2 à 4 ans (CFM CF13).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4", "cfm_5_17"]'
+      age_applicability_json: '["child_2_4"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_being_understood_inside_household:
+    slot_uri: publicschema:difficulty_being_understood_inside_household
+    title: Difficulty being understood inside household
+    description: The degree of difficulty people inside the household have understanding the child when
+      (name) speaks, compared to children of the same age. Applies to children ages 5-17 (CFM CF15).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para hacerse entender dentro del hogar
+      label_fr: Difficulté à se faire comprendre au sein du ménage
+      description_es: El grado de dificultad que tienen las personas dentro del hogar para entender al
+        niño cuando habla, en comparación con niños de la misma edad. Se aplica a niños de 5 a 17 años
+        (CFM CF15).
+      description_fr: Le degré de difficulté qu'ont les personnes du ménage à comprendre l'enfant lorsqu'il
+        parle, par rapport aux enfants du même âge. S'applique aux enfants de 5 à 17 ans (CFM CF15).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4"]'
+      age_applicability_json: '["child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_being_understood_outside_household:
+    slot_uri: publicschema:difficulty_being_understood_outside_household
+    title: Difficulty being understood outside household
+    description: The degree of difficulty people outside the household have understanding the child when
+      (name) speaks, compared to children of the same age. Applies to children ages 5-17 (CFM CF16).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para hacerse entender fuera del hogar
+      label_fr: Difficulté à se faire comprendre hors du ménage
+      description_es: El grado de dificultad que tienen las personas fuera del hogar para entender al
+        niño cuando habla, en comparación con niños de la misma edad. Se aplica a niños de 5 a 17 años
+        (CFM CF16).
+      description_fr: Le degré de difficulté qu'ont les personnes à l'extérieur du ménage à comprendre
+        l'enfant lorsqu'il parle, par rapport aux enfants du même âge. S'applique aux enfants de 5 à 17
+        ans (CFM CF16).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4"]'
+      age_applicability_json: '["child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_climbing_steps:
+    slot_uri: publicschema:difficulty_climbing_steps
+    title: Difficulty climbing steps
+    description: The degree of difficulty the person experiences walking up or down 12 steps. Applies
+      to adults (WG-ES MOB_6).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para subir escalones
+      label_fr: Difficulté à monter des marches
+      description_es: El grado de dificultad que la persona experimenta al subir o bajar 12 escalones.
+        Se aplica a adultos (WG-ES MOB_6).
+      description_fr: Le degré de difficulté que la personne éprouve à monter ou descendre 12 marches.
+        S'applique aux adultes (WG-ES MOB_6).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17", "wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  difficulty_cognition:
+    slot_uri: publicschema:difficulty_cognition
+    title: Difficulty with cognition
+    description: The degree of difficulty the person experiences remembering or concentrating. Applies
+      to adults (WG-SS); for children ages 5-17 see difficulty_remembering and difficulty_concentrating,
+      which the CFM asks as two separate questions.
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad cognitiva
+      label_fr: Difficulté cognitive
+      description_es: El grado de dificultad que la persona experimenta para recordar o concentrarse.
+        Se aplica a adultos (WG-SS); para niños de 5 a 17 años, véase difficulty_remembering y difficulty_concentrating,
+        que el CFM hace como dos preguntas separadas.
+      description_fr: Le degré de difficulté que la personne éprouve à se souvenir ou à se concentrer.
+        S'applique aux adultes (WG-SS); pour les enfants de 5 à 17 ans, voir difficulty_remembering et
+        difficulty_concentrating, que le CFM pose comme deux questions distinctes.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es", "wg_ss"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["dhs-recode7", "fhir-r4", "mics6", "washington-group-es", "washington-group-ss"]'
+  difficulty_communication:
+    slot_uri: publicschema:difficulty_communication
+    title: Difficulty communicating
+    description: The degree of difficulty the person experiences communicating, for example understanding
+      or being understood, using their usual language. Applies to adults (WG-SS / WG-ES collapsed item).
+      For children the CFM splits this into separate receptive and expressive items per age band; see
+      difficulty_understanding_others, difficulty_being_understood, difficulty_being_understood_inside_household,
+      difficulty_being_understood_outside_household.
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para comunicarse
+      label_fr: Difficulté à communiquer
+      description_es: El grado de dificultad que la persona experimenta al comunicarse, por ejemplo al
+        entender o al hacerse entender, en su idioma habitual. Se aplica a adultos (ítem agrupado WG-SS
+        / WG-ES). Para niños, el CFM divide este ítem en elementos receptivos y expresivos por franja
+        de edad; véase difficulty_understanding_others, difficulty_being_understood, difficulty_being_understood_inside_household,
+        difficulty_being_understood_outside_household.
+      description_fr: Le degré de difficulté que la personne éprouve à communiquer, par exemple à comprendre
+        ou à se faire comprendre, dans sa langue habituelle. S'applique aux adultes (item collapsé WG-SS
+        / WG-ES). Pour les enfants, le CFM scinde cet item en éléments réceptifs et expressifs distincts
+        selon l'âge; voir difficulty_understanding_others, difficulty_being_understood, difficulty_being_understood_inside_household,
+        difficulty_being_understood_outside_household.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es", "wg_ss"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["dhs-recode7", "fhir-r4", "mics6", "washington-group-es", "washington-group-ss"]'
+  difficulty_concentrating:
+    slot_uri: publicschema:difficulty_concentrating
+    title: Difficulty concentrating
+    description: The degree of difficulty the child experiences concentrating on an activity they enjoy
+      doing. Applies to children ages 5-17 (CFM). Paired with difficulty_remembering; the WG-SS difficulty_cognition
+      property bundles both into a single question for adults.
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para concentrarse
+      label_fr: Difficulté à se concentrer
+      description_es: El grado de dificultad que el niño experimenta para concentrarse en una actividad
+        que disfruta. Se aplica a niños de 5 a 17 años (CFM). Se combina con difficulty_remembering; la
+        propiedad WG-SS difficulty_cognition agrupa ambos en una sola pregunta para adultos.
+      description_fr: Le degré de difficulté que l'enfant éprouve à se concentrer sur une activité qu'il
+        aime faire. S'applique aux enfants de 5 à 17 ans (CFM). Associé à difficulty_remembering; la propriété
+        WG-SS difficulty_cognition regroupe les deux en une seule question pour les adultes.
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17"]'
+      age_applicability_json: '["child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_controlling_behaviour:
+    slot_uri: publicschema:difficulty_controlling_behaviour
+    title: Difficulty controlling behaviour
+    description: The degree of difficulty the child has controlling their behaviour, compared to children
+      of the same age. Applies to children ages 5-17 (CFM CF21).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para controlar el comportamiento
+      label_fr: Difficulté à contrôler son comportement
+      description_es: El grado de dificultad que el niño tiene para controlar su comportamiento, en comparación
+        con niños de la misma edad. Se aplica a niños de 5 a 17 años (CFM CF21).
+      description_fr: Le degré de difficulté que l'enfant a à contrôler son comportement, par rapport
+        aux enfants du même âge. S'applique aux enfants de 5 à 17 ans (CFM CF21).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4", "cfm_5_17"]'
+      age_applicability_json: '["child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_dexterity:
+    slot_uri: publicschema:difficulty_dexterity
+    title: Difficulty with dexterity
+    description: The degree of difficulty the person experiences picking up a small object, such as a
+      button or pencil, with their hand. For children ages 2-4 (CFM CF11) the item is phrased comparatively
+      (difficulty picking up small objects compared to children of the same age).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad de destreza manual
+      label_fr: Difficulté de dextérité
+      description_es: El grado de dificultad que la persona experimenta para recoger un objeto pequeño,
+        como un botón o un lápiz, con la mano. Para niños de 2 a 4 años (CFM CF11), la pregunta se formula
+        de manera comparativa (dificultad para recoger objetos pequeños en comparación con niños de la
+        misma edad).
+      description_fr: Le degré de difficulté que la personne éprouve à saisir un petit objet, tel qu'un
+        bouton ou un crayon, avec la main. Pour les enfants de 2 à 4 ans (CFM CF11), la question est formulée
+        de manière comparative (difficulté à saisir de petits objets par rapport aux enfants du même âge).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4", "cfm_5_17", "wg_es"]'
+      age_applicability_json: '["adult", "child_2_4"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm", "washington-group-es"]'
+  difficulty_disruptive_behaviour:
+    slot_uri: publicschema:difficulty_disruptive_behaviour
+    title: Disruptive behaviour
+    description: How much the child kicks, bites, or hits other children or adults, compared to children
+      of the same age. Applies to children ages 2-4 (CFM CF16).
+    range: ComparativeBehaviourScale
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Conducta perturbadora
+      label_fr: Comportement perturbateur
+      description_es: En qué medida el niño da patadas, muerde o golpea a otros niños o adultos, en comparación
+        con niños de la misma edad. Se aplica a niños de 2 a 4 años (CFM CF16).
+      description_fr: Dans quelle mesure l'enfant donne des coups de pied, mord ou frappe d'autres enfants
+        ou des adultes, par rapport aux enfants du même âge. S'applique aux enfants de 2 à 4 ans (CFM
+        CF16).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17"]'
+      age_applicability_json: '["child_2_4"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_hearing:
+    slot_uri: publicschema:difficulty_hearing
+    title: Difficulty hearing
+    description: The degree of difficulty the person experiences hearing, even when using a hearing aid.
+      Applies to adults (WG-SS) and to children ages 2-17 (CFM).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para oír
+      label_fr: Difficulté à entendre
+      description_es: El grado de dificultad que la persona experimenta para escuchar, incluso usando
+        un audífono. Se aplica a adultos (WG-SS) y a niños de 2 a 17 años (CFM).
+      description_fr: Le degré de difficulté que la personne éprouve à entendre, même en utilisant une
+        aide auditive. S'applique aux adultes (WG-SS) et aux enfants de 2 à 17 ans (CFM).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4", "cfm_5_17", "wg_es", "wg_ss"]'
+      age_applicability_json: '["adult", "child_2_4", "child_5_17"]'
+      bibliography_refs: '["dhs-recode7", "fhir-r4", "mics6", "washington-group-cfm", "washington-group-es",
+        "washington-group-ss"]'
+  difficulty_hearing_noisy_room:
+    slot_uri: publicschema:difficulty_hearing_noisy_room
+    title: Difficulty hearing in a noisy room
+    description: The degree of difficulty the person experiences hearing what is said in a conversation
+      with one other person in a noisier room, with their hearing aid in use if they wear one. Applies
+      to adults (WG-ES HEAR_5).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para oír en un ambiente ruidoso
+      label_fr: Difficulté à entendre dans une pièce bruyante
+      description_es: El grado de dificultad que la persona experimenta al oír lo que se dice en una conversación
+        con otra persona en una habitación más ruidosa, con el audífono puesto si lo usa. Se aplica a
+        adultos (WG-ES HEAR_5).
+      description_fr: Le degré de difficulté que la personne éprouve à entendre ce qui se dit dans une
+        conversation avec une autre personne dans une pièce plus bruyante, avec son appareil auditif en
+        place si elle en porte un. S'applique aux adultes (WG-ES HEAR_5).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  difficulty_hearing_quiet_room:
+    slot_uri: publicschema:difficulty_hearing_quiet_room
+    title: Difficulty hearing in a quiet room
+    description: The degree of difficulty the person experiences hearing what is said in a conversation
+      with one other person in a quiet room, with their hearing aid in use if they wear one. Applies to
+      adults (WG-ES HEAR_4).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para oír en un ambiente tranquilo
+      label_fr: Difficulté à entendre dans une pièce calme
+      description_es: El grado de dificultad que la persona experimenta al oír lo que se dice en una conversación
+        con otra persona en una habitación silenciosa, con el audífono puesto si lo usa. Se aplica a adultos
+        (WG-ES HEAR_4).
+      description_fr: Le degré de difficulté que la personne éprouve à entendre ce qui se dit dans une
+        conversation avec une autre personne dans une pièce calme, avec son appareil auditif en place
+        si elle en porte un. S'applique aux adultes (WG-ES HEAR_4).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  difficulty_learning:
+    slot_uri: publicschema:difficulty_learning
+    title: Difficulty learning
+    description: The degree of difficulty the child experiences learning to do things, compared to children
+      of the same age. Applies to children ages 2-17 (CFM).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para aprender
+      label_fr: Difficulté à apprendre
+      description_es: El grado de dificultad que el niño experimenta para aprender a hacer cosas, en comparación
+        con niños de la misma edad. Se aplica a niños de 2 a 17 años (CFM).
+      description_fr: Le degré de difficulté que l'enfant éprouve à apprendre à faire des choses, par
+        rapport aux enfants du même âge. S'applique aux enfants de 2 à 17 ans (CFM).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4", "cfm_5_17"]'
+      age_applicability_json: '["child_2_4", "child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_making_friends:
+    slot_uri: publicschema:difficulty_making_friends
+    title: Difficulty making friends
+    description: The degree of difficulty the child experiences making friends. Applies to children ages
+      5-17 (CFM).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para hacer amigos
+      label_fr: Difficulté à se faire des amis
+      description_es: El grado de dificultad que el niño experimenta para hacer amigos. Se aplica a niños
+        de 5 a 17 años (CFM).
+      description_fr: Le degré de difficulté que l'enfant éprouve à se faire des amis. S'applique aux
+        enfants de 5 à 17 ans (CFM).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17"]'
+      age_applicability_json: '["child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_playing:
+    slot_uri: publicschema:difficulty_playing
+    title: Difficulty playing
+    description: The degree of difficulty the child experiences playing, compared to children of the same
+      age. Applies to children ages 2-4 (CFM).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para jugar
+      label_fr: Difficulté à jouer
+      description_es: El grado de dificultad que el niño experimenta para jugar, en comparación con niños
+        de la misma edad. Se aplica a niños de 2 a 4 años (CFM).
+      description_fr: Le degré de difficulté que l'enfant éprouve à jouer, par rapport aux enfants du
+        même âge. S'applique aux enfants de 2 à 4 ans (CFM).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4"]'
+      age_applicability_json: '["child_2_4"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_remembering:
+    slot_uri: publicschema:difficulty_remembering
+    title: Difficulty remembering
+    description: The degree of difficulty the child experiences remembering things. Applies to children
+      ages 5-17 (CFM). Paired with difficulty_concentrating; the WG-SS difficulty_cognition property bundles
+      both into a single question for adults.
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para recordar
+      label_fr: Difficulté à se souvenir
+      description_es: El grado de dificultad que el niño experimenta para recordar cosas. Se aplica a
+        niños de 5 a 17 años (CFM). Se combina con difficulty_concentrating; la propiedad WG-SS difficulty_cognition
+        agrupa ambos en una sola pregunta para adultos.
+      description_fr: Le degré de difficulté que l'enfant éprouve à se souvenir des choses. S'applique
+        aux enfants de 5 à 17 ans (CFM). Associé à difficulty_concentrating; la propriété WG-SS difficulty_cognition
+        regroupe les deux en une seule question pour les adultes.
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17"]'
+      age_applicability_json: '["child_5_17"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_seeing:
+    slot_uri: publicschema:difficulty_seeing
+    title: Difficulty seeing
+    description: The degree of difficulty the person experiences seeing, even when wearing glasses or
+      contact lenses. Applies to adults (WG-SS) and to children ages 2-17 (CFM).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para ver
+      label_fr: Difficulté à voir
+      description_es: El grado de dificultad que la persona experimenta para ver, incluso usando lentes
+        o anteojos. Se aplica a adultos (WG-SS) y a niños de 2 a 17 años (CFM).
+      description_fr: Le degré de difficulté que la personne éprouve à voir, même en portant des lunettes
+        ou des lentilles de contact. S'applique aux adultes (WG-SS) et aux enfants de 2 à 17 ans (CFM).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4", "cfm_5_17", "wg_es", "wg_ss"]'
+      age_applicability_json: '["adult", "child_2_4", "child_5_17"]'
+      bibliography_refs: '["dhs-recode7", "fhir-r4", "mics6", "washington-group-cfm", "washington-group-es",
+        "washington-group-ss"]'
+  difficulty_seeing_coin:
+    slot_uri: publicschema:difficulty_seeing_coin
+    title: Difficulty seeing nearby
+    description: The degree of difficulty the person experiences seeing something held at arm's length,
+      such as a coin in the palm of their hand, even when wearing glasses if they use them. Applies to
+      adults (WG-ES VIS_4, flagged OPTIONAL in the WG-ES instrument).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para ver de cerca
+      label_fr: Difficulté à voir de près
+      description_es: El grado de dificultad que la persona experimenta al ver algo sostenido a la distancia
+        de un brazo, como una moneda en la palma de la mano, incluso usando lentes si los utiliza. Se
+        aplica a adultos (WG-ES VIS_4, marcado como OPCIONAL en el instrumento WG-ES).
+      description_fr: Le degré de difficulté que la personne éprouve à voir quelque chose tenu à bout
+        de bras, comme une pièce de monnaie dans la paume de la main, même en portant des lunettes si
+        elle en utilise. S'applique aux adultes (WG-ES VIS_4, marqué OPTIONNEL dans l'instrument WG-ES).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  difficulty_seeing_face_across_room:
+    slot_uri: publicschema:difficulty_seeing_face_across_room
+    title: Difficulty seeing at distance
+    description: The degree of difficulty the person experiences seeing the face of someone across a room,
+      even when wearing glasses if they use them. Applies to adults (WG-ES VIS_3, flagged OPTIONAL in
+      the WG-ES instrument).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para ver a distancia
+      label_fr: Difficulté à voir à distance
+      description_es: El grado de dificultad que la persona experimenta al ver la cara de alguien al otro
+        lado de una habitación, incluso usando lentes si los utiliza. Se aplica a adultos (WG-ES VIS_3,
+        marcado como OPCIONAL en el instrumento WG-ES).
+      description_fr: Le degré de difficulté que la personne éprouve à voir le visage de quelqu'un de
+        l'autre côté d'une pièce, même en portant des lunettes si elle en utilise. S'applique aux adultes
+        (WG-ES VIS_3, marqué OPTIONNEL dans l'instrument WG-ES).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  difficulty_self_care:
+    slot_uri: publicschema:difficulty_self_care
+    title: Difficulty with self-care
+    description: The degree of difficulty the person experiences with self-care, such as washing all over
+      or dressing. Applies to adults (WG-SS) and to children ages 5-17 (CFM); not measured by the CFM
+      for ages 2-4.
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para el autocuidado
+      label_fr: Difficulté pour les soins personnels
+      description_es: El grado de dificultad que la persona experimenta para el autocuidado, como bañarse
+        completamente o vestirse. Se aplica a adultos (WG-SS) y a niños de 5 a 17 años (CFM); no se mide
+        en el CFM para niños de 2 a 4 años.
+      description_fr: Le degré de difficulté que la personne éprouve pour prendre soin d'elle-même, comme
+        se laver entièrement ou s'habiller. S'applique aux adultes (WG-SS) et aux enfants de 5 à 17 ans
+        (CFM); non mesuré par le CFM pour les 2 à 4 ans.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17", "wg_es", "wg_ss"]'
+      age_applicability_json: '["adult", "child_5_17"]'
+      bibliography_refs: '["dhs-recode7", "fhir-r4", "mics6", "washington-group-cfm", "washington-group-es",
+        "washington-group-ss"]'
+  difficulty_understanding_others:
+    slot_uri: publicschema:difficulty_understanding_others
+    title: Difficulty understanding others
+    description: The degree of difficulty the child has understanding others (receptive communication),
+      compared to children of the same age. Applies to children ages 2-4 (CFM CF12).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para entender a otros
+      label_fr: Difficulté à comprendre les autres
+      description_es: El grado de dificultad que el niño tiene para entender a los demás (comunicación
+        receptiva), en comparación con niños de la misma edad. Se aplica a niños de 2 a 4 años (CFM CF12).
+      description_fr: Le degré de difficulté que l'enfant a à comprendre les autres (communication réceptive),
+        par rapport aux enfants du même âge. S'applique aux enfants de 2 à 4 ans (CFM CF12).
+      category: child_functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4", "cfm_5_17"]'
+      age_applicability_json: '["child_2_4"]'
+      bibliography_refs: '["fhir-r4", "mics6", "washington-group-cfm"]'
+  difficulty_upper_body_fine_motor:
+    slot_uri: publicschema:difficulty_upper_body_fine_motor
+    title: Difficulty with fine motor tasks (hands and fingers)
+    description: The degree of difficulty the person experiences using their hands and fingers, such as
+      picking up small objects (for example, a button or pencil) or opening and closing containers or
+      bottles. Applies to adults (WG-ES UB_2).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad con motricidad fina (manos y dedos)
+      label_fr: Difficulté avec la motricité fine (mains et doigts)
+      description_es: El grado de dificultad que la persona experimenta al usar sus manos y dedos, como
+        recoger objetos pequeños (por ejemplo, un botón o un lápiz) o abrir y cerrar recipientes o botellas.
+        Se aplica a adultos (WG-ES UB_2).
+      description_fr: Le degré de difficulté que la personne éprouve à utiliser ses mains et ses doigts,
+        par exemple pour ramasser de petits objets (comme un bouton ou un crayon) ou pour ouvrir et fermer
+        des contenants ou des bouteilles. S'applique aux adultes (WG-ES UB_2).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+  difficulty_upper_body_reach:
+    slot_uri: publicschema:difficulty_upper_body_reach
+    title: Difficulty reaching overhead
+    description: The degree of difficulty the person experiences raising a 2-litre bottle of water from
+      waist to eye level. Applies to adults (WG-ES UB_1).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para alcanzar arriba
+      label_fr: Difficulté à lever les bras
+      description_es: El grado de dificultad que la persona experimenta al levantar una botella de agua
+        de 2 litros desde la cintura hasta el nivel de los ojos. Se aplica a adultos (WG-ES UB_1).
+      description_fr: Le degré de difficulté que la personne éprouve à soulever une bouteille d'eau de
+        2 litres de la taille aux yeux. S'applique aux adultes (WG-ES UB_1).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  difficulty_walking:
+    slot_uri: publicschema:difficulty_walking
+    title: Difficulty walking
+    description: The degree of difficulty the person experiences walking or climbing steps. Applies to
+      adults (WG-SS) and to children ages 2-17 (CFM).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para caminar
+      label_fr: Difficulté à marcher
+      description_es: El grado de dificultad que la persona experimenta para caminar o subir escaleras.
+        Se aplica a adultos (WG-SS) y a niños de 2 a 17 años (CFM).
+      description_fr: Le degré de difficulté que la personne éprouve à marcher ou à monter des escaliers.
+        S'applique aux adultes (WG-SS) et aux enfants de 2 à 17 ans (CFM).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_2_4", "cfm_5_17", "wg_es", "wg_ss"]'
+      age_applicability_json: '["adult", "child_2_4", "child_5_17"]'
+      bibliography_refs: '["dhs-recode7", "fhir-r4", "mics6", "washington-group-cfm", "washington-group-es",
+        "washington-group-ss"]'
+  difficulty_walking_100m:
+    slot_uri: publicschema:difficulty_walking_100m
+    title: Difficulty walking 100m
+    description: The degree of difficulty the person experiences walking 100 metres (about the length
+      of a football field) on level ground, without using any aid. Applies to adults (WG-ES MOB_4) and
+      to children ages 5-17 (CFM CF8 / CF10, with and without aid variants; CF12 comparative). For children
+      ages 2-4 the CFM uses a generic 'walking' stem; see difficulty_walking.
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para caminar 100 m
+      label_fr: Difficulté à marcher 100 m
+      description_es: El grado de dificultad que la persona experimenta al caminar 100 metros (aproximadamente
+        el largo de un campo de fútbol) sobre terreno plano, sin usar ningún tipo de ayuda. Se aplica
+        a adultos (WG-ES MOB_4) y a niños de 5 a 17 años (CFM CF8 / CF10, con y sin ayuda; CF12 comparativo).
+        Para niños de 2 a 4 años, el CFM utiliza una pregunta genérica; véase difficulty_walking.
+      description_fr: Le degré de difficulté que la personne éprouve à marcher 100 mètres (environ la
+        longueur d'un terrain de football) sur un sol plat, sans utiliser d'aide. S'applique aux adultes
+        (WG-ES MOB_4) et aux enfants de 5 à 17 ans (CFM CF8 / CF10, avec ou sans aide; CF12 comparatif).
+        Pour les enfants de 2 à 4 ans, le CFM utilise une question générique; voir difficulty_walking.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17", "wg_es"]'
+      age_applicability_json: '["adult", "child_5_17"]'
+      bibliography_refs: '["fhir-r4", "washington-group-cfm", "washington-group-es"]'
+  difficulty_walking_500m:
+    slot_uri: publicschema:difficulty_walking_500m
+    title: Difficulty walking 500m
+    description: The degree of difficulty the person experiences walking 500 metres (about a third of
+      a mile) on level ground, without using any aid. Applies to adults (WG-ES MOB_5) and to children
+      ages 5-17 (CFM CF9 / CF11, with and without aid variants; CF13 comparative).
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dificultad para caminar 500 m
+      label_fr: Difficulté à marcher 500 m
+      description_es: El grado de dificultad que la persona experimenta al caminar 500 metros (aproximadamente
+        un tercio de milla) sobre terreno plano, sin usar ningún tipo de ayuda. Se aplica a adultos (WG-ES
+        MOB_5) y a niños de 5 a 17 años (CFM CF9 / CF11, con y sin ayuda; CF13 comparativo).
+      description_fr: Le degré de difficulté que la personne éprouve à marcher 500 mètres (environ un
+        tiers de mile) sur un sol plat, sans utiliser d'aide. S'applique aux adultes (WG-ES MOB_5) et
+        aux enfants de 5 à 17 ans (CFM CF9 / CF11, avec ou sans aide; CF13 comparatif).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["cfm_5_17", "wg_es"]'
+      age_applicability_json: '["adult", "child_5_17"]'
+      bibliography_refs: '["fhir-r4", "washington-group-cfm", "washington-group-es"]'
+  disability_domains_identified:
+    slot_uri: publicschema:disability_domains_identified
+    title: Disability domains identified
+    description: The WG-SS core domains in which the person reports 'a lot of difficulty' or 'cannot do
+      at all'. Populated only when disability_identified is true. Values are drawn from the wg-ss-domain
+      vocabulary (seeing, hearing, walking, cognition, self_care, communication).
+    range: WgSsDomain
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Dominios de discapacidad identificados
+      label_fr: Domaines de handicap identifiés
+      description_es: Los dominios principales del WG-SS en los que la persona reporta 'mucha dificultad'
+        o 'no puede hacerlo'. Se completa solo cuando disability_identified es verdadero. Los valores
+        provienen del vocabulario wg-ss-domain (visión, audición, caminar, cognición, cuidado personal,
+        comunicación).
+      description_fr: Les domaines fondamentaux du WG-SS dans lesquels la personne rapporte « beaucoup
+        de difficulté » ou « ne peut pas du tout ». Renseigné uniquement lorsque disability_identified
+        est vrai. Les valeurs proviennent du vocabulaire wg-ss-domain (vision, audition, marche, cognition,
+        soins personnels, communication).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_ss"]'
+      age_applicability_json: '["child_5_17", "adult"]'
+      bibliography_refs: '["washington-group-ss"]'
+  disability_identified:
+    slot_uri: publicschema:disability_identified
+    title: Disability identified
+    description: 'Whether the person meets the WG recommended disability identifier: at least one of the
+      six core domains (seeing, hearing, walking, cognition, self-care, communication) reports ''a lot
+      of difficulty'' or ''cannot do at all''. This is a survey-based statistical identifier for population
+      reporting, not a clinical disability determination. Use in individual eligibility decisions diverges
+      from the instrument''s intended purpose.'
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Discapacidad identificada
+      label_fr: Handicap identifié
+      description_es: 'Si la persona cumple el identificador de discapacidad recomendado por el WG: al
+        menos uno de los seis dominios principales (visión, audición, caminar, cognición, cuidado personal,
+        comunicación) reporta ''mucha dificultad'' o ''no puede hacerlo''. Es un identificador estadístico
+        de encuesta para reporte poblacional, no una determinación clínica de discapacidad. Su uso en
+        decisiones de elegibilidad individual se aparta del propósito previsto del instrumento.'
+      description_fr: 'Si la personne satisfait l''identifiant de handicap recommandé par le WG : au moins
+        un des six domaines fondamentaux (vision, audition, marche, cognition, soins personnels, communication)
+        rapporte « beaucoup de difficulté » ou « ne peut pas du tout ». Il s''agit d''un identifiant statistique
+        d''enquête pour le reporting de population, pas d''une détermination clinique du handicap. L''utilisation
+        dans les décisions d''éligibilité individuelle s''écarte de l''usage prévu de l''instrument.'
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_ss"]'
+      age_applicability_json: '["child_5_17", "adult"]'
+      bibliography_refs: '["washington-group-ss"]'
+  fatigue_duration:
+    slot_uri: publicschema:fatigue_duration
+    title: Fatigue duration
+    description: How much of the day the person felt tired or exhausted the last time they felt this way.
+      Applies to adults (WG-ES TIRED_2). Asked of respondents who reported fatigue at least some days
+      in the past 3 months.
+    range: DailyDuration
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Duración de la fatiga
+      label_fr: Durée de la fatigue
+      description_es: Qué parte del día la persona se sintió cansada o agotada la última vez que se sintió
+        así. Se aplica a adultos (WG-ES TIRED_2). Se pregunta a los encuestados que reportaron fatiga
+        al menos algunos días en los últimos 3 meses.
+      description_fr: Quelle partie de la journée la personne s'est sentie fatiguée ou épuisée la dernière
+        fois qu'elle s'est sentie ainsi. S'applique aux adultes (WG-ES TIRED_2). Posée aux répondants
+        ayant déclaré de la fatigue au moins certains jours au cours des 3 derniers mois.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  fatigue_frequency:
+    slot_uri: publicschema:fatigue_frequency
+    title: Fatigue frequency
+    description: How often the person has felt tired or exhausted during the past 3 months. Applies to
+      adults (WG-ES TIRED_1).
+    range: SymptomPeriodFrequency
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Frecuencia de la fatiga
+      label_fr: Fréquence de la fatigue
+      description_es: Con qué frecuencia la persona se ha sentido cansada o agotada durante los últimos
+        3 meses. Se aplica a adultos (WG-ES TIRED_1).
+      description_fr: À quelle fréquence la personne s'est sentie fatiguée ou épuisée au cours des 3 derniers
+        mois. S'applique aux adultes (WG-ES TIRED_1).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  fatigue_intensity:
+    slot_uri: publicschema:fatigue_intensity
+    title: Fatigue intensity
+    description: The intensity of the tiredness or exhaustion the person felt the last time they felt
+      this way. Applies to adults (WG-ES TIRED_3). Asked of respondents who reported fatigue at least
+      some days in the past 3 months.
+    range: FunctionalIntensity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Intensidad de la fatiga
+      label_fr: Intensité de la fatigue
+      description_es: La intensidad del cansancio o agotamiento que la persona sintió la última vez que
+        se sintió así. Se aplica a adultos (WG-ES TIRED_3). Se pregunta a los encuestados que reportaron
+        fatiga al menos algunos días en los últimos 3 meses.
+      description_fr: L'intensité de la fatigue ou de l'épuisement ressenti par la personne la dernière
+        fois qu'elle s'est sentie ainsi. S'applique aux adultes (WG-ES TIRED_3). Posée aux répondants
+        ayant déclaré de la fatigue au moins certains jours au cours des 3 derniers mois.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  hearing_aid_use_frequency:
+    slot_uri: publicschema:hearing_aid_use_frequency
+    title: Hearing aid use frequency
+    description: How often the person uses their hearing aid. Applies to adults (WG-ES HEAR_3, flagged
+      OPTIONAL in the WG-ES instrument). Asked of respondents who reported using a hearing aid.
+    range: AidUseFrequency
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Frecuencia de uso de audífono
+      label_fr: Fréquence d'utilisation d'appareil auditif
+      description_es: Con qué frecuencia la persona usa su audífono. Se aplica a adultos (WG-ES HEAR_3,
+        marcado como OPCIONAL en el instrumento WG-ES). Se pregunta a los encuestados que reportaron usar
+        audífono.
+      description_fr: À quelle fréquence la personne utilise son appareil auditif. S'applique aux adultes
+        (WG-ES HEAR_3, marqué OPTIONNEL dans l'instrument WG-ES). Posée aux répondants ayant déclaré utiliser
+        un appareil auditif.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  instrument_used:
+    slot_uri: publicschema:instrument_used
+    title: Instrument used
+    description: Reference to the instrument (survey form, questionnaire, screening protocol, measurement
+      procedure) administered in this profile record.
+    range: Instrument
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Instrumento utilizado
+      label_fr: Instrument utilisé
+      description_es: Referencia al instrumento (formulario de encuesta, cuestionario, protocolo de detección,
+        procedimiento de medición) administrado en este registro de perfil.
+      description_fr: Référence à l'instrument (formulaire d'enquête, questionnaire, protocole de dépistage,
+        procédure de mesure) administré dans cet enregistrement de profil.
+  items_asked:
+    slot_uri: publicschema:items_asked
+    title: Items asked
+    description: The PublicSchema property IDs that were actually asked during this administration. Lets
+      adopters distinguish items that were asked and declined (answer absent) from items that were not
+      asked at all. When omitted, the item set is assumed to be the default item_set of the instrument
+      used. The intended producer is the form compiler or collection server, which populates this list
+      from the form definition at submission time.
+    range: string
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Ítems preguntados
+      label_fr: Items posés
+      description_es: Los identificadores de propiedades PublicSchema realmente preguntados durante esta
+        administración. Permite a los adoptantes distinguir ítems preguntados y rechazados (respuesta
+        ausente) de ítems que no fueron preguntados. Cuando se omite, el conjunto de ítems se asume igual
+        al item_set por defecto del instrumento utilizado. El productor previsto es el compilador de formularios
+        o el servidor de recolección, que completa esta lista a partir de la definición del formulario
+        al momento del envío.
+      description_fr: Les identifiants de propriétés PublicSchema effectivement posées lors de cette administration.
+        Permet aux adopteurs de distinguer les items posés et refusés (réponse absente) des items qui
+        n'ont pas été posés du tout. En l'absence de cette liste, l'ensemble d'items est présumé correspondre
+        à l'item_set par défaut de l'instrument utilisé. Le producteur prévu est le compilateur de formulaire
+        ou le serveur de collecte, qui remplit cette liste à partir de la définition du formulaire au
+        moment de la soumission.
+  mobility_aid_types:
+    slot_uri: publicschema:mobility_aid_types
+    title: Mobility aid types used
+    description: The specific types of mobility equipment or assistance the person uses, as recorded by
+      the WG-ES MOB_3 multi-select checklist. Multiple values may be recorded. Applies to adults who reported
+      using equipment or receiving help for getting around (WG-ES MOB_2 = Yes).
+    range: MobilityAidType
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Tipos de ayudas para la movilidad utilizadas
+      label_fr: Types d'aides à la mobilité utilisées
+      description_es: Los tipos específicos de equipos de movilidad o asistencia que usa la persona, según
+        lo registrado por la lista de verificación de selección múltiple MOB_3 del WG-ES. Se pueden registrar
+        múltiples valores. Se aplica a adultos que informaron usar equipos o recibir ayuda para desplazarse
+        (WG-ES MOB_2 = Sí).
+      description_fr: Les types spécifiques d'équipements de mobilité ou d'assistance que la personne
+        utilise, tels qu'enregistrés par la liste de contrôle multi-sélection MOB_3 du WG-ES. Plusieurs
+        valeurs peuvent être enregistrées. S'applique aux adultes ayant déclaré utiliser des équipements
+        ou recevoir de l'aide pour se déplacer (WG-ES MOB_2 = Oui).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+  observation_date:
+    slot_uri: publicschema:observation_date
+    title: Observation date
+    description: The date on which the profile data was collected (when the instrument was administered
+      or the measurement taken).
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de observación
+      label_fr: Date d'observation
+      description_es: La fecha en que se recopilaron los datos del perfil (fecha en que se administró
+        el instrumento o se tomó la medición).
+      description_fr: La date à laquelle les données du profil ont été collectées (date d'administration
+        de l'instrument ou de prise de mesure).
+  pain_frequency:
+    slot_uri: publicschema:pain_frequency
+    title: Pain frequency
+    description: How often the person has experienced pain during the past 3 months. Applies to adults
+      (WG-ES PAIN_1).
+    range: SymptomPeriodFrequency
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Frecuencia del dolor
+      label_fr: Fréquence de la douleur
+      description_es: Con qué frecuencia la persona ha sentido dolor durante los últimos 3 meses. Se aplica
+        a adultos (WG-ES PAIN_1).
+      description_fr: À quelle fréquence la personne a ressenti de la douleur au cours des 3 derniers
+        mois. S'applique aux adultes (WG-ES PAIN_1).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  pain_intensity:
+    slot_uri: publicschema:pain_intensity
+    title: Pain intensity
+    description: The intensity of the person's pain the last time they had pain. Applies to adults (WG-ES
+      PAIN_2). Asked of respondents who reported pain at least some days in the past 3 months.
+    range: FunctionalIntensity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Intensidad del dolor
+      label_fr: Intensité de la douleur
+      description_es: La intensidad del dolor de la persona la última vez que sintió dolor. Se aplica
+        a adultos (WG-ES PAIN_2). Se pregunta a los encuestados que reportaron dolor al menos algunos
+        días en los últimos 3 meses.
+      description_fr: L'intensité de la douleur de la personne la dernière fois qu'elle en a ressenti.
+        S'applique aux adultes (WG-ES PAIN_2). Posée aux répondants ayant déclaré des douleurs au moins
+        certains jours au cours des 3 derniers mois.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  performed_by:
+    slot_uri: publicschema:performed_by
+    title: Performed by
+    description: The agent (enumerator, field officer, or agency) accountable for administering the instrument
+      or taking the measurement. Typically a Person or an Organization. When a software tool captured
+      or derived the data, record it separately as software_used; performed_by identifies who is responsible,
+      not what ran the capture.
+    range: Agent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Realizado por
+      label_fr: Réalisé par
+      description_es: El agente (encuestador, agente de campo u organismo) responsable de administrar
+        el instrumento o tomar la medición. Normalmente una Person o una Organization. Cuando una herramienta
+        de software capturó o derivó los datos, regístrelo por separado mediante software_used; performed_by
+        identifica quién es responsable, no qué ejecutó la captura.
+      description_fr: L'agent (enquêteur, agent de terrain ou organisme) responsable de l'administration
+        de l'instrument ou de la prise de mesure. Généralement une Person ou une Organization. Lorsqu'un
+        outil logiciel a capturé ou dérivé les données, enregistrez-le séparément via software_used ;
+        performed_by identifie qui est responsable, et non ce qui a réalisé la capture.
+  remembering_extent:
+    slot_uri: publicschema:remembering_extent
+    title: Remembering extent
+    description: 'How much the person forgets: a few things, a lot of things, or almost everything. Applies
+      to adults (WG-ES COG_4). Asked of respondents who reported remembering difficulty.'
+    range: CognitionRememberingExtent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Extensión del olvido
+      label_fr: Degré d'oubli
+      description_es: 'Cuánto olvida la persona: algunas cosas, muchas cosas, o casi todo. Se aplica a
+        adultos (WG-ES COG_4). Se pregunta a los encuestados que reportaron dificultades de memoria.'
+      description_fr: 'Dans quelle mesure la personne oublie: quelques choses, beaucoup de choses ou presque
+        tout. S''applique aux adultes (WG-ES COG_4). Posée aux répondants ayant déclaré des difficultés
+        de mémoire.'
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  remembering_frequency:
+    slot_uri: publicschema:remembering_frequency
+    title: Remembering frequency
+    description: How often the person has difficulty remembering. Applies to adults (WG-ES COG_3). Asked
+      of respondents who reported remembering difficulty.
+    range: SymptomChronicity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Frecuencia de dificultad para recordar
+      label_fr: Fréquence des troubles de mémoire
+      description_es: Con qué frecuencia la persona tiene dificultad para recordar. Se aplica a adultos
+        (WG-ES COG_3). Se pregunta a los encuestados que reportaron dificultades de memoria.
+      description_fr: À quelle fréquence la personne a des difficultés de mémoire. S'applique aux adultes
+        (WG-ES COG_3). Posée aux répondants ayant déclaré des difficultés de mémoire.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["fhir-r4", "washington-group-es"]'
+  respondent:
+    slot_uri: publicschema:respondent
+    title: Respondent
+    description: The person who provided the answers to the instrument, when different from the subject.
+      Required whenever the administration mode is proxy or assisted.
+    range: Person
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Encuestado
+      label_fr: Répondant
+      description_es: La persona que proporcionó las respuestas al instrumento, cuando es distinta del
+        sujeto. Requerida cuando el modo de administración es por terceros o asistido.
+      description_fr: La personne qui a fourni les réponses à l'instrument, lorsqu'elle est différente
+        du sujet. Requise lorsque le mode d'administration est par procuration ou assisté.
+  respondent_relationship:
+    slot_uri: publicschema:respondent_relationship
+    title: Respondent relationship
+    description: The relationship of the respondent to the subject (parent, spouse, guardian, caregiver,
+      etc.). Uses relationship-type because it describes a person-to-person relationship, not a role within
+      a group. Required whenever the administration mode is proxy or assisted.
+    range: RelationshipType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Relación del encuestado
+      label_fr: Lien du répondant
+      description_es: La relación del respondiente con el sujeto (padre o madre, cónyuge, tutor, cuidador,
+        etc.). Usa relationship-type porque describe una relación entre personas, no un rol dentro de
+        un grupo. Requerida cuando el modo de administración es por terceros o asistido.
+      description_fr: La relation du répondant avec le sujet (parent, conjoint, tuteur, aidant, etc.).
+        Utilise relationship-type parce qu'elle décrit une relation entre deux personnes, et non un rôle
+        au sein d'un groupe. Requise lorsque le mode d'administration est par procuration ou assisté.
+  uses_glasses:
+    slot_uri: publicschema:uses_glasses
+    title: Uses glasses
+    description: Whether the person wears glasses or contact lenses. Applies to adults (WG-ES VIS_1) and
+      to children (CFM CF1). This filter is used to interpret difficulty_seeing answers, which are asked
+      with corrective lenses if the person uses them.
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Usa lentes
+      label_fr: Porte des lunettes
+      description_es: Si la persona usa lentes o anteojos de contacto. Se aplica a adultos (WG-ES VIS_1)
+        y a niños (CFM CF1). Este filtro se usa para interpretar las respuestas de difficulty_seeing,
+        que se formulan con corrección si la persona la usa.
+      description_fr: Si la personne porte des lunettes ou des lentilles de contact. S'applique aux adultes
+        (WG-ES VIS_1) et aux enfants (CFM CF1). Ce filtre sert à interpréter les réponses à difficulty_seeing,
+        qui sont posées avec correction si la personne en porte.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult", "child_2_4", "child_5_17"]'
+      bibliography_refs: '["fhir-r4", "washington-group-cfm", "washington-group-es"]'
+  uses_hearing_aid:
+    slot_uri: publicschema:uses_hearing_aid
+    title: Uses hearing aid
+    description: Whether the person uses a hearing aid. Applies to adults (WG-ES HEAR_1) and to children
+      (CFM CF4). This filter is used to interpret difficulty_hearing answers, which are asked with the
+      hearing aid in use if the person wears one.
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Usa audífono
+      label_fr: Porte un appareil auditif
+      description_es: Si la persona usa un audífono. Se aplica a adultos (WG-ES HEAR_1) y a niños (CFM
+        CF4). Este filtro se usa para interpretar las respuestas de difficulty_hearing, que se formulan
+        con el audífono puesto si la persona lo usa.
+      description_fr: Si la personne utilise un appareil auditif. S'applique aux adultes (WG-ES HEAR_1)
+        et aux enfants (CFM CF4). Ce filtre sert à interpréter les réponses à difficulty_hearing, qui
+        sont posées avec l'appareil en place si la personne en porte un.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult", "child_2_4", "child_5_17"]'
+      bibliography_refs: '["fhir-r4", "washington-group-cfm", "washington-group-es"]'
+  uses_mobility_aid:
+    slot_uri: publicschema:uses_mobility_aid
+    title: Uses mobility aid
+    description: Whether the person uses equipment or receives assistance for getting around, such as
+      a cane, walker, wheelchair, or help from another person. Applies to adults (WG-ES MOB_2) and to
+      children (CFM CF7).
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Usa ayuda para la movilidad
+      label_fr: Utilise une aide à la mobilité
+      description_es: Si la persona utiliza equipo o recibe asistencia para desplazarse, tal como un bastón,
+        un andador, una silla de ruedas o la ayuda de otra persona. Se aplica a adultos (WG-ES MOB_2)
+        y a niños (CFM CF7).
+      description_fr: Si la personne utilise un équipement ou reçoit une aide pour se déplacer, tel qu'une
+        canne, un déambulateur, un fauteuil roulant ou l'aide d'une autre personne. S'applique aux adultes
+        (WG-ES MOB_2) et aux enfants (CFM CF7).
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult", "child_2_4", "child_5_17"]'
+      bibliography_refs: '["fhir-r4", "washington-group-cfm", "washington-group-es"]'
+  uses_sign_language:
+    slot_uri: publicschema:uses_sign_language
+    title: Uses sign language
+    description: Whether the person uses sign language as a communication method. Applies to adults (WG-ES
+      COM_2). This filter captures the communication modality used and may inform interpretation of difficulty_communication
+      responses.
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Usa lengua de señas
+      label_fr: Utilise la langue des signes
+      description_es: Si la persona usa lengua de señas como método de comunicación. Se aplica a adultos
+        (WG-ES COM_2). Este filtro captura la modalidad de comunicación utilizada y puede informar la
+        interpretación de las respuestas de difficulty_communication.
+      description_fr: Si la personne utilise la langue des signes comme méthode de communication. S'applique
+        aux adultes (WG-ES COM_2). Ce filtre capture la modalité de communication utilisée et peut contribuer
+        à l'interprétation des réponses à difficulty_communication.
+      category: functioning
+      sensitivity: sensitive
+      valid_instruments_json: '["wg_es"]'
+      age_applicability_json: '["adult"]'

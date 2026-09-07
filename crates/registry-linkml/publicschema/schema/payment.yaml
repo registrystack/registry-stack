@@ -1,0 +1,127 @@
+id: https://publicschema.org/linkml/payment
+name: publicschema-payment
+title: PublicSchema payment domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- vocabularies
+classes:
+  DeliveryItem:
+    class_uri: publicschema:DeliveryItem
+    title: Delivery Item
+    description: 'A line item describing a specific commodity and quantity within a delivery or voucher.
+      Used to represent food baskets, supply kits, and other composite benefits where multiple commodities
+      are included at specified quantities.
+
+      '
+    slots:
+    - commodity_type
+    - quantity
+    - unit_of_measure
+    - quantity_redeemed
+    - description
+    status: bibo:draft
+    annotations:
+      label_es: Elemento de prestación
+      label_fr: Élément de prestation
+      description_es: Una línea de detalle que describe un producto específico y su cantidad dentro de
+        una entrega o vale. Se utiliza para representar canastas de alimentos, kits de suministros y otros
+        beneficios compuestos donde se incluyen múltiples productos en cantidades especificadas.
+      description_fr: Une ligne de détail décrivant un produit spécifique et sa quantité dans une livraison
+        ou un bon. Utilisé pour représenter les paniers alimentaires, les kits de fournitures et d'autres
+        prestations composites où plusieurs produits sont inclus à des quantités spécifiées.
+      convergence_json: '{"notes": "No direct analog in the six mapped SP systems. Commodity line items
+        are common in humanitarian logistics systems (WFP LESS, UNICEF supply chain) but these are not
+        among the currently mapped targets.\n", "system_count": 0, "total_systems": 6}'
+slots:
+  commodity_type:
+    slot_uri: publicschema:commodity_type
+    title: Commodity type
+    description: The type of commodity or goods being delivered or redeemable.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de bien
+      label_fr: Type de produit
+      description_es: El tipo de producto o bien entregado o canjeable.
+      description_fr: Le type de produit ou de bien livré ou échangeable.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  quantity:
+    slot_uri: publicschema:quantity
+    title: Quantity
+    description: The amount of a commodity in the specified unit of measure.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Cantidad
+      label_fr: Quantité
+      description_es: La cantidad de un producto en la unidad de medida especificada.
+      description_fr: La quantité d'une denrée ou d'un produit dans l'unité de mesure spécifiée.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  quantity_redeemed:
+    slot_uri: publicschema:quantity_redeemed
+    title: Quantity redeemed
+    description: The amount of this commodity that has been redeemed or collected so far.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Cantidad canjeada
+      label_fr: Quantité encaissée
+      description_es: La cantidad de este producto que ha sido canjeada o recolectada hasta el momento.
+      description_fr: La quantité de cette denrée ou de ce produit qui a été encaissée ou collectée jusqu'à
+        présent.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  unit_of_measure:
+    slot_uri: publicschema:unit_of_measure
+    title: Unit of measure
+    description: The unit in which the quantity is expressed.
+    range: UnitOfMeasure
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Unidad de medida
+      label_fr: Unité de mesure
+      description_es: La unidad en la que se expresa la cantidad.
+      description_fr: L'unité dans laquelle la quantité est exprimée.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["un-cefact-rec20"]'
