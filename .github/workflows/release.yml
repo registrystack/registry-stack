@@ -481,7 +481,8 @@ jobs:
           {
             printf '%s\n' \
               SHA256SUMS \
-              "registry-stack-${tag}-SHA256SUMS.sigstore.json"
+              "registry-stack-${tag}-SHA256SUMS.sigstore.json" \
+              "registry-stack-${tag}-SHA256SUMS.intoto.jsonl"
           } | sort -u > contract/retryable-final-assets
           jq -r '.[].name' contract/staged-assets.json \
             | sort -u > contract/expected-staged-assets
@@ -730,6 +731,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: read
+      attestations: write
       contents: write
       id-token: write
       packages: read
@@ -859,13 +861,10 @@ jobs:
               contract/staged-assets.json
           )
 
-      - name: Sign and upload the checksum closure
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Sign the checksum closure
         shell: bash
         run: |
           set -euo pipefail
-          tag="${{ needs.verify.outputs.tag }}"
           (
             cd release-assets
             find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
@@ -876,6 +875,31 @@ jobs:
             --bundle "${checksum_bundle}" \
             release-assets/SHA256SUMS
           test -s "${checksum_bundle}"
+
+      # The checksum file closes over every payload, so one SLSA provenance
+      # statement for it covers the whole public inventory. The bundle is a
+      # Sigstore bundle carrying a DSSE envelope, the shape the `.intoto.jsonl`
+      # release-asset convention names.
+      - name: Attest the signed checksum closure
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-assets/SHA256SUMS
+          show-summary: false
+
+      - name: Upload the checksum closure and its provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          provenance_asset="release-assets/registry-stack-${tag}-SHA256SUMS.intoto.jsonl"
+          test -s "${PROVENANCE_BUNDLE}"
+          jq -e '.dsseEnvelope.payloadType == "application/vnd.in-toto+json"' \
+            "${PROVENANCE_BUNDLE}" >/dev/null
+          cp "${PROVENANCE_BUNDLE}" "${provenance_asset}"
           mapfile -d '' -t staged < <(
             jq -r '.[].name' contract/staged-assets.json \
               | while IFS= read -r name; do
@@ -955,6 +979,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: read
+      attestations: read
       contents: write
     steps:
       - name: Download exact candidate manifest
@@ -1096,12 +1121,20 @@ jobs:
             --certificate-identity "${identity}" \
             --certificate-oidc-issuer \
               https://token.actions.githubusercontent.com
+          gh attestation verify draft/SHA256SUMS \
+            --bundle "draft/registry-stack-${tag}-SHA256SUMS.intoto.jsonl" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow \
+              "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
           while IFS=$'\t' read -r digest final_ref; do
             test "$(crane digest "${final_ref}")" = "${digest}"
           done < <(jq -r '.images[] | [.digest,.final_ref] | @tsv' "${manifest}")
           required=(
             SHA256SUMS
             "registry-stack-${tag}-SHA256SUMS.sigstore.json"
+            "registry-stack-${tag}-SHA256SUMS.intoto.jsonl"
           )
           for name in "${required[@]}"; do
             jq -e --arg name "${name}" \

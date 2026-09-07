@@ -52,6 +52,82 @@ class PublicReleaseVerifierTest(TestCase):
             self.module.client_registry_clients("0.26.1"),
         )
 
+    def test_release_provenance_asset_is_required_from_v0_27_0(self) -> None:
+        self.assertFalse(self.module.version_requires_release_provenance("0.26.1"))
+        self.assertTrue(self.module.version_requires_release_provenance("0.27.0"))
+        self.assertTrue(self.module.version_requires_release_provenance("1.0.0"))
+
+    def test_downloaded_provenance_is_outside_the_closure_and_returned(self) -> None:
+        tag = "v0.27.0"
+        payloads = {"payload.bin": b"payload\n"}
+        sums = "".join(
+            f"{digest(body)}  {name}\n" for name, body in sorted(payloads.items())
+        ).encode()
+        provenance_name = f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl"
+        files = {
+            **payloads,
+            "SHA256SUMS": sums,
+            f"registry-stack-{tag}-SHA256SUMS.sigstore.json": b"{\"bundle\":true}\n",
+            provenance_name: b"{\"dsseEnvelope\":{}}\n",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in files.items():
+                (root / name).write_bytes(body)
+            assets = {
+                name: {
+                    "name": name,
+                    "digest": f"sha256:{digest(body)}",
+                    "size": len(body),
+                }
+                for name, body in files.items()
+            }
+            checksums, _, provenance = self.module.verify_downloaded_assets(
+                root,
+                assets,
+                tag=tag,
+            )
+            self.assertEqual(set(payloads), set(checksums))
+            self.assertEqual(provenance_name, provenance)
+
+            (root / provenance_name).unlink()
+            del assets[provenance_name]
+            with self.assertRaisesRegex(
+                self.module.PublicReleaseError,
+                f"missing {provenance_name}",
+            ):
+                self.module.verify_downloaded_assets(root, assets, tag=tag)
+
+    def test_pre_v0_27_0_releases_verify_without_a_provenance_asset(self) -> None:
+        tag = "v0.26.1"
+        payloads = {"payload.bin": b"payload\n"}
+        sums = "".join(
+            f"{digest(body)}  {name}\n" for name, body in sorted(payloads.items())
+        ).encode()
+        files = {
+            **payloads,
+            "SHA256SUMS": sums,
+            f"registry-stack-{tag}-SHA256SUMS.sigstore.json": b"{\"bundle\":true}\n",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in files.items():
+                (root / name).write_bytes(body)
+            assets = {
+                name: {
+                    "name": name,
+                    "digest": f"sha256:{digest(body)}",
+                    "size": len(body),
+                }
+                for name, body in files.items()
+            }
+            _, _, provenance = self.module.verify_downloaded_assets(
+                root,
+                assets,
+                tag=tag,
+            )
+            self.assertIsNone(provenance)
+
     def test_checksum_parser_requires_one_local_unique_asset_per_line(self) -> None:
         parsed = self.module.parse_sha256sums(
             f"{'a' * 64}  payload.tar.gz\n{'b' * 64}  relay-v1.2.3-linux-amd64\n"
@@ -120,6 +196,7 @@ class PublicReleaseVerifierTest(TestCase):
             **payloads,
             "SHA256SUMS": sums,
             f"registry-stack-{tag}-SHA256SUMS.sigstore.json": b"{\"bundle\":true}\n",
+            f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl": b"{\"dsseEnvelope\":{}}\n",
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -133,7 +210,7 @@ class PublicReleaseVerifierTest(TestCase):
                 }
                 for name, body in files.items()
             }
-            checksums, bundle = self.module.verify_downloaded_assets(
+            checksums, bundle, provenance = self.module.verify_downloaded_assets(
                 root,
                 assets,
                 tag=tag,
@@ -142,6 +219,10 @@ class PublicReleaseVerifierTest(TestCase):
             self.assertEqual(
                 f"registry-stack-{tag}-SHA256SUMS.sigstore.json",
                 bundle,
+            )
+            self.assertEqual(
+                f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl",
+                provenance,
             )
 
             (root / "payload.bin").write_bytes(b"tampered\n")

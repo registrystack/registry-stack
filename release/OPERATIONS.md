@@ -723,7 +723,10 @@ Publication:
 3. Promotes each private image manifest to the final tag at the candidate
    digest. An absent tag is copied, an existing exact digest is accepted, and a
    mismatch stops publication.
-4. Adds `SHA256SUMS` and one keyless Sigstore bundle for the checksum file.
+4. Adds `SHA256SUMS`, one keyless Sigstore bundle for the checksum file, and
+   one SLSA build provenance bundle for the checksum file, published as
+   `registry-stack-v<version>-SHA256SUMS.intoto.jsonl` and recorded in the
+   repository attestation store.
 5. Reconciles the exact version-appropriate client wheels on PyPI and root and
    platform packages on npm. v0.22.0 through v0.26.0 use the historical
    product projects. v0.26.1 and later use only `registry-stack-client` and
@@ -738,9 +741,12 @@ Publication:
    retaining the latest authenticated docs-bearing release at the canonical
    and versioned routes.
 
-The candidate attestation and signed checksum chain are the Beta provenance
-model. Ordinary Beta publication does not generate a second generic SLSA
-provenance asset. Pre-v0.19 release finalizers remain only in their immutable
+The candidate attestation, the signed checksum chain, and the checksum
+provenance bundle are the Beta provenance model. Because `SHA256SUMS` closes
+over every public payload, one provenance statement for it covers the whole
+inventory; publication does not attest each payload separately. The public
+verifier requires the provenance asset from v0.27.0 and verifies it whenever it
+is present. Pre-v0.19 release finalizers remain only in their immutable
 historical release tags.
 
 After publication, run the minimum public verifier from a checkout whose
@@ -752,8 +758,8 @@ release/scripts/registry-release verify-public --tag v<version>
 
 It verifies the annotated tag target, latest published non-prerelease state,
 every downloadable asset against GitHub's digest metadata, the exact
-`SHA256SUMS` closure and its protected-main Sigstore identity, the release-body
-manifest binding, every final OCI digest, and one maintained binary version
+`SHA256SUMS` closure, its protected-main Sigstore identity and provenance, the
+release-body manifest binding, every final OCI digest, and one maintained binary version
 smoke. For v0.22.0 and later, the publication workflow also verifies the npm
 SHA-512 integrity and PyPI SHA-256 digest of every version-appropriate client
 package before docs promotion. The verifier selects the historical individual

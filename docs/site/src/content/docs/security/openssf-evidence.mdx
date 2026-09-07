@@ -24,7 +24,7 @@ procedure to authenticate a current release.
 | --- | --- | --- |
 | Are current release payloads signed? | Yes. One keyless Sigstore bundle authenticates `SHA256SUMS`, which covers every public payload. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
 | Are release Git tags signed? | No. The annotated tag binds a candidate run, attempt, and manifest hash, but the Git tag object is not cryptographically signed. | [Release operations](https://github.com/registrystack/registry-stack/blob/main/release/OPERATIONS.md) |
-| Is release provenance published? | Yes. GitHub artifact attestations authenticate the candidate manifest and bundle, and the signed checksum chain authenticates the public payloads. | [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
+| Is release provenance published? | Yes. GitHub artifact attestations authenticate the candidate manifest and bundle, the signed checksum chain authenticates the public payloads, and releases from `v0.27.0` publish SLSA build provenance for `SHA256SUMS`. | [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
 | Are published builds repeatable? | A weekly clean proof covers canonical Linux amd64 binaries plus image configuration and ordered layers. The OpenSSF justification is current only while an applicable successful proof is no older than 30 days. | [Repeatable build evidence](https://github.com/registrystack/registry-stack/blob/main/release/REPEATABLE-BUILDS.md) |
 
 ## Current release evidence chain
@@ -43,6 +43,8 @@ Current public security assets include:
 
 - `SHA256SUMS`.
 - One `registry-stack-vX.Y.Z-SHA256SUMS.sigstore.json` bundle.
+- One `registry-stack-vX.Y.Z-SHA256SUMS.intoto.jsonl` SLSA build provenance
+  bundle, from `v0.27.0`.
 - One consolidated SPDX JSON software bill of materials (SBOM).
 - One checksum-covered security-evidence archive.
 - One compact release manifest recording candidate and promotion identity.
@@ -55,9 +57,9 @@ archived assets.
      .github/workflows/release.yml has no image-lock fallback; and
      release/manifests/registry-stack-beta-29.yaml records the retirement. */}
 
-Current releases do not publish a second generic SLSA provenance envelope,
-per-file signature and certificate pairs, release capsules, candidate
-telemetry, or intermediate receipt parts.
+Current releases do not publish per-payload provenance envelopes, per-file
+signature and certificate pairs, release capsules, candidate telemetry, or
+intermediate receipt parts.
 
 ## Scorecard
 
@@ -106,7 +108,7 @@ version-pinned baseline map.
 | Token permissions | Read-only build and verification jobs; package, release, signing, and Pages permissions are separated | Implemented |
 | Release artifacts | Signed checksums, consolidated SPDX SBOM, security archive, and release manifest | Implemented by the current workflow |
 | Signed version tags | Cryptographic Git tag signatures | Not implemented |
-| Provenance | Candidate build attestations and a signed public checksum closure | Implemented by the current workflows |
+| Provenance | Candidate build attestations, a signed public checksum closure, and SLSA build provenance for that closure | Implemented by the current workflows |
 
 ## Historical releases
 

@@ -4,7 +4,8 @@ Current Beta releases use two linked controls. The candidate workflow attests
 the exact candidate manifest and bundle. The protected-main publication
 workflow verifies those attestations before promotion, then keyless-signs one
 `SHA256SUMS` file covering every public payload, including the release
-manifest, consolidated SPDX SBOM, and security-evidence archive.
+manifest, consolidated SPDX SBOM, and security-evidence archive, and publishes
+SLSA build provenance for that checksum file.
 
 ## Install tools
 
@@ -61,7 +62,31 @@ Then verify every covered payload:
 sha256sum --check --strict SHA256SUMS
 ```
 
-`SHA256SUMS` intentionally excludes itself and its Sigstore bundle.
+`SHA256SUMS` intentionally excludes itself, its Sigstore bundle, and its
+provenance bundle.
+
+## Authenticate the checksum provenance
+
+Releases from `v0.27.0` publish `registry-stack-${tag}-SHA256SUMS.intoto.jsonl`,
+a Sigstore bundle carrying a SLSA build provenance statement whose subject is
+`SHA256SUMS`. Verify that it was produced by the protected-main publication
+workflow of this repository:
+
+```sh
+provenance_bundle="registry-stack-${tag}-SHA256SUMS.intoto.jsonl"
+
+gh attestation verify SHA256SUMS \
+  --bundle "${provenance_bundle}" \
+  --repo registrystack/registry-stack \
+  --signer-workflow \
+    registrystack/registry-stack/.github/workflows/release.yml \
+  --source-ref refs/heads/main \
+  --deny-self-hosted-runners
+```
+
+Because `SHA256SUMS` closes over every public payload, this one statement
+covers the whole release inventory. Releases before `v0.27.0` do not carry
+this asset.
 
 ## Verify release identity and image bindings
 
@@ -223,9 +248,8 @@ source, scans, advisory verdict, and image promotion binding. GitHub artifact
 attestations authenticate the candidate manifest and bundle before promotion.
 The signed checksum chain authenticates the exact public release inventory.
 
-Ordinary Beta releases do not publish a second generic
-`release-provenance.intoto.jsonl` asset. Do not treat its absence as missing
-release evidence.
+Releases from `v0.27.0` add one SLSA build provenance bundle for `SHA256SUMS`.
+Its absence from an earlier release is not missing release evidence.
 
 ## Legacy releases
 
