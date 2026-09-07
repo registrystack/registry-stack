@@ -8211,10 +8211,8 @@ fn write_dev_success(
             lines.pairs(&pairs);
             // Credential file references, never credential bytes.
             let clients = report["clients"].as_array().into_iter().flatten();
-            for (index, client) in clients.enumerate() {
-                if index == 0 {
-                    lines.blank();
-                }
+            for client in clients {
+                lines.blank();
                 lines.item(&format!(
                     "client {}",
                     client["id"].as_str().unwrap_or_default()
