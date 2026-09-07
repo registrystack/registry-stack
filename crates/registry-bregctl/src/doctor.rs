@@ -9,7 +9,7 @@ use registry_breg::{Diagnostic, DiagnosticSeverity};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
 /// Doctor only reports success once every one of these has passed, so this is
-/// what a `doctor succeeded` report names as checked.
+/// what the passing report counts and names, one line per dependency.
 pub(crate) const CHECKED_DEPENDENCIES: [&str; 8] = [
     "runtimeConfig",
     "package",

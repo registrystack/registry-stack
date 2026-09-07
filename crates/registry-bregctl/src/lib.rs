@@ -7925,6 +7925,9 @@ fn success_lead(report: &SuccessReport) -> String {
             ProfileArg::Authoring => "Authoring check passed.".to_owned(),
             ProfileArg::Production => "Production check passed.".to_owned(),
         },
+        // A lock that already held writes nothing, and a count of zero
+        // artifacts would read as a write that produced no file.
+        "project lock" if artifacts == 0 => "Locked the project modules.".to_owned(),
         "project lock" => format!(
             "Locked the project modules. {} written.",
             report::counted(artifacts, "artifact")
@@ -8144,7 +8147,7 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
             lines.item_at(
                 1,
                 &format!(
-                    "{} ({})",
+                    "entity {} ({})",
                     entity["entity"].as_str().unwrap_or(""),
                     entity["classification"].as_str().unwrap_or("")
                 ),
@@ -8166,7 +8169,10 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
 }
 
 fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines) {
-    lines.item_at(depth, profile["id"].as_str().unwrap_or(""));
+    lines.item_at(
+        depth,
+        &format!("profile {}", profile["id"].as_str().unwrap_or("")),
+    );
     let mut fields = vec![(
         "principal claim",
         profile["principalClaim"]
@@ -8429,7 +8435,7 @@ fn write_schema_test_success(
                 ("signing input sha256", report.signing_input_sha256.clone()),
                 (
                     "successful journeys",
-                    report.successful_journey_ids.join(","),
+                    list_or_none(&report.successful_journey_ids),
                 ),
                 ("receipt sha256", report.receipt.sha256.clone()),
                 ("receipt bytes", report.receipt.byte_length.to_string()),
@@ -8699,9 +8705,13 @@ fn write_history_rebaseline_success(
                     },
                 ),
             ]);
-            lines.steps(&[
-                "snapshot references before the new baseline remain unavailable".to_owned(),
-            ]);
+            // A statement about what the rebaselined history no longer holds,
+            // not something the reader does next.
+            lines.blank();
+            lines.prose(
+                1,
+                "Snapshot references before the new baseline remain unavailable.",
+            );
             stdout.write_all(lines.finish().as_bytes())
         }
     };
@@ -9212,6 +9222,15 @@ fn write_migration_explain_human(
                 change_class_name(migration.change_class()).to_owned(),
             ),
             ("recovery", recovery_name(migration.recovery()).to_owned()),
+            ("lock timeout ms", migration.lock_timeout_ms().to_string()),
+            (
+                "statement timeout ms",
+                migration.statement_timeout_ms().to_string(),
+            ),
+            (
+                "transactional step count",
+                migration.transactional_step_count().to_string(),
+            ),
             (
                 "chunked step count",
                 migration.chunked_step_count().to_string(),
@@ -9353,7 +9372,7 @@ fn write_failure(
             // diagnostics below it carry their own severity and closing count.
             let mut lines = report::Lines::new();
             lines.lead(&format!("bregctl {} refused.", report.command));
-            lines.findings(&report_findings(&report.diagnostics));
+            lines.refusal_findings(&report_findings(&report.diagnostics));
             stderr.write_all(lines.finish().as_bytes())
         }
     };
@@ -10398,6 +10417,117 @@ mod tests {
                 ExitCode::SUCCESS
             );
             assert_eq!(plain(&stdout), expected);
+            assert!(stderr.is_empty());
+        }
+    }
+
+    #[test]
+    fn rebaselined_history_states_the_unavailable_range_as_a_note_not_a_step() {
+        let report = HistoryRebaselineSuccessReport {
+            ok: true,
+            command: "history rebaseline",
+            outcome: HistoryRebaselineLifecycleOutcome {
+                package_revision: "pkg-1".to_owned(),
+                baseline_position: 42,
+                verified_entity_count: 1,
+                verified_record_count: 2,
+                previous_coverage_baseline_position: 7,
+                previous_unavailable_after_position: None,
+            },
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        assert_eq!(
+            write_history_rebaseline_success(
+                &report,
+                OutputFormat::Human,
+                &mut stdout,
+                &mut stderr
+            ),
+            ExitCode::SUCCESS
+        );
+        let rendered = plain(&stdout);
+        assert!(
+            !rendered.contains("Next:"),
+            "a statement about the rebaselined history is not a step: {rendered}"
+        );
+        assert!(
+            rendered
+                .ends_with("\n  Snapshot references before the new baseline remain unavailable.\n"),
+            "{rendered}"
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn an_access_explanation_names_the_entity_and_the_profile_it_groups() {
+        let explanation = json!({
+            "scopeMatching": "all required scopes must be present",
+            "purposeMatching": "",
+            "rowMatching": "",
+            "profileSelection": "",
+            "entities": [{
+                "entity": "record",
+                "classification": "internal",
+                "requirements": null,
+                "profiles": [{
+                    "id": "record-reader",
+                    "principalClaim": "registry_principal",
+                }],
+            }],
+        });
+        let mut lines = report::Lines::new();
+
+        push_access_explanation(&explanation, &mut lines);
+
+        let rendered = plain(lines.finish().as_bytes());
+        assert!(
+            rendered.contains("\n  entity record (internal)\n"),
+            "the entity group names what it groups: {rendered}"
+        );
+        assert!(
+            rendered.contains("\n    profile record-reader\n"),
+            "the profile group names what it groups: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_fixture_run_names_its_journeys_the_way_an_export_names_its_fields() {
+        for (journeys, expected) in [
+            (Vec::new(), "successful journeys   none\n"),
+            (
+                vec![
+                    "package-record-list".to_owned(),
+                    "package-record-get".to_owned(),
+                ],
+                "successful journeys   package-record-list, package-record-get\n",
+            ),
+        ] {
+            let report = SchemaTestSuccessReport {
+                ok: true,
+                command: "test",
+                profile: ProfileArg::Production,
+                package_revision: "pkg-1".to_owned(),
+                schema_fingerprint: "sha256:1111".to_owned(),
+                signing_input_sha256: "sha256:2222".to_owned(),
+                successful_journey_ids: journeys,
+                receipt: ArtifactReport {
+                    path: "result.json".to_owned(),
+                    media_type: "application/json".to_owned(),
+                    sha256: "sha256:3333".to_owned(),
+                    byte_length: 2,
+                },
+            };
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+
+            assert_eq!(
+                write_schema_test_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
+                ExitCode::SUCCESS
+            );
+            let rendered = plain(&stdout);
+            assert!(rendered.contains(expected), "{rendered}");
             assert!(stderr.is_empty());
         }
     }

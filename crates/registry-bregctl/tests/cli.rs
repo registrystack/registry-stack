@@ -312,7 +312,8 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "required scopes (all)",
         "allowed purposes (any)",
         "row restrictions (all)",
-        "district-reader",
+        "  entity record (internal)\n",
+        "    profile district-reader\n",
         "principal claim         registry_principal",
     ] {
         assert!(text.contains(expected), "{text}");
@@ -472,6 +473,9 @@ struct RuntimePackageFixture {
     anchor: PathBuf,
     runtime_config: PathBuf,
     package_revision: String,
+    /// The key the trust anchor names, so a test that builds a successor of
+    /// this package can sign it for the same anchor.
+    signing: PrivateJwk,
 }
 
 impl RuntimePackageFixture {
@@ -540,6 +544,7 @@ impl RuntimePackageFixture {
             anchor,
             runtime_config,
             package_revision,
+            signing,
         }
     }
 
@@ -1240,6 +1245,14 @@ fn project_lock_writes_module_digests_and_is_idempotent() {
     );
     assert!(second_report.get("artifacts").is_none());
 
+    let unchanged = bregctl(&["project", "lock", path(project.path())]);
+    assert!(unchanged.status.success(), "{unchanged:?}");
+    let rendered = String::from_utf8(unchanged.stdout).expect("lock report is UTF-8");
+    assert!(
+        rendered.starts_with("Locked the project modules.\n  revision  sha256:"),
+        "a lock that wrote nothing counts no artifact: {rendered}"
+    );
+
     let check_only = bregctl(&[
         "--format",
         "json",
@@ -1578,6 +1591,117 @@ modules:
 }
 
 #[test]
+fn deny_findings_refuses_on_the_findings_that_refused_it() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("initialized");
+    assert!(bregctl(&["init", path(&destination)]).status.success());
+
+    let refused = bregctl(&["check", path(&destination), "--deny-findings"]);
+
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+    let rendered = String::from_utf8(refused.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with("bregctl check refused.\n"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.ends_with("\nrefused on 2 findings.\n"),
+        "a refusal names what refused it: {rendered}"
+    );
+    assert!(
+        !rendered.contains("0 errors"),
+        "a refusal never closes on a count of no errors: {rendered}"
+    );
+}
+
+/// One numbered step, read back out of the rendering: the ordinal line and the
+/// continuation lines hanging under it, checked for the column the renderer
+/// folds them into and rejoined into the sentence the step states.
+fn numbered_step(rendered: &str, ordinal: usize) -> String {
+    let prefix = format!("  {ordinal}. ");
+    let mut lines = rendered
+        .lines()
+        .skip_while(|line| !line.starts_with(&prefix));
+    let first = lines
+        .next()
+        .unwrap_or_else(|| panic!("step {ordinal} is not rendered: {rendered}"));
+    let mut sentence = first[prefix.len()..].to_owned();
+    for line in lines {
+        let Some(continuation) = line.strip_prefix(&" ".repeat(prefix.len())) else {
+            break;
+        };
+        assert!(
+            !continuation.starts_with(' '),
+            "a continuation of step {ordinal} left its hanging column: {line:?}"
+        );
+        sentence.push(' ');
+        sentence.push_str(continuation);
+    }
+    sentence
+}
+
+#[test]
+fn an_authored_claim_name_cannot_forge_a_line_of_the_access_report() {
+    // The entity, field, and profile identifiers a report prints are held to
+    // the closed identifier grammar, so a claim name is the authored value
+    // that reaches a rendered line with nothing removed from it.
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: forged-line-fixture
+  version: 1
+  defaultLanguage: en
+  canonicalBaseIri: https://forged-line-fixture.example.test
+entities:
+  - id: record
+    primaryDataset: test-dataset
+    route: records
+    mutationMode: create_only
+    fields:
+      - id: code
+        type: string
+        maxLength: 64
+        classification: internal
+accessProfiles:
+  - id: reader
+    principalClaim: "registry_principal\n  error  forged.code  forged"
+    grants:
+      - entity: record
+        operations: [get]
+        readableFields: [code]
+        rowBoundaries: []
+"#,
+    );
+
+    let explained = bregctl(&["explain", "access", path(project.path())]);
+
+    assert!(explained.status.success(), "{explained:?}");
+    let rendered = String::from_utf8(explained.stdout).expect("access report is UTF-8");
+    assert!(
+        rendered.contains(
+            "      principal claim         registry_principal\\n  error  forged.code  forged\n"
+        ),
+        "the authored claim name stays escaped on the line it was given: {rendered}"
+    );
+    assert!(
+        !rendered
+            .lines()
+            .any(|line| line.trim_start().starts_with("error  forged.code")),
+        "an authored claim name forged a report line: {rendered}"
+    );
+    assert!(
+        rendered
+            .lines()
+            .filter(|line| line.contains("forged.code"))
+            .count()
+            == 1,
+        "the authored claim name reached more than one line: {rendered}"
+    );
+}
+
+#[test]
 fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediately() {
     let project = TestProject::asset_fixture();
     let destination = project.path().join("derived");
@@ -1701,13 +1825,9 @@ fn init_from_publicschema_reports_the_derived_project_in_the_report_shape() {
         stdout.contains("\n0 errors, 8 findings.\n"),
         "the report closes with the count to act on: {stdout}"
     );
-    // The steps are numbered and folded to a fixed column, so the sentence is
-    // matched against the rendering with its line breaks and indentation
-    // collapsed back into single spaces.
-    let unwrapped = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        unwrapped.contains(&format!(
-            "5. keep {}/model/selection.yaml beside the project",
+        numbered_step(&stdout, 5).starts_with(&format!(
+            "keep {}/model/selection.yaml beside the project",
             destination.display()
         )),
         "the derived project names its selection in a numbered step: {stdout}"
@@ -1869,28 +1989,25 @@ fn init_prints_the_next_command_and_what_the_example_leaves_open() {
     let stdout = String::from_utf8(output.stdout).expect("init stdout is UTF-8");
     let readme = destination.join("README.md");
     let registry = destination.join("registry.yaml");
-    // The steps are numbered and folded to a fixed column, so each sentence is
-    // matched against the rendering with its line breaks and indentation
-    // collapsed back into single spaces.
-    let unwrapped = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        stdout.contains("Next:"),
+        stdout.contains("\nNext:\n"),
         "init opens the steps with a heading: {stdout}"
     );
-    assert!(
-        unwrapped.contains(&format!(
-            "1. read {}, then run 'bregctl check {destination_argument}'",
+    assert_eq!(
+        numbered_step(&stdout, 1),
+        format!(
+            "read {}, then run 'bregctl check {destination_argument}'",
             readme.display()
-        )),
+        ),
         "init names the next command: {stdout}"
     );
     assert!(
-        unwrapped.contains("2. leave the findings above as they are;"),
+        numbered_step(&stdout, 2).starts_with("leave the findings above as they are;"),
         "init says the reported findings belong to the example: {stdout}"
     );
     assert!(
-        unwrapped.contains(&format!(
-            "3. replace canonicalBaseIri in {} before you build a production package;",
+        numbered_step(&stdout, 3).starts_with(&format!(
+            "replace canonicalBaseIri in {} before you build a production package;",
             registry.display()
         )),
         "init says the example base IRI is not shippable: {stdout}"

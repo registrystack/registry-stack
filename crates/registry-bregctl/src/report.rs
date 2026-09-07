@@ -116,16 +116,20 @@ impl Lines {
 
     /// Render aligned detail nested `depth` levels under the lead sentence.
     ///
-    /// Each depth is aligned on its own, so a nested group's labels line up
-    /// with each other rather than with the wider group above them.
+    /// One call aligns the list it is given and nothing else, so a nested
+    /// group's labels line up with each other rather than with the wider
+    /// group they sit under, and two groups at one depth keep their own
+    /// value columns.
     pub(crate) fn pairs_at(&mut self, depth: usize, pairs: &[(&str, String)]) {
-        let width = pairs
+        // The label is escaped before it is measured, so an escape that
+        // widens a label widens the column it is padded to with it.
+        let labels: Vec<String> = pairs
             .iter()
-            .map(|(label, _)| label.len())
-            .max()
-            .unwrap_or_default();
+            .map(|(label, _)| escape_report_text(label))
+            .collect();
+        let width = labels.iter().map(String::len).max().unwrap_or_default();
         let indent = INDENT.repeat(depth);
-        for (label, value) in pairs {
+        for (label, (_, value)) in labels.iter().zip(pairs) {
             let padded = format!("{label:<width$}");
             self.lines.push(format!(
                 "{indent}{}{GAP}{}",
@@ -229,6 +233,20 @@ impl Lines {
     /// there is no repetition to collapse and the path reads better on the
     /// line that names the code.
     pub(crate) fn findings(&mut self, findings: &[Finding<'_>]) {
+        self.push_findings(findings, finding_summary);
+    }
+
+    /// Render the diagnostics of a report that refused, closing with what
+    /// refused it.
+    ///
+    /// A refusal that carries no error is still a refusal: `--deny-findings`
+    /// stops on findings alone, and closing that report with a count opening
+    /// on `0 errors` would tell the reader the opposite of the exit status.
+    pub(crate) fn refusal_findings(&mut self, findings: &[Finding<'_>]) {
+        self.push_findings(findings, refusal_summary);
+    }
+
+    fn push_findings(&mut self, findings: &[Finding<'_>], summary: fn(&[Finding<'_>]) -> String) {
         if findings.is_empty() {
             return;
         }
@@ -239,7 +257,7 @@ impl Lines {
             }
         }
         self.blank();
-        self.raw(finding_summary(findings));
+        self.raw(summary(findings));
     }
 
     fn push_group(&mut self, severity: Severity, group: &[&Finding<'_>]) {
@@ -341,6 +359,19 @@ fn group_by_code<'report, 'a>(
         }
     }
     groups
+}
+
+/// Close a refusal with the diagnostics that produced it. Where an error
+/// stopped the command the count of errors is what the reader acts on, and
+/// where only findings did the sentence names them as the reason.
+fn refusal_summary(findings: &[Finding<'_>]) -> String {
+    if findings.iter().any(|item| item.severity == Severity::Error) {
+        return finding_summary(findings);
+    }
+    styled(
+        FINDING,
+        &format!("refused on {}.", counted(findings.len(), "finding")),
+    )
 }
 
 fn finding_summary(findings: &[Finding<'_>]) -> String {
@@ -673,6 +704,77 @@ mod tests {
         assert!(
             plain(&rendered).len() < rendered.len(),
             "stripping the attributes changed nothing"
+        );
+    }
+
+    #[test]
+    fn a_refusal_built_only_from_findings_names_what_refused_it() {
+        let mut lines = Lines::new();
+        lines.lead("bregctl check refused.");
+        lines.refusal_findings(&[
+            finding(Severity::Finding, "a.code", "a", "the first sentence"),
+            finding(Severity::Finding, "b.code", "b", "the second sentence"),
+        ]);
+        assert_eq!(
+            plain(&lines.finish()),
+            concat!(
+                "bregctl check refused.\n",
+                "\n",
+                "  finding  a.code  a\n",
+                "           the first sentence\n",
+                "  finding  b.code  b\n",
+                "           the second sentence\n",
+                "\n",
+                "refused on 2 findings.\n",
+            )
+        );
+    }
+
+    #[test]
+    fn a_refusal_carrying_an_error_closes_with_the_count_that_stopped_it() {
+        let mut lines = Lines::new();
+        lines.lead("bregctl check refused.");
+        lines.refusal_findings(&[
+            finding(Severity::Error, "a.code", "a", "the error sentence"),
+            finding(Severity::Finding, "b.code", "b", "the finding sentence"),
+        ]);
+        assert!(plain(&lines.finish()).ends_with("\n1 error, 1 finding.\n"));
+    }
+
+    #[test]
+    fn an_authored_label_is_escaped_and_still_holds_its_column() {
+        let mut lines = Lines::new();
+        lines.lead("Explained the compiled inventory.");
+        lines.pairs(&[
+            ("entity\n  error  forged.code", "record".to_owned()),
+            ("route", "records".to_owned()),
+        ]);
+        let rendered = plain(&lines.finish());
+        assert_eq!(
+            rendered,
+            concat!(
+                "Explained the compiled inventory.\n",
+                "  entity\\n  error  forged.code  record\n",
+                "  route                         records\n",
+            )
+        );
+    }
+
+    #[test]
+    fn two_lists_at_one_depth_each_align_on_their_own_widest_label() {
+        let mut lines = Lines::new();
+        lines.lead("Explained the compiled inventory.");
+        lines.pairs(&[("entity", "record".to_owned())]);
+        lines.blank();
+        lines.pairs(&[("access entries", "2".to_owned())]);
+        assert_eq!(
+            plain(&lines.finish()),
+            concat!(
+                "Explained the compiled inventory.\n",
+                "  entity  record\n",
+                "\n",
+                "  access entries  2\n",
+            )
         );
     }
 
