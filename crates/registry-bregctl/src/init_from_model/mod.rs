@@ -210,19 +210,30 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
         )
     };
     let elevated = render::elevated_fields(plan);
-    let findings = if elevated.is_empty() {
-        format!("{profiles} on purpose")
-    } else {
-        format!(
-            "{profiles} on purpose, and the `{}` profile reads {} the model marks sensitive",
-            render::OPERATOR_PROFILE,
-            if elevated.len() == 1 {
-                "a field".to_owned()
-            } else {
-                format!("{} fields", elevated.len())
-            }
-        )
+    let counted = |count: usize| {
+        if count == 1 {
+            "a field".to_owned()
+        } else {
+            format!("{count} fields")
+        }
     };
+    let mut findings = format!("{profiles} on purpose");
+    let sensitive = render::sensitive_elevated_fields(&elevated);
+    if !sensitive.is_empty() {
+        findings.push_str(&format!(
+            ", and the `{}` profile reads {} the model marks sensitive",
+            render::OPERATOR_PROFILE,
+            counted(sensitive.len())
+        ));
+    }
+    let mismatched = render::public_mismatch_fields(&elevated);
+    if !mismatched.is_empty() {
+        findings.push_str(&format!(
+            ", and the `{}` profile reads {} the selection placed inside a public entity",
+            render::OPERATOR_PROFILE,
+            counted(mismatched.len())
+        ));
+    }
     let mut steps = vec![
         format!(
             "read {}, then run 'bregctl check {}'",
@@ -316,6 +327,44 @@ mod tests {
             refused.message.contains("symbolic link"),
             "{}",
             refused.message
+        );
+    }
+
+    #[test]
+    fn next_steps_tell_a_public_entitys_fields_apart_from_ones_the_model_marks_sensitive() {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let root = directory.path().canonicalize().expect("a canonical path");
+        let selection = root.join("selection.yaml");
+        std::fs::write(
+            &selection,
+            "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
+             kind: ModelSelection\n\
+             model: publicschema\n\
+             modelVersion: \"0.3.0\"\n\
+             registry:\n  id: place-registry\n  title: Place Registry\n\
+             entities:\n\
+             \x20 - concept: Household\n\
+             \x20   classification: public\n\
+             \x20   properties:\n\
+             \x20     - name: name\n\
+             \x20     - name: address\n",
+        )
+        .expect("a selection");
+        let destination = root.join("project");
+        let report = run(
+            &destination,
+            ModelName::Publicschema,
+            Source::File(&selection),
+        )
+        .unwrap_or_else(|failure| panic!("{}", serde_json::to_string_pretty(&failure).unwrap()));
+        let step = &report.next_steps[1];
+        assert!(
+            !step.contains("the model marks sensitive"),
+            "no field of a public entity is model-sensitive: {step}"
+        );
+        assert!(
+            step.contains("reads 3 fields the selection placed inside a public entity"),
+            "{step}"
         );
     }
 

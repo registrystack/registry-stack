@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use super::resolve::{Classification, FieldKind, Plan, PlannedEntity, PlannedField, Text};
 use super::selection::Selection;
@@ -61,9 +62,14 @@ pub(crate) fn reader_entities(plan: &Plan) -> Vec<&PlannedEntity> {
         .collect()
 }
 
-/// The fields classified above their entity: the ones the model marks
-/// sensitive inside an entity that is not, which `check` reports as
+/// The fields classified above their entity, which `check` reports as
 /// `access.profile.higher_classification` for every profile reading them.
+/// This mixes two distinct causes: a field the model marks sensitive inside
+/// an entity that is not `restricted`, and an ordinarily `internal` field
+/// (the generated identifier, or a property the model does not mark
+/// sensitive) sitting inside an entity the selection classified `public`.
+/// [`sensitive_elevated_fields`] and [`public_mismatch_fields`] split the two
+/// apart so a reader is told which is which.
 pub(crate) fn elevated_fields(plan: &Plan) -> Vec<(&PlannedEntity, &PlannedField)> {
     plan.entities
         .iter()
@@ -74,6 +80,82 @@ pub(crate) fn elevated_fields(plan: &Plan) -> Vec<(&PlannedEntity, &PlannedField
                 .map(move |field| (entity, field))
         })
         .collect()
+}
+
+/// The elevated fields the model itself marks sensitive: the ones classified
+/// `restricted`, a classification the derivation never assigns on its own.
+pub(super) fn sensitive_elevated_fields<'a>(
+    elevated: &[(&'a PlannedEntity, &'a PlannedField)],
+) -> Vec<(&'a PlannedEntity, &'a PlannedField)> {
+    elevated
+        .iter()
+        .copied()
+        .filter(|(_, field)| field.classification == Classification::Restricted)
+        .collect()
+}
+
+/// The elevated fields that are not model-sensitive: the generated
+/// identifier or an ordinary property, carrying the derivation's default
+/// `internal` classification, elevated only because the selection
+/// classified their entity `public`.
+pub(super) fn public_mismatch_fields<'a>(
+    elevated: &[(&'a PlannedEntity, &'a PlannedField)],
+) -> Vec<(&'a PlannedEntity, &'a PlannedField)> {
+    elevated
+        .iter()
+        .copied()
+        .filter(|(_, field)| field.classification != Classification::Restricted)
+        .collect()
+}
+
+/// The sentence naming the fields the model marks sensitive inside an entity
+/// that is not `restricted`, or `None` when there are none.
+fn sensitive_note(plan: &Plan) -> Option<String> {
+    let elevated = elevated_fields(plan);
+    let sensitive = sensitive_elevated_fields(&elevated);
+    if sensitive.is_empty() {
+        return None;
+    }
+    let names = names_of(&sensitive);
+    let model = plan.model.display_name;
+    let (noun, pronoun) = if sensitive.len() == 1 {
+        ("the field", "it")
+    } else {
+        ("the fields", "them")
+    };
+    Some(format!(
+        "`check` also reports `access.profile.higher_classification` for {names}: {model} \
+         marks {noun} sensitive, so the derivation classified {pronoun} `restricted` inside \
+         an entity that is not, and `{OPERATOR_PROFILE}` reads {pronoun} anyway. Keep the \
+         finding as a reminder of what that profile discloses, or raise the entity's \
+         classification in {SELECTION_PATH} and derive again."
+    ))
+}
+
+/// The sentence naming the fields that are elevated only because their
+/// entity is classified `public` while the field itself carries the
+/// derivation's ordinary `internal` default, or `None` when there are none.
+fn public_mismatch_note(plan: &Plan) -> Option<String> {
+    let elevated = elevated_fields(plan);
+    let mismatched = public_mismatch_fields(&elevated);
+    if mismatched.is_empty() {
+        return None;
+    }
+    let (subject, sit, carry, pronoun) = if mismatched.len() == 1 {
+        ("it", "sits", "carries", "it")
+    } else {
+        ("they", "sit", "carry", "them")
+    };
+    Some(format!(
+        "`check` also reports `access.profile.higher_classification` for {}: {subject} \
+         {sit} in an entity the selection classified `public`, but {subject} still {carry} \
+         the derivation's ordinary `internal` classification, since {} does not mark \
+         {pronoun} sensitive, so `{OPERATOR_PROFILE}` reads {pronoun} anyway. Keep the \
+         finding as a reminder of what that profile discloses, or lower the entity's \
+         classification in {SELECTION_PATH} if these fields should be public too.",
+        names_of(&mismatched),
+        plan.model.display_name,
+    ))
 }
 
 fn base_iri(plan: &Plan) -> String {
@@ -144,10 +226,12 @@ fn registry(plan: &Plan) -> String {
         0,
         &format!(
             "The Registry Manifest projection is the catalogue description this registry \
-             publishes about itself. Every entity and field below carries the {} concept it \
-             was derived from, so a catalogue reader can tell what a field means without \
-             reading this file. `accessProfile` and `classificationCeiling` bound what the \
-             projection may describe; they never grant access to a caller.",
+             publishes about itself. Every entity, and every field other than a structured \
+             one, carries the {} concept it was derived from, so a catalogue reader can tell \
+             what most fields mean without reading this file; a structured field's value is \
+             not projected, so its concept is visible only in the entity's own `fields:` \
+             below. `accessProfile` and `classificationCeiling` bound what the projection may \
+             describe; they never grant access to a caller.",
             plan.model.display_name
         ),
     );
@@ -321,30 +405,11 @@ fn registry(plan: &Plan) -> String {
          caller-supplied filter is not authorization. That is intended for a single \
          operations team; close it with a `rowBoundaries` entry or by removing `list`.",
     );
-    let elevated = elevated_fields(plan);
-    if !elevated.is_empty() {
-        yaml.comment(
-            0,
-            &format!(
-                "`check` also reports `access.profile.higher_classification` for {}: the \
-                 model marks {} sensitive, so the derivation classified {} `restricted` \
-                 inside an entity that is not, and `operator` reads {} anyway. Keep the \
-                 finding as a reminder of which fields a profile discloses, or raise the \
-                 entity's classification in {SELECTION_PATH} and derive again.",
-                names_of(&elevated),
-                if elevated.len() == 1 {
-                    "that property"
-                } else {
-                    "those properties"
-                },
-                if elevated.len() == 1 {
-                    "the field"
-                } else {
-                    "the fields"
-                },
-                if elevated.len() == 1 { "it" } else { "them" },
-            ),
-        );
+    if let Some(note) = sensitive_note(plan) {
+        yaml.comment(0, &note);
+    }
+    if let Some(note) = public_mismatch_note(plan) {
+        yaml.comment(0, &note);
     }
     yaml.line(0, "accessProfiles:");
     yaml.entry(1, "- id", OPERATOR_PROFILE);
@@ -569,6 +634,65 @@ fn dev_clients(plan: &Plan) -> String {
 /// The journeys `bregctl test` and `bregctl dev` replay: one record per
 /// entity created by the operator, read back, and listed, then each
 /// non-restricted collection listed by the reader.
+/// The fixture grammar's identifier bound, mirroring the private
+/// `MAX_IDENTIFIER_BYTES` in `crates/registry-breg/src/fixtures.rs`: a
+/// journey, step, or capture id holds at most this many bytes.
+const FIXTURE_ID_MAX_BYTES: usize = 64;
+
+/// The fixture grammar's step bound, mirroring the private
+/// `MAX_STEPS_PER_JOURNEY` in `crates/registry-breg/src/fixtures.rs`: a
+/// journey declares at most this many steps.
+const FIXTURE_MAX_STEPS_PER_JOURNEY: usize = 128;
+
+/// The steps one entity contributes to the operator's part of a journey:
+/// create, get, and list.
+const ENTITY_JOURNEY_STEPS: usize = 3;
+
+/// A journey, step, or capture id built from `prefix` and `name`, held to
+/// the stable-id grammar `crates/registry-breg/src/fixtures.rs` applies to
+/// them: lowercase letters, digits, and hyphens only, starting with a
+/// letter, in at most [`FIXTURE_ID_MAX_BYTES`] bytes. `name` is an entity id
+/// or route, which the project's own identifier grammar additionally allows
+/// to carry `_` and to run up to 64 bytes on its own; this folds `_` to `-`
+/// and, when the combined id would still be too long, truncates it and
+/// appends a short digest of the untruncated id, so two long names sharing a
+/// prefix still produce distinct ids.
+fn fixture_id(prefix: &str, name: &str) -> String {
+    let folded: String = name
+        .chars()
+        .map(|character| if character == '_' { '-' } else { character })
+        .collect();
+    let candidate = format!("{prefix}{folded}");
+    if candidate.len() <= FIXTURE_ID_MAX_BYTES {
+        return candidate;
+    }
+    let digest = crate::hex_lower(&Sha256::digest(candidate.as_bytes()));
+    let suffix = format!("-{}", &digest[..8]);
+    let budget = FIXTURE_ID_MAX_BYTES
+        .saturating_sub(prefix.len())
+        .saturating_sub(suffix.len());
+    format!("{prefix}{}{suffix}", &folded[..budget.min(folded.len())])
+}
+
+/// The capture id a create step for `entity_id` registers, and the id a
+/// later step's `recordRef` names to read the same record back.
+fn capture_id(entity_id: &str) -> String {
+    fixture_id("example-", entity_id)
+}
+
+/// Opens the journey that carries the operator and reader steps starting at
+/// `index`: `first-records` for the first, `first-records-2` for the next,
+/// and so on when a selection is large enough to need more than one.
+fn open_journey(yaml: &mut Yaml, index: usize) {
+    let id = if index == 1 {
+        "first-records".to_owned()
+    } else {
+        format!("first-records-{index}")
+    };
+    yaml.line(1, &format!("- id: {id}"));
+    yaml.line(2, "steps:");
+}
+
 fn journeys(plan: &Plan) -> String {
     let mut yaml = Yaml::default();
     yaml.comment(
@@ -583,19 +707,30 @@ fn journeys(plan: &Plan) -> String {
         0,
         "The operator creates one record per entity, in an order that lets each reference \
          point at a record created before it, then reads and lists each one. A reference \
-         whose target has no record yet is left out of the create, so the journey stays valid \
-         for a cycle of references too.",
+         whose target has no record in the same journey yet is left out of the create, so the \
+         journey stays valid for a cycle of references too, and for a target created in an \
+         earlier journey. A selection large enough to exceed one journey's step bound is split \
+         across journeys named `first-records`, `first-records-2`, and so on.",
     );
     yaml.line(0, "apiVersion: registry.registrystack.org/breg-journeys/v1");
     yaml.line(0, "journeys:");
-    yaml.line(1, "- id: first-records");
-    yaml.line(2, "steps:");
+
     let mut operator_claims_declared = false;
+    let mut journey_index = 1usize;
+    let mut steps_in_journey = 0usize;
     let mut created: BTreeSet<&str> = BTreeSet::new();
+    open_journey(&mut yaml, journey_index);
+
     for entity in creation_order(plan) {
-        let capture = format!("example-{}", entity.id);
+        if steps_in_journey + ENTITY_JOURNEY_STEPS > FIXTURE_MAX_STEPS_PER_JOURNEY {
+            journey_index += 1;
+            steps_in_journey = 0;
+            created.clear();
+            open_journey(&mut yaml, journey_index);
+        }
+        let capture = capture_id(&entity.id);
         let identifier_value = format!("{}-1", entity.id);
-        yaml.line(3, &format!("- id: create-{}", entity.id));
+        yaml.line(3, &format!("- id: {}", fixture_id("create-", &entity.id)));
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
         operator_claims(&mut yaml, plan, &mut operator_claims_declared);
@@ -620,7 +755,7 @@ fn journeys(plan: &Plan) -> String {
             ),
         );
         yaml.entry(4, "capture", &capture);
-        yaml.line(3, &format!("- id: get-{}", entity.id));
+        yaml.line(3, &format!("- id: {}", fixture_id("get-", &entity.id)));
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
         yaml.line(4, "claims: *operator_claims");
@@ -639,19 +774,29 @@ fn journeys(plan: &Plan) -> String {
                 scalar(&identifier_value)
             ),
         );
-        yaml.line(3, &format!("- id: list-{}", entity.route));
+        yaml.line(3, &format!("- id: {}", fixture_id("list-", &entity.route)));
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
         yaml.line(4, "claims: *operator_claims");
         yaml.line(4, "request: {operation: list}");
         yaml.line(4, "expect: {outcome: success, status: 200, count: 1}");
         created.insert(entity.id.as_str());
+        steps_in_journey += ENTITY_JOURNEY_STEPS;
     }
+
     let mut reader_claims_declared = false;
     for entity in reader_entities(plan) {
+        if steps_in_journey + 1 > FIXTURE_MAX_STEPS_PER_JOURNEY {
+            journey_index += 1;
+            steps_in_journey = 0;
+            open_journey(&mut yaml, journey_index);
+        }
         yaml.line(
             3,
-            &format!("- id: read-{}-as-{READER_PROFILE}", entity.route),
+            &format!(
+                "- id: {}",
+                fixture_id("read-", &format!("{}-as-{READER_PROFILE}", entity.route))
+            ),
         );
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", READER_PROFILE);
@@ -666,6 +811,7 @@ fn journeys(plan: &Plan) -> String {
         }
         yaml.line(4, "request: {operation: list}");
         yaml.line(4, "expect: {outcome: success, status: 200, count: 1}");
+        steps_in_journey += 1;
     }
     yaml.finish()
 }
@@ -742,7 +888,7 @@ fn example_value(
             if !created.contains(target.as_str()) {
                 return None;
             }
-            format!("{{recordRef: {}}}", scalar(&format!("example-{target}")))
+            format!("{{recordRef: {}}}", scalar(&capture_id(target)))
         }
         FieldKind::Structured { schema, .. } => {
             serde_json::to_string(&example_structured(schema)).expect("a value serializes")
@@ -1021,9 +1167,11 @@ fn readme(plan: &Plan) -> String {
     );
     let _ = writeln!(
         out,
-        "- Every entity and field carries its {model} concept IRI in the Registry Manifest \
-         projection, and each vocabulary carries the enumeration's IRI and labels, so a \
-         catalogue reader can tell what a field means without reading `registry.yaml`."
+        "- Every entity, and every field other than a structured one, carries its {model} \
+         concept IRI in the Registry Manifest projection, and each vocabulary carries the \
+         enumeration's IRI and labels, so a catalogue reader can tell what most fields mean \
+         without reading `registry.yaml`. A structured field's value is not projected, so its \
+         concept is visible only by reading the entity's fields in `registry.yaml` directly."
     );
     let _ = writeln!(out);
     let _ = writeln!(out, "## Access profiles");
@@ -1055,28 +1203,11 @@ fn readme(plan: &Plan) -> String {
          bind a `rowBoundaries` entry to whatever field carries your registry's tenancy, or \
          remove `list`."
     );
-    let elevated = elevated_fields(plan);
-    if !elevated.is_empty() {
-        let _ = writeln!(
-            out,
-            "\nIt also reports `access.profile.higher_classification` for {}. {model} marks \
-             {} sensitive, so the derivation classified {} `restricted` inside an entity \
-             that is not, and `{OPERATOR_PROFILE}` reads {} anyway. Keep the finding as a \
-             reminder of what that profile discloses, or raise the entity's classification \
-             in `{SELECTION_PATH}` and derive again.",
-            names_of(&elevated),
-            if elevated.len() == 1 {
-                "that property"
-            } else {
-                "those properties"
-            },
-            if elevated.len() == 1 {
-                "the field"
-            } else {
-                "the fields"
-            },
-            if elevated.len() == 1 { "it" } else { "them" },
-        );
+    if let Some(note) = sensitive_note(plan) {
+        let _ = writeln!(out, "\n{note}");
+    }
+    if let Some(note) = public_mismatch_note(plan) {
+        let _ = writeln!(out, "\n{note}");
     }
     let _ = writeln!(out);
     let _ = writeln!(out, "## Files");
@@ -1302,7 +1433,7 @@ mod tests {
     use registry_breg::fixtures::validate_fixture_journeys;
     use registry_linkml::publicschema;
 
-    use super::super::resolve::resolve;
+    use super::super::resolve::{resolve, ModelFacts};
     use super::*;
     use crate::{compile, ProfileArg};
 
@@ -1466,6 +1597,245 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"));
     }
 
+    /// A plan with `entity_count` unrelated, `internal` entities, each
+    /// carrying only its generated identifier: enough to drive the steps the
+    /// operator and reader replay, without resolving a selection against the
+    /// model.
+    fn synthetic_plan(entity_count: usize) -> (Plan, Selection) {
+        let model = ModelFacts {
+            display_name: "Test Model",
+            version: "0.0.0".to_owned(),
+            repository: "https://example.invalid/model".to_owned(),
+            license: "Apache-2.0".to_owned(),
+            license_url: "https://example.invalid/license".to_owned(),
+        };
+        let entities: Vec<PlannedEntity> = (0..entity_count)
+            .map(|index| {
+                let id = format!("entity-{index}");
+                PlannedEntity {
+                    route: format!("entities-{index}"),
+                    concept: format!("Entity{index}"),
+                    concept_uri: format!("https://example.invalid/Entity{index}"),
+                    title: Text::from([("en".to_owned(), format!("Entity {index}"))]),
+                    description: Text::from([(
+                        "en".to_owned(),
+                        format!("Entity {index}, used only to size a journey."),
+                    )]),
+                    classification: Classification::Internal,
+                    identifier: PlannedField {
+                        id: format!("{id}-code"),
+                        property: "identifier".to_owned(),
+                        concept_uri: None,
+                        title: Text::from([("en".to_owned(), "Identifier".to_owned())]),
+                        description: Text::from([(
+                            "en".to_owned(),
+                            "The code that identifies a record.".to_owned(),
+                        )]),
+                        classification: Classification::Internal,
+                        required: true,
+                        kind: FieldKind::String {
+                            min_length: 1,
+                            max_length: 64,
+                        },
+                    },
+                    fields: Vec::new(),
+                    id,
+                }
+            })
+            .collect();
+        let plan = Plan {
+            registry_id: "synthetic-registry".to_owned(),
+            registry_title: "Synthetic Registry".to_owned(),
+            model,
+            entities,
+            vocabularies: Vec::new(),
+            classification_ceiling: Classification::Internal,
+            connectors: Vec::new(),
+        };
+        let selection = Selection {
+            api_version: super::super::selection::API_VERSION.to_owned(),
+            kind: super::super::selection::KIND.to_owned(),
+            model: super::super::selection::ModelName::Publicschema,
+            model_version: None,
+            registry: super::super::selection::RegistrySelection {
+                id: plan.registry_id.clone(),
+                title: plan.registry_title.clone(),
+            },
+            entities: Vec::new(),
+            vocabularies: Vec::new(),
+        };
+        (plan, selection)
+    }
+
+    #[test]
+    fn fixture_ids_fold_underscores_and_stay_within_the_fixture_bound() {
+        assert_eq!(
+            fixture_id("create-", "person_record"),
+            "create-person-record"
+        );
+        assert_eq!(capture_id("person_record"), "example-person-record");
+        let long_name = "a".repeat(64);
+        let over_long = fixture_id("read-", &format!("{long_name}-as-reader"));
+        assert!(over_long.len() <= FIXTURE_ID_MAX_BYTES, "{over_long}");
+        assert!(over_long.starts_with("read-"), "{over_long}");
+        // Two long names sharing a prefix must not collide once truncated.
+        let other_long = format!("{}b", "a".repeat(63));
+        let first = fixture_id("read-", &format!("{long_name}-as-reader"));
+        let second = fixture_id("read-", &format!("{other_long}-as-reader"));
+        assert_ne!(first, second);
+        assert!(second.len() <= FIXTURE_ID_MAX_BYTES, "{second}");
+    }
+
+    #[test]
+    fn a_selection_large_enough_to_exceed_one_journeys_step_bound_is_split_across_several() {
+        // 33 internal entities, none referencing another, produce 4 steps
+        // each (create, get, operator list, reader list): 132, past the
+        // fixture's 128-step-per-journey bound.
+        let (plan, selection) = synthetic_plan(33);
+        let files = render(&plan, &selection);
+        let (_root, path) = write_project(&files);
+        let authoring = compile(&path, ProfileArg::Authoring, "init").unwrap_or_else(|failure| {
+            panic!("{}", serde_json::to_string_pretty(&failure).unwrap())
+        });
+        let document = yaml(&files, FIXTURE_JOURNEYS_PATH);
+        let journeys = document["journeys"].as_array().expect("journeys");
+        assert!(journeys.len() > 1, "{journeys:#?}");
+        let total_steps: usize = journeys
+            .iter()
+            .map(|journey| {
+                let steps = journey["steps"].as_array().expect("steps").len();
+                assert!(steps <= FIXTURE_MAX_STEPS_PER_JOURNEY, "{journey:#?}");
+                steps
+            })
+            .sum();
+        assert_eq!(total_steps, 33 * 4);
+        validate_fixture_journeys(&files[FIXTURE_JOURNEYS_PATH], &authoring)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    #[test]
+    fn an_entity_id_with_an_underscore_gets_a_fixture_safe_step_and_capture_id() {
+        let starter = publicschema::starters()
+            .iter()
+            .find(|starter| starter.name == "household")
+            .expect("the starter ships");
+        let mut selection =
+            Selection::parse("household", starter.contents.as_bytes()).expect("parses");
+        let person = selection
+            .entities
+            .iter_mut()
+            .find(|entity| entity.concept == "Person")
+            .expect("person is selected");
+        person.id = Some("person_record".to_owned());
+        let model = publicschema::model().expect("the snapshot reads");
+        let plan = resolve(&selection, &model).expect("resolves with the renamed id");
+        let files = render(&plan, &selection);
+        let (_root, path) = write_project(&files);
+        let authoring = compile(&path, ProfileArg::Authoring, "init").unwrap_or_else(|failure| {
+            panic!("{}", serde_json::to_string_pretty(&failure).unwrap())
+        });
+        // `entity:` legitimately carries the real, underscored entity id;
+        // only step and capture ids are held to the fixture's stricter
+        // hyphen-only stable-id grammar.
+        let document = yaml(&files, FIXTURE_JOURNEYS_PATH);
+        let steps = document["journeys"][0]["steps"].as_array().expect("steps");
+        for step in steps {
+            let id = step["id"].as_str().expect("a step id");
+            assert!(!id.contains('_'), "{id}");
+            if let Some(capture) = step["capture"].as_str() {
+                assert!(!capture.contains('_'), "{capture}");
+            }
+            if let Some(record_ref) = step["request"]["recordRef"].as_str() {
+                assert!(!record_ref.contains('_'), "{record_ref}");
+            }
+            if let Some(data) = step["request"]["data"].as_object() {
+                for value in data.values() {
+                    if let Some(record_ref) = value.get("recordRef").and_then(Value::as_str) {
+                        assert!(!record_ref.contains('_'), "{record_ref}");
+                    }
+                }
+            }
+        }
+        validate_fixture_journeys(&files[FIXTURE_JOURNEYS_PATH], &authoring)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    #[test]
+    fn a_public_entitys_ordinary_fields_are_told_apart_from_ones_the_model_marks_sensitive() {
+        let (mut plan, _) = synthetic_plan(1);
+        plan.entities[0].classification = Classification::Public;
+        plan.entities[0].fields.push(PlannedField {
+            id: "name".to_owned(),
+            property: "name".to_owned(),
+            concept_uri: None,
+            title: Text::from([("en".to_owned(), "Name".to_owned())]),
+            description: Text::new(),
+            classification: Classification::Internal,
+            required: false,
+            kind: FieldKind::String {
+                min_length: 1,
+                max_length: 64,
+            },
+        });
+        plan.entities[0].fields.push(PlannedField {
+            id: "note".to_owned(),
+            property: "note".to_owned(),
+            concept_uri: None,
+            title: Text::from([("en".to_owned(), "Note".to_owned())]),
+            description: Text::new(),
+            classification: Classification::Restricted,
+            required: false,
+            kind: FieldKind::String {
+                min_length: 1,
+                max_length: 64,
+            },
+        });
+        plan.classification_ceiling = Classification::Restricted;
+
+        // The identifier and `name` are elevated only because the entity is
+        // `public`; `note` is elevated because the model marks it sensitive.
+        let elevated = elevated_fields(&plan);
+        assert_eq!(elevated.len(), 3, "{elevated:?}");
+        let sensitive = sensitive_elevated_fields(&elevated);
+        assert_eq!(
+            sensitive
+                .iter()
+                .map(|(_, field)| &field.id)
+                .collect::<Vec<_>>(),
+            vec!["note"]
+        );
+        let mismatched = public_mismatch_fields(&elevated);
+        let mut mismatched_ids: Vec<&str> = mismatched
+            .iter()
+            .map(|(_, field)| field.id.as_str())
+            .collect();
+        mismatched_ids.sort_unstable();
+        assert_eq!(mismatched_ids, vec!["entity-0-code", "name"]);
+
+        // A wrapped `#` comment breaks a long sentence across lines, so
+        // compare against the flattened text rather than the raw one.
+        let flatten = |text: &str| -> String {
+            text.lines()
+                .map(|line| line.trim_start_matches('#').trim())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let registry_text = flatten(&registry(&plan));
+        assert!(
+            registry_text.contains("an entity the selection classified `public`"),
+            "{registry_text}"
+        );
+        assert!(
+            registry_text.contains("Test Model marks the field sensitive"),
+            "{registry_text}"
+        );
+        let readme_text = flatten(&readme(&plan));
+        assert!(
+            readme_text.contains("an entity the selection classified `public`"),
+            "{readme_text}"
+        );
+    }
+
     #[test]
     fn the_registry_carries_the_plan() {
         let (plan, selection) = starter_plan("household");
@@ -1521,6 +1891,18 @@ mod tests {
             "https://publicschema.org/Person"
         );
         assert_eq!(manifest_entities[0]["title"]["fr"], "Personne");
+        // A structured field, `household.address`, is not representable in
+        // the manifest projection, so it carries no field or concept there,
+        // while an ordinary scalar field of the same entity still does.
+        let household_manifest_fields = manifest_entities[1]["fields"]
+            .as_array()
+            .expect("household manifest fields");
+        assert!(!household_manifest_fields
+            .iter()
+            .any(|field| field["id"] == "address"));
+        assert!(household_manifest_fields
+            .iter()
+            .any(|field| field["id"] == "name"));
         let manifest_vocabularies = registry["manifestProjection"]["vocabularies"]
             .as_array()
             .expect("manifest vocabularies");
