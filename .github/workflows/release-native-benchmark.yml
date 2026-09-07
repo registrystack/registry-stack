@@ -1,0 +1,179 @@
+name: Review-only native release build benchmark
+run-name: Native benchmark v${{ inputs.version }} at ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact source commit to build
+        required: true
+        type: string
+      version:
+        description: Release version without the v prefix
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  validate:
+    name: Bind the review-only benchmark source
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.bind.outputs.source_sha }}
+      version: ${{ steps.bind.outputs.version }}
+    steps:
+      - name: Checkout exact benchmark source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Validate source and version binding
+        id: bind
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be an exact lowercase commit ID" >&2
+            exit 2
+          fi
+          if [[ ! "${VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "version must be canonical semantic version text" >&2
+            exit 2
+          fi
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          python3 - "${VERSION}" <<'PY'
+          import sys
+          import tomllib
+
+          with open("Cargo.toml", "rb") as handle:
+              actual = tomllib.load(handle)["workspace"]["package"]["version"]
+          if actual != sys.argv[1]:
+              raise SystemExit(
+                  f"workspace version {actual!r} does not match {sys.argv[1]!r}"
+              )
+          PY
+          printf 'source_sha=%s\nversion=%s\n' "${SOURCE_SHA}" "${VERSION}" \
+            >>"${GITHUB_OUTPUT}"
+
+  build:
+    name: Build review-only macOS ${{ matrix.group }} shard
+    needs: validate
+    runs-on: macos-14
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, breg, bregctl]
+    steps:
+      - name: Checkout exact benchmark source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Build review-only native macOS shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 \
+            --profile minimal --target aarch64-apple-darwin
+          release/scripts/build-release-native-platform.sh \
+            --group "${{ matrix.group }}" \
+            --purpose review_only \
+            --source-sha "${{ needs.validate.outputs.source_sha }}" \
+            --version "${{ needs.validate.outputs.version }}" \
+            --output native-shard
+
+      - name: Upload review-only native macOS shard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-native-benchmark-${{ needs.validate.outputs.version }}-${{ matrix.group }}-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-shard
+          if-no-files-found: error
+          retention-days: 2
+
+  merge:
+    name: Merge the review-only native benchmark
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact benchmark source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Download review-only core shard
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-native-benchmark-${{ needs.validate.outputs.version }}-core-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-shards/core
+
+      - name: Download review-only BReg shard
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-native-benchmark-${{ needs.validate.outputs.version }}-breg-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-shards/breg
+
+      - name: Download review-only bregctl shard
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-native-benchmark-${{ needs.validate.outputs.version }}-bregctl-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-shards/bregctl
+
+      - name: Merge review-only native macOS shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          release/scripts/merge-release-native-platform-shards.py \
+            --version "${{ needs.validate.outputs.version }}" \
+            --source-sha "${{ needs.validate.outputs.source_sha }}" \
+            --purpose review_only \
+            --core native-shards/core \
+            --breg native-shards/breg \
+            --bregctl native-shards/bregctl \
+            --output native-benchmark
+          printf '%s\npurpose=review_only\nsource_sha=%s\nversion=%s\ntarget=%s\ngroup=merged\nrun_id=%s\nrun_attempt=%s\n' \
+            registry-stack.release-native-benchmark.v1 \
+            "${{ needs.validate.outputs.source_sha }}" \
+            "${{ needs.validate.outputs.version }}" \
+            aarch64-apple-darwin "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" \
+            >native-benchmark/REVIEW_ONLY
+          python3 - <<'PY'
+          import stat
+          from pathlib import Path
+
+          for binary in Path("native-benchmark/platform").iterdir():
+              if stat.S_IMODE(binary.stat().st_mode) != 0o755:
+                  raise SystemExit(f"merged binary is not executable: {binary}")
+          PY
+
+      - name: Upload merged review-only native benchmark
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-native-benchmark-${{ needs.validate.outputs.version }}-merged-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-benchmark
+          if-no-files-found: error
+          retention-days: 2

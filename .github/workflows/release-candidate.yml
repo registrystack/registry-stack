@@ -427,9 +427,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
-            target: aarch64-apple-darwin
-            asset: macos-arm64
           - runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             asset: linux-arm64
@@ -507,6 +504,47 @@ jobs:
         with:
           name: candidate-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-platform
+          if-no-files-found: error
+          retention-days: 2
+
+  build-macos-platforms:
+    name: Build native macOS ${{ matrix.group }} payload once
+    needs: validate
+    runs-on: macos-14
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, breg, bregctl]
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Build native macOS release shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 \
+            --profile minimal --target aarch64-apple-darwin
+          release/scripts/build-release-native-platform.sh \
+            --group "${{ matrix.group }}" \
+            --purpose candidate_input \
+            --source-sha "${{ needs.validate.outputs.source_sha }}" \
+            --version "${{ needs.validate.outputs.version }}" \
+            --output candidate-native-shard
+
+      - name: Upload native macOS release shard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-native-macos-arm64-${{ needs.validate.outputs.version }}-${{ matrix.group }}-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-native-shard
           if-no-files-found: error
           retention-days: 2
 
@@ -928,6 +966,7 @@ jobs:
       - validate
       - build-canonical
       - build-platforms
+      - build-macos-platforms
       - clients
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -951,6 +990,21 @@ jobs:
         with:
           pattern: candidate-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: inputs
+
+      - name: Merge exact native macOS release shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="candidate-native-macos-arm64-${{ needs.validate.outputs.version }}"
+          suffix="${{ needs.validate.outputs.source_sha }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          release/scripts/merge-release-native-platform-shards.py \
+            --version "${{ needs.validate.outputs.version }}" \
+            --source-sha "${{ needs.validate.outputs.source_sha }}" \
+            --purpose candidate_input \
+            --core "inputs/${prefix}-core-${suffix}" \
+            --breg "inputs/${prefix}-breg-${suffix}" \
+            --bregctl "inputs/${prefix}-bregctl-${suffix}" \
+            --output "inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Install pinned candidate inspection tools
         env:

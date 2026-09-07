@@ -403,6 +403,9 @@ SECURITY_WORKFLOW_GATES: dict[str, frozenset[str]] = {
     ".github/workflows/release-candidate.yml": frozenset(
         {"release_source_proof", "release_tool"}
     ),
+    ".github/workflows/release-native-benchmark.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
     ".github/workflows/release-canary.yml": frozenset(
         {"release_source_proof", "release_tool"}
     ),

@@ -828,6 +828,9 @@ jobs:
       - name: Test canonical release binary shard merge
         run: python3 -m unittest release/scripts/test_merge_release_binary_shards.py
 
+      - name: Test native release platform build and merge
+        run: python3 -m unittest release/scripts/test_release_native_platform.py
+
       - name: Test release workflow structure
         run: python3 -m unittest release/scripts/test_release_workflow_structure.py
 

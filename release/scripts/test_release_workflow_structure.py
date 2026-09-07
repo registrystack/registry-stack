@@ -386,6 +386,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 "build-canonical-binaries",
                 "build-canonical",
                 "build-platforms",
+                "build-macos-platforms",
                 "clients",
                 "assemble",
                 "attest",
@@ -395,6 +396,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "build-canonical-binaries",
             "build-canonical",
             "build-platforms",
+            "build-macos-platforms",
             "clients",
         ):
             permissions = document["jobs"][job]["permissions"]
@@ -553,7 +555,6 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(
             {(entry["runner"], entry["target"], entry["asset"]) for entry in matrix},
             {
-                ("macos-14", "aarch64-apple-darwin", "macos-arm64"),
                 ("ubuntu-22.04-arm", "aarch64-unknown-linux-gnu", "linux-arm64"),
             },
         )
@@ -574,6 +575,68 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             if step.get("name") == "Upload native platform payload"
         )
         self.assertLess(steps.index(floor_check), upload_index)
+
+    def test_native_macos_shards_are_exact_source_inputs_to_assembly(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        shards = document["jobs"]["build-macos-platforms"]
+        self.assertEqual("validate", shards["needs"])
+        self.assertEqual("macos-14", shards["runs-on"])
+        self.assertFalse(shards["strategy"]["fail-fast"])
+        self.assertEqual(
+            ["core", "breg", "bregctl"],
+            shards["strategy"]["matrix"]["group"],
+        )
+        checkout = shards["steps"][0]
+        self.assertEqual(
+            "${{ needs.validate.outputs.source_sha }}", checkout["with"]["ref"]
+        )
+        build = step_run(
+            document, "build-macos-platforms", "Build native macOS release shard"
+        )
+        self.assertIn("rustup toolchain install 1.95.0", build)
+        self.assertIn("--profile minimal --target aarch64-apple-darwin", build)
+        self.assertIn("release/scripts/build-release-native-platform.sh", build)
+        self.assertIn('--group "${{ matrix.group }}"', build)
+        self.assertIn("--purpose candidate_input", build)
+        self.assertIn('--source-sha "${{ needs.validate.outputs.source_sha }}"', build)
+        upload = next(
+            step for step in shards["steps"] if "upload-artifact@" in str(step)
+        )
+        for binding in (
+            "${{ needs.validate.outputs.version }}",
+            "${{ matrix.group }}",
+            "${{ needs.validate.outputs.source_sha }}",
+            "${{ github.run_id }}",
+            "${{ github.run_attempt }}",
+        ):
+            self.assertIn(binding, upload["with"]["name"])
+
+        assemble = document["jobs"]["assemble"]
+        self.assertIn("build-macos-platforms", assemble["needs"])
+        merge = step_run(
+            document, "assemble", "Merge exact native macOS release shards"
+        )
+        self.assertIn("release/scripts/merge-release-native-platform-shards.py", merge)
+        self.assertIn("--purpose candidate_input", merge)
+        self.assertIn('--core "inputs/${prefix}-core-${suffix}"', merge)
+        self.assertIn('--breg "inputs/${prefix}-breg-${suffix}"', merge)
+        self.assertIn('--bregctl "inputs/${prefix}-bregctl-${suffix}"', merge)
+        self.assertIn(
+            'inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}',
+            merge,
+        )
+        steps = assemble["steps"]
+        merge_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Merge exact native macOS release shards"
+        )
+        tools_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Install pinned candidate inspection tools"
+        )
+        self.assertLess(merge_index, tools_index)
 
     def test_release_embeds_evidencectl_tag_and_publishes_latest_alias(self) -> None:
         _, document = workflow("release-candidate.yml")
@@ -1028,6 +1091,95 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("docker run --rm", scan[:run_image])
         self.assertLess(run_image, scan.index('syft "${candidate_ref}"'))
         self.assertLess(run_image, scan.index("scan_image \\"))
+
+
+class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
+    def test_is_manual_read_only_and_cannot_qualify_as_release_rehearsal(self) -> None:
+        text, document = workflow("release-native-benchmark.yml")
+        trigger = text.split("permissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", trigger)
+        self.assertNotIn("repository_dispatch:", trigger)
+        self.assertNotIn("push:", trigger)
+        self.assertNotIn("schedule:", trigger)
+        self.assertEqual({}, document["permissions"])
+        self.assertEqual(["validate", "build", "merge"], list(document["jobs"]))
+        self.assertEqual(
+            {"contents": "read"}, document["jobs"]["validate"]["permissions"]
+        )
+        self.assertEqual(
+            {"contents": "read"}, document["jobs"]["build"]["permissions"]
+        )
+        self.assertEqual(
+            {"actions": "read", "contents": "read"},
+            document["jobs"]["merge"]["permissions"],
+        )
+        for forbidden in (
+            "contents: write",
+            "packages: write",
+            "id-token: write",
+            "attestations: write",
+            "git push",
+            "git tag ",
+            "gh release",
+            "docker ",
+            "oras ",
+            "crane ",
+            "release/scripts/rehearse-release",
+            "Exercise future-tag release paths",
+        ):
+            self.assertNotIn(forbidden, text)
+
+    def test_builds_three_bound_shards_and_merges_one_review_only_payload(self) -> None:
+        text, document = workflow("release-native-benchmark.yml")
+        validation = step_run(
+            document, "validate", "Validate source and version binding"
+        )
+        self.assertIn('test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"', validation)
+        self.assertIn('["workspace"]["package"]["version"]', validation)
+        build = document["jobs"]["build"]
+        self.assertEqual("macos-14", build["runs-on"])
+        self.assertFalse(build["strategy"]["fail-fast"])
+        self.assertEqual(
+            ["core", "breg", "bregctl"],
+            build["strategy"]["matrix"]["group"],
+        )
+        build_run = step_run(
+            document, "build", "Build review-only native macOS shard"
+        )
+        self.assertIn("release/scripts/build-release-native-platform.sh", build_run)
+        self.assertIn("--purpose review_only", build_run)
+        upload = next(
+            step for step in build["steps"] if "upload-artifact@" in str(step)
+        )
+        for binding in (
+            "${{ needs.validate.outputs.version }}",
+            "${{ matrix.group }}",
+            "${{ needs.validate.outputs.source_sha }}",
+            "${{ github.run_id }}",
+            "${{ github.run_attempt }}",
+        ):
+            self.assertIn(binding, upload["with"]["name"])
+
+        merge = document["jobs"]["merge"]
+        self.assertEqual(["validate", "build"], merge["needs"])
+        downloads = [
+            step for step in merge["steps"] if "download-artifact@" in str(step)
+        ]
+        self.assertEqual(3, len(downloads))
+        self.assertEqual(
+            {"native-shards/core", "native-shards/breg", "native-shards/bregctl"},
+            {step["with"]["path"] for step in downloads},
+        )
+        merge_run = step_run(
+            document, "merge", "Merge review-only native macOS shards"
+        )
+        self.assertIn("release/scripts/merge-release-native-platform-shards.py", merge_run)
+        self.assertIn("--purpose review_only", merge_run)
+        self.assertIn("registry-stack.release-native-benchmark.v1", merge_run)
+        self.assertIn("purpose=review_only", merge_run)
+        self.assertIn("group=merged", merge_run)
+        self.assertIn("stat.S_IMODE(binary.stat().st_mode) != 0o755", merge_run)
+        self.assertEqual(text.count("actions/upload-artifact@"), 2)
 
 
 class PublicationWorkflowStructureTest(unittest.TestCase):
