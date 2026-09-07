@@ -1,0 +1,17 @@
+extends: existence
+message: "Avoid '%s'. Address the reader directly ('If you are deciding whether to...') and describe the product, not the documentation or its navigation."
+level: warning
+scope: text
+ignorecase: true
+# Third-person reader framing ("This page is for someone sizing up...") and
+# narration about the docs tree ("Three terms recur on every page that
+# follows", quoted sidebar labels) describe the documentation instead of the
+# product. A scope sentence such as "This page covers X" is not matched.
+tokens:
+  - '\bthis (?:page|guide|tutorial|document|section|reference|explanation) (?:is|was) (?:written |meant |intended |aimed )?(?:for|at) (?:someone|anyone|a|an|the|people|readers|those|reviewers|operators|authors|developers)\b'
+  - '\b(?:is|was) written for (?:someone|anyone|a|an|the|people|readers)\b'
+  - '\bfor (?:someone|anyone|a reader|readers|a person|people) (?:sizing up|deciding|evaluating|choosing|weighing|considering|assessing)\b'
+  - '\b(?:terms|words|names) recur\b'
+  - '\bpages? (?:that follows?|after (?:it|this))\b'
+  - '\bsidebar (?:phase|group|section|entry|label)s?\b'
+  - '\bthe (?:phase|group|tab)s? "'

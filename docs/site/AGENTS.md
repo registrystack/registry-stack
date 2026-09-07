@@ -16,9 +16,10 @@ This repo is an Astro and Starlight documentation site.
 ## Writing
 
 Read `docs/style-guide.md` before drafting or editing any page. It covers voice,
-structure, frontmatter, page types, the banned-word list, the rules for pages
-that ask the reader to run something, claim levels for standards, and the GitLab
-rules we adopt, adapt, or skip. The visual design language is recorded
+structure, frontmatter, page types, the banned-word list, how a lead addresses
+its reader and how a page's depth follows its sidebar position, the rules for
+pages that ask the reader to run something, claim levels for standards, and the
+GitLab rules we adopt, adapt, or skip. The visual design language is recorded
 separately in `design-registry-docs.md`, maintained alongside the repository,
 not published in it; the binding visual rules for diagrams are summarized in the
 style guide's "Images and diagrams" section.

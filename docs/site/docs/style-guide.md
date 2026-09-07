@@ -32,6 +32,10 @@ If a rule here conflicts with `design-registry-docs.md`, follow the design doc f
 - H1 is the page topic, not the brand name. Title is set in frontmatter; do not write `#` H1 in MDX.
 - One lead paragraph directly under H1. No second lead.
 - The lead names who the page is for wherever the page has a narrower reader than someone using this product: an adopter deploying it, an operator on call, a contributor changing it. A tutorial that opens without naming its reader is usually written for whoever wrote it. Reference and specification pages are exempt, because their reader is whoever holds the contract.
+- Name the reader by addressing them, not by describing them. "If you are deciding whether to run Base Registry Engine, this is what a deployment asks of you" talks to the reader. "This page is for someone sizing up Base Registry Engine before committing a database to it" talks about the reader to a third party, usually the writer. Vale flags the second form (`RegistryDocs.MetaNarration`).
+- Describe the product, not the documentation. A scope sentence ("This page covers the deployment contract") is fine. Sentences about the docs tree are not: which terms recur on later pages, which sidebar group a section corresponds to, what the next page will explain. Navigation belongs to the sidebar and the `Next` list; a sentence that would become false after a sidebar rename is narrating the site.
+- Altitude follows position. A page reached from the sidebar's first group or from the homepage is read by someone who has not run anything yet. It settles one question (which product, whether it fits, what a deployment asks of you) and stops. Operating detail, capacity figures, and identifiers belong in the product's own Deploy or Operate group, where the reader arrives with a deployment in mind. A Start page longer than the tutorial it precedes is at the wrong altitude.
+- Length is a budget, not a target. A Start or chooser page fits on one screen, about 600 words, the length GitHub Docs allows a quickstart. An explanation page is as long as the model it leaves behind, without a tour of its evidence. A tutorial or how-to is as long as the procedure, with every step earning its place under Principle 6. A page over budget is usually carrying another page's content.
 - Increment heading levels by one. Do not skip from H2 to H4.
 - Max depth is H4. If a page wants H5, split the page.
 - Sentence case for all headings. `Architecture overview`, not `Architecture Overview`.
@@ -74,6 +78,8 @@ Each page belongs to exactly one `doc_type`. The pattern is enforced by the type
 **Reference.** Contract status (`current` / `historical`), source of truth, generated-or-manual marker, version or commit, examples only where they clarify the contract. Do not write narrative.
 
 **Decision.** Date, status, decision, context, consequences, `superseded-by` if applicable. One decision per page.
+
+Start from what this page's reader needs to decide or do, not from a sibling page's headings. Two products do not owe each other the same six sections, and a page whose skeleton was copied from another inherits that page's reader, altitude, and blind spots along with its structure.
 
 ## Word list
 
@@ -142,6 +148,7 @@ do not relabel an existing integration as a different domain.
 - When real output is long, quote the lines the reader checks against and say plainly that the rest is omitted. When it varies per reader, replace the varying parts with `<placeholder>` and name what varies: timestamps, identifiers, host names, absolute paths.
 - Repo paths such as `crates/registry-evidence/` and `products/evidence/` address a contributor with the repository checked out. An adopter has a terminal and a released binary. Keep repo paths out of reader-facing prose in tutorials, how-tos, and start pages: put them in an author-facing MDX comment, in a page whose reader is a contributor, or in a pinned link so a reader without a clone can still open the file.
 - Paths the reader creates, edits, or passes on their own machine are not repo paths. Write those in full and say where they come from.
+- The evidence anchor holds where you checked; the sentence above it holds what the product does. A sentence that names the operator contract, quotes a source file, or repeats a figure measured on a developer laptop is reading the anchor aloud. Link a contract document once, where a reader would open it, and give a number only when the reader can act on it.
 
 ### YAML examples
 
@@ -288,6 +295,12 @@ This applies to every page that touches a standard or a contract.
 - The GitLab-specific Vale dictionary. We maintain a project vocabulary in
   `styles/config/vocabularies/RegistryDocs/` and focused local rules in `.vale.ini`.
 
+## Rules borrowed from other projects
+
+- Second person and the imperative as the default voice, with no "Let's" or "Next, we will" narration: Astro's docs writing guide and Google's developer documentation style guide. Google prescribes "this document" for self-reference, so a scope sentence is not the fault; describing the reader in the third person is.
+- A quickstart of about 600 words or five minutes of reading: GitHub Docs' content model.
+- Tutorials are learning-oriented and explanation is understanding-oriented, read away from the product: Diátaxis. A page that mixes them, a walkthrough with a cost accounting in it, serves neither reader.
+
 ## Tooling
 
 - **markdownlint** validates Markdown structure. Config at `.markdownlint-cli2.yaml`.
@@ -312,5 +325,6 @@ Two reviews per change:
    3. Is every transcript on the page one that somebody ran and read?
    4. Does the page read as written to a person, or assembled against a checklist? Second person through the whole procedure, cause where there is cause, a plain sentence where a fragment would hide the point.
    5. Do the mechanics hold: clear lead, descriptive headings, banned words gone, scannable where scanning is what the reader is doing?
+   6. Does the page sit at the altitude of its position? A reader who arrived from the sidebar or the homepage should understand it with nothing else open, a Start page should be shorter than the tutorial it precedes, and no sentence should describe the documentation or its navigation instead of the product.
 
 A page is `current` only after both reviews pass and `last_reviewed` is bumped.
