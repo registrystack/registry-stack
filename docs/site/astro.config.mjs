@@ -144,6 +144,10 @@ export default defineConfig({
     '/configure/breg-webhooks/': internalRedirect('/operate/breg-webhooks/'),
     '/reference/breg-history/': internalRedirect('/reference/breg-api/'),
     '/reference/breg-events/': internalRedirect('/reference/breg-api/'),
+    // The operating-requirements pages moved from Start into each product's
+    // Deploy group; a first visit chooses a product before it plans a deployment.
+    '/start/evaluate-evidence/': internalRedirect('/operate/evidence-requirements/'),
+    '/start/evaluate-breg/': internalRedirect('/operate/breg-requirements/'),
     // One client package ships all four namespaces, so one reference page
     // documents them; the two per-product pages it absorbed keep resolving.
     '/reference/relay-client-api/': internalRedirect('/reference/client-api/'),
@@ -303,8 +307,6 @@ export default defineConfig({
           items: [
             { label: 'Overview', link: '/' },
             { label: 'Choose a product', slug: 'start/when-to-use' },
-            { label: 'Evaluate Evidence Gateway', slug: 'start/evaluate-evidence' },
-            { label: 'Evaluate Base Registry Engine', slug: 'start/evaluate-breg' },
             { label: 'Glossary', slug: 'reference/glossary' },
           ],
         },
@@ -359,6 +361,7 @@ export default defineConfig({
               label: 'Deploy',
               collapsed: true,
               items: [
+                { label: 'What you need to run it', slug: 'operate/evidence-requirements' },
                 { label: 'Test with fixtures', slug: 'tutorials/prove-an-evidence-project' },
                 { label: 'Configure a deployment', slug: 'configure/evidence' },
                 { label: 'Build a production candidate', slug: 'tutorials/build-and-deploy-evidence-project' },
@@ -445,6 +448,7 @@ export default defineConfig({
               label: 'Deploy',
               collapsed: true,
               items: [
+                { label: 'What you need to run it', slug: 'operate/breg-requirements' },
                 { label: 'Build a production candidate', slug: 'tutorials/build-a-breg-production-candidate' },
                 { label: 'Deploy a registry', slug: 'operate/breg' },
                 { label: 'Bind webhook receivers', slug: 'operate/breg-webhooks' },

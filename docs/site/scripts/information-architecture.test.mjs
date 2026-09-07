@@ -398,6 +398,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'configure/breg-change-control',
     'configure/breg-journeys',
     'explanation/registry-modeling-patterns',
+    'operate/breg-requirements',
     'tutorials/build-a-breg-production-candidate',
     'operate/breg',
     'operate/breg-webhooks',
@@ -445,19 +446,58 @@ test('keeps the BReg guide and references in one adoption path', () => {
   }
 });
 
-// Base Registry Engine asks an adopter for PostgreSQL, a token issuer, and a
-// package signing policy before it serves anything, so like Evidence Gateway
-// its case is made in Start, before the first command, beside the Evidence
-// evaluation and after it.
-test('evaluates Base Registry Engine in Start beside Evidence Gateway', () => {
+// Both runtime products ask an adopter for infrastructure before they serve
+// anything: PostgreSQL, a token issuer, and a signing process for Base Registry
+// Engine; a Transit proxy, an identity provider, and durable audit storage for
+// Evidence Gateway. That is deployment planning, so it opens each product's
+// Deploy group. It is not a first encounter, so Start carries none of it: a
+// first visit meets the overview, the product chooser, and the glossary, and
+// reaches every product through its own overview. The two retired Start seats
+// redirect to the Deploy pages that replaced them.
+test('keeps operating requirements in each product Deploy group, not in Start', () => {
   const start = topLevelSection(sidebarSource, 'Start');
   assert.ok(start, 'could not isolate Start');
-  assertOrdered(
-    start,
-    ["slug: 'start/evaluate-evidence'", "slug: 'start/evaluate-breg'", "slug: 'reference/glossary'"],
-    'Start',
+  assert.deepEqual(
+    [...start.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]),
+    ['start/when-to-use', 'reference/glossary'],
   );
-  assert.ok(hasDocForSlug('start/evaluate-breg'), 'start/evaluate-breg must be a published page');
+
+  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
+  assertOrdered(
+    evidence,
+    [
+      "label: 'Deploy'",
+      "slug: 'operate/evidence-requirements'",
+      "slug: 'tutorials/prove-an-evidence-project'",
+    ],
+    'Evidence Gateway Deploy group',
+  );
+  const breg = topLevelSection(sidebarSource, 'Base Registry Engine');
+  assertOrdered(
+    breg,
+    [
+      "label: 'Deploy'",
+      "slug: 'operate/breg-requirements'",
+      "slug: 'tutorials/build-a-breg-production-candidate'",
+    ],
+    'Base Registry Engine Deploy group',
+  );
+  for (const slug of ['operate/evidence-requirements', 'operate/breg-requirements']) {
+    assert.ok(hasDocForSlug(slug), `${slug} must be a published page`);
+  }
+
+  for (const retired of ['start/evaluate-evidence', 'start/evaluate-breg']) {
+    assert.equal(hasDocForSlug(retired), false, `${retired} must not be a published page`);
+    assert.doesNotMatch(sidebarSource, new RegExp(retired));
+  }
+  assert.match(
+    configSource,
+    /'\/start\/evaluate-evidence\/': internalRedirect\('\/operate\/evidence-requirements\/'\)/,
+  );
+  assert.match(
+    configSource,
+    /'\/start\/evaluate-breg\/': internalRedirect\('\/operate\/breg-requirements\/'\)/,
+  );
 });
 
 test('redirects the retired Server webhook, history, and event pages to their merged pages', () => {

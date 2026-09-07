@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-07"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -84,6 +84,28 @@ it is not a drop-in publisher for arbitrary pre-existing database tables.
 Registry Stack makes these boundaries visible, but the responsible
 institutions still make and approve the underlying decisions.
 
+## What each product needs to run
+
+Every product runs as one process behind your own TLS termination, and protected access needs
+bearer tokens from one OpenID Connect issuer, or from Registry Mint when you have none. The rest
+differs:
+
+| | Registry Relay | Evidence Gateway | Base Registry Engine |
+| --- | --- | --- | --- |
+| Source | Reviewed read-only SQLite views | One fixed request per question to a system you already run | An authored data model; the records live in the registry |
+| Database | None | None | PostgreSQL 15 or newer, two roles |
+| Durable state | Audit log on disk | Audit log on disk | Everything in PostgreSQL |
+| Production signing | Sealed package, no signature | Vault or OpenBao Transit key for assertions | External signatures on every package |
+| Plan a deployment | [Run a deployment](../../operate/relay/) | [What you need to run Evidence Gateway](../../operate/evidence-requirements/) | [What you need to run Base Registry Engine](../../operate/breg-requirements/) |
+
+The local tutorials need none of this; they start disposable versions of everything on your machine.
+
+{/* Evidence: crates/registry-relay-v2/src/contract.rs, RelayRuntime; crates/registry-relay-v2/src/auth.rs;
+    crates/registry-relay-v2/src/audit.rs; products/evidence/OPERATOR-CONTRACT.md,
+    "Supported deployment"; crates/registry-breg/src/postgres/schema.rs;
+    crates/registry-breg/src/runtime_config.rs, SqlRoles and OidcVerifierConfig;
+    crates/registry-breg/src/package.rs, validate_signature_policy; docs/site/src/content/docs/operate/index.mdx. */}
+
 ## What you need to adopt it
 
 Before moving beyond a local sample, identify:
@@ -101,6 +123,5 @@ approval.
 
 - [Base Registry Engine overview](../breg-quickstart/)
 - [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/)
-- [Evaluate Evidence Gateway](../evaluate-evidence/)
 - [Connect an existing registry](../../configure/)
 - [Review the security boundaries](../../security/)
