@@ -148,12 +148,12 @@ complete ordered DiffID list, the closed production runtime configuration
 fixed runtime UID/GID labels), and each
 reviewed file digest in both Syft and the exported rootfs. These are uncompressed
 rootfs DiffIDs, not compressed manifest layer digests, and they cover the complete
-filesystem, including libraries, interpreters, loader inputs, and symlinks. The
-Relay reference is an official v0.20.1 candidate; the Evidence and Mint references
-are explicitly identified local reproductions from the recorded source revision
-because v0.20.x retained official image reports only for Relay. A changed DiffID,
-configuration, path, or digest requires a fresh review and renewed definition
-digest. This DiffID-based contract avoids an in-tree manifest-digest self-reference
+filesystem, including libraries, interpreters, loader inputs, and symlinks. Each
+baseline records the exact reviewed reference image, source revision and
+provenance. A reference may be a local reproduction from the read-only rehearsal;
+the candidate independently verifies its own image identity and protected source.
+A changed DiffID, configuration, path, or digest requires a fresh review and
+renewed definition digest. This DiffID-based contract avoids an in-tree manifest-digest self-reference
 when the source revision label changes. The temporary rootfs is deleted after the
 decision and is not a release asset. `release/OPERATIONS.md` gives the exact
 private-candidate recovery and evidence-regeneration procedure for a failed gate.

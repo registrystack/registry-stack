@@ -26,24 +26,24 @@ LIVE_BASELINES = (
     ROOT / "release/security/mint-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:ff8e8d84143d3af01930d0ddc65c8b894f367b31b66f0b5d163854cd7d28dea8",
-    "breg": "sha256:ff6faa69c81b62029578f50d47499165e3942a01cd2987b70984a920d5619239",
-    "discovery": "sha256:68b298259c0871c161a4f3f7c1ef4f0bb0a78e42051f833aa1d64a922ad75587",
-    "evidence": "sha256:3b2acf91f2095d565d06529175fc231414c0dd508844c2d09ad4522d7be03908",
-    "mint": "sha256:532598e7581716ce679cb83e10aa7d6c1ff9c134f0fcfc7ec9578818644db800",
+    "relay": "sha256:c2fdee13ee6ed8099b46ee228a31477e18a492f3afa6295a1a17fcf5153433ad",
+    "breg": "sha256:382ba2047e213dbf8dc3234f14607e0d3fea5c6b02c5ee54aa2cacf5d59c6f77",
+    "discovery": "sha256:2f2bc9fd04a8fa7f7bb3a2950b60ec89dc65d32a9858e59433f232f25108a740",
+    "evidence": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
+    "mint": "sha256:06fa8148546e162b301e6d3c80b75b59e6597444c4dd9d98fbe3914e05ec837b",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "3e655214558e4479a72a2049ebf72bf5721a303e"
+LIVE_REFERENCE_SOURCE_REVISION = "bee7708e4f6ac5712a05245963fbce7bd5f732e8"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
 # exception. Move it forward by hand when the baselines are renewed.
-LIVE_REVIEW_EVALUATION_DATE = "2026-09-04"
+LIVE_REVIEW_EVALUATION_DATE = "2026-09-07"
 LIVE_REFERENCE_PROVENANCE = {
-    "relay": "official_candidate",
-    "breg": "official_candidate",
-    "discovery": "official_candidate",
-    "evidence": "official_candidate",
-    "mint": "official_candidate",
+    "relay": "local_reproduction",
+    "breg": "local_reproduction",
+    "discovery": "local_reproduction",
+    "evidence": "local_reproduction",
+    "mint": "local_reproduction",
 }
 LIVE_EXECUTABLES = {
     "relay": "/usr/local/bin/relay",
@@ -1306,7 +1306,7 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                         executable,
                         "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
                         "/usr/lib/x86_64-linux-gnu/libc.so.6",
-                        "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+                        "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
                         "/usr/lib/x86_64-linux-gnu/libm.so.6",
                     },
                     paths,
@@ -1322,11 +1322,11 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                     "/usr/lib/x86_64-linux-gnu/libc.so.6",
                     needed=("ld-linux-x86-64.so.2",),
                 )
-                self.write_elf("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1")
+                self.write_elf("/usr/lib/x86_64-linux-gnu/libpthread.so.0")
                 self.write_elf("/usr/lib/x86_64-linux-gnu/libm.so.6")
                 self.write_elf(
                     executable,
-                    needed=("libc.so.6", "libgcc_s.so.1", "libm.so.6"),
+                    needed=("libc.so.6", "libpthread.so.0", "libm.so.6"),
                     interpreter="/lib64/ld-linux-x86-64.so.2",
                 )
                 assertion = copy.deepcopy(live_assertion)
