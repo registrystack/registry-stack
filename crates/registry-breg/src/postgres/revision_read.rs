@@ -35,11 +35,12 @@ use crate::model::{
     MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::record_profile::{self, RecordRepresentation};
+use crate::stored_bytes;
 
 use super::history_read::HISTORY_STATEMENT_TIMEOUT;
 use super::{
-    begin_record_transaction, validate_field_value, ClaimContext, ExpectedRegistryIdentity,
-    RegistryLockKey, RowBoundaryContext, RuntimePool,
+    begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
+    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
 };
 
 const MAX_JOURNAL_TEXT_BYTES: usize = 512;
@@ -241,7 +242,7 @@ impl PostgresRevisionReadService {
             .transaction()
             .query(&sql, &parameter_refs)
             .await
-            .map_err(|_| ReadServiceError::Unavailable)?;
+            .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::RevisionRead))?;
         let mut descriptors = BTreeMap::new();
         let mut context_visibility = BTreeMap::new();
         let rows = revision_rows_from_rows(
@@ -481,7 +482,7 @@ fn revision_sql(
         } else {
             parameters.push(Box::new(boundary.field().to_owned()));
             let key_parameter = parameters.len();
-            format!("(convert_from(snapshot, 'UTF8')::jsonb -> ${key_parameter}::text)")
+            snapshot_boundary_expression(key_parameter)
         };
         let mut values = Vec::new();
         for value in boundary.values() {
@@ -544,6 +545,13 @@ fn revision_sql(
         ),
         parameters,
     ))
+}
+
+/// Read one authorizing field out of the stored snapshot. The snapshot is read
+/// as JSON here, so a row the reader will not accept refuses the read as
+/// unreadable stored bytes.
+fn snapshot_boundary_expression(key_parameter: usize) -> String {
+    format!("(convert_from(snapshot, 'UTF8')::jsonb -> ${key_parameter}::text)")
 }
 
 async fn descriptor_for_package<'a>(
@@ -1253,5 +1261,30 @@ impl RevisionReadFaultControl {
         }
         let _ = (self, point);
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "postgres-test"))]
+mod tests {
+    use crate::postgres::stored_bytes_probe::{expression_error, UNREADABLE};
+
+    use super::{
+        snapshot_boundary_expression, snapshot_read_error, stored_bytes, ReadServiceError,
+    };
+
+    /// A stored snapshot the JSON reader will not accept must refuse the
+    /// revision read as the unreadable row it is, not as an outage the caller
+    /// retries while the corrupted row stays unreported.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unreadable_stored_snapshots_refuse_the_revision_read_as_corruption() {
+        let expression = snapshot_boundary_expression(1);
+        for stored in UNREADABLE {
+            let error = expression_error(&expression, stored, &["jurisdiction"]).await;
+            assert_eq!(
+                snapshot_read_error(&error, stored_bytes::Reader::RevisionRead),
+                ReadServiceError::SnapshotUnreadable,
+                "unreadable stored bytes refuse the read as corruption"
+            );
+        }
     }
 }

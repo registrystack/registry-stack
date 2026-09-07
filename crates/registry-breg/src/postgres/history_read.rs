@@ -44,10 +44,11 @@ use crate::model::{
 };
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
+use crate::stored_bytes;
 
 use super::{
-    begin_record_transaction, validate_field_value, ClaimContext, ExpectedRegistryIdentity,
-    RegistryLockKey, RowBoundaryContext, RuntimePool,
+    begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
+    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
 };
 
 const MAX_SQL_LIMIT: usize = 1000;
@@ -319,7 +320,9 @@ impl PostgresSnapshotReadService {
                 transaction
                     .query_one(&count_sql, &refs)
                     .await
-                    .map_err(|_| ReadServiceError::Unavailable)?
+                    .map_err(|error| {
+                        snapshot_read_error(&error, stored_bytes::Reader::HistoryRead)
+                    })?
                     .get::<_, i64>(0),
             );
         }
@@ -339,7 +342,7 @@ impl PostgresSnapshotReadService {
         let rows = transaction
             .query(&page_sql, &refs)
             .await
-            .map_err(|_| ReadServiceError::Unavailable)?;
+            .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::HistoryRead))?;
         let page_size = usize::from(request.plan.page_size);
         let has_more = rows.len() > page_size;
         let rows = if has_more {
@@ -877,6 +880,17 @@ impl HistorySqlField {
     }
 }
 
+/// Name one recorded package revision whose stored snapshot does not carry a
+/// required key. The snapshot is read as JSON here, so a row the reader will
+/// not accept refuses the read as unreadable stored bytes.
+fn snapshot_key_present_predicate(package_revision: &str, key: &str) -> String {
+    format!(
+        "(revision.package_revision = {} AND NOT (convert_from(revision.snapshot, 'UTF8')::jsonb ? {}))",
+        sql_quote_literal(package_revision),
+        sql_quote_literal(key),
+    )
+}
+
 async fn ensure_required_snapshot_keys_present(
     transaction: &tokio_postgres::Transaction<'_>,
     entity_id: &str,
@@ -888,18 +902,17 @@ async fn ensure_required_snapshot_keys_present(
         .values()
         .filter(|field| field.field_id != "id")
         .flat_map(|field| {
-            field.package_sources.iter().filter_map(|(package, source)| {
-                let HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey { key }) =
-                    &source.source
-                else {
-                    return None;
-                };
-                Some(format!(
-                    "(revision.package_revision = {} AND NOT (convert_from(revision.snapshot, 'UTF8')::jsonb ? {}))",
-                    sql_quote_literal(package),
-                    sql_quote_literal(key),
-                ))
-            })
+            field
+                .package_sources
+                .iter()
+                .filter_map(|(package, source)| {
+                    let HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey { key }) =
+                        &source.source
+                    else {
+                        return None;
+                    };
+                    Some(snapshot_key_present_predicate(package, key))
+                })
         })
         .collect::<Vec<_>>();
     if predicates.is_empty() {
@@ -933,7 +946,7 @@ async fn ensure_required_snapshot_keys_present(
     let missing: bool = transaction
         .query_one(&sql, &[&entity_id, &position])
         .await
-        .map_err(|_| ReadServiceError::Unavailable)?
+        .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::HistoryRead))?
         .get(0);
     if missing {
         return Err(ReadServiceError::Unavailable);
@@ -1981,5 +1994,68 @@ impl SnapshotReadFaultControl {
         }
         let _ = (self, point);
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "postgres-test"))]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::contract::FieldTypeSource;
+    use crate::history_schema::{
+        HistoryFieldCompatibility, HistoryFieldSource, HistoryValueSource,
+    };
+    use crate::postgres::stored_bytes_probe::{expression_error, UNREADABLE};
+
+    use super::{
+        snapshot_key_present_predicate, snapshot_read_error, stored_bytes, HistorySqlField,
+        ReadServiceError,
+    };
+
+    /// A stored snapshot the JSON reader will not accept must refuse the read
+    /// as the unreadable row it is. Reporting it as an outage would leave the
+    /// corrupted snapshot hidden behind a failure the caller retries.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unreadable_stored_snapshots_refuse_the_historical_read_as_corruption() {
+        let field = HistorySqlField {
+            field_id: "probe-code".to_owned(),
+            alias: "probe_code".to_owned(),
+            field_type: FieldTypeSource::String {
+                min_length: 0,
+                max_length: 32,
+            },
+            package_sources: BTreeMap::from([(
+                "probe-package".to_owned(),
+                HistoryFieldCompatibility {
+                    field_id: "probe-code".to_owned(),
+                    active_api_name: "probeCode".to_owned(),
+                    source: HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey {
+                        key: "probe-code".to_owned(),
+                    }),
+                    field_type: FieldTypeSource::String {
+                        min_length: 0,
+                        max_length: 32,
+                    },
+                    required: true,
+                    nullable: false,
+                },
+            )]),
+        };
+        let expressions = [
+            field
+                .cte_json_expression()
+                .expect("the probe field names one recorded package revision"),
+            snapshot_key_present_predicate("probe-package", "probe-code"),
+        ];
+        for expression in expressions {
+            for stored in UNREADABLE {
+                let error = expression_error(&expression, stored, &[]).await;
+                assert_eq!(
+                    snapshot_read_error(&error, stored_bytes::Reader::HistoryRead),
+                    ReadServiceError::SnapshotUnreadable,
+                    "unreadable stored bytes refuse the read as corruption"
+                );
+            }
+        }
     }
 }

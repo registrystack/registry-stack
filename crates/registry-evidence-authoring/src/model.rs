@@ -20,7 +20,12 @@ pub struct AccessPolicy {
 }
 
 /// One authored question: what is asked, of which subjects, from which source,
-/// and which governed concepts the answer carries.
+/// and which governed concepts the answer carries. The schema derived from this
+/// type describes shape alone: which keys exist, which are required, and which
+/// values are one of a closed set. Rules that hold between fields, such as a
+/// subject naming `selector` or `profiles` and never both, stay with the
+/// authoring checks the compiler and the language server both run, so a
+/// document this schema accepts may still be one those checks turn away.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

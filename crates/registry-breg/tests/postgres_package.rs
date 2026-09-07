@@ -2205,7 +2205,10 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
         &database.runtime_role,
     )
     .await;
-    assert_eq!(no_listener_gate.err(), Some(StartupError::PackageRefused));
+    assert!(matches!(
+        no_listener_gate.err(),
+        Some(StartupError::PackageRefused(_))
+    ));
     drop(runtime);
 
     let second = PackageFixture::build(
@@ -2580,7 +2583,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     .await;
     assert!(matches!(
         old_process,
-        Err(StartupError::DatabaseUnready) | Err(StartupError::PackageRefused)
+        Err(StartupError::DatabaseUnready) | Err(StartupError::PackageRefused(_))
     ));
     drop(runtime);
 

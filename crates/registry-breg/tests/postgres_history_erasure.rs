@@ -56,11 +56,18 @@ mod idempotency;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
+#[path = "../src/stored_bytes.rs"]
+#[allow(dead_code)]
+mod stored_bytes;
 
+use std::collections::BTreeSet;
+use std::io;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use registry_platform_audit::AuditProfile;
-use serde_json::json;
+use serde_json::{json, Value};
+use tracing::instrument::WithSubscriber;
 use uuid::Uuid;
 
 use history_commit::{
@@ -694,6 +701,165 @@ async fn erasure_refuses_more_than_ten_thousand_actual_target_revisions() {
     database.cleanup().await;
 }
 
+/// A cached batch response whose stored bytes are not readable JSON refuses
+/// the erasure as the corruption it is. Reporting it as storage unavailability
+/// would hide the unreadable row behind an outage an operator would retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn erasure_reports_an_unreadable_cached_response_rather_than_an_outage() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x77; 32].into())
+        .expect("test owns a keyed audit profile");
+    let record_id = Uuid::parse_str("018feaa0-68f9-4a45-b9e3-58436df07afd").unwrap();
+
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration can begin transaction");
+    insert_revision(&transaction, record_id, 1, CURRENT_PACKAGE, "create").await;
+    transaction.commit().await.expect("target revision commits");
+
+    // The two ways stored bytes stop being readable: a sequence no UTF-8
+    // decoder accepts, and text that decodes but is not JSON.
+    for body in [
+        vec![0xf0_u8, 0x28, 0x8c, 0x28],
+        b"{\"unterminated\"".to_vec(),
+    ] {
+        let transaction = migration
+            .transaction()
+            .await
+            .expect("migration can begin transaction");
+        transaction
+            .execute("DELETE FROM registry_internal.registry_idempotency", &[])
+            .await
+            .expect("test can replace the cached response");
+        insert_idempotency_response_bytes(
+            &transaction,
+            "batch-unreadable-key",
+            "batch-unreadable-binding",
+            &body,
+        )
+        .await;
+        transaction
+            .commit()
+            .await
+            .expect("unreadable cached response commits");
+
+        let logs = CapturedOperationalLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_current_span(false)
+            .with_span_list(false)
+            .with_writer(logs.clone())
+            .finish();
+        let result = erase_record_history(
+            &mut migration,
+            HistoryErasureRequest {
+                expected: &expected,
+                migration_role: &database.migration_role,
+                lock_key,
+                timeouts: HistoryErasureTimeouts::new(
+                    Duration::from_secs(5),
+                    Duration::from_secs(5),
+                )
+                .unwrap(),
+                audit_profile: &audit_profile,
+                operator_reference: OPERATOR_CANARY,
+                reason: REASON_CANARY,
+                target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
+            },
+        )
+        .with_subscriber(subscriber)
+        .await;
+        assert_eq!(
+            result,
+            Err(registry_breg::history_erasure::HistoryErasureError::CachedResponseUnreadable),
+            "an unreadable cached response is reported as corruption"
+        );
+
+        // The operator sees the classification, because every read surface
+        // answers the refusal it always answered. The record names the reader
+        // and nothing about the row it read.
+        let captured = logs.text();
+        let records = captured
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("operational log is JSON"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            records.len(),
+            1,
+            "the classified failure logs exactly one record"
+        );
+        assert_eq!(records[0]["level"], "WARN");
+        assert_eq!(records[0]["target"], "registry_breg::storage");
+        let fields = records[0]["fields"]
+            .as_object()
+            .expect("operational fields are an object");
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["message", "reader"])
+        );
+        assert_eq!(fields["message"], "stored bytes are unreadable as JSON");
+        assert_eq!(fields["reader"], "idempotency_cache");
+        for forbidden in [
+            record_id.to_string().as_str(),
+            ENTITY,
+            "batch-unreadable-key",
+            "batch-unreadable-binding",
+            "unterminated",
+            "registry_idempotency",
+            "convert_from",
+            OPERATOR_CANARY,
+            REASON_CANARY,
+        ] {
+            assert!(
+                !captured.contains(forbidden),
+                "the classification log carries nothing about the row it read"
+            );
+        }
+    }
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+/// Collect the operational log a call emits, so a test can assert on the
+/// rendered record instead of letting it print.
+#[derive(Clone, Default)]
+struct CapturedOperationalLogs(Arc<Mutex<Vec<u8>>>);
+
+impl CapturedOperationalLogs {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().expect("operational log buffer").clone())
+            .expect("operational logs are UTF-8")
+    }
+}
+
+impl io::Write for CapturedOperationalLogs {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| io::Error::other("operational log buffer poisoned"))?
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedOperationalLogs {
+    type Writer = Self;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        self.clone()
+    }
+}
+
 async fn install_ready_history_registry(
     database: &TestDatabase,
     migration: &mut tokio_postgres::Client,
@@ -889,6 +1055,27 @@ async fn insert_idempotency_response(
                 &body,
                 &vec![0_u8, 0_u8],
             ],
+        )
+        .await
+        .expect("idempotency response inserts");
+}
+
+/// A cached response stored exactly as supplied, so a test can place bytes the
+/// stored-JSON reader cannot accept.
+async fn insert_idempotency_response_bytes(
+    transaction: &tokio_postgres::Transaction<'_>,
+    key_reference: &str,
+    binding_reference: &str,
+    body: &[u8],
+) {
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_idempotency
+                 (key_reference, binding_reference, result_kind, record_reference,
+                  record_revision, result_count, response_status, response_body,
+                  response_headers)
+             VALUES ($1, $2, 'batch', NULL, NULL, 1, 200, $3, $4)",
+            &[&key_reference, &binding_reference, &body, &vec![0_u8, 0_u8]],
         )
         .await
         .expect("idempotency response inserts");

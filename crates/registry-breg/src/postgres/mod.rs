@@ -81,6 +81,90 @@ pub use schema::{
 
 use thiserror::Error;
 
+use crate::api::ReadServiceError;
+
+/// Classify a failed statement that reads stored snapshot bytes as JSON, for
+/// the reader named by `reader`.
+///
+/// The read cannot answer from a row the JSON reader will not accept. That is
+/// the row's own state, so the refusal names it. Reporting it as an outage
+/// would hide the corrupted row behind a failure callers retry.
+#[must_use]
+pub(crate) fn snapshot_read_error(
+    error: &tokio_postgres::Error,
+    reader: crate::stored_bytes::Reader,
+) -> ReadServiceError {
+    if crate::stored_bytes::unreadable(error, reader) {
+        ReadServiceError::SnapshotUnreadable
+    } else {
+        ReadServiceError::Unavailable
+    }
+}
+
+/// A session-private table holding one stored value, so a test can run the
+/// expression a read builds over bytes the JSON reader cannot accept.
+#[cfg(all(test, feature = "postgres-test"))]
+pub(crate) mod stored_bytes_probe {
+    use std::env;
+    use std::str::FromStr;
+
+    use tokio_postgres::{Config, NoTls};
+
+    /// The two ways stored bytes stop being readable: a sequence no UTF-8
+    /// decoder accepts, and text that decodes but is not JSON.
+    pub(crate) const UNREADABLE: [&[u8]; 2] = [&[0xf0, 0x28, 0x8c, 0x28], b"{\"unterminated\""];
+
+    /// Hold `stored` in a session-private `revision` row and return the error
+    /// `expression` raises over it. Text parameters bind from `$1` in the order
+    /// given, matching the numbering the read's own builder emits.
+    pub(crate) async fn expression_error(
+        expression: &str,
+        stored: &[u8],
+        text_parameters: &[&str],
+    ) -> tokio_postgres::Error {
+        let url = env::var("BREG_TEST_DATABASE_URL")
+            .expect("BREG_TEST_DATABASE_URL is required for the stored-bytes probe");
+        let config =
+            Config::from_str(&url).expect("BREG_TEST_DATABASE_URL must be a valid PostgreSQL URL");
+        let (client, connection) = config
+            .connect(NoTls)
+            .await
+            .expect("stored-bytes probe connects");
+        // The connection ends when the client drops at the end of the probe.
+        let task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        client
+            .batch_execute(
+                "CREATE TEMPORARY TABLE revision (
+                     snapshot bytea NOT NULL,
+                     package_revision text NOT NULL,
+                     record_id uuid NOT NULL
+                 )",
+            )
+            .await
+            .expect("stored-bytes probe creates its session-private table");
+        client
+            .execute(
+                "INSERT INTO revision (snapshot, package_revision, record_id)
+                 VALUES ($1, 'probe-package', '00000000-0000-4000-8000-000000000001')",
+                &[&stored],
+            )
+            .await
+            .expect("stored-bytes probe stores the unreadable row");
+        let parameters = text_parameters
+            .iter()
+            .map(|value| value as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect::<Vec<_>>();
+        let error = client
+            .query(&format!("SELECT {expression} FROM revision"), &parameters)
+            .await
+            .expect_err("the expression cannot read the stored bytes");
+        task.abort();
+        error
+    }
+}
+
 /// A value-free PostgreSQL kernel error suitable for an operational boundary.
 #[derive(Debug, Error)]
 pub enum PostgresKernelError {

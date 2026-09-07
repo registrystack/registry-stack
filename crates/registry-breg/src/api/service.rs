@@ -736,6 +736,10 @@ pub struct ReadRuntimeIdentity {
 pub enum ReadServiceError {
     Unavailable,
     CursorInvalid,
+    /// A stored snapshot holds bytes no JSON reader accepts. The read cannot
+    /// answer from that row, and the refusal names the row rather than the
+    /// transport so a corrupted snapshot is not retried as an outage.
+    SnapshotUnreadable,
 }
 
 /// Record reads execute only after the HTTP layer has selected and authorized

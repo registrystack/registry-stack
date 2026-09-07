@@ -784,6 +784,21 @@ impl SourceExecutor {
     /// because this executor can materialize requests but is never executed,
     /// and a statement source compiled here is given no extract for the same
     /// reason.
+    ///
+    /// A source that names a `connection` is exempt here from the shared
+    /// resources `new_with_selector_sets_and_connection_pool` requires, and
+    /// that exemption is the fixture contract rather than an oversight. The
+    /// pool is built from the runtime document's outbound TLS configuration
+    /// and its captured CA bytes, and every caller of this constructor holds a
+    /// bundle and no runtime document, so requiring the resources here would
+    /// make a connected source uncheckable before a deployment exists rather
+    /// than better checked. Each source compiled here therefore gets its own
+    /// resources, and because this path materializes requests and dispatches
+    /// none, the shared client identity, the private-CA trust, the token cache
+    /// and the admission semaphore are not among the facts a bundle-only check
+    /// or fixture run proves. `evidence check` and `evidence fixture` read the
+    /// runtime document, build the pool, and refuse a connected source that
+    /// cannot get it.
     pub fn new_for_offline_fixture(
         source: &SourceConfig,
         allowed_selector_sets: &[SourceSelectorSet],
@@ -3108,6 +3123,78 @@ mod tests {
                 .available_permits(),
             1,
             "an operation timeout releases aggregate capacity"
+        );
+    }
+
+    /// V1-I09: equal values never merge two declarations into one allocation.
+    ///
+    /// `shared` and `independent` are byte-identical connection values down to
+    /// the credential reference, and the inline source repeats the same origin
+    /// and the same reference without naming either. Deduplicating any two of
+    /// them on endpoint, credential reference or resolved secret bytes would
+    /// join governance decisions the operator wrote separately: one
+    /// declaration's exhausted admission budget would throttle the other, and
+    /// a token acquired under one would be presented under the other. Only the
+    /// explicit name shares, so the pool holds three separate allocations and
+    /// the two sources that name `shared` hold the fourth reference to one of
+    /// them.
+    #[tokio::test]
+    async fn identical_connection_values_are_never_deduplicated_into_one_allocation() {
+        let root = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(
+            SecretResolver::new([crate::secrets::SecretProvider::File], root.path()).unwrap(),
+        );
+        let config = connection_test_config(
+            "https://sources.example/",
+            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+        );
+        assert_eq!(
+            serde_json::to_value(config.source_connections.get("shared")).unwrap(),
+            serde_json::to_value(config.source_connections.get("independent")).unwrap(),
+            "the premise: the two names carry identical values and one reference"
+        );
+        let executors = connection_test_executors(&config, secrets);
+        assert!(
+            Arc::ptr_eq(http_resources(&executors[0]), http_resources(&executors[1])),
+            "two sources naming one connection share its allocation"
+        );
+        for (name, other) in [("independent", 2), ("inline", 3)] {
+            assert!(
+                !Arc::ptr_eq(
+                    http_resources(&executors[0]),
+                    http_resources(&executors[other])
+                ),
+                "{name} carries the same values and must keep its own allocation"
+            );
+        }
+        assert!(
+            !Arc::ptr_eq(http_resources(&executors[2]), http_resources(&executors[3])),
+            "an independent name and an inline source stay separate from each other"
+        );
+        // Separate allocations, not merely separate addresses: exhausting one
+        // admission budget leaves the other two untouched.
+        let _held = http_resources(&executors[0])
+            .concurrency
+            .acquire()
+            .await
+            .unwrap();
+        assert_eq!(
+            http_resources(&executors[1])
+                .concurrency
+                .available_permits(),
+            0
+        );
+        assert_eq!(
+            http_resources(&executors[2])
+                .concurrency
+                .available_permits(),
+            1
+        );
+        assert_eq!(
+            http_resources(&executors[3])
+                .concurrency
+                .available_permits(),
+            1
         );
     }
 

@@ -178,8 +178,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // the dependency check initializes, reads this capture rather than
             // the pathname again, so what passed is what gets opened.
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
-            let runtime = deployment.runtime.clone();
-            let bundle = Arc::new(deployment.bundle.clone());
+            let runtime = deployment.runtime().clone();
+            let bundle = Arc::new(deployment.bundle().clone());
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
             let source_plans = compile_source_plans(&bundle, &runtime)?;
@@ -234,8 +234,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             explain_format,
         } => {
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
-            let runtime = deployment.runtime;
-            let bundle = Arc::new(deployment.bundle);
+            let (bundle, runtime) = deployment.into_parts();
+            let bundle = Arc::new(bundle);
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
                 kernel_compile_error("fixture bundle compilation failed", error)
             })?;
@@ -355,11 +355,13 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let config =
                 EvidenceConfig::parse_yaml(&bytes).map_err(|_| DISCOVERY_CONFIG_INVALID)?;
             // Configuration validation projects the publication before it
-            // accepts the document, so a publication the shared profile
-            // refuses is already reported as an invalid configuration. This
-            // class stays the projection's own refusal.
+            // accepts the document, so every projection refusal is already
+            // reported as an invalid configuration and this call cannot fail
+            // for a document that parsed. The refusal is still classified
+            // rather than unwrapped, and it is classified as the same invalid
+            // configuration `validate` would have reported.
             if let Some(rendered) = registry_evidence::discovery::render(&config)
-                .map_err(|_| DISCOVERY_RENDER_FAILED)?
+                .map_err(|_| DISCOVERY_CONFIG_INVALID)?
             {
                 std::io::stdout()
                     .write_all(&rendered)
@@ -422,18 +424,23 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     }
 }
 
-/// The four ways provider-publication compilation refuses.
+/// The three ways provider-publication compilation refuses.
 ///
 /// Each stage of the compilation reports its own class, so an adopter learns
 /// whether the configuration was unreadable, refused as Evidence
-/// configuration, refused as a publication, or never reached standard output.
-/// Every class is fixed text: the configured path and the document's own keys
-/// and scalars stay out of it, exactly as they stay out of `check`.
+/// configuration, or never reached standard output. Every class is fixed text:
+/// the configured path and the document's own keys and scalars stay out of it,
+/// exactly as they stay out of `check`.
+///
+/// The projection has no class of its own because it has no refusal of its
+/// own. `EvidenceConfig::validate` renders the publication before it accepts
+/// the document and refuses the document when the render refuses, and the
+/// render is a no-op when no publication is configured, so every projection
+/// refusal is an invalid configuration before this command sees it.
 const DISCOVERY_CONFIG_UNREADABLE: CliError =
     CliError("discovery description configuration could not be read");
 const DISCOVERY_CONFIG_INVALID: CliError =
     CliError("discovery description configuration is not valid Evidence configuration");
-const DISCOVERY_RENDER_FAILED: CliError = CliError("discovery description could not be rendered");
 const DISCOVERY_OUTPUT_UNWRITABLE: CliError =
     CliError("discovery description output could not be written");
 
@@ -779,21 +786,21 @@ fn write_canonical_json_line<T: serde::Serialize>(
 /// verified, so stdout can never contain a partial or unverified operation.
 fn local_audit_last_operation_command(runtime_path: &Path) -> Result<ExitCode, CommandError> {
     let deployment = DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_AUDIT_FAILED)?;
-    if deployment.bundle.config.assurance_profile != AssuranceProfile::Local {
+    if deployment.bundle().config.assurance_profile != AssuranceProfile::Local {
         return Err(LOCAL_AUDIT_FAILED.into());
     }
     let secrets = SecretResolver::new(
         [SecretProvider::File],
-        &deployment.runtime.config.secret_providers.file.root,
+        &deployment.runtime().config.secret_providers.file.root,
     )
     .map_err(|_| LOCAL_AUDIT_FAILED)?;
     let audit_secret = secrets
-        .resolve(deployment.bundle.config.audit.hash_secret_ref.as_str())
+        .resolve(deployment.bundle().config.audit.hash_secret_ref.as_str())
         .map_err(|_| LOCAL_AUDIT_FAILED)?;
     let master_secret =
         derived_audit_chain_secret(audit_secret.expose_secret()).map_err(|_| LOCAL_AUDIT_FAILED)?;
     let view = verified_last_local_audit_operation(
-        Path::new(&deployment.runtime.config.audit_storage.path),
+        Path::new(&deployment.runtime().config.audit_storage.path),
         &master_secret,
     )
     .map_err(|_| LOCAL_AUDIT_FAILED)?;
@@ -1022,16 +1029,16 @@ fn run_verify_audit(runtime_path: &Path) -> Result<ExitCode, CommandError> {
     let deployment = DeploymentInputs::load(runtime_path).map_err(deployment_load_error)?;
     let secrets = SecretResolver::new(
         [SecretProvider::File],
-        &deployment.runtime.config.secret_providers.file.root,
+        &deployment.runtime().config.secret_providers.file.root,
     )
     .map_err(|_| CliError("audit verification secret resolver failed"))?;
     let audit_secret = secrets
-        .resolve(deployment.bundle.config.audit.hash_secret_ref.as_str())
+        .resolve(deployment.bundle().config.audit.hash_secret_ref.as_str())
         .map_err(|_| CliError("audit verification secret resolution failed"))?;
     let master_secret = derived_audit_chain_secret(audit_secret.expose_secret())
         .map_err(|_| CliError("audit verification secret is invalid"))?;
     verify_audit_with_secret(
-        Path::new(&deployment.runtime.config.audit_storage.path),
+        Path::new(&deployment.runtime().config.audit_storage.path),
         &master_secret,
     )
 }
@@ -5125,14 +5132,14 @@ mod tests {
         }
     }
 
-    /// Provider-publication compilation has four stages, and each one reports
-    /// its own class, so a rejected compilation says which stage refused.
+    /// Provider-publication compilation refuses in three stages, and each one
+    /// reports its own class, so a rejected compilation says which stage
+    /// refused.
     #[test]
     fn discovery_description_failure_classes_are_distinct() {
         let classes = [
             DISCOVERY_CONFIG_UNREADABLE,
             DISCOVERY_CONFIG_INVALID,
-            DISCOVERY_RENDER_FAILED,
             DISCOVERY_OUTPUT_UNWRITABLE,
         ];
 
@@ -5195,17 +5202,18 @@ mod tests {
         }
     }
 
-    /// Configuration validation projects the publication before it accepts the
-    /// document, so a publication the shared profile refuses is reported as an
+    /// Configuration validation refuses every scalar the shared public profile
+    /// refuses, so a document that could not be projected is reported as an
     /// invalid configuration and never reaches the projection stage.
     #[tokio::test]
     async fn render_discovery_description_refuses_an_unprojectable_publication() {
         const ACCEPTANCE: &str = include_str!(
             "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
         );
-        // A non-breaking space is a URI character the configuration contract
-        // accepts and the shared public profile refuses, so this document is
-        // rejected only by the publication projection.
+        // The issuer id becomes a role identifier in the projection. A
+        // no-break space is whitespace no URI carries, and `validate_uri`
+        // reads that rule from the same shared profile the projection reads,
+        // so the document is refused while its fields are checked.
         let document = ACCEPTANCE.replace(
             "issuer: {id: urn:example:fixture:issuer:authority}",
             "issuer: {id: \"urn:example:fixture:issuer\u{a0}authority\"}",
@@ -5215,10 +5223,7 @@ mod tests {
             .expect("the acceptance configuration is accepted as written");
         let refusal = EvidenceConfig::parse_yaml(document.as_bytes())
             .expect_err("an unprojectable publication is not accepted as configuration");
-        assert_eq!(
-            refusal.fault().cause(),
-            "provider publication cannot be rendered"
-        );
+        assert_eq!(refusal.fault().cause(), "URI is invalid");
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("unprojectable-publication.yaml");

@@ -396,7 +396,9 @@ async fn items(
     };
     match service.records.list(request).await {
         Ok(response) => exact_non_record_no_store(response),
-        Err(super::ReadServiceError::Unavailable) => unavailable(),
+        Err(super::ReadServiceError::Unavailable | super::ReadServiceError::SnapshotUnreadable) => {
+            unavailable()
+        }
         Err(super::ReadServiceError::CursorInvalid) => super::cursor_invalid(),
     }
 }

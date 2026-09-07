@@ -68,8 +68,11 @@ and published ports. It requires the fixed audit root to be the only writable
 declared mount, requires the explicit read-only `/dev/shm` hardening mount,
 accepts exactly one `no-new-privileges` security option, and rejects mounts
 over official executable or library paths, lifecycle hooks, and dynamic-loader
-overrides. It then invokes the native
-Evidence dependency check without printing Compose output or secret values:
+overrides. It accepts a service healthcheck only when it is absent, explicitly
+disabled, or the product's own executable run through `CMD`, because Docker runs
+that command inside the container as the service identity. It then invokes the
+native Evidence dependency check without printing Compose output or secret
+values:
 
 ```sh
 python3 docker/runtime-preflight.py \
@@ -85,13 +88,20 @@ requires a shorter one. The preflight honors selected
 a dependency, it checks Mint, starts only that service with `--no-deps`,
 requires Mint's exact `/ready` response, and then checks Evidence. Relay cannot
 be started as a preflight dependency because its existing healthcheck is
-liveness-only, and a `depends_on` edge to a service you did not select starts
-nothing. Add `--dependency-timeout-seconds SECONDS` to change the bounded
-shared Mint startup and readiness deadline. Set `MINT_HEALTHCHECK_URL` on the
-Mint service to its numeric private `/ready` listener when Mint does not bind
-loopback. A started Mint remains under the operator's Compose lifecycle; the
-preflight names every service it started, and the `docker compose stop` command
-that removes them, whether the run passed or failed. That command repeats the
+liveness-only. A `depends_on` edge to a Registry Stack service you did not
+select is refused and names both ends, since the dependent would otherwise be
+checked against a service this run never checked or started; an edge to any
+other service starts nothing. Add `--dependency-timeout-seconds SECONDS` to change the bounded
+shared Mint startup and readiness deadline. The overlay requires
+`MINT_HEALTHCHECK_URL` and refuses to render without it, because
+`mint healthcheck` otherwise falls back to its loopback default and would report
+readiness from a listener the Mint configuration may not bind. Name the numeric
+private `/ready` listener Mint binds, loopback included. A started Mint remains
+under the operator's Compose lifecycle; the preflight names every service it
+started, and the `docker compose stop` command that stops those containers,
+whether the run passed or failed. A Mint whose start did not return
+successfully is named as one the preflight could not confirm, since Compose may
+have created its container before failing. That command repeats the
 `--env-file` and `--compose-file` arguments you passed, so it targets the same
 project the preflight started them in.
 The preflight accepts only Docker-managed local named audit volumes without
@@ -101,9 +111,11 @@ read-only `/dev/shm`. This closes the implicit ephemeral file lane, and the
 preflight then passes the audit root it validated to every native check as
 `--require-audit-under`. An image whose check command does not support that
 flag fails the preflight by name; the assertion is never dropped to let an
-older image pass. The preflight proves the root is durable storage and
-reads no product configuration to do it; the product proves its own configured
-sink resolves inside that root, and still has to open and lock it.
+older image pass. The preflight proves the root is a declared persistent mount
+and reads no product configuration to do it; the product proves its own
+configured sink resolves inside that root, and still has to open and lock it.
+A passing run prints that limit rather than implying more: containment says
+where each sink resolves, not that the storage behind the mount survives.
 It passes the already validated rendered Compose JSON to every native check, so
 changes to the source Compose or environment files cannot change the checked
 containers between phases. Host storage durability, daemon state, and changes

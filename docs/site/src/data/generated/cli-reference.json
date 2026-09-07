@@ -93,7 +93,7 @@
           "arguments": [
             {
               "display": "<DESTINATION>",
-              "description": "New directory that will receive the example project closure",
+              "description": "New directory that will receive the example project closure. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -138,7 +138,7 @@
           "arguments": [
             {
               "display": "<PROJECT>",
-              "description": "Base Registry Engine project directory",
+              "description": "Base Registry Engine project directory. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -235,7 +235,7 @@
               "arguments": [
                 {
                   "display": "<PROJECT>",
-                  "description": "Base Registry Engine project directory",
+                  "description": "Base Registry Engine project directory. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -289,7 +289,7 @@
               "arguments": [
                 {
                   "display": "<PROJECT>",
-                  "description": "Base Registry Engine project directory",
+                  "description": "Base Registry Engine project directory. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -343,7 +343,7 @@
               "arguments": [
                 {
                   "display": "<PROJECT>",
-                  "description": "Base Registry Engine project directory",
+                  "description": "Base Registry Engine project directory. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -363,7 +363,7 @@
                 },
                 {
                   "display": "--request <JSON_FILE>",
-                  "description": "Bounded strict JSON object containing synthetic request fields",
+                  "description": "Bounded strict JSON object containing synthetic request fields. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -425,7 +425,7 @@
             },
             {
               "display": "<PROJECT>",
-              "description": "Base Registry Engine project directory",
+              "description": "Base Registry Engine project directory. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -445,7 +445,7 @@
             },
             {
               "display": "--output <DIRECTORY>",
-              "description": "New directory that will receive exactly the generated artifact inventory",
+              "description": "New directory that will receive exactly the generated artifact inventory. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -543,7 +543,7 @@
           "options": [
             {
               "display": "--project <PROJECT>",
-              "description": "Existing authored registry project. Its package environment must be local",
+              "description": "Existing authored registry project. Its package environment must be local. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -618,13 +618,13 @@
               "name": "start",
               "invocation": "bregctl dev start",
               "about": "Start or reuse the project's retained local database and services",
-              "long_about": null,
+              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL container plus its local Mint and Base Registry Engine (BReg) children. The database runs the pinned image postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .breg/dev/logs directory.",
               "usage": "bregctl dev start [OPTIONS]",
               "arguments": [],
               "options": [
                 {
                   "display": "--project <PROJECT>",
-                  "description": "Existing authored registry project. Its package environment must be local",
+                  "description": "Existing authored registry project. Its package environment must be local. A symbolic link at any component of this path is refused.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -685,7 +685,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -706,7 +706,7 @@
               "options": [
                 {
                   "display": "--project <PROJECT>",
-                  "description": "Registry project whose owned services should stop while preserving records",
+                  "description": "Registry project whose owned services should stop while preserving records. A symbolic link at any component of this path is refused.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -779,7 +779,7 @@
             },
             {
               "display": "<PROJECT>",
-              "description": "Base Registry Engine project directory",
+              "description": "Base Registry Engine project directory. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -799,7 +799,7 @@
             },
             {
               "display": "--scenario <JSON_FILE>",
-              "description": "For access only: bounded JSON with synthetic claims. Performs no token verification or record access",
+              "description": "For access only: bounded JSON with synthetic claims. Performs no token verification or record access. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -842,7 +842,7 @@
           "arguments": [
             {
               "display": "<PROJECT>",
-              "description": "Base Registry Engine authoring project directory",
+              "description": "Base Registry Engine authoring project directory. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -853,7 +853,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute runtime configuration whose package bindings and trust apply",
+              "description": "Absolute runtime configuration whose package bindings and trust apply. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -862,7 +862,7 @@
             },
             {
               "display": "--package <DIRECTORY>",
-              "description": "Closed package inspected for integrity only, without activation authority",
+              "description": "Closed package inspected for integrity only, without activation authority. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -922,7 +922,7 @@
           "arguments": [
             {
               "display": "<PROJECT>",
-              "description": "Base Registry Engine project directory",
+              "description": "Base Registry Engine project directory. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -942,7 +942,7 @@
             },
             {
               "display": "--baseline-runtime-config <ABSOLUTE_FILE>",
-              "description": "Runtime configuration selecting the verified active baseline for a successor",
+              "description": "Runtime configuration selecting the verified active baseline for a successor. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -951,7 +951,7 @@
             },
             {
               "display": "--reviewed-migrations <DIRECTORY>",
-              "description": "Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline",
+              "description": "Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -989,7 +989,7 @@
             },
             {
               "display": "--test-receipt <ABSOLUTE_FILE>",
-              "description": "Canonical receipt from a successful schema test of this exact candidate",
+              "description": "Canonical receipt from a successful schema test of this exact candidate. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -998,7 +998,7 @@
             },
             {
               "display": "--signatures <FILE>",
-              "description": "JSON document containing externally produced package signatures",
+              "description": "JSON document containing externally produced package signatures. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -1007,7 +1007,7 @@
             },
             {
               "display": "--output <DIRECTORY>",
-              "description": "New build directory containing signing-input.json and, once approved, package/",
+              "description": "New build directory containing signing-input.json and, once approved, package/. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -1058,7 +1058,7 @@
           "arguments": [
             {
               "display": "<PROJECT>",
-              "description": "Base Registry Engine project directory",
+              "description": "Base Registry Engine project directory. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -1078,7 +1078,7 @@
             },
             {
               "display": "--baseline-runtime-config <ABSOLUTE_FILE>",
-              "description": "Runtime configuration selecting the verified active baseline for a successor",
+              "description": "Runtime configuration selecting the verified active baseline for a successor. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -1087,7 +1087,7 @@
             },
             {
               "display": "--reviewed-migrations <DIRECTORY>",
-              "description": "Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline",
+              "description": "Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a verified baseline. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -1116,7 +1116,7 @@
             },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute runtime configuration for test database access and secret resolution",
+              "description": "Absolute runtime configuration for test database access and secret resolution. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -1125,7 +1125,7 @@
             },
             {
               "display": "--credentials <ABSOLUTE_FILE>",
-              "description": "Absolute schema-test credential binding document",
+              "description": "Absolute schema-test credential binding document. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -1134,7 +1134,7 @@
             },
             {
               "display": "--output <ABSOLUTE_FILE>",
-              "description": "New canonical schema-test receipt file",
+              "description": "New canonical schema-test receipt file. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -1186,7 +1186,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute runtime configuration for deployment identity, trust, roles, and database access",
+              "description": "Absolute runtime configuration for deployment identity, trust, roles, and database access. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -1195,7 +1195,7 @@
             },
             {
               "display": "--package <ABSOLUTE_DIRECTORY>",
-              "description": "Absolute target package directory",
+              "description": "Absolute target package directory. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -1257,7 +1257,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute Base Registry Engine runtime configuration file",
+              "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -1301,7 +1301,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute Base Registry Engine runtime configuration file",
+              "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -1379,7 +1379,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1423,7 +1423,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1432,7 +1432,7 @@
                 },
                 {
                   "display": "--package <ABSOLUTE_DIRECTORY>",
-                  "description": "Absolute directory of the verified package the failed activation pinned",
+                  "description": "Absolute directory of the verified package the failed activation pinned. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1530,7 +1530,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1539,7 +1539,7 @@
                 },
                 {
                   "display": "--request-file <ABSOLUTE_FILE>",
-                  "description": "Absolute owner-only JSON erasure request file",
+                  "description": "Absolute owner-only JSON erasure request file. Read through the parent directory this path resolves to, so a `..` component is refused. The file must carry no group or other permission bits, because it names the records the erasure covers. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1562,7 +1562,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -1583,7 +1583,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1592,7 +1592,7 @@
                 },
                 {
                   "display": "--request-file <ABSOLUTE_FILE>",
-                  "description": "Absolute owner-only JSON rebaseline request file",
+                  "description": "Absolute owner-only JSON rebaseline request file. Read through the parent directory this path resolves to, so a `..` component is refused. The file must carry no group or other permission bits, because it names the records the rebaseline covers. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1615,7 +1615,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -1672,7 +1672,7 @@
               "options": [
                 {
                   "display": "--package <ABSOLUTE_DIRECTORY>",
-                  "description": "Absolute closed package directory used only for deterministic planning",
+                  "description": "Absolute closed package directory used only for deterministic planning. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1711,7 +1711,7 @@
                 },
                 {
                   "display": "--input <FILE>",
-                  "description": "JSON Lines import file",
+                  "description": "JSON Lines import file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1755,7 +1755,7 @@
               "options": [
                 {
                   "display": "--package <ABSOLUTE_DIRECTORY>",
-                  "description": "Absolute closed package directory used only for deterministic planning",
+                  "description": "Absolute closed package directory used only for deterministic planning. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1773,7 +1773,7 @@
                 },
                 {
                   "display": "--access-token-file <ABSOLUTE_FILE>",
-                  "description": "File containing one bearer access token and no other credential material",
+                  "description": "File containing one bearer access token and no other credential material. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1812,7 +1812,7 @@
                 },
                 {
                   "display": "--input <FILE>",
-                  "description": "JSON Lines import file",
+                  "description": "JSON Lines import file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1821,7 +1821,7 @@
                 },
                 {
                   "display": "--checkpoint <FILE>",
-                  "description": "Import checkpoint file. A ctl-held .state sidecar is created beside it",
+                  "description": "Import checkpoint file. A ctl-held .state sidecar is created beside it. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1874,7 +1874,7 @@
               "options": [
                 {
                   "display": "--package <ABSOLUTE_DIRECTORY>",
-                  "description": "Absolute closed package directory used only for deterministic planning",
+                  "description": "Absolute closed package directory used only for deterministic planning. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1892,7 +1892,7 @@
                 },
                 {
                   "display": "--access-token-file <ABSOLUTE_FILE>",
-                  "description": "File containing one bearer access token and no other credential material",
+                  "description": "File containing one bearer access token and no other credential material. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1928,7 +1928,7 @@
                 },
                 {
                   "display": "--output <FILE>",
-                  "description": "JSON Lines output file. Existing output resumes from its checkpoint",
+                  "description": "JSON Lines output file. Existing output resumes from its checkpoint. A resume continues after the last page the checkpoint records and discards the output beyond it, which is at most the one page a run stopped between appending a page and publishing its checkpoint left behind. A longer tail is refused rather than discarded. The output and the checkpoint are usable only as a pair: one present without the other is refused, and removing the file that remains starts a fresh export. A path holding a `..` component is refused. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1937,7 +1937,7 @@
                 },
                 {
                   "display": "--checkpoint <FILE>",
-                  "description": "Export checkpoint file written after every page",
+                  "description": "Export checkpoint file written after every page. The checkpoint is published after the page it records reaches the output, so it names the position a resume continues from. Keep it for as long as the output it belongs to, and give each export its own pair. A path holding a `..` component is refused. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -1969,7 +1969,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -2025,7 +2025,7 @@
               "arguments": [
                 {
                   "display": "<PROJECT>",
-                  "description": "Base Registry Engine authoring project directory",
+                  "description": "Base Registry Engine authoring project directory. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2080,7 +2080,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2135,7 +2135,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2242,7 +2242,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2315,7 +2315,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2386,7 +2386,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2493,7 +2493,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2537,7 +2537,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2546,7 +2546,7 @@
                 },
                 {
                   "display": "--output <ABSOLUTE_FILE>",
-                  "description": "Absolute JSON Lines file the export creates",
+                  "description": "Absolute JSON Lines file the export creates. The export creates this file and never truncates, replaces, or appends to an existing one, so a destination that already exists is refused. A path holding a `..` component is refused. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2569,7 +2569,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -2590,7 +2590,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file",
+                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],

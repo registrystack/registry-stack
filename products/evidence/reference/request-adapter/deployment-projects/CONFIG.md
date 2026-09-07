@@ -419,7 +419,7 @@ Beyond the shared keys, an `http-json` source declares:
 | Key | Required | Meaning |
 |---|---|---|
 | `connection` | no | Explicit `sourceConnections` owner. Every copied endpoint, authentication, TLS and concurrency value must equal that owner at startup. |
-| `behaviorRevision` | no | Provider-selected behavior digest, exactly `sha256:` followed by 64 lowercase hexadecimal characters. This reached source dependency changes its questions’ revisions independently of export provenance. |
+| `behaviorRevision` | no | Provider-selected behavior digest, exactly `sha256:` followed by 64 lowercase hexadecimal characters. This reached source dependency changes its questions' revisions independently of export provenance. |
 | `baseUrl` | yes | Fixed HTTPS origin, except for the `kind: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
 | `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin. |
@@ -482,7 +482,7 @@ In an authored source, `connection: shared-read` replaces `baseUrl`,
 must be absent, so source overrides have no precedence rule. Build resolves
 the reference into concrete values in the governed candidate and retains the
 connection identity and owner. Startup rejects missing owners and mismatched
-copies. Runtime configuration cannot retarget the source. Each question’s
+copies. Runtime configuration cannot retarget the source. Each question's
 configuration revision includes only its reached connection owners.
 
 The operation still owns its method, fixed path, headers, preparation limits,
@@ -613,7 +613,7 @@ URL log. Token redirects are denied and token responses are bounded. The token
 request is credential bootstrap, not a second evidence-data lookup.
 
 `audience` is sent as a token-request parameter only when the bundle states it.
-An authorization server that scopes a token to a named API needs it; without it
+An authorization server that scopes a token to a named API needs it; without it,
 it returns a token the source will reject. It is not
 `clientAssertionAudience`: this one is a form field of the token request, that
 one is a claim inside the signed assertion, and a server may want both, neither,
@@ -1245,6 +1245,18 @@ follows its own rule: it must carry no group or other permission at all
 (`0700` or tighter), and owner write is accepted, since the operator
 provisions and rotates the secret files inside it; those files keep their own
 exact `0400` or `0600` mode.
+
+A read-only mount satisfies the write-permission rule on its own. When
+`statvfs` reports `ST_RDONLY` for the filesystem holding an input, that input's
+mode bits are accepted as written, because nothing can write through that mount
+whatever the bits say. The exemption covers every input the write-permission
+rule names, `runtime.yaml`, the bundle directory and each artifact inside it, a
+named CA bundle file, and a bound extract, and it covers only that rule. The
+secret root and the secret files inside it are judged on their mode bits alone,
+`0700` or tighter for the root and exactly `0400` or `0600` for each file, on a
+read-only mount as on any other, because those modes bound who may read a
+secret rather than who may write it.
+
 `evidence check` refuses a non-conforming runtime file, bundle artifact, CA
 bundle file, or secret root before the listener binds. When the fault is
 bound to one artifact, the printed message names it, for example `evidence:

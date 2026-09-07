@@ -1257,15 +1257,18 @@ mod tests {
 
     #[test]
     fn location_parser_falls_back_when_a_sequence_index_is_out_of_range() {
+        // The "resources" key sits on the second line rather than the document's own origin, so
+        // the ancestor range this asserts cannot be confused with the zero range a lost walk would
+        // fall back to; only the resolved ancestor's own position satisfies this assertion.
         let parsed = crate::yaml::parse_yaml(
-            "resources:\n  - id: people\n    properties:\n      name: {type: string}\n",
+            "apiVersion: relay.registrystack.org/v2alpha1\nresources:\n  - id: people\n    properties:\n      name: {type: string}\n",
         )
         .unwrap();
         assert_eq!(
             range_for_location(&parsed.value, "resources[9].name")
                 .unwrap()
                 .start,
-            Position::new(0, 0)
+            Position::new(1, 0)
         );
     }
 

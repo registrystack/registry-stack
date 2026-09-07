@@ -1,12 +1,39 @@
-//! Resolution of the Evidence runtime binary delegated work runs through.
+//! Resolution of the Evidence runtime binary delegated work runs through, and
+//! the bounds every delegated run is held to.
 
 use std::{
-    env, fs,
+    env,
+    fs::{self, File},
+    io::{Read as _, Seek as _},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
+
+/// How long a delegated `evidence` run may take before evidencectl stops it.
+///
+/// Compilation and fixture evaluation are local, bounded work against a bundle
+/// the runtime already holds, so ten minutes is far past what any of it needs.
+/// The deadline exists so a child that never exits cannot hold a build open.
+pub(crate) const DELEGATED_RUN_DEADLINE: Duration = Duration::from_secs(600);
+
+/// How long the `--version` handshake may take.
+///
+/// The runtime prints one line and exits, so thirty seconds bounds a binary
+/// that hangs before evidencectl has handed it any work.
+const VERSION_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
+
+/// The most `evidence --version` may print before evidencectl stops reading.
+///
+/// One version line is a few dozen bytes. Anything near this is not a runtime
+/// identifying itself.
+const MAX_VERSION_OUTPUT_BYTES: u64 = 64 * 1024;
+
+/// How often a delegated run is checked while it is still running.
+const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Resolve an explicit binary, `EVIDENCE_BIN`, or the first executable on
 /// `PATH`, in that order.
@@ -56,19 +83,20 @@ pub(crate) fn resolve_matching(explicit: Option<&Path>) -> Result<PathBuf> {
 /// identify itself is the one check that cannot be delegated, so it happens
 /// before any work is handed over.
 pub(crate) fn ensure_matching_version(evidence_bin: &Path) -> Result<()> {
-    let expected = registry_platform_buildinfo::DISPLAY_VERSION;
-    let output = Command::new(evidence_bin)
-        .arg("--version")
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to ask {} for its version, which evidencectl {expected} must match before delegating any work",
-                evidence_bin.display()
-            )
-        })?;
+    ensure_matching_version_within(evidence_bin, VERSION_HANDSHAKE_DEADLINE)
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let reported = if output.status.success() {
+fn ensure_matching_version_within(evidence_bin: &Path, deadline: Duration) -> Result<()> {
+    let expected = registry_platform_buildinfo::DISPLAY_VERSION;
+    let (status, printed) = ask_for_version(evidence_bin, deadline).with_context(|| {
+        format!(
+            "failed to ask {} for its version, which evidencectl {expected} must match before delegating any work",
+            evidence_bin.display()
+        )
+    })?;
+
+    let stdout = String::from_utf8_lossy(&printed).into_owned();
+    let reported = if status.success() {
         reported_version(&stdout)
     } else {
         None
@@ -86,6 +114,92 @@ pub(crate) fn ensure_matching_version(evidence_bin: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Ask the binary to identify itself, under the bounds every delegated run is
+/// held to: a private capture the child writes into, a byte limit on what it
+/// may print, and a deadline.
+///
+/// A binary that never answers is exactly the case this handshake exists to
+/// catch, so waiting for one forever would defeat it.
+fn ask_for_version(evidence_bin: &Path, deadline: Duration) -> Result<(ExitStatus, Vec<u8>)> {
+    let what = format!("the version handshake with {}", evidence_bin.display());
+    let mut capture =
+        tempfile::tempfile().with_context(|| format!("creating a private capture for {what}"))?;
+    let mut child = Command::new(evidence_bin)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(capture.try_clone()?))
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("starting {what}"))?;
+    let status = wait_bounded(&mut child, &what, deadline, &|| Ok(()), &|| {
+        capture_over_limit(&capture, MAX_VERSION_OUTPUT_BYTES)
+    })?;
+    let stdout = drain_capture(&mut capture, MAX_VERSION_OUTPUT_BYTES, &what)?;
+    Ok((status, stdout))
+}
+
+/// Wait for a delegated `evidence` child under three bounds: the caller's
+/// interruption, a byte limit the caller measures, and a deadline.
+///
+/// A child that outlives any of the three is stopped and reaped, so no
+/// delegated run holds a command open on a binary that never finishes.
+pub(crate) fn wait_bounded(
+    child: &mut Child,
+    what: &str,
+    deadline: Duration,
+    interrupted: &dyn Fn() -> Result<()>,
+    over_limit: &dyn Fn() -> bool,
+) -> Result<ExitStatus> {
+    let started = Instant::now();
+    loop {
+        if let Err(error) = interrupted() {
+            terminate_child(child);
+            return Err(error);
+        }
+        if over_limit() {
+            terminate_child(child);
+            bail!("{what} output exceeded its byte limit");
+        }
+        if started.elapsed() > deadline {
+            terminate_child(child);
+            bail!("{what} did not finish within its {deadline:?} deadline");
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => thread::sleep(POLL_INTERVAL),
+            Err(error) => {
+                terminate_child(child);
+                return Err(error).context(format!("waiting for {what}"));
+            }
+        }
+    }
+}
+
+/// Whether a delegated child has already written more than it is allowed to.
+pub(crate) fn capture_over_limit(file: &File, limit: u64) -> bool {
+    file.metadata().is_ok_and(|metadata| metadata.len() > limit)
+}
+
+/// Read a finished child's capture back, refusing one that ran past its limit.
+pub(crate) fn drain_capture(file: &mut File, limit: u64, what: &str) -> Result<Vec<u8>> {
+    let mut captured = Vec::new();
+    file.rewind()?;
+    file.take(limit + 1).read_to_end(&mut captured)?;
+    if captured.len() as u64 > limit {
+        bail!("{what} output exceeded its byte limit");
+    }
+    Ok(captured)
+}
+
+/// Stop a delegated child and reap it.
+///
+/// Both calls report failure only when the child is already gone, which is the
+/// state this function exists to reach.
+pub(crate) fn terminate_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Read the version out of `evidence <version>`, the single line the runtime
@@ -125,7 +239,77 @@ fn is_candidate_executable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::reported_version;
+    use std::{fs::OpenOptions, io::Write as _, os::unix::fs::OpenOptionsExt as _, path::Path};
+
+    use super::{ensure_matching_version_within, reported_version, Duration};
+
+    fn write_stub(path: &Path, script: &str) {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(path)
+            .expect("stub");
+        file.write_all(script.as_bytes()).expect("write stub");
+    }
+
+    /// A binary that never answers is exactly what the handshake exists to
+    /// catch, so waiting for one forever would defeat it.
+    #[test]
+    fn a_binary_that_never_answers_the_handshake_is_refused_at_the_deadline() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub(&evidence, "#!/bin/sh\nsleep 60\n");
+
+        let error = ensure_matching_version_within(&evidence, Duration::from_millis(200))
+            .expect_err("a binary that never answers must be refused");
+
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains("did not finish within its 200ms deadline"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("must match before delegating any work"),
+            "the refusal must say why the handshake matters: {diagnostic}"
+        );
+    }
+
+    /// A binary that answers without end is not a runtime printing one line.
+    #[test]
+    fn a_binary_that_floods_the_handshake_is_refused_at_its_byte_limit() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub(
+            &evidence,
+            "#!/bin/sh\nyes 'evidence 0.0.0' | head -c 1048576\n",
+        );
+
+        let error = ensure_matching_version_within(&evidence, Duration::from_secs(30))
+            .expect_err("a flooding binary must be refused");
+
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains("output exceeded its byte limit"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn a_binary_that_answers_at_once_completes_the_handshake() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let evidence = root.path().join("evidence-stub");
+        write_stub(
+            &evidence,
+            &format!(
+                "#!/bin/sh\necho 'evidence {}'\n",
+                registry_platform_buildinfo::DISPLAY_VERSION
+            ),
+        );
+
+        ensure_matching_version_within(&evidence, Duration::from_secs(30))
+            .expect("the matching runtime is accepted");
+    }
 
     #[test]
     fn the_runtimes_own_version_line_is_read() {

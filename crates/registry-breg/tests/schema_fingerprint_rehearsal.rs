@@ -10,8 +10,8 @@ use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::package::{
-    prepare_package, PackageBuildRequest, PackageMigrationPlanInput, PackageSourceFile,
-    PreparedPackage, SignaturePolicy,
+    prepare_package, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
+    PackageSourceFile, PreparedPackage, SignaturePolicy,
 };
 use registry_breg::runtime_config::{parse_runtime_config, RuntimeConfig};
 use registry_breg::startup::{
@@ -177,7 +177,7 @@ async fn rehearsal_binding_is_refused_before_database_secret_resolution() {
 
     assert_eq!(
         rehearse_schema_fingerprint(&config, &registry).await.err(),
-        Some(StartupError::PackageRefused),
+        Some(StartupError::PackageRefused(PackageError::Binding)),
         "identity binding is checked before missing database secrets can be resolved"
     );
 }

@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::future::Future;
+use std::pin::pin;
+use std::task::{Context, Poll, Waker};
+
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::data::{
-    DataError, DataExportCheckpoint, DataExportPlan, DataImportCheckpoint, DataImportOperation,
-    DataImportPlan,
+    execute_export_page, DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan,
+    DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan,
+    MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::{json, Value};
@@ -14,6 +19,11 @@ const ENTITY: &str = "entity-canary-9f31";
 const PROFILE: &str = "operator-canary";
 const PACKAGE: &str = "package-revision-canary";
 const SCHEMA: &str = "schema-fingerprint-canary";
+const WIDE_REGISTRY: &str = "data-contract-wide";
+const WIDE_ENTITY: &str = "entity-wide-canary";
+const WIDE_DATASET: &str = "wide-dataset";
+/// The compiled list query bound every export page is drawn through.
+const COMPILED_MAXIMUM_PAGE_SIZE: usize = 100;
 
 fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
     let source = json!({
@@ -77,6 +87,74 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// A registry whose exportable field is wide enough that one authorized page
+/// can fill the response bound.
+fn wide_export_registry() -> registry_breg::CompiledRegistry {
+    let source = json!({
+        "apiVersion": "registry.registrystack.org/v1alpha1",
+        "kind": "RegistryProject",
+        "registry": {"id": WIDE_REGISTRY, "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
+        "entities": [{
+            "id": WIDE_ENTITY,
+            "primaryDataset": WIDE_DATASET,
+            "route": "wide-records",
+            "mutationMode": "mutable",
+            "fields": [
+                {"id": "payload", "type": "text", "maxLength": 1000000,
+                 "classification": "internal"}
+            ]
+        }],
+        "accessProfiles": [{
+            "id": PROFILE,
+            "principalClaim": "principal",
+            "grants": [{
+                "entity": WIDE_ENTITY,
+                "operations": ["list"],
+                "readableFields": ["payload"],
+                "writableFields": [],
+                "allowDataExport": true,
+                "rowBoundaries": []
+            }]
+        }]
+    });
+    compile_source(source).expect("the wide export registry compiles")
+}
+
+/// One canonical list response holding `item_count` records of `payload_length`
+/// characters each.
+fn wide_export_body(payload_length: usize, item_count: usize) -> Vec<u8> {
+    let items = (0..item_count)
+        .map(|index| {
+            json!({
+                "recordIdentifier": format!("00000000-0000-4000-8000-{index:012}"),
+                "revisionIdentifier": "1",
+                "domainData": {"payload": "x".repeat(payload_length)}
+            })
+        })
+        .collect::<Vec<_>>();
+    canonicalize_json(&json!({
+        "items": items,
+        "meta": {
+            "registryIdentifier": WIDE_REGISTRY,
+            "datasetIdentifier": WIDE_DATASET,
+            "entityTypeIdentifier": WIDE_ENTITY
+        },
+        "pageInfo": {"nextCursor": Value::Null}
+    }))
+    .expect("the crafted list response canonicalizes")
+}
+
+/// Drive one export page without a runtime. The export executor awaits only its
+/// dispatch closure, and the stub below is ready on its first poll.
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    let mut context = Context::from_waker(Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("the stubbed export page never pends"),
+    }
 }
 
 #[test]
@@ -552,4 +630,55 @@ fn data_export_checkpoint_refuses_package_profile_projection_or_prefix_substitut
     for canary in [ENTITY, PROFILE, PACKAGE, SCHEMA, "OUTPUT-ROW-CANARY"] {
         assert!(!debug.contains(canary), "Debug leaked canary {canary}");
     }
+}
+
+/// `bregctl` resumes an interrupted export by discarding at most one page of
+/// uncommitted tail, a bound it reads from this crate. Pin the relationship
+/// where the page is produced so a page size change fails here instead of
+/// silently shortening a resume past a committed record.
+#[test]
+fn one_export_page_stays_within_the_bound_a_resumed_tail_is_measured_against() {
+    assert_eq!(
+        MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
+        "the page bound a resume discards a tail against is the response bound"
+    );
+    let registry = wide_export_registry();
+    let plan = DataExportPlan::from_compiled(&registry, WIDE_ENTITY, PROFILE, ["payload"])
+        .expect("the wide export permission compiles");
+    let overhead = wide_export_body(0, COMPILED_MAXIMUM_PAGE_SIZE).len();
+    let payload_length = (MAX_DATA_HTTP_RESPONSE_BYTES - overhead) / COMPILED_MAXIMUM_PAGE_SIZE;
+    let body = wide_export_body(payload_length, COMPILED_MAXIMUM_PAGE_SIZE);
+    assert!(
+        body.len() <= MAX_DATA_HTTP_RESPONSE_BYTES
+            && MAX_DATA_HTTP_RESPONSE_BYTES - body.len() < COMPILED_MAXIMUM_PAGE_SIZE,
+        "the crafted response fills the response bound"
+    );
+
+    let (mut checkpoint, resume_state) =
+        DataExportCheckpoint::start(&plan, PACKAGE, SCHEMA).expect("the export checkpoint starts");
+    let output_state = DataExportOutputState::empty();
+    let progress = block_on(execute_export_page(
+        &plan,
+        &mut checkpoint,
+        PACKAGE,
+        SCHEMA,
+        &output_state,
+        &resume_state,
+        |_request| {
+            let body = body.clone();
+            async move { DataHttpResponse::new(200, Some("application/json".to_owned()), body) }
+        },
+    ))
+    .expect("a maximal authorized page is accepted")
+    .expect("the page carries export progress");
+    let (page_bytes, _output_state, _resume_state) = progress.into_parts();
+    assert!(
+        page_bytes.len() <= MAX_DATA_EXPORT_PAGE_BYTES,
+        "a full page appended {} bytes, more than a resume would discard",
+        page_bytes.len()
+    );
+    assert!(
+        page_bytes.len() > MAX_DATA_EXPORT_PAGE_BYTES - 16 * 1024,
+        "the page has to approach the bound for this to prove anything"
+    );
 }

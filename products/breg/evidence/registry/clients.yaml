@@ -16,6 +16,11 @@ clients:
   claims:
     registry_principal: evidence-source
     registry_purpose: evidence-source-read
+# Seed records are created through the HTTP API, so each field appears under its
+# HTTP property name. `registration-number` declares `apiName: registrationNumber`
+# in registry.yaml, which is why it is written `registrationNumber` here and
+# `registration-number` in tests/journeys.yaml, which rehearses the native
+# request schema.
 seed:
 - id: active
   client: operator

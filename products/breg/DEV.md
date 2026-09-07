@@ -23,6 +23,13 @@ explicit seed creation succeed. Default loopback ports are BReg `8090`, Mint
 `--breg-port`, `--mint-port` and `--database-port`. A restart retains the
 original ports and clients-file location. Conflicting ports are refused.
 
+The database runs the pinned image
+`postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
+so an operator can check exactly what the supervisor pulls. Each supervised
+prerequisite command may run for 120 seconds, and the owned database and each
+started service have 45 seconds to answer as ready. A start that passes a
+deadline fails, stops what it acquired and keeps its owner-only diagnostics.
+
 `dev stop` keeps everything it created: the owned container, its named data
 volume, records, audit history, keys, credentials and the built package. Add
 `--remove` to reclaim the storage as well; it removes the owned container and
@@ -96,11 +103,13 @@ credential and BReg's operator credential retain separate authority.
 ## Retained state and recovery
 
 The private `.breg/dev` directory records a random ownership identifier, exact
-Docker container ID, ports, captured authored closure, package revision and seed
-checkpoints. It contains generated configurations, separate database roles,
-local TLS material, credentials and bounded private diagnostic logs. Keep it out
-of version control and preserve it with the retained database while the exercise
-matters. It is local development material, not production key provisioning.
+Docker container ID, ports, captured authored closure, package revision, seed
+checkpoints and, for each resolved `breg`, `mint` and `docker` prerequisite, the
+fully resolved path of the file that ran and the version it reported. It
+contains generated configurations, separate database roles, local TLS material,
+credentials and bounded private diagnostic logs. Keep it out of version control
+and preserve it with the retained database while the exercise matters. It is
+local development material, not production key provisioning.
 Records live in a named `breg-dev-<owner>` Docker volume, so the storage stays
 identifiable and reclaimable once the container is gone.
 
@@ -109,6 +118,7 @@ identifiable and reclaimable once the container is gone.
 | First start | Capture the authored closure, prepare private identities, create the owned database, run normal schema-test/package/apply/verify commands, then seed through authenticated HTTP. |
 | Already running | Return the existing ready session and credential references. |
 | Stop, including repeated stop | Gracefully stop owned BReg and Mint children and stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and audit history. |
+| Stop where no start ever ran | Refuse and name the absent session. Nothing is created, changed or removed, so a mistyped `--project` cannot read as a stopped session. |
 | Start after stop | Reuse the same container, database, credentials and package. Obtain fresh short-lived tokens. Preserve record edits. |
 | Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
 | Start after `--remove` | Create an empty container and volume under the same ownership identifier, activate the retained package again and replay the authored seeds. |

@@ -4,7 +4,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{Read as _, Seek as _, Write as _},
+    io::{Read as _, Write as _},
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Component, Path, PathBuf},
     process::{Command, ExitCode, ExitStatus, Stdio},
@@ -12,8 +12,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    thread,
-    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -21,7 +19,7 @@ use clap::Args;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::{authoring, source_import::ProjectLock};
+use crate::{authoring, evidence_binary, source_import::ProjectLock};
 
 const MAX_TARGET_BYTES: u64 = 1024 * 1024;
 const MAX_EVIDENCE_CAPTURE_BYTES: u64 = 1024 * 1024;
@@ -31,6 +29,8 @@ const MAX_EVIDENCE_CAPTURE_BYTES: u64 = 1024 * 1024;
 const MAX_DIAGNOSTIC_EXCERPT_LINES: usize = 40;
 const MAX_DIAGNOSTIC_EXCERPT_BYTES: usize = 8 * 1024;
 const SECRET_PREFIX: &str = "secret:file/";
+/// What a delegated validation run is called in the diagnostics it produces.
+const EVIDENCE_VALIDATION: &str = "Evidence deployment validation";
 
 #[derive(Debug, Args)]
 pub struct BuildArgs {
@@ -538,24 +538,13 @@ fn run_evidence(
     let mut child = command
         .spawn()
         .context("starting the Evidence deployment validation")?;
-    let status = loop {
-        if interruption.check().is_err() {
-            terminate_validation_child(&mut child);
-            return Err(anyhow!("deployment build interrupted"));
-        }
-        if capture_over_limit(&stdout) || capture_over_limit(&stderr) {
-            terminate_validation_child(&mut child);
-            bail!("Evidence deployment validation output exceeded its byte limit");
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(error) => {
-                terminate_validation_child(&mut child);
-                return Err(error).context("waiting for Evidence deployment validation");
-            }
-        }
-    };
+    let status = evidence_binary::wait_bounded(
+        &mut child,
+        EVIDENCE_VALIDATION,
+        evidence_binary::DELEGATED_RUN_DEADLINE,
+        &|| interruption.check(),
+        &|| capture_over_limit(&stdout) || capture_over_limit(&stderr),
+    )?;
     interruption.check()?;
 
     Ok(EvidenceOutput {
@@ -566,28 +555,17 @@ fn run_evidence(
 }
 
 fn capture_over_limit(file: &Option<File>) -> bool {
-    file.as_ref().is_some_and(|file| {
-        file.metadata()
-            .is_ok_and(|metadata| metadata.len() > MAX_EVIDENCE_CAPTURE_BYTES)
-    })
+    file.as_ref()
+        .is_some_and(|file| evidence_binary::capture_over_limit(file, MAX_EVIDENCE_CAPTURE_BYTES))
 }
 
 fn drain_capture(file: &mut Option<File>) -> Result<Vec<u8>> {
-    let mut captured = Vec::new();
-    if let Some(file) = file.as_mut() {
-        file.rewind()?;
-        file.take(MAX_EVIDENCE_CAPTURE_BYTES + 1)
-            .read_to_end(&mut captured)?;
-        if captured.len() as u64 > MAX_EVIDENCE_CAPTURE_BYTES {
-            bail!("Evidence deployment validation output exceeded its byte limit");
+    match file.as_mut() {
+        Some(file) => {
+            evidence_binary::drain_capture(file, MAX_EVIDENCE_CAPTURE_BYTES, EVIDENCE_VALIDATION)
         }
+        None => Ok(Vec::new()),
     }
-    Ok(captured)
-}
-
-fn terminate_validation_child(child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// Refuse the build with a fixed sentence, the command that shows the reader

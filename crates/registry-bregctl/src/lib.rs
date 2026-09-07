@@ -56,7 +56,7 @@ mod webhook_lifecycle;
 use apply_lifecycle::{ApplyLifecycleError, ApplyLifecycleRequest};
 use audit_lifecycle::{AuditCliError, AuditExportOutcome, AuditPruneOutcome, AuditVerifyOutcome};
 use data_lifecycle::{
-    DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest,
+    DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest, ExportPairState,
 };
 use history_erasure_lifecycle::{
     HistoryErasureLifecycleError, HistoryErasureLifecycleOutcome, HistoryErasureLifecycleRequest,
@@ -78,7 +78,7 @@ use request_retention::{
     RequestRetentionCliError, RequestRetentionDryRunOutcome, RequestRetentionEraseOutcome,
     RequestRetentionListOutcome,
 };
-use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError};
+use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
 use test_lifecycle::{remove_exact_file, TestLifecycleError, TestLifecycleRequest};
 use webhook_lifecycle::{
     WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome, WebhookSampleOutcome,
@@ -507,6 +507,10 @@ struct AuditExportArgs {
     runtime_config: PathBuf,
 
     /// Absolute JSON Lines file the export creates.
+    ///
+    /// The export creates this file and never truncates, replaces, or appends
+    /// to an existing one, so a destination that already exists is refused.
+    /// A path holding a `..` component is refused.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     output: PathBuf,
 }
@@ -666,10 +670,23 @@ struct DataExportArgs {
     fields: Vec<String>,
 
     /// JSON Lines output file. Existing output resumes from its checkpoint.
+    ///
+    /// A resume continues after the last page the checkpoint records and
+    /// discards the output beyond it, which is at most the one page a run
+    /// stopped between appending a page and publishing its checkpoint left
+    /// behind. A longer tail is refused rather than discarded. The output and
+    /// the checkpoint are usable only as a pair: one present without the other
+    /// is refused, and removing the file that remains starts a fresh export.
+    /// A path holding a `..` component is refused.
     #[arg(long, value_name = "FILE")]
     output: PathBuf,
 
     /// Export checkpoint file written after every page.
+    ///
+    /// The checkpoint is published after the page it records reaches the
+    /// output, so it names the position a resume continues from. Keep it for
+    /// as long as the output it belongs to, and give each export its own pair.
+    /// A path holding a `..` component is refused.
     #[arg(long, value_name = "FILE")]
     checkpoint: PathBuf,
 
@@ -745,6 +762,10 @@ struct HistoryEraseArgs {
     runtime_config: PathBuf,
 
     /// Absolute owner-only JSON erasure request file.
+    ///
+    /// Read through the parent directory this path resolves to, so a `..`
+    /// component is refused. The file must carry no group or other permission
+    /// bits, because it names the records the erasure covers.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     request_file: PathBuf,
 }
@@ -756,6 +777,10 @@ struct HistoryRebaselineArgs {
     runtime_config: PathBuf,
 
     /// Absolute owner-only JSON rebaseline request file.
+    ///
+    /// Read through the parent directory this path resolves to, so a `..`
+    /// component is refused. The file must carry no group or other permission
+    /// bits, because it names the records the rebaseline covers.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     request_file: PathBuf,
 }
@@ -1830,6 +1855,11 @@ fn audit_failure(command: &'static str, error: AuditCliError) -> FailureReport {
             "output",
             "the export output must be a new path; choose a destination that does not already exist",
         ),
+        AuditCliError::OutputNotDurable => diagnostic(
+            "audit.output.not_durable",
+            "output",
+            "the export was written to its destination and the directory holding it could not be made durable, so a crash may lose it; verify the destination, or remove it and export again",
+        ),
         AuditCliError::ChainBroken => diagnostic(
             "audit.chain.broken",
             "audit",
@@ -1955,6 +1985,13 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
                 "database",
                 "history erasure requires the configured migration authority",
                 DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_breg::history_erasure::HistoryErasureError::CachedResponseUnreadable => (
+                "history.erase.cached_response.invalid",
+                "history",
+                "history erasure found a cached response no JSON reader accepts",
+                DiagnosticArtifact::HistoryErasure,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
             registry_breg::history_erasure::HistoryErasureError::HistoryNotReady
@@ -2429,6 +2466,20 @@ fn data_lifecycle_failure(
             "the Registry data transport is unavailable",
             DiagnosticArtifact::DataTransport,
             SuggestedAction::VerifyDataTransport,
+        ),
+        DataLifecycleError::ExportPair(ExportPairState::CheckpointMissing) => (
+            format!("{prefix}.checkpoint.missing"),
+            "checkpoint",
+            "the export output exists without the checkpoint that records it, which is what a run stopped before its first checkpoint leaves; remove the output file to export again, or name the checkpoint the output belongs to",
+            DiagnosticArtifact::DataCheckpoint,
+            SuggestedAction::VerifyDataCheckpoint,
+        ),
+        DataLifecycleError::ExportPair(ExportPairState::OutputMissing) => (
+            format!("{prefix}.output.missing"),
+            "output",
+            "the export checkpoint exists without the output it records; remove the checkpoint file to export again, or name the output the checkpoint belongs to",
+            DiagnosticArtifact::DataCheckpoint,
+            SuggestedAction::VerifyDataCheckpoint,
         ),
     };
     FailureReport {
@@ -3692,8 +3743,8 @@ fn init(destination: &Path) -> Result<SuccessReport, FailureReport> {
 
 /// What a reader does after `init`, named against the directory just written.
 ///
-/// The example project reports a finding and carries a reserved base IRI, both
-/// on purpose. A reader who is told neither reads the finding as a mistake and
+/// The example project reports findings and carries a reserved base IRI, both
+/// on purpose. A reader who is told neither reads a finding as a mistake and
 /// carries the reserved identity into a real package, so `init` says which of
 /// the two it left standing for teaching and which one has to go before a
 /// production package.
@@ -3706,7 +3757,7 @@ fn init_next_steps(destination: &Path) -> Vec<String> {
             destination.display()
         ),
         format!(
-            "leave the finding above as it is; the example operator profile lists a whole collection on purpose, and {} says where to narrow it",
+            "leave the findings above as they are; the example operator profile lists a whole collection and the example evidence-source profile looks up any record, both on purpose, and {} says where to narrow them",
             readme.display()
         ),
         format!(
@@ -3812,7 +3863,7 @@ fn project_migrate(
         (original.clone(), migrated.bytes.clone()),
     );
     let mut module_locks = Vec::new();
-    for (module_id, bytes) in discover_module_files(project_path).map_err(|diagnostic| {
+    for source in discover_module_files(project_path).map_err(|diagnostic| {
         source_failure(
             "project migrate",
             diagnostic,
@@ -3820,6 +3871,11 @@ fn project_migrate(
             SuggestedAction::CorrectAuthoringSource,
         )
     })? {
+        let ModuleSource {
+            id: module_id,
+            bytes,
+            directory,
+        } = source;
         let updated = project_migration::add_module_entity_membership(&bytes, &migrated.dataset_id)
             .map_err(|diagnostic| {
                 source_failure(
@@ -3846,7 +3902,7 @@ fn project_migrate(
                 })
                 .collect(),
         })?;
-        let assets = load_module_asset_files(project_path, &module_id, &module)
+        let assets = load_module_asset_files(&directory, &module_id, &module)
             .map_err(|diagnostic| {
                 source_failure(
                     "project migrate",
@@ -4541,7 +4597,7 @@ fn source_failure(
 }
 
 fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, Diagnostic> {
-    validate_project_directory(project_path)?;
+    let project_directory = validate_project_directory(project_path)?;
     let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
         "source.project.missing",
@@ -4549,13 +4605,18 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
-    let project_assets = load_project_planner_asset_files(project_path, &project)?;
+    let project_assets = load_project_planner_asset_files(&project_directory, &project)?;
     let modules = load_module_files(project_path, &project)?
         .into_iter()
-        .map(|(id, bytes)| {
+        .map(|source| {
+            let ModuleSource {
+                id,
+                bytes,
+                directory,
+            } = source;
             let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
             ensure_module_id_matches_directory(&module.id, &id)?;
-            let assets = load_module_asset_files(project_path, &id, &module)?;
+            let assets = load_module_asset_files(&directory, &id, &module)?;
             Ok(CapturedModuleSource {
                 id,
                 module,
@@ -4616,7 +4677,7 @@ fn ensure_every_lock_has_a_source(
 fn capture_project_source_for_lock(
     project_path: &Path,
 ) -> Result<CapturedProjectSource, Diagnostic> {
-    validate_project_directory(project_path)?;
+    let project_directory = validate_project_directory(project_path)?;
     let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
         "source.project.missing",
@@ -4624,7 +4685,7 @@ fn capture_project_source_for_lock(
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
-    let project_assets = load_project_planner_asset_files(project_path, &project)?;
+    let project_assets = load_project_planner_asset_files(&project_directory, &project)?;
     let mut locked = BTreeSet::new();
     for lock in &project.modules {
         if !locked.insert(lock.id.as_str()) {
@@ -4637,10 +4698,15 @@ fn capture_project_source_for_lock(
     }
     let modules = discover_module_files(project_path)?
         .into_iter()
-        .map(|(directory_id, bytes)| {
+        .map(|source| {
+            let ModuleSource {
+                id: directory_id,
+                bytes,
+                directory,
+            } = source;
             let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
             ensure_module_id_matches_directory(&module.id, &directory_id)?;
-            let assets = load_module_asset_files(project_path, &directory_id, &module)?;
+            let assets = load_module_asset_files(&directory, &directory_id, &module)?;
             Ok(CapturedModuleSource {
                 id: directory_id,
                 module,
@@ -4661,7 +4727,7 @@ fn capture_project_source_for_lock(
 fn load_module_files(
     project_path: &Path,
     project: &RegistryProject,
-) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
+) -> Result<Vec<ModuleSource>, Diagnostic> {
     let locked: std::collections::BTreeSet<&str> = project
         .modules
         .iter()
@@ -4752,12 +4818,20 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
     })
 }
 
+/// One authored module: its `module.yaml` bytes and the module directory
+/// descriptor they were read through. The assets the module declares are read
+/// through that same descriptor, so one captured module source never mixes
+/// bytes from two trees.
+struct ModuleSource {
+    id: String,
+    bytes: Vec<u8>,
+    directory: SafeDir,
+}
+
 /// Read each listed module's `module.yaml` through the listed `modules`
 /// directory, so the file read is the one under the directory whose entries
 /// were checked, whatever the pathname reaches by now.
-fn read_module_yaml_files(
-    modules: ModuleDirectories,
-) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
+fn read_module_yaml_files(modules: ModuleDirectories) -> Result<Vec<ModuleSource>, Diagnostic> {
     let ModuleDirectories { directory, names } = modules;
     let Some(directory) = directory else {
         return Ok(Vec::new());
@@ -4782,17 +4856,21 @@ fn read_module_yaml_files(
                 &report_path,
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )?;
-            Ok((id, bytes))
+            Ok(ModuleSource {
+                id,
+                bytes,
+                directory: entry.into_parent(),
+            })
         })
         .collect()
 }
 
-fn discover_module_files(project_path: &Path) -> Result<Vec<(String, Vec<u8>)>, Diagnostic> {
+fn discover_module_files(project_path: &Path) -> Result<Vec<ModuleSource>, Diagnostic> {
     read_module_yaml_files(read_module_directory_names(project_path)?)
 }
 
 fn load_project_planner_asset_files(
-    project_path: &Path,
+    project_directory: &SafeDir,
     project: &RegistryProject,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
     let paths = project
@@ -4806,11 +4884,15 @@ fn load_project_planner_asset_files(
                 .map(|planner| planner.script.clone())
         })
         .collect::<BTreeSet<_>>();
-    load_planner_asset_files(project_path, "registry.yaml", paths)
+    load_planner_asset_files(project_directory, "registry.yaml", paths)
 }
 
+/// Read a module's declared assets through the module directory descriptor the
+/// module source was read from, so a `modules` ancestor replaced between the
+/// listing and these reads cannot mix another tree's bytes into one captured
+/// module.
 fn load_module_asset_files(
-    project_path: &Path,
+    module_directory: &SafeDir,
     module_id: &str,
     module: &RegistryModule,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
@@ -4842,10 +4924,25 @@ fn load_module_asset_files(
     let mut assets = paths
         .into_iter()
         .map(|path| {
-            let bytes = read_bounded_source_file(
-                &project_path.join("modules").join(module_id).join(&path),
+            let report_path = format!("modules/{module_id}/{path}");
+            let entry = open_asset_entry(
+                module_directory,
+                &path,
+                || module_asset_path_diagnostic(module_id),
+                |error| {
+                    path_diagnostic(
+                        error,
+                        "source.module_asset.missing",
+                        &report_path,
+                        "the required authoring source is not available",
+                        "authoring sources must be regular files and must not be symbolic links",
+                    )
+                },
+            )?;
+            let bytes = read_bounded_source_entry(
+                &entry,
                 "source.module_asset.missing",
-                &format!("modules/{module_id}/{path}"),
+                &report_path,
                 MAX_DERIVED_SQL_ASSET_BYTES,
             )?;
             if bytes.is_empty() {
@@ -4877,7 +4974,7 @@ fn load_module_asset_files(
         }))
         .collect::<BTreeSet<_>>();
     assets.extend(load_planner_asset_files(
-        &project_path.join("modules").join(module_id),
+        module_directory,
         &format!("modules/{module_id}/module.yaml"),
         planner_paths,
     )?);
@@ -4885,8 +4982,11 @@ fn load_module_asset_files(
     Ok(assets)
 }
 
+/// Read the Rhai planner scripts declared by one authoring source through the
+/// descriptor of the directory that source was read from, so the scripts come
+/// from the tree the declaring file came from.
 fn load_planner_asset_files(
-    origin: &Path,
+    origin: &SafeDir,
     declaring_path: &str,
     paths: BTreeSet<String>,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
@@ -4894,9 +4994,24 @@ fn load_planner_asset_files(
         .into_iter()
         .map(|path| {
             validate_rhai_planner_asset_path(declaring_path, &path)?;
-            let bytes = read_bounded_regular_file(
-                &origin.join(&path),
+            let entry = open_asset_entry(
+                origin,
+                &path,
+                || planner_asset_path_diagnostic(declaring_path),
+                |error| {
+                    path_diagnostic(
+                        error,
+                        "source.planner_asset.missing",
+                        "project",
+                        "the required authoring source is not available",
+                        "authoring sources must be regular files and must not be symbolic links",
+                    )
+                },
+            )?;
+            let bytes = read_bounded_source_entry(
+                &entry,
                 "source.planner_asset.missing",
+                "project",
                 MAX_RHAI_PLANNER_SOURCE_BYTES,
             )?;
             if bytes.is_empty() {
@@ -4909,6 +5024,34 @@ fn load_planner_asset_files(
             Ok(CapturedModuleAssetSource { path, bytes })
         })
         .collect()
+}
+
+/// Open an asset named relative to an authoring origin through that origin's
+/// held directory descriptor.
+///
+/// Every component is opened with `openat` and `O_NOFOLLOW`, and a path that is
+/// absolute, climbs with `..`, or carries a prefix is refused rather than
+/// walked, so the asset read reaches the tree the declaring source was read
+/// from and no other.
+fn open_asset_entry(
+    origin: &SafeDir,
+    asset_path: &str,
+    unsafe_path: impl Fn() -> Diagnostic,
+    unavailable: impl Fn(SafePathError) -> Diagnostic,
+) -> Result<SafeEntry, Diagnostic> {
+    let mut names = Vec::new();
+    for component in Path::new(asset_path).components() {
+        match component {
+            Component::Normal(name) => names.push(name),
+            _ => return Err(unsafe_path()),
+        }
+    }
+    let name = names.pop().ok_or_else(&unsafe_path)?;
+    let mut directory = origin.try_clone().map_err(&unavailable)?;
+    for part in names {
+        directory = directory.open_directory(part).map_err(&unavailable)?;
+    }
+    Ok(SafeEntry::in_directory(directory, name))
 }
 
 fn validate_rhai_planner_asset_path(
@@ -5011,7 +5154,7 @@ and every file carries comments saying what a block does and what you change.
 
 | File | What it holds |
 | --- | --- |
-| `registry.yaml` | The registry: its identity and package identity, the catalogue projection, one closed vocabulary, two entities, and two access profiles. Every command reads this file. |
+| `registry.yaml` | The registry: its identity and package identity, the catalogue projection, one closed vocabulary, two entities, and three access profiles. Every command reads this file. |
 | `modules/record-notes/module.yaml` | A module: a reusable part of the model, versioned on its own and pinned by content digest in the project's `modules` list. |
 | `tests/journeys.yaml` | The requests `bregctl test` replays over HTTP against a throwaway database before a package is built. |
 | `runtime.example.yaml` | An example of the operator's runtime configuration. No command reads it; copy it out of the project and replace every value. |
@@ -5020,9 +5163,10 @@ and every file carries comments saying what a block does and what you change.
 
 Two entities: `record-group` is public reference data, and `record` is the
 internal record that points at a group through a `reference` field and carries a
-`status` drawn from a closed vocabulary. Two access profiles read them: an
-`operator` that runs the whole registry, and a `record-reader` whose rows are
-restricted by a claim on its own credentials.
+`status` drawn from a closed vocabulary. Three access profiles read them: an
+`operator` that runs the whole registry, a `record-reader` whose rows are
+restricted by a claim on its own credentials, and an `evidence-source` that may
+only look a record up by its `code`.
 
 Replace this model with your own. The names are deliberately generic so that
 nothing here reads as advice about what your registry should contain.
@@ -5035,13 +5179,30 @@ bregctl explain queries .
 bregctl explain events .
 ```
 
-`check` compiles the project and reports problems and findings. It reports one
-finding for this project on purpose: `access.profile.unrestricted_collection`,
-because the `operator` profile can list every record. The comment above that
-profile says how to close it.
+`check` compiles the project and reports problems and findings. It reports two
+findings for this project on purpose: `access.profile.unrestricted_collection`,
+because the `operator` profile can list every record, and
+`access.profile.unrestricted_rows`, because the `evidence-source` profile can
+look up any record by its code. The comment above each profile says how to
+close it.
 
 `explain` prints what the compiled project exposes, such as the query surface
 each profile gets and the events the package would emit.
+
+The `evidence-source` profile's lookup is what `generate evidence-source`
+exports, so this project already produces an Evidence source definition:
+
+```sh
+mkdir exports
+bregctl generate evidence-source . --access-profile evidence-source \
+  --entity record --selector by-code --fields status \
+  --source-id registry-status --connection registry \
+  --output ./exports/registry-status
+```
+
+The export refuses a destination that already exists and a parent directory that
+does not, so the output path names a directory the command creates inside one
+you made.
 
 Edit `modules/record-notes/module.yaml`, then re-pin it:
 
@@ -5134,7 +5295,7 @@ entities:
     mutationMode: mutable
     classification: public
     fields:
-      - {id: code, type: string, required: true, maxLength: 64, classification: public}
+      - {id: code, type: string, required: true, minLength: 1, maxLength: 64, classification: public}
       - {id: label, type: string, required: true, maxLength: 200, classification: public}
     constraints:
       - {kind: unique, fields: [code]}
@@ -5155,12 +5316,19 @@ entities:
     mutationMode: mutable
     classification: internal
     fields:
-      - {id: code, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: code, type: string, required: true, minLength: 1, maxLength: 64, classification: internal}
       - {id: label, type: string, required: true, maxLength: 200, classification: internal}
       - {id: group, type: reference, target: record-group, classification: internal}
       - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}
     constraints:
       - {kind: unique, fields: [code]}
+    # A selector profile names an exact-match question a caller may ask by
+    # value, rather than a filter over a listing. Every field it names must
+    # refuse the empty value, which is why `code` declares `minLength: 1` above.
+    # `bregctl generate evidence-source` exports one Evidence source per
+    # selector an access profile grants a lookup on.
+    selectorProfiles:
+      - {id: by-code, fields: [code]}
 
 # A token selects one profile per request, and that profile decides everything
 # the request may touch. Profiles are never merged, and naming one in a request
@@ -5215,6 +5383,30 @@ accessProfiles:
         filterableFields: [code]
         rowBoundaries:
           - {field: status, claim: registry_record_status, operator: equals}
+
+  # A lookup-only source. It answers one exact-match question, by `code`, and
+  # reads only the fields that answer it. `valueOrigin: request` says the caller
+  # supplies the selector value. The profile grants no `list`, so it can confirm
+  # a record whose code it is given and cannot enumerate the registry.
+  # `bregctl generate evidence-source .` exports this grant as an Evidence
+  # source definition, so a project written by `init` exports unmodified.
+  #
+  # `check` reports `access.profile.unrestricted_rows` for this profile: any
+  # record's code answers it, and the value a caller supplies is not
+  # authorization. That is intended for a source that vouches for the whole
+  # registry. Close it by giving the grant a `rowBoundaries` entry, the way
+  # `record-reader` above does.
+  - id: evidence-source
+    principalClaim: registry_principal
+    requiredScopes: [registry:evidence:lookup]
+    requiredPurposes: [evidence-source-read]
+    grants:
+      - entity: record
+        rowBoundaries: []
+        operations: [lookup]
+        readableFields: [code, status]
+        lookups:
+          - {selector: by-code, valueOrigin: request}
 
 # Modules contribute to the model from their own files under `modules/`.
 # `bregctl project lock` writes the version and content digest below;
@@ -5680,6 +5872,56 @@ enum MigrationWriteFault {
     Stage(usize),
     #[cfg(test)]
     Commit(usize),
+    /// Fail this commit after occupying the staged name inside every promoted
+    /// target's transaction, so the rollback cannot restage what it promoted.
+    #[cfg(test)]
+    CommitWithBlockedRestage(usize),
+    /// Stand in for a process whose soft open file limit is this many files.
+    #[cfg(test)]
+    OpenFileLimit(u64),
+}
+
+/// Descriptors one migration target holds at once: the resolved parent of its
+/// destination, and the transaction directory staging opens beside it.
+const MIGRATION_DESCRIPTORS_PER_FILE: u64 = 2;
+/// Descriptors left for everything else this process holds while a migration
+/// runs: the standard streams, the source and staged files each target is
+/// written through, and whatever the operator's environment inherited.
+const MIGRATION_DESCRIPTOR_RESERVE: u64 = 64;
+
+/// Report whether a write set of `file_count` files fits an open file limit of
+/// `limit`.
+fn migration_descriptors_fit(file_count: usize, limit: u64) -> bool {
+    u64::try_from(file_count)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(MIGRATION_DESCRIPTORS_PER_FILE)
+        .saturating_add(MIGRATION_DESCRIPTOR_RESERVE)
+        <= limit
+}
+
+/// The soft open file limit this process runs under, where the platform
+/// reports one.
+#[cfg(unix)]
+fn process_open_file_limit() -> Option<u64> {
+    rustix::process::getrlimit(rustix::process::Resource::Nofile).current
+}
+
+#[cfg(not(unix))]
+fn process_open_file_limit() -> Option<u64> {
+    None
+}
+
+/// Name the limit a write set cannot fit. Descriptor exhaustion part way
+/// through staging would otherwise surface as an opaque write failure, and the
+/// operator would have no way to tell it from a permission or disk refusal.
+fn migration_open_file_limit_diagnostic(file_count: usize, limit: u64) -> Diagnostic {
+    diagnostic(
+        "project.migrate.open_file_limit",
+        "project",
+        &format!(
+            "the migration holds {MIGRATION_DESCRIPTORS_PER_FILE} open files per rewritten file and this process may open {limit} at once, which the {file_count} files of this migration cannot fit; raise the open file limit (ulimit -n) and migrate again"
+        ),
+    )
 }
 
 fn write_migration_files(
@@ -5694,6 +5936,18 @@ fn write_migration_files_with_fault(
     files: &BTreeMap<String, (Vec<u8>, Vec<u8>)>,
     _fault: MigrationWriteFault,
 ) -> Result<(), Diagnostic> {
+    let observed_limit = match _fault {
+        #[cfg(test)]
+        MigrationWriteFault::OpenFileLimit(limit) => Some(limit),
+        _ => process_open_file_limit(),
+    };
+    // A migration holds descriptors for every file at once, so refuse a write
+    // set the process cannot hold before opening the first one.
+    if let Some(limit) = observed_limit {
+        if !migration_descriptors_fit(files.len(), limit) {
+            return Err(migration_open_file_limit_diagnostic(files.len(), limit));
+        }
+    }
     // Preflight the complete write set before creating even a staging
     // directory. A refusal here therefore cannot partially migrate a project.
     let mut targets = Vec::with_capacity(files.len());
@@ -5717,7 +5971,11 @@ fn write_migration_files_with_fault(
                 "the project directory must be a directory and must not be a symbolic link",
             )
         })?;
-        let current = read_bounded_source_entry(
+        // The recorded identity comes from the descriptor these bytes are read
+        // through, so it names the file whose content was compared and the file
+        // the renames further down will move, with no second open of the name
+        // to relink in between.
+        let (current, metadata) = read_bounded_source_entry_with_identity(
             &destination,
             "project.migrate.source_missing",
             relative_path,
@@ -5726,14 +5984,6 @@ fn write_migration_files_with_fault(
         if current != *original {
             return Err(migration_concurrent_change_diagnostic(relative_path));
         }
-        // Take the recorded identity from a descriptor opened through the
-        // resolved parent, so it names the file the renames below will move.
-        let metadata = destination
-            .open_read()
-            .and_then(|file| file.metadata())
-            .map_err(|_| {
-                migration_write_diagnostic("project.migrate.write_failed", relative_path)
-            })?;
         if !migration_target_permissions_are_safe(&metadata) {
             return Err(migration_write_diagnostic(
                 "project.migrate.permissions_invalid",
@@ -5864,6 +6114,15 @@ fn write_migration_files_with_fault(
                 migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
             }));
         }
+        #[cfg(test)]
+        if matches!(_fault, MigrationWriteFault::CommitWithBlockedRestage(failed) if failed == index)
+        {
+            block_migration_restage(&targets[..promoted]);
+            let rollback = restore_migration_targets(&targets, backed_up, promoted);
+            return Err(rollback.unwrap_or_else(|| {
+                migration_write_diagnostic("project.migrate.write_failed", &target.relative_path)
+            }));
+        }
         if promote_migration_target(target).is_err() {
             let rollback = restore_migration_targets(&targets, backed_up, promoted);
             return Err(rollback.unwrap_or_else(|| {
@@ -5921,6 +6180,22 @@ fn promote_migration_target(target: &MigrationWriteTarget) -> Result<(), ()> {
             target.destination.name(),
         )
         .map_err(|_| ())
+}
+
+/// Occupy the staged name inside every promoted target's transaction with a
+/// directory, so the rollback's restage rename fails and the promoted file has
+/// to be reclaimed through the identity captured while staging.
+#[cfg(test)]
+fn block_migration_restage(targets: &[MigrationWriteTarget]) {
+    for target in targets {
+        let transaction = target
+            .transaction
+            .as_ref()
+            .expect("a promoted target holds its transaction");
+        transaction
+            .create_directory(OsStr::new(MIGRATION_STAGED_NAME), 0o700)
+            .expect("fault injection occupies the staged name");
+    }
 }
 
 fn restore_migration_targets(
@@ -7025,7 +7300,10 @@ fn decimal_literal_order(left: &str, right: &str) -> Option<std::cmp::Ordering> 
     left.partial_cmp(&right)
 }
 
-fn validate_project_directory(project_path: &Path) -> Result<(), Diagnostic> {
+/// Resolve the project directory to a held descriptor, refusing a symbolic link
+/// at every component. Callers that read the project's own files afterwards read
+/// them through the returned descriptor.
+fn validate_project_directory(project_path: &Path) -> Result<SafeDir, Diagnostic> {
     if project_path.as_os_str().is_empty() || has_parent_component(project_path) {
         return Err(diagnostic(
             "source.project.path_unsafe",
@@ -7033,7 +7311,7 @@ fn validate_project_directory(project_path: &Path) -> Result<(), Diagnostic> {
             "the project path must not contain parent-directory components",
         ));
     }
-    validate_directory(project_path, "source.project.invalid").map(|_| ())
+    validate_directory(project_path, "source.project.invalid")
 }
 
 /// Resolve a directory to a held descriptor, refusing a symbolic link at every
@@ -7130,6 +7408,19 @@ fn read_bounded_source_entry(
     report_path: &str,
     bound: u64,
 ) -> Result<Vec<u8>, Diagnostic> {
+    read_bounded_source_entry_with_identity(entry, missing_code, report_path, bound)
+        .map(|(bytes, _)| bytes)
+}
+
+/// Read a bounded regular file through an already-resolved entry and report the
+/// identity of the descriptor the bytes came from, for callers that must record
+/// which file they read instead of opening the name again to ask.
+fn read_bounded_source_entry_with_identity(
+    entry: &SafeEntry,
+    missing_code: &str,
+    report_path: &str,
+    bound: u64,
+) -> Result<(Vec<u8>, fs::Metadata), Diagnostic> {
     let invalid = || {
         diagnostic(
             "source.file.invalid",
@@ -7208,7 +7499,7 @@ fn read_bounded_source_entry(
             "an authoring source exceeds its fixed size bound",
         ));
     }
-    Ok(bytes)
+    Ok((bytes, opened))
 }
 
 /// Refuse an authoring source whose opened descriptor is not the entry that was
@@ -7266,10 +7557,10 @@ fn write_files_with_before_publish(
     files: &BTreeMap<String, Vec<u8>>,
     before_publish: impl FnOnce(&Path) -> Result<(), Diagnostic>,
 ) -> Result<(), Diagnostic> {
-    if output.as_os_str().is_empty()
-        || has_parent_component(output)
-        || output.file_name().is_none()
-        || output.exists()
+    // Only the shape of the path is judged here. Whether the destination is
+    // already taken is decided below, through the parent descriptor this
+    // resolves, rather than by reaching the pathname a second time.
+    if output.as_os_str().is_empty() || has_parent_component(output) || output.file_name().is_none()
     {
         return Err(diagnostic(
             "output.destination.invalid",
@@ -7385,6 +7676,17 @@ fn artifact_destination(
         }
     }
     let name = names.pop().ok_or_else(unsafe_path)?.to_owned();
+    // Create only what this tool can also take away. The staged tree is removed
+    // by `SafeDir::remove_tree`, which walks at most `MAX_REMOVE_TREE_DEPTH`
+    // levels below the staging directory, so a deeper artifact path would stage
+    // a tree that neither the failure cleanup nor a later removal could reach.
+    if names.len() >= MAX_REMOVE_TREE_DEPTH as usize {
+        return Err(diagnostic(
+            "artifact.path.invalid",
+            "artifacts",
+            "the compiler returned an artifact path deeper than this tool removes",
+        ));
+    }
     let mut directory = root.try_clone().map_err(|_| {
         diagnostic(
             "output.write.failed",
@@ -8808,6 +9110,55 @@ mod tests {
         }
     }
 
+    fn nested_artifact_path(levels: u32, leaf: &str) -> String {
+        let mut path = String::new();
+        for level in 0..levels {
+            path.push_str(&format!("d{level}/"));
+        }
+        path.push_str(leaf);
+        path
+    }
+
+    #[test]
+    fn a_generated_artifact_tree_the_tool_could_not_remove_is_refused_before_staging() {
+        let directory = TestDirectory::create();
+        let files = BTreeMap::from([(
+            nested_artifact_path(MAX_REMOVE_TREE_DEPTH, "schema.sql"),
+            b"generated".to_vec(),
+        )]);
+
+        let refused = write_source_files(&directory.path.join("out"), &files)
+            .expect_err("an artifact tree deeper than the removal bound is refused");
+
+        assert_eq!(refused.code, "artifact.path.invalid");
+        // The refusal lands before the first artifact is created, and the
+        // staging directory the writer had already made is removed, so nothing
+        // survives that the tool could not clean up afterwards.
+        assert!(!directory.path.join("out").exists());
+        assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_generated_artifact_tree_at_the_removal_bound_publishes_and_stays_removable() {
+        let directory = TestDirectory::create();
+        let relative = nested_artifact_path(MAX_REMOVE_TREE_DEPTH - 1, "schema.sql");
+        let files = BTreeMap::from([(relative.clone(), b"generated".to_vec())]);
+
+        write_source_files(&directory.path.join("out"), &files)
+            .expect("an artifact tree within the removal bound publishes");
+
+        assert_eq!(
+            fs::read(directory.path.join("out").join(&relative)).unwrap(),
+            b"generated"
+        );
+        // What the writer accepts, the removal reaches: the deepest tree it
+        // will create is one this tool can still take away.
+        SafeDir::resolve(&directory.path)
+            .expect("the test directory resolves")
+            .remove_tree(OsStr::new("out"))
+            .expect("the published tree is within the removal bound");
+    }
+
     #[test]
     fn rhai_planner_capture_enforces_normalized_relative_paths_and_source_bound() {
         let directory = TestDirectory::create();
@@ -8817,8 +9168,9 @@ mod tests {
             b"fn plan(ctx) { #{ disposition: \"apply\", effects: [] } }\n",
         )
         .unwrap();
+        let origin = SafeDir::resolve(&directory.path).expect("the test directory resolves");
         let captured = load_planner_asset_files(
-            &directory.path,
+            &origin,
             "registry.yaml",
             BTreeSet::from(["planners/request.rhai".to_owned()]),
         )
@@ -8846,12 +9198,50 @@ mod tests {
         )
         .unwrap();
         let oversized = load_planner_asset_files(
-            &directory.path,
+            &origin,
             "registry.yaml",
             BTreeSet::from(["planners/oversized.rhai".to_owned()]),
         )
         .unwrap_err();
         assert_eq!(oversized.code, "source.file.bounds");
+    }
+
+    /// The asset readers refuse an escaping path themselves, so the module and
+    /// planner path rules are not the only thing between a declared asset and a
+    /// file outside the directory the module was listed in.
+    #[test]
+    fn an_asset_path_that_climbs_out_of_its_origin_is_refused_before_any_component_opens() {
+        let directory = TestDirectory::create();
+        fs::create_dir_all(directory.path.join("modules/persons")).unwrap();
+        fs::write(directory.path.join("modules/outside.sql"), b"outside\n").unwrap();
+        let origin = SafeDir::resolve(&directory.path.join("modules/persons"))
+            .expect("the module directory resolves");
+
+        for asset_path in ["../outside.sql", "/etc/passwd"] {
+            let refused = open_asset_entry(
+                &origin,
+                asset_path,
+                || module_asset_path_diagnostic("persons"),
+                |error| {
+                    path_diagnostic(
+                        error,
+                        "source.module_asset.missing",
+                        "modules/persons",
+                        "the required authoring source is not available",
+                        "authoring sources must be regular files and must not be symbolic links",
+                    )
+                },
+            )
+            .expect_err("an escaping asset path is refused");
+
+            // The path arm answered, so no component of the escaping path was
+            // opened on the way to a missing-source refusal.
+            assert_eq!(refused.code, "source.module_asset.path_unsafe");
+        }
+        assert_eq!(
+            fs::read(directory.path.join("modules/outside.sql")).unwrap(),
+            b"outside\n"
+        );
     }
 
     #[test]
@@ -9230,6 +9620,49 @@ mod tests {
     }
 
     #[test]
+    fn project_migration_refuses_a_write_set_the_open_file_limit_cannot_hold() {
+        let directory = TestDirectory::create();
+        let files = migration_transaction_fixture(&directory);
+
+        let failure = write_migration_files_with_fault(
+            &directory.path,
+            &files,
+            MigrationWriteFault::OpenFileLimit(4),
+        )
+        .expect_err("a write set larger than the open file limit is refused");
+
+        assert_eq!(failure.code, "project.migrate.open_file_limit");
+        assert!(
+            failure.message.contains("open file limit"),
+            "the refusal names the limit: {}",
+            failure.message
+        );
+        // The refusal runs before the first descriptor is opened, so nothing
+        // is staged and no source moves.
+        assert_eq!(
+            fs::read(directory.path.join("registry.yaml")).unwrap(),
+            b"registry: original\n"
+        );
+        assert_eq!(
+            fs::read(directory.path.join("modules/core/module.yaml")).unwrap(),
+            b"module: original\n"
+        );
+        assert_no_migration_transaction_directories(&directory);
+    }
+
+    #[test]
+    fn project_migration_fits_an_ordinary_write_set_in_an_ordinary_limit() {
+        // Two descriptors per file plus the reserve, against the smallest
+        // limit a POSIX process is guaranteed.
+        assert!(migration_descriptors_fit(2, 256));
+        assert!(!migration_descriptors_fit(1024, 256));
+        assert!(
+            process_open_file_limit().is_none_or(|limit| migration_descriptors_fit(2, limit)),
+            "the fixture write set has to fit the limit this process runs under"
+        );
+    }
+
+    #[test]
     fn project_migration_concurrent_change_advances_no_other_target() {
         let directory = TestDirectory::create();
         let files = migration_transaction_fixture(&directory);
@@ -9276,6 +9709,86 @@ mod tests {
             b"module: original\n"
         );
         assert_no_migration_transaction_directories(&directory);
+    }
+
+    #[test]
+    fn project_migration_rollback_reclaims_a_promoted_target_it_cannot_restage() {
+        let directory = TestDirectory::create();
+        let files = migration_transaction_fixture(&directory);
+
+        // The fault occupies the staged name inside the promoted target's
+        // transaction, so the rollback cannot move the promoted file back and
+        // has to reclaim it through the identity captured while staging.
+        let failure = write_migration_files_with_fault(
+            &directory.path,
+            &files,
+            MigrationWriteFault::CommitWithBlockedRestage(1),
+        )
+        .expect_err("injected late commit failure rolls back");
+
+        // A rollback that could not reclaim the promoted file would report
+        // project.migrate.rollback_failed instead.
+        assert_eq!(failure.code, "project.migrate.write_failed");
+        assert_eq!(
+            fs::read(directory.path.join("registry.yaml")).unwrap(),
+            b"registry: original\n"
+        );
+        assert_eq!(
+            fs::read(directory.path.join("modules/core/module.yaml")).unwrap(),
+            b"module: original\n"
+        );
+        assert_no_migration_transaction_directories(&directory);
+    }
+
+    #[test]
+    fn a_half_reserved_export_pair_names_the_file_that_is_missing() {
+        let checkpoint = serde_json::to_value(data_lifecycle_failure(
+            "data export",
+            "data.export",
+            DataLifecycleError::ExportPair(ExportPairState::CheckpointMissing),
+        ))
+        .expect("the failure report serializes");
+        assert_eq!(
+            checkpoint["diagnostics"][0]["code"],
+            "data.export.checkpoint.missing"
+        );
+        assert_eq!(checkpoint["diagnostics"][0]["path"], "checkpoint");
+        assert!(checkpoint["diagnostics"][0]["message"]
+            .as_str()
+            .expect("the message renders")
+            .contains("without the checkpoint"));
+
+        let output = serde_json::to_value(data_lifecycle_failure(
+            "data export",
+            "data.export",
+            DataLifecycleError::ExportPair(ExportPairState::OutputMissing),
+        ))
+        .expect("the failure report serializes");
+        assert_eq!(
+            output["diagnostics"][0]["code"],
+            "data.export.output.missing"
+        );
+        assert_eq!(output["diagnostics"][0]["path"], "output");
+        assert!(output["diagnostics"][0]["message"]
+            .as_str()
+            .expect("the message renders")
+            .contains("without the output"));
+    }
+
+    #[test]
+    fn an_undurable_export_is_not_reported_as_an_operation_that_did_nothing() {
+        let report = serde_json::to_value(audit_failure(
+            "audit export",
+            AuditCliError::OutputNotDurable,
+        ))
+        .expect("the failure report serializes");
+        assert_eq!(report["diagnostics"][0]["code"], "audit.output.not_durable");
+        assert_eq!(report["diagnostics"][0]["path"], "output");
+        let message = report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("the message renders");
+        assert!(message.contains("written to its destination"));
+        assert!(message.contains("durable"));
     }
 
     #[test]
@@ -9741,6 +10254,75 @@ accessProfiles:
             assert_eq!(fs::read(&named).unwrap(), b"decoy\n");
         }
 
+        /// A module that declares one derived SQL asset and one Rhai planner
+        /// script, so both asset readers are exercised by one capture.
+        const MODULE_WITH_ASSETS: &[u8] = br#"id: persons
+version: 0.1.0
+extendEntities:
+  - entity: person
+    derived:
+      - id: person-summary
+        sql: sql/summary.sql
+        key: id
+    changeRequest:
+      planner:
+        kind: rhai
+        script: planners/person.rhai
+        abi: registry.change-request-plan/v1
+      review: {}
+"#;
+
+        fn plant_module_with_assets(root: &Path, sql: &[u8], planner: &[u8]) {
+            fs::create_dir_all(root.join("modules/persons/sql")).unwrap();
+            fs::create_dir_all(root.join("modules/persons/planners")).unwrap();
+            fs::write(root.join("modules/persons/module.yaml"), MODULE_WITH_ASSETS).unwrap();
+            fs::write(root.join("modules/persons/sql/summary.sql"), sql).unwrap();
+            fs::write(root.join("modules/persons/planners/person.rhai"), planner).unwrap();
+        }
+
+        #[test]
+        fn module_assets_read_after_an_ancestor_swap_carry_the_listed_module_bytes() {
+            let tree = race_tree();
+            let project = tree.named_directory();
+            plant_module_with_assets(&project, b"genuine sql\n", b"genuine planner\n");
+            plant_module_with_assets(
+                &tree.outside_directory(),
+                b"decoy sql\n",
+                b"decoy planner\n",
+            );
+
+            let sources = read_module_yaml_files(read_module_directory_names(&project).unwrap())
+                .expect("the listed module source reads");
+            let module = parse_module_yaml(&sources[0].bytes).expect("the module source parses");
+            // The ancestor becomes a real directory holding the decoy assets, so
+            // an asset read that resolved its pathname again would reach them
+            // without meeting a symbolic link.
+            tree.swap_ancestor_directory();
+            let assets = load_module_asset_files(&sources[0].directory, "persons", &module)
+                .expect("the module assets read");
+
+            let captured = assets
+                .iter()
+                .map(|asset| (asset.path.as_str(), asset.bytes.as_slice()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                captured,
+                vec![
+                    ("planners/person.rhai", b"genuine planner\n".as_slice()),
+                    ("sql/summary.sql", b"genuine sql\n".as_slice()),
+                ]
+            );
+            // The window is real: the same pathnames now reach the decoys.
+            assert_eq!(
+                fs::read(project.join("modules/persons/sql/summary.sql")).unwrap(),
+                b"decoy sql\n"
+            );
+            assert_eq!(
+                fs::read(project.join("modules/persons/planners/person.rhai")).unwrap(),
+                b"decoy planner\n"
+            );
+        }
+
         #[test]
         fn module_sources_listed_before_an_ancestor_swap_are_read_from_the_listed_directory() {
             let tree = race_tree();
@@ -9759,7 +10341,9 @@ accessProfiles:
             tree.swap_ancestor_directory();
             let files = read_module_yaml_files(modules).unwrap();
 
-            assert_eq!(files, vec![("persons".to_owned(), b"genuine\n".to_vec())]);
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].id, "persons");
+            assert_eq!(files[0].bytes, b"genuine\n");
             assert_eq!(
                 fs::read(project.join("modules/persons/module.yaml")).unwrap(),
                 b"decoy\n"
@@ -9790,6 +10374,24 @@ accessProfiles:
         }
 
         #[test]
+        fn an_output_directory_that_is_already_taken_is_refused_through_the_held_parent() {
+            let tree = race_tree();
+            let files = BTreeMap::from([("schema.sql".to_owned(), b"generated".to_vec())]);
+            fs::create_dir(tree.named("out")).unwrap();
+            fs::write(tree.named("out/kept.txt"), b"kept").unwrap();
+            // The tree the operator never named has no `out`, so a refusal
+            // decided by pathname after the swap would not fire at all.
+            let guard = tree.arm();
+            let refused = write_source_files(&tree.named("out"), &files)
+                .expect_err("an output directory that already exists is refused");
+            drop(guard);
+
+            assert_eq!(refused.code, "output.destination.invalid");
+            assert_eq!(fs::read(tree.moved("out/kept.txt")).unwrap(), b"kept");
+            assert_eq!(tree.outside_entries(), vec!["target".to_owned()]);
+        }
+
+        #[test]
         fn a_module_lock_write_after_an_ancestor_swap_rewrites_only_the_named_file() {
             let tree = race_tree();
             fs::write(tree.named("registry.yaml"), b"original\n").unwrap();
@@ -9801,6 +10403,33 @@ accessProfiles:
 
             assert_eq!(fs::read(tree.moved("registry.yaml")).unwrap(), b"locked\n");
             assert_eq!(fs::read(tree.outside("registry.yaml")).unwrap(), b"decoy\n");
+        }
+
+        #[test]
+        fn a_bounded_source_read_records_the_identity_of_the_file_it_read() {
+            let tree = race_tree();
+            let named = tree.named("registry.yaml");
+            fs::write(&named, b"original\n").unwrap();
+            fs::write(tree.named("decoy.yaml"), b"decoy\n").unwrap();
+
+            let entry = SafeEntry::resolve(&named).unwrap();
+            let (bytes, metadata) = read_bounded_source_entry_with_identity(
+                &entry,
+                "project.migrate.source_missing",
+                "registry.yaml",
+                AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
+            )
+            .unwrap();
+
+            // Relinking the name after the read leaves the reported identity
+            // alone, so a caller that records it holds the file whose bytes it
+            // compared rather than whatever the name reaches next.
+            fs::rename(tree.named("decoy.yaml"), &named).unwrap();
+            let relinked = SafeEntry::resolve(&named).unwrap().stat().unwrap();
+
+            assert_eq!(bytes, b"original\n");
+            assert_eq!(metadata.len(), bytes.len() as u64);
+            assert!(!relinked.is_same_file_as(&metadata));
         }
 
         #[test]

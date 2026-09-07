@@ -17,15 +17,13 @@ use serde_json::Value;
 
 pub(crate) use files::ProjectLock;
 use files::{
-    artifact_path, digest, read, snapshot, write, Contents, JOURNAL_PATH, MAX_FILE_BYTES,
-    MAX_PROJECT_BYTES, STATE_PATH,
+    artifact_path, authored_bound, digest, read, snapshot, write, Contents, JOURNAL_PATH,
+    MAX_FILE_BYTES, MAX_JOURNAL_BYTES, MAX_STATE_BYTES, STATE_PATH,
 };
 
 const MANIFEST_FILE: &str = "source-export.json";
 const MAX_ARTIFACTS: usize = 256;
 const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_STATE_BYTES: u64 = (MAX_PROJECT_BYTES * 4) as u64;
-const MAX_JOURNAL_BYTES: u64 = (MAX_PROJECT_BYTES * 8) as u64;
 
 /// The same export set and explicit resolutions are usable for a read-only
 /// comparison and for accepting the resulting candidate.
@@ -41,6 +39,10 @@ pub(crate) struct ImportArgs {
     #[arg(long)]
     pub resolutions: Option<PathBuf>,
     /// Complete target used by the compiler to compare actual question revisions.
+    ///
+    /// Comparing revisions compiles the exports named on the command line, so
+    /// the adapter of an export that has not been accepted yet runs against its
+    /// fixtures during the comparison.
     #[arg(long)]
     pub target: Option<PathBuf>,
 }
@@ -820,7 +822,7 @@ struct Journal {
 
 fn transact(lock: &ProjectLock, operations: Vec<Operation>) -> Result<()> {
     for operation in &operations {
-        if read(&lock.root, &operation.path, MAX_STATE_BYTES)? != operation.before {
+        if read(&lock.root, &operation.path, authored_bound(&operation.path))? != operation.before {
             bail!("source-import content precondition changed immediately before application");
         }
     }
@@ -840,13 +842,17 @@ fn transact(lock: &ProjectLock, operations: Vec<Operation>) -> Result<()> {
     )?;
     let result = (|| {
         for operation in &journal.operations {
-            if read(&lock.root, &operation.path, MAX_STATE_BYTES)? != operation.before {
+            if read(&lock.root, &operation.path, authored_bound(&operation.path))?
+                != operation.before
+            {
                 bail!("authored artifact changed during source application; recovery preserves the independent edit");
             }
             write(&lock.root, &operation.path, operation.after.as_ref())?;
         }
         for operation in &journal.operations {
-            if read(&lock.root, &operation.path, MAX_STATE_BYTES)? != operation.after {
+            if read(&lock.root, &operation.path, authored_bound(&operation.path))?
+                != operation.after
+            {
                 bail!("authored artifact changed before source application committed");
             }
         }
@@ -885,7 +891,7 @@ fn recover(lock: &ProjectLock) -> Result<()> {
         if !paths.insert(&operation.path) {
             bail!("source-import recovery journal repeats an artifact");
         }
-        let current = read(&lock.root, &operation.path, MAX_STATE_BYTES)?;
+        let current = read(&lock.root, &operation.path, authored_bound(&operation.path))?;
         if current != operation.before && current != operation.after {
             bail!("source-import recovery found an independent edit to {}; preserve it, restore the recorded before or after content, and retry", operation.path);
         }

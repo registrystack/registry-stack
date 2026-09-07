@@ -8,7 +8,7 @@
 use std::{
     collections::BTreeSet,
     net::IpAddr,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -361,7 +361,7 @@ impl MintConfig {
         };
         let root = root.canonicalize().map_err(|_| ConfigError::Unavailable)?;
         config.resolve_paths(&root);
-        config.validate()?;
+        config.validate(&root)?;
         Ok(config)
     }
 
@@ -384,7 +384,7 @@ impl MintConfig {
         self.clients.directory = resolve(&self.clients.directory);
     }
 
-    fn validate(&self) -> Result<(), ConfigError> {
+    fn validate(&mut self, root: &Path) -> Result<(), ConfigError> {
         if self.version != 1 {
             return Err(ConfigError::Invalid(
                 "only configuration version 1 is supported",
@@ -515,6 +515,12 @@ impl MintConfig {
                 "audit storage, audit key, and local signing material must be distinct",
             ));
         }
+        // Record the location Mint will actually open. Until the destination is
+        // walked through the filesystem, a link anywhere in it can move the
+        // audit chain somewhere the recorded configuration never named, and the
+        // deployment that mounts the storage is the only place that would
+        // notice. Mint owns where its own sink resolves.
+        self.audit.path = resolve_audit_destination(&self.audit.path, root)?;
 
         if self.access_tokens.audiences.is_empty() || self.access_tokens.audiences.len() > 16 {
             return Err(ConfigError::Invalid(
@@ -603,6 +609,65 @@ fn is_plain_route_path(path: &str) -> bool {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
             })
     })
+}
+
+/// Resolves the already absolute audit destination to the location Mint opens.
+///
+/// Every component that exists is resolved through its symbolic links, and the
+/// components the first write creates are appended as written, so this is a
+/// configuration proof rather than a defence against a concurrent writer. Any
+/// resolution error fails closed.
+///
+/// A destination that resolves under the configuration directory must stay
+/// there: a link leading out of it would move the audit chain to storage the
+/// configuration never named. An absolute destination elsewhere names storage
+/// the operator chose, and only its links are resolved. Messages stay value
+/// free so a failure never puts a configured location into shared logs.
+fn resolve_audit_destination(destination: &Path, root: &Path) -> Result<PathBuf, ConfigError> {
+    const DESCENDING: &str = "audit path must be absolute and free of parent traversal";
+    const UNRESOLVED: &str = "audit path could not be resolved to a real location";
+
+    if !destination.is_absolute() {
+        return Err(ConfigError::Invalid(DESCENDING));
+    }
+    let mut descending = PathBuf::new();
+    for component in destination.components() {
+        match component {
+            // `Components` already drops an interior `.`; a `..` would let the
+            // tail climb back out of whatever the earlier components resolved
+            // to, so neither is resolved here.
+            Component::CurDir | Component::ParentDir => {
+                return Err(ConfigError::Invalid(DESCENDING))
+            }
+            other => descending.push(other.as_os_str()),
+        }
+    }
+
+    let existing = descending
+        .ancestors()
+        // `symlink_metadata` does not follow a final link, so a dangling link
+        // counts as existing and then fails canonicalization below.
+        .find(|candidate| candidate.symlink_metadata().is_ok())
+        .ok_or(ConfigError::Invalid(UNRESOLVED))?;
+    let tail = descending
+        .strip_prefix(existing)
+        .map_err(|_| ConfigError::Invalid(UNRESOLVED))?;
+    let mut resolved = existing
+        .canonicalize()
+        .map_err(|_| ConfigError::Invalid(UNRESOLVED))?;
+    if !tail.as_os_str().is_empty() {
+        // Joining an empty tail would append a separator, and a destination
+        // that already exists resolves whole. Mint opens the location it
+        // records rather than only comparing it, and a trailing separator
+        // names a directory the sink is not.
+        resolved.push(tail);
+    }
+    if destination.starts_with(root) && !resolved.starts_with(root) {
+        return Err(ConfigError::Invalid(
+            "audit path must resolve inside the configuration directory",
+        ));
+    }
+    Ok(resolved)
 }
 
 fn is_thumbprint_key_id(value: &str) -> bool {
@@ -834,6 +899,121 @@ clients:
             ConfigError::Invalid(
                 "audit storage, audit key, and local signing material must be distinct"
             )
+        );
+    }
+
+    #[test]
+    fn a_plain_absolute_audit_path_is_accepted_outside_the_configuration_directory() {
+        let storage = tempfile::tempdir().expect("audit storage");
+        let destination = storage.path().join("audit").join("mint.jsonl");
+        let config = load_from(&VALID.replace(
+            "path: audit/mint.jsonl",
+            &format!("path: {}", destination.display()),
+        ))
+        .expect("an absolute audit destination names storage the operator chose");
+
+        assert_eq!(
+            config.audit.path,
+            storage
+                .path()
+                .canonicalize()
+                .expect("canonical audit storage")
+                .join("audit/mint.jsonl")
+        );
+    }
+
+    #[test]
+    fn an_audit_destination_that_already_exists_stays_openable() {
+        // A restart resolves a chain that is already there, so nothing is left
+        // to append to the resolved location. The recorded path still has to
+        // name the file: a trailing separator would name a directory instead.
+        let storage = tempfile::tempdir().expect("audit storage");
+        let destination = storage.path().join("mint.jsonl");
+        fs::write(&destination, "").expect("stage an existing audit chain");
+        let config = load_from(&VALID.replace(
+            "path: audit/mint.jsonl",
+            &format!("path: {}", destination.display()),
+        ))
+        .expect("an existing audit destination is valid");
+
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&config.audit.path)
+            .expect("the recorded destination opens for append");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_absolute_audit_path_records_where_its_links_resolve() {
+        // The deployment that mounts the storage is not the only place a link
+        // in the middle of the destination gets resolved: Mint records the
+        // location it will actually open.
+        let storage = tempfile::tempdir().expect("audit storage");
+        let linked = tempfile::tempdir().expect("linked audit storage");
+        std::os::unix::fs::symlink(linked.path(), storage.path().join("audit"))
+            .expect("audit directory link");
+        let config = load_from(&VALID.replace(
+            "path: audit/mint.jsonl",
+            &format!(
+                "path: {}",
+                storage.path().join("audit").join("mint.jsonl").display()
+            ),
+        ))
+        .expect("an absolute audit destination is valid");
+
+        assert_eq!(
+            config.audit.path,
+            linked
+                .path()
+                .canonicalize()
+                .expect("canonical linked storage")
+                .join("mint.jsonl")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_audit_path_whose_link_leaves_the_configuration_directory_is_refused() {
+        // A relative destination names a file under the configuration
+        // directory. A link component that leads out of it would move the
+        // audit chain somewhere the configuration never named.
+        let directory = tempfile::tempdir().expect("temp dir");
+        let elsewhere = tempfile::tempdir().expect("ephemeral storage");
+        std::os::unix::fs::symlink(elsewhere.path(), directory.path().join("audit"))
+            .expect("escaping symlink");
+        let path = directory.path().join("mint.yaml");
+        fs::write(&path, VALID).expect("write config");
+
+        assert_eq!(
+            MintConfig::load(&path).expect_err("the destination must be rejected"),
+            ConfigError::Invalid("audit path must resolve inside the configuration directory")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_audit_path_link_fails_closed() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        fs::create_dir(directory.path().join("audit")).expect("audit directory");
+        std::os::unix::fs::symlink(
+            directory.path().join("audit").join("missing"),
+            directory.path().join("audit").join("mint.jsonl"),
+        )
+        .expect("dangling symlink");
+        let path = directory.path().join("mint.yaml");
+        fs::write(&path, VALID).expect("write config");
+
+        assert_eq!(
+            MintConfig::load(&path).expect_err("the destination must be rejected"),
+            ConfigError::Invalid("audit path could not be resolved to a real location")
+        );
+    }
+
+    #[test]
+    fn an_audit_path_with_a_parent_traversal_component_is_refused() {
+        assert_eq!(
+            load_error(&VALID.replace("path: audit/mint.jsonl", "path: audit/../../mint.jsonl")),
+            ConfigError::Invalid("audit path must be absolute and free of parent traversal")
         );
     }
 

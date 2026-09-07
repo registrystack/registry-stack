@@ -93,3 +93,58 @@ fn native_export_refuses_unreadable_facts_without_publishing_partial_files() {
     assert_eq!(report["diagnostics"][0]["code"], "evidence_source.refused");
     assert!(!destination.exists());
 }
+
+#[test]
+fn an_initialized_project_exports_an_evidence_source_without_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let project = root.join("registry");
+    let initialized = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args(["--format", "json", "init"])
+        .arg(&project)
+        .output()
+        .unwrap();
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stdout)
+    );
+
+    let destination = root.join("export");
+    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args(["--format", "json", "generate", "evidence-source"])
+        .arg(&project)
+        .args([
+            "--access-profile",
+            "evidence-source",
+            "--entity",
+            "record",
+            "--selector",
+            "by-code",
+            "--fields",
+            "status",
+            "--source-id",
+            "registry-status",
+            "--connection",
+            "registry",
+            "--output",
+        ])
+        .arg(&destination)
+        .output()
+        .unwrap();
+
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(
+        report["explanation"]["selectorProfiles"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(destination.join("sources/registry-status.yaml").exists());
+}

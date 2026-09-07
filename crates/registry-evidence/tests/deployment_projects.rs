@@ -429,7 +429,8 @@ fn load_project(project_name: &str) -> LoadedProject {
     let deployment = DeploymentInputs::load(&runtime_path).unwrap_or_else(|error| {
         panic!("{project_name}: production deployment loading failed: {error:?}")
     });
-    let bundle = Arc::new(deployment.bundle);
+    let (loaded_bundle, loaded_runtime) = deployment.into_parts();
+    let bundle = Arc::new(loaded_bundle);
     let kernel = OfflineKernel::compile(Arc::clone(&bundle))
         .unwrap_or_else(|_| panic!("{project_name}: production kernel compilation failed"));
     LoadedProject {
@@ -437,7 +438,7 @@ fn load_project(project_name: &str) -> LoadedProject {
         runtime_path,
         bundle,
         kernel,
-        extracts: deployment.runtime.source_extracts,
+        extracts: loaded_runtime.source_extracts,
     }
 }
 

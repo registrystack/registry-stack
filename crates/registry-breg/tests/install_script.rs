@@ -6,10 +6,16 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const TEST_VERSION: &str = "v9.8.7";
 const BINARIES: [&str; 2] = ["breg", "bregctl"];
+
+// Distinguishes fixture roots built within the same process. The wall clock alone is not
+// enough: macOS reports CLOCK_REALTIME at 1 microsecond resolution, so two fixtures built in
+// close succession within the same test binary can otherwise land on the same nanosecond
+// reading and share a root.
+static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn installer_switches_both_commands_through_one_toolset_pointer() {
@@ -146,10 +152,7 @@ impl InstallerFixture {
     }
 
     fn build(forced_uname: Option<(String, String)>) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let unique = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "registry-breg-installer-test-{}-{unique}",
             std::process::id()

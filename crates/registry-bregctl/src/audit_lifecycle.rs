@@ -21,7 +21,7 @@ use registry_breg::audit_tooling::{
 };
 use serde::Serialize;
 
-use crate::safe_path::{SafeEntry, SafePathError};
+use crate::safe_path::{SafeDir, SafeEntry, SafePathError};
 
 /// Owner-only permissions for an export the operator has not yet placed.
 const EXPORT_FILE_MODE: u32 = 0o600;
@@ -33,6 +33,9 @@ pub(crate) enum AuditCliError {
     Operator,
     OutputPath(SafePathError),
     OutputExists,
+    /// The export reached its destination, and the directory entry naming it
+    /// could not be made durable.
+    OutputNotDurable,
     ChainBroken,
     InvalidEnvelope,
     HeadMismatch,
@@ -80,10 +83,10 @@ pub(crate) fn export(
     if !runtime_config.is_absolute() || !output.is_absolute() {
         return Err(AuditCliError::Operator);
     }
-    if output.exists() {
-        return Err(AuditCliError::OutputExists);
-    }
     let runtime = operator_runtime()?;
+    // `create_export_file` refuses a destination that is already taken through
+    // the parent descriptor it resolves, so the pathname is never reached a
+    // second time to ask the same question.
     let mut staged = create_export_file(output)?;
     let export = {
         let mut sink = BufWriter::new(&mut staged.file);
@@ -197,14 +200,60 @@ fn publish_export_file(mut staged: StagedExport) -> Result<(), AuditCliError> {
         .destination
         .publish_new_from(&staged.temporary)
         .map_err(|_| AuditCliError::Operator)?;
+    // The link put the export at its destination, so a sync that fails after
+    // it cannot be reported as an operation that did nothing.
+    sync_publication_parent(staged.destination.parent())?;
     // Publication consumes the staging name, so the cleanup has nothing left
     // to remove.
     staged.published = true;
-    staged
-        .destination
-        .parent()
-        .sync()
-        .map_err(|_| AuditCliError::Operator)
+    Ok(())
+}
+
+/// Report an export as published only once the directory entry naming it is
+/// durable. The link is already visible to every reader by then, so a failure
+/// here reports an export whose survival across a crash is unproven.
+fn sync_publication_parent(parent: &SafeDir) -> Result<(), AuditCliError> {
+    if publication_sync_faulted() {
+        return Err(AuditCliError::OutputNotDurable);
+    }
+    parent.sync().map_err(|_| AuditCliError::OutputNotDurable)
+}
+
+// Test-only seam that stands in for a directory the filesystem could not make
+// durable. It fires where the export would be reported as published.
+#[cfg(test)]
+thread_local! {
+    static PUBLICATION_SYNC_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn publication_sync_faulted() -> bool {
+    PUBLICATION_SYNC_FAULT.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+fn publication_sync_faulted() -> bool {
+    false
+}
+
+/// Make every export publication in this thread fail its parent directory sync
+/// until the returned guard drops.
+#[cfg(test)]
+fn install_publication_sync_fault() -> PublicationSyncFaultGuard {
+    PUBLICATION_SYNC_FAULT.with(|faulted| faulted.set(true));
+    PublicationSyncFaultGuard
+}
+
+/// Clears the fault, so one test cannot leak it into the next test on the same
+/// thread.
+#[cfg(test)]
+struct PublicationSyncFaultGuard;
+
+#[cfg(test)]
+impl Drop for PublicationSyncFaultGuard {
+    fn drop(&mut self) {
+        PUBLICATION_SYNC_FAULT.with(|faulted| faulted.set(false));
+    }
 }
 
 fn map_error(error: AuditToolingError) -> AuditCliError {
@@ -260,6 +309,37 @@ mod tests {
             std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn an_export_whose_directory_cannot_be_synced_is_reported_as_undurable_not_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let output = root.join("audit.jsonl");
+        let mut staged = create_export_file(&output).unwrap();
+
+        {
+            let mut sink = BufWriter::new(&mut staged.file);
+            sink.write_all(b"verified\n").unwrap();
+            finish_export_file(sink).unwrap();
+        }
+
+        let guard = install_publication_sync_fault();
+        // The link runs before the sync, so the export is already where the
+        // operator asked for it. The refusal has to say that rather than claim
+        // the operation was refused with nothing written.
+        assert_eq!(
+            publish_export_file(staged).unwrap_err(),
+            AuditCliError::OutputNotDurable
+        );
+        drop(guard);
+
+        assert_eq!(std::fs::read(&output).unwrap(), b"verified\n");
+        assert!(!std::fs::read_dir(&root).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".bregctl-audit-export-")));
     }
 
     #[test]
@@ -342,6 +422,24 @@ mod tests {
             create_export_file(&output).unwrap_err(),
             AuditCliError::OutputExists
         );
+    }
+
+    #[test]
+    fn export_reports_an_existing_destination_by_its_own_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let output = root.join("audit.jsonl");
+        std::fs::write(&output, b"occupied\n").unwrap();
+        // An absolute runtime configuration that does not load, so a refusal
+        // that came from anywhere but the destination would report the
+        // operator code instead.
+        let runtime_config = root.join("runtime.yaml");
+
+        assert_eq!(
+            export(&runtime_config, &output).unwrap_err(),
+            AuditCliError::OutputExists
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), b"occupied\n");
     }
 
     #[cfg(unix)]

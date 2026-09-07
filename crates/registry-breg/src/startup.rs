@@ -27,7 +27,9 @@ use crate::auth::RegistryAuthenticator;
 use crate::metrics::{self, Metrics};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
-use crate::package::{load_package, PackageIntent, PackageLoadContext, VerifiedPackage};
+use crate::package::{
+    load_package, PackageError, PackageIntent, PackageLoadContext, VerifiedPackage,
+};
 use crate::postgres::{
     verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
@@ -43,7 +45,7 @@ pub enum StartupError {
     #[error("the Registry runtime configuration was refused")]
     RuntimeConfig(RuntimeConfigError),
     #[error("the Registry package was refused")]
-    PackageRefused,
+    PackageRefused(PackageError),
     #[error("the Registry database connection was refused")]
     DatabaseConnection,
     #[error("the Registry database is not ready for this package")]
@@ -246,7 +248,7 @@ impl StartupError {
     const fn operational_message(self) -> &'static str {
         match self {
             Self::RuntimeConfig(_) => "the Registry runtime configuration was refused",
-            Self::PackageRefused => "the Registry package was refused",
+            Self::PackageRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection => "the Registry database connection was refused",
             Self::DatabaseUnready => "the Registry database is not ready for this package",
             Self::Audit => "the Registry audit profile was refused",
@@ -375,7 +377,7 @@ pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
-        load_package(&package_root, &package_context).map_err(|_| StartupError::PackageRefused)?
+        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
     };
     let connection = config
         .runtime_database_connection_config()
@@ -496,7 +498,7 @@ fn validate_schema_test_candidate_binding(
         || config.package().compiler_source_revision() != manifest.compiler.source_revision
         || candidate.registry().registry_id() != manifest.package_id
     {
-        return Err(StartupError::PackageRefused);
+        return Err(StartupError::PackageRefused(PackageError::Binding));
     }
     Ok(())
 }
@@ -506,12 +508,14 @@ fn validate_rehearsal_registry_binding(
     config: &RuntimeConfig,
     registry: &CompiledRegistry,
 ) -> Result<()> {
-    let package = registry.package().ok_or(StartupError::PackageRefused)?;
+    let package = registry
+        .package()
+        .ok_or(StartupError::PackageRefused(PackageError::Binding))?;
     if config.identity().environment() != package.environment
         || config.identity().instance_id() != package.instance_id
         || config.package().compiler_source_revision() != package.source_revision
     {
-        return Err(StartupError::PackageRefused);
+        return Err(StartupError::PackageRefused(PackageError::Binding));
     }
     Ok(())
 }
@@ -526,7 +530,7 @@ pub async fn prepare_with_connection_config_for_test(
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
-        load_package(&package_root, &package_context).map_err(|_| StartupError::PackageRefused)?
+        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
     };
     prepare_verified_package_with_connection(config, package, connection).await
 }
@@ -542,7 +546,7 @@ pub async fn prepare_with_connection_and_key_source_for_test(
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
-        load_package(&package_root, &package_context).map_err(|_| StartupError::PackageRefused)?
+        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
     };
     prepare_verified_package_with_key_source(config, package, connection, key_source).await
 }
@@ -1028,11 +1032,11 @@ pub async fn prepare_startup(
     runtime_role: &SqlIdentifier,
 ) -> Result<VerifiedStartup> {
     if !matches!(context.intent, PackageIntent::Startup { .. }) {
-        return Err(StartupError::PackageRefused);
+        return Err(StartupError::PackageRefused(PackageError::Binding));
     }
     // Ordering is security-relevant: no database call precedes package closure,
     // signature, binding, and compiler-derivation verification.
-    let package = load_package(package_root, context).map_err(|_| StartupError::PackageRefused)?;
+    let package = load_package(package_root, context).map_err(StartupError::PackageRefused)?;
     verify_opened_startup(package, client, migration_role, runtime_role).await
 }
 

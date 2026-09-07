@@ -4,22 +4,24 @@
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import math
+import os
 import re
 import shlex
 import subprocess
 import sys
-import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO, Sequence, TextIO
+from typing import Any, Sequence, TextIO
 
 
 MAXIMUM_COMPOSE_BYTES = 4 * 1024 * 1024
 MAXIMUM_NATIVE_CHECK_STDERR_BYTES = 4 * 1024
+CAPTURE_CHUNK_BYTES = 64 * 1024
+CAPTURE_DRAIN_SECONDS = 5
 MINIMUM_DEPENDENCY_TIMEOUT_SECONDS = 5
 MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS = 10 * 60
 MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 30
@@ -37,6 +39,9 @@ AUDIT_PREFIXES = {
     "relay": "/var/lib/relay/audit",
 }
 EXECUTABLE_PATHS = {product: f"/usr/local/bin/{product}" for product in PRODUCTS}
+OFFICIAL_IMAGE_REPOSITORIES = tuple(
+    f"ghcr.io/registrystack/{product}" for product in PRODUCTS
+)
 AUDIT_CONTAINMENT_FLAG = "--require-audit-under"
 # An image whose check command predates the containment flag rejects it as an
 # unknown argument. These are the argument parsers' phrasings for that refusal.
@@ -176,7 +181,7 @@ def run_compose(
     *,
     timeout: int | None,
     capture_output: bool = True,
-    stderr_sink: BinaryIO | None = None,
+    stderr_sink: BoundedStderr | None = None,
     input_text: str | None = None,
     timeout_is_failure: bool = True,
     timeout_message: str = "Docker Compose could not complete the preflight",
@@ -331,6 +336,26 @@ def is_one_or_absent(value: Any) -> bool:
     )
 
 
+def audit_root(product: str) -> PurePosixPath:
+    """The container directory this deployment must mount as audit storage.
+
+    Containment proves where a configured sink resolves, not that the storage
+    behind the mount survives. A root that every absolute path resolves under
+    proves neither, so it is refused here instead of reaching a native check as
+    an assertion that cannot fail.
+    """
+    root = PurePosixPath(AUDIT_PREFIXES[product])
+    if not root.is_absolute() or root == PurePosixPath("/"):
+        raise PreflightError(
+            "the required audit root must be an absolute directory below /"
+        )
+    if any(part in (".", "..") for part in root.parts):
+        raise PreflightError(
+            "the required audit root must name a directory without traversal"
+        )
+    return root
+
+
 def validate_mounts(
     product: str, service: dict[str, Any], document: dict[str, Any]
 ) -> None:
@@ -343,7 +368,7 @@ def validate_mounts(
     service_tmpfs = service.get("tmpfs", [])
     if not isinstance(service_tmpfs, list) or service_tmpfs:
         raise PreflightError("service must not use service-level tmpfs mounts")
-    audit_prefix = PurePosixPath(AUDIT_PREFIXES[product])
+    audit_prefix = audit_root(product)
     executable = PurePosixPath(EXECUTABLE_PATHS[product])
     audit_mounts = 0
     read_only_shm_mounts = 0
@@ -396,6 +421,49 @@ def validate_mounts(
         raise PreflightError(
             "service must mount exactly one read-only tmpfs at /dev/shm"
         )
+
+
+def validate_healthcheck(service: dict[str, Any], executable: PurePosixPath) -> None:
+    """Validate the healthcheck as what it is, a command lane into the container.
+
+    Docker runs it as the service identity, on its own schedule, with nothing
+    watching. The official images declare no healthcheck and readiness is the
+    preflight's own probe, so the accepted forms are none at all, one that is
+    explicitly disabled, and the product's own executable run without a shell.
+    """
+    healthcheck = service.get("healthcheck")
+    if healthcheck is None:
+        return
+    if not isinstance(healthcheck, dict):
+        raise PreflightError("service healthcheck posture is invalid")
+    if healthcheck.get("disable") is True:
+        return
+    test = healthcheck.get("test")
+    if test is None:
+        return
+    if not isinstance(test, list) or not all(isinstance(item, str) for item in test):
+        raise PreflightError("service healthcheck must be a command, not a shell string")
+    if test == ["NONE"]:
+        return
+    if len(test) < 2 or test[0] != "CMD" or test[1] != executable.as_posix():
+        raise PreflightError(
+            "service healthcheck must run the official product executable as a "
+            "command without a shell"
+        )
+
+
+def names_official_image(image: Any) -> bool:
+    """Whether the reference names an official product image, by tag or digest.
+
+    Recognizing one is not accepting it: a service the preflight cannot check
+    is named so the operator can select it or remove the edge.
+    """
+    if not isinstance(image, str):
+        return False
+    return any(
+        image == repository or image.startswith((f"{repository}:", f"{repository}@"))
+        for repository in OFFICIAL_IMAGE_REPOSITORIES
+    )
 
 
 def validate_ports(service: dict[str, Any]) -> None:
@@ -506,22 +574,70 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     executable = PurePosixPath(EXECUTABLE_PATHS[selection.product])
     validate_secret_entries(service, executable)
     validate_config_entries(service, executable)
+    validate_healthcheck(service, executable)
     validate_mounts(selection.product, service, document)
     validate_ports(service)
 
 
-def bounded_stderr(sink: BinaryIO) -> str:
-    """The tail of a child's stderr, bounded so a chatty child cannot exhaust memory.
+class BoundedStderr:
+    """A child's stderr, read while the child runs and bounded to a byte cap.
 
-    The child writes to a temporary file and the preflight holds only this tail.
-    The text classifies the failure and is never printed, so preflight failures
-    stay free of Compose output and configured values.
+    A spool file grows to whatever the child writes, and reading it back
+    afterwards bounds only the reader. The child writes into a pipe instead and
+    a reader thread keeps the stream's first bytes up to the cap, discarding the
+    rest, so a chatty child neither costs unbounded storage nor blocks on a full
+    pipe. The kept text classifies the failure and is never printed, so
+    preflight failures stay free of Compose output and configured values.
     """
-    end = sink.seek(0, io.SEEK_END)
-    sink.seek(max(0, end - MAXIMUM_NATIVE_CHECK_STDERR_BYTES))
-    return sink.read(MAXIMUM_NATIVE_CHECK_STDERR_BYTES).decode(
-        "utf-8", errors="replace"
-    )
+
+    def __init__(self, limit: int = MAXIMUM_NATIVE_CHECK_STDERR_BYTES) -> None:
+        read_descriptor, write_descriptor = os.pipe()
+        self._reader = open(read_descriptor, "rb", buffering=0)
+        self._writer = open(write_descriptor, "wb")
+        self._limit = limit
+        self._kept = bytearray()
+        self._reading = threading.Thread(target=self._keep_bounded, daemon=True)
+        self._reading.start()
+
+    def _keep_bounded(self) -> None:
+        while True:
+            chunk = self._reader.read(CAPTURE_CHUNK_BYTES)
+            if not chunk:
+                return
+            # What is kept is the start of the stream, because a command that
+            # refuses an argument says so before it does anything else, and a
+            # wrapper entrypoint that keeps printing would otherwise displace
+            # that refusal. Later output is still read, so the child never
+            # blocks on a full pipe.
+            self._kept.extend(chunk[: self._limit - len(self._kept)])
+
+    def fileno(self) -> int:
+        """The descriptor the child inherits as its stderr."""
+        return self._writer.fileno()
+
+    def write(self, data: bytes) -> int:
+        """Write as the child does, for callers that hold the object directly."""
+        written = self._writer.write(data)
+        self._writer.flush()
+        return written
+
+    def captured(self) -> str:
+        return bytes(self._kept).decode("utf-8", errors="replace")
+
+    def close(self) -> None:
+        self._writer.close()
+        # Closing every write end ends the read. A grandchild that inherited the
+        # descriptor would hold the pipe open past a killed child, so the wait is
+        # bounded; the reader is a daemon thread and cannot outlive the process.
+        self._reading.join(CAPTURE_DRAIN_SECONDS)
+        if not self._reading.is_alive():
+            self._reader.close()
+
+    def __enter__(self) -> BoundedStderr:
+        return self
+
+    def __exit__(self, *exception: object) -> None:
+        self.close()
 
 
 def rejects_audit_containment_flag(diagnostic: str) -> bool:
@@ -534,7 +650,7 @@ def rejects_audit_containment_flag(diagnostic: str) -> bool:
 def native_check(
     selection: ServiceSelection, timeout: int, frozen_compose: str
 ) -> None:
-    with tempfile.TemporaryFile() as sink:
+    with BoundedStderr() as sink:
         result = run_compose(
             [
                 "docker",
@@ -558,7 +674,7 @@ def native_check(
         )
         if result.returncode == 0:
             return
-        captured = bounded_stderr(sink)
+    captured = sink.captured()
     # The containment assertion is not optional, so an image whose check command
     # cannot make it fails closed. Naming that image is the one distinction the
     # generic failure cannot express, and it costs no disclosure: the captured
@@ -599,6 +715,18 @@ def native_check_plan(
         else:
             raise PreflightError("service dependency posture is invalid")
         selected_dependencies = set(names) & selected_services
+        for dependency in sorted(set(names) - selected_services):
+            declared = services.get(dependency)
+            if isinstance(declared, dict) and names_official_image(
+                declared.get("image")
+            ):
+                # Ignoring the edge would check the dependent against a
+                # Registry Stack service this run never checked or started.
+                raise PreflightError(
+                    f"selected service {selection.service} depends on Registry "
+                    f"Stack service {dependency}, which was not selected. Select "
+                    "it so the preflight checks and starts it, or remove the edge"
+                )
         for dependency in selected_dependencies:
             if selected_by_service[dependency].product not in DEPENDENCY_HEALTHCHECKS:
                 raise PreflightError(
@@ -759,31 +887,43 @@ def bounded_seconds(raw: str, *, minimum: int, maximum: int) -> int:
 
 
 def report_started_dependencies(
-    started: Sequence[str], prefix: Sequence[str], stream: TextIO
+    running: Sequence[str],
+    uncertain: Sequence[str],
+    prefix: Sequence[str],
+    stream: TextIO,
 ) -> None:
-    """Name the services the preflight started and the command that stops them.
+    """Name the dependency services the operator now owns and how to stop them.
 
     The preflight renders the deployment once and runs every later command
     against that frozen configuration on stdin, so the recovery command has to
     repeat the operator's own Compose invocation instead. Anything else targets
-    a different project and leaves the started services running.
+    a different project and leaves the started services running. A start that
+    did not return successfully is reported separately, because Compose may have
+    created the container before failing and may not have.
     """
-    if not started:
+    if not running and not uncertain:
         return
-    names = " ".join(started)
-    recovery = shlex.join([*prefix, "stop", *started])
-    print(
-        "dependency services started by the preflight remain running under the "
-        f"operator's Compose lifecycle: {names}. Stop them with the same "
-        f"Compose files: {recovery}",
-        file=stream,
-    )
+    sentences = []
+    if running:
+        sentences.append(
+            "dependency services started by the preflight remain running under "
+            f"the operator's Compose lifecycle: {' '.join(running)}."
+        )
+    if uncertain:
+        sentences.append(
+            "the preflight could not confirm the start of, and may have left a "
+            f"container for: {' '.join(uncertain)}."
+        )
+    recovery = shlex.join([*prefix, "stop", *running, *uncertain])
+    sentences.append(f"Stop them with the same Compose files: {recovery}")
+    print(" ".join(sentences), file=stream)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     prefix = compose_prefix(args)
-    started: list[str] = []
+    running: list[str] = []
+    uncertain: list[str] = []
     try:
         selections = [parse_service(raw) for raw in args.service]
         if len(selections) != len({item.service for item in selections}):
@@ -801,12 +941,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if selection.service in dependency_services:
                 deadline = time.monotonic() + args.dependency_timeout_seconds
-                started.append(selection.service)
+                uncertain.append(selection.service)
                 start_dependency(
                     selection,
                     deadline,
                     frozen_compose,
                 )
+                uncertain.remove(selection.service)
+                running.append(selection.service)
                 wait_for_dependency(
                     selection,
                     deadline,
@@ -814,11 +956,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
     except PreflightError as error:
         print(f"runtime preflight failed: {error}", file=sys.stderr)
-        report_started_dependencies(started, prefix, sys.stderr)
+        report_started_dependencies(running, uncertain, prefix, sys.stderr)
         return 1
+    except BaseException:
+        # A failure the preflight does not model, an interrupt included, leaves
+        # the same services behind. The operator gets the list, and the failure
+        # is raised on rather than swallowed or renamed.
+        report_started_dependencies(running, uncertain, prefix, sys.stderr)
+        raise
 
     print(f"runtime preflight passed for {len(selections)} service(s)")
-    report_started_dependencies(started, prefix, sys.stdout)
+    print(
+        "each configured audit sink resolves inside the declared persistent "
+        "mount; that the storage behind that mount survives is not proven"
+    )
+    report_started_dependencies(running, uncertain, prefix, sys.stdout)
     return 0
 
 

@@ -7257,7 +7257,7 @@ fn extract(response, selectors, context) {
         .await;
     let deployment = DeploymentInputs::load(&prepared.runtime_path)
         .expect("selector subset deployment is valid");
-    crate::kernel::OfflineKernel::compile(Arc::new(deployment.bundle))
+    crate::kernel::OfflineKernel::compile(Arc::new(deployment.into_parts().0))
         .expect("selector-aware source compiles");
     let runtime =
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -9114,6 +9114,36 @@ async fn initialize_from_opens_the_deployment_it_was_handed_not_the_runtime_path
         redirected_audit.display().to_string()
     );
     assert!(redirected_audit.exists());
+}
+
+/// The pair `initialize_from` accepts is exactly the pair `load` checked.
+///
+/// `DeploymentInputs` keeps its two captures private and offers `load` as its
+/// only constructor, so an in-process caller that ran `evidence check` and then
+/// wanted to hand initialization a different bundle or runtime document has no
+/// way to write it. That is a compile-time property, and this test pins the
+/// runtime half of it: what the accessors report before initialization is what
+/// the initialized runtime reports afterwards, on both captures, so a future
+/// change that let the pair be rebuilt between the two would show up here as a
+/// revision that no longer matches.
+#[tokio::test]
+async fn initialize_from_serves_the_revisions_the_captured_inputs_carry() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let deployment =
+        DeploymentInputs::load(&prepared.runtime_path).expect("the immutable deployment loads");
+    let captured_bundle = deployment.bundle().revision().to_owned();
+    let captured_runtime = deployment.runtime().revision().to_owned();
+    assert_ne!(
+        captured_bundle, captured_runtime,
+        "the two captures carry independent revisions"
+    );
+
+    let runtime = EvidenceRuntime::initialize_from(deployment)
+        .await
+        .expect("the captured deployment initializes");
+
+    assert_eq!(runtime.bundle().revision(), captured_bundle);
+    assert_eq!(runtime.runtime_revision(), captured_runtime);
 }
 
 async fn prepare_acceptance(binding_secret: &str) -> PreparedAcceptance {

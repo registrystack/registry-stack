@@ -299,19 +299,21 @@ fn ensure_reviewer_evidence(
     expected_signing_input: &[u8],
     expected_test_receipt: &[u8],
 ) -> Result<(), PackageLifecycleError> {
-    if build_directory.exists() {
+    // Resolving once decides both outcomes: a build directory that is there
+    // is compared through the descriptor this opens, and one that is not there
+    // is the first run, which writes the evidence below. Anything else about
+    // the path, a symbolic link included, is refused rather than retried by
+    // name.
+    let existing = match SafeDir::resolve(build_directory) {
+        Ok(directory) => Some(directory),
+        Err(error) if error.is_not_found() => None,
+        Err(_) => return Err(PackageLifecycleError::Output),
+    };
+    if let Some(directory) = existing {
         // The held descriptor is what the evidence reads and the published
         // package check below use, so replacing a component of the build path
         // afterwards can neither substitute the evidence compared here nor hide
         // an already published package.
-        let directory = super::validate_directory_for(
-            build_directory,
-            "package.output.invalid",
-            "output",
-            "the package build directory is unavailable",
-            "the package build path must be a directory and must not be a symbolic link",
-        )
-        .map_err(|_| PackageLifecycleError::Output)?;
         let existing_signing_input = read_bounded_entry(
             &directory,
             OsStr::new(SIGNING_INPUT_PATH),
@@ -604,6 +606,55 @@ mod tests {
             // The window is real: the same pathname now reaches the tree the
             // operator never named.
             assert_eq!(std::fs::read(&named).unwrap(), b"decoy");
+        }
+    }
+
+    /// Coverage for the single resolution the reviewer-evidence check makes.
+    /// One `SafeDir::resolve` decides whether this run compares evidence or
+    /// writes it, so no branch here reaches the build path by name a second
+    /// time.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    mod build_directory_resolution {
+        use super::*;
+        use crate::safe_path::race_fixture::race_tree;
+
+        #[test]
+        fn a_first_run_writes_the_evidence_into_the_named_build_directory() {
+            let tree = race_tree();
+            let build = tree.named("build");
+
+            ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+                .expect("a build directory that is not there yet is the first run");
+
+            assert_eq!(
+                std::fs::read(build.join(SIGNING_INPUT_PATH)).unwrap(),
+                b"signing input"
+            );
+            assert_eq!(
+                std::fs::read(build.join(TEST_RECEIPT_PATH)).unwrap(),
+                b"receipt"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_build_directory_that_is_a_symbolic_link_is_refused_rather_than_followed() {
+            use std::os::unix::fs::symlink;
+
+            let tree = race_tree();
+            let build = tree.named("build");
+            // Matching evidence sits behind the link, so a check that followed
+            // it would accept this run instead of refusing the path.
+            let decoy = tree.outside("build");
+            std::fs::create_dir_all(&decoy).unwrap();
+            std::fs::write(decoy.join(SIGNING_INPUT_PATH), b"signing input").unwrap();
+            std::fs::write(decoy.join(TEST_RECEIPT_PATH), b"receipt").unwrap();
+            symlink(&decoy, &build).unwrap();
+
+            let refused = ensure_reviewer_evidence(&build, b"signing input", b"receipt")
+                .expect_err("a build directory reached through a symbolic link is refused");
+
+            assert!(matches!(refused, PackageLifecycleError::Output));
         }
     }
 

@@ -10,7 +10,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -236,7 +235,9 @@ class RuntimePreflightTest(unittest.TestCase):
         )
         result, stdout, stderr, run = self.run_main(document)
         self.assertEqual(0, result, stderr)
-        self.assertEqual("runtime preflight passed for 3 service(s)\n", stdout)
+        self.assertEqual(
+            "runtime preflight passed for 3 service(s)", stdout.splitlines()[0]
+        )
         self.assertEqual(4, run.call_count)
         calls = [call.args[0] for call in run.call_args_list]
         self.assertEqual(
@@ -395,6 +396,19 @@ class RuntimePreflightTest(unittest.TestCase):
             "public port": lambda item: item.update(
                 ports=[{"target": 8080, "published": 8080}]
             ),
+            "shell healthcheck": lambda item: item.update(
+                healthcheck={"test": ["CMD-SHELL", "curl -fsS http://localhost/health"]}
+            ),
+            "string healthcheck": lambda item: item.update(
+                healthcheck={"test": "curl -fsS http://localhost/health"}
+            ),
+            "foreign healthcheck command": lambda item: item.update(
+                healthcheck={"test": ["CMD", "/usr/bin/curl", "-fsS", "http://x"]}
+            ),
+            "healthcheck without a command": lambda item: item.update(
+                healthcheck={"test": ["CMD"]}
+            ),
+            "invalid healthcheck": lambda item: item.update(healthcheck=["CMD"]),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
@@ -407,7 +421,11 @@ class RuntimePreflightTest(unittest.TestCase):
                     stderr="",
                 )
                 run = unittest.mock.Mock(return_value=render)
-                with unittest.mock.patch.object(self.module.subprocess, "run", run):
+                reported = io.StringIO()
+                with (
+                    unittest.mock.patch.object(self.module.subprocess, "run", run),
+                    contextlib.redirect_stderr(reported),
+                ):
                     result = self.module.main(
                         [
                             "--compose-file",
@@ -417,7 +435,98 @@ class RuntimePreflightTest(unittest.TestCase):
                         ]
                     )
                 self.assertEqual(1, result)
+                self.assertEqual(
+                    1, len(reported.getvalue().splitlines()), reported.getvalue()
+                )
+                self.assertTrue(
+                    reported.getvalue().startswith("runtime preflight failed: "),
+                    reported.getvalue(),
+                )
                 run.assert_called_once()
+
+    def test_a_healthcheck_may_only_run_the_official_product_command(self) -> None:
+        # Docker runs a healthcheck as the service identity on its own
+        # schedule, so it is a command lane into the container. The official
+        # images declare none, and the preflight owns readiness.
+        argv = [
+            "--compose-file",
+            "compose.yaml",
+            "--service",
+            "evidence=evidence",
+        ]
+        for accepted in (
+            None,
+            {"disable": True},
+            {"test": ["NONE"]},
+            {"test": ["CMD", "/usr/local/bin/evidence", "check"], "interval": "30s"},
+        ):
+            with self.subTest(healthcheck=accepted):
+                selected = service("evidence")
+                if accepted is not None:
+                    selected["healthcheck"] = accepted
+                result, _, stderr, _ = self.run_main(
+                    deployment({"evidence": selected}), argv=argv
+                )
+                self.assertEqual(0, result, stderr)
+
+    def test_an_audit_root_that_proves_nothing_is_refused(self) -> None:
+        # Containment proves where a configured sink resolves, so a root every
+        # path resolves under asserts nothing. Such a root is refused before
+        # any native check receives it, rather than passed on as a proof that
+        # cannot fail.
+        document = deployment({"mint": service("mint")})
+        for root in ("/", "", "var/lib/registry-mint", "/var/lib/registry-mint/.."):
+            with self.subTest(root=root):
+                with unittest.mock.patch.dict(
+                    self.module.AUDIT_PREFIXES, {"mint": root}
+                ):
+                    with self.assertRaises(self.module.PreflightError) as raised:
+                        self.module.validate_service(
+                            self.module.ServiceSelection("mint", "mint"), document
+                        )
+                self.assertIn("audit root", str(raised.exception))
+
+    def test_a_passing_run_states_that_persistence_is_not_proven(self) -> None:
+        document = deployment({"mint": service("mint")})
+        result, stdout, stderr, _ = self.run_main(
+            document,
+            argv=["--compose-file", "compose.yaml", "--service", "mint=mint"],
+        )
+        self.assertEqual(0, result, stderr)
+        self.assertIn("not proven", stdout)
+
+    def test_an_unselected_registry_stack_dependency_is_refused(self) -> None:
+        # Silently ignoring the edge left Evidence checked against a Mint the
+        # preflight never checked or started. The refusal names both ends so
+        # the operator can select the service or remove the edge.
+        document = cold_deployment()
+        result, stdout, stderr, run = self.run_orchestration(
+            document,
+            [completed()],
+            ["--compose-file", "compose.yaml", "--service", "evidence=evidence"],
+        )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertIn("evidence", stderr)
+        self.assertIn("mint", stderr)
+        self.assertIn("was not selected", stderr)
+        run.assert_called_once()
+
+    def test_a_dependency_outside_the_product_set_starts_nothing(self) -> None:
+        document = deployment({"evidence": service("evidence")})
+        document["services"]["proxy"] = {"image": "example.invalid/proxy:latest"}
+        document["services"]["evidence"]["depends_on"] = ["proxy"]  # type: ignore[index]
+        result, stdout, stderr, run = self.run_orchestration(
+            document,
+            [completed()],
+            ["--compose-file", "compose.yaml", "--service", "evidence=evidence"],
+        )
+        self.assertEqual(0, result, stderr)
+        self.assertEqual(2, run.call_count)
+        native = run.call_args_list[1].args[0]
+        self.assertEqual("evidence", native[native.index("--no-deps") + 1])
+        self.assertNotIn("up", native)
+        self.assertNotIn("proxy", native)
 
     def test_secret_modes_are_exact_and_audit_must_be_writable(self) -> None:
         for mode in (0o400, 0o600, "0400", "0600"):
@@ -778,14 +887,47 @@ class RuntimePreflightTest(unittest.TestCase):
             stderr,
         )
 
-    def test_the_captured_stderr_is_bounded_and_still_classifies(self) -> None:
-        with tempfile.TemporaryFile() as sink:
-            sink.write(b"x" * (self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES * 4))
-            sink.write(b"\nerror: unexpected argument '--require-audit-under' found\n")
-            captured = self.module.bounded_stderr(sink)
-        self.assertLessEqual(
-            len(captured), self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES
+    def test_a_child_that_outwrites_the_cap_is_captured_without_blocking(
+        self,
+    ) -> None:
+        # A pipe holds about 64 KiB, so a child that keeps writing blocks once
+        # it fills unless something reads the pipe while the child runs. The
+        # capture keeps the cap and discards the rest, so this child writes a
+        # thousand times the cap and still exits on its own.
+        cap = self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES
+        program = (
+            "import sys\n"
+            "sys.stderr.write("
+            "\"error: unexpected argument '--require-audit-under' found\\n\")\n"
+            "chunk = 'x' * 1024\n"
+            "for _ in range(4096):\n"
+            "    sys.stderr.write(chunk)\n"
         )
+        with self.module.BoundedStderr() as sink:
+            result = subprocess.run(
+                [sys.executable, "-c", program],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=sink,
+                timeout=120,
+            )
+
+        self.assertEqual(0, result.returncode)
+        captured = sink.captured()
+        self.assertLessEqual(len(captured), cap)
+        self.assertTrue(self.module.rejects_audit_containment_flag(captured))
+
+    def test_the_captured_stderr_is_bounded_and_still_classifies(self) -> None:
+        # An argument parser refuses before the command it fronts does anything,
+        # so its message is the first thing on the stream. A wrapper entrypoint
+        # that keeps printing afterwards must not push it out of the capture,
+        # and the classification searches everything the capture kept.
+        cap = self.module.MAXIMUM_NATIVE_CHECK_STDERR_BYTES
+        with self.module.BoundedStderr() as sink:
+            sink.write(b"error: unexpected argument '--require-audit-under' found\n")
+            sink.write(b"x" * (cap * 4))
+        captured = sink.captured()
+        self.assertLessEqual(len(captured), cap)
         self.assertTrue(self.module.rejects_audit_containment_flag(captured))
 
     def test_native_check_deadline_is_bounded_and_operator_configurable(self) -> None:
@@ -1019,21 +1161,6 @@ class RuntimePreflightTest(unittest.TestCase):
                 repeated, _ = self.module.native_check_plan(list(selected), document)
                 self.assertEqual(names, [item.service for item in repeated])
 
-    def test_an_unselected_dependency_is_never_started(self) -> None:
-        document = cold_deployment()
-        result, stdout, stderr, run = self.run_orchestration(
-            document,
-            [completed()],
-            ["--compose-file", "compose.yaml", "--service", "evidence=evidence"],
-        )
-        self.assertEqual(0, result, stderr)
-        self.assertEqual("runtime preflight passed for 1 service(s)\n", stdout)
-        self.assertEqual(2, run.call_count)
-        native = run.call_args_list[1].args[0]
-        self.assertEqual("evidence", native[native.index("--no-deps") + 1])
-        self.assertNotIn("up", native)
-        self.assertNotIn("mint", native)
-
     def test_an_unavailable_mint_fails_before_the_dependent_check(self) -> None:
         document = cold_deployment()
         result, stdout, stderr, run = self.run_orchestration(
@@ -1095,6 +1222,77 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertEqual(1, result)
         self.assertIn("docker compose --file compose.yaml stop mint", stderr)
 
+    def test_a_dependency_that_failed_to_start_is_not_reported_as_running(
+        self,
+    ) -> None:
+        # Compose may have created the container before failing, or not. The
+        # hint has to say which of the two lists a service is in.
+        document = cold_deployment()
+        result, stdout, stderr, _ = self.run_orchestration(
+            document,
+            [completed(), completed(returncode=1)],
+            [
+                "--compose-file",
+                "compose.yaml",
+                "--service",
+                "evidence=evidence",
+                "--service",
+                "mint=mint",
+            ],
+        )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout)
+        self.assertIn("could not be started", stderr)
+        self.assertIn("could not confirm", stderr)
+        self.assertNotIn("remain running", stderr)
+        self.assertIn("docker compose --file compose.yaml stop mint", stderr)
+
+    def test_started_dependencies_are_named_when_an_unexpected_failure_escapes(
+        self,
+    ) -> None:
+        # A failure the preflight does not model still leaves Mint running, and
+        # the operator still has to stop it. The failure itself is not swallowed
+        # and its text is not echoed.
+        document = cold_deployment()
+        render = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(document), stderr=""
+        )
+        run = unittest.mock.Mock(
+            side_effect=emitting(
+                [
+                    render,
+                    completed(),
+                    completed(),
+                    completed(),
+                    RuntimeError("sensitive daemon detail"),
+                ]
+            )
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            unittest.mock.patch.object(self.module.subprocess, "run", run),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.module.main(
+                    [
+                        "--compose-file",
+                        "compose.yaml",
+                        "--service",
+                        "evidence=evidence",
+                        "--service",
+                        "mint=mint",
+                    ]
+                )
+
+        self.assertIn("remain running", stderr.getvalue())
+        self.assertIn(
+            "docker compose --file compose.yaml stop mint", stderr.getvalue()
+        )
+        self.assertNotIn("sensitive", stderr.getvalue())
+
     def test_the_recovery_hint_repeats_the_operator_compose_invocation(self) -> None:
         # The preflight renders with `--file -`, so the hint has to name the
         # operator's own files. Without them the operator stops services in a
@@ -1127,7 +1325,7 @@ class RuntimePreflightTest(unittest.TestCase):
     def test_the_recovery_hint_without_compose_flags_names_the_services(self) -> None:
         stream = io.StringIO()
         self.module.report_started_dependencies(
-            ["mint"], ["docker", "compose"], stream
+            ["mint"], [], ["docker", "compose"], stream
         )
         self.assertIn("docker compose stop mint", stream.getvalue())
 

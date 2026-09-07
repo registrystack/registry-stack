@@ -470,7 +470,8 @@ fn interrupted_replacement_and_baseline_advance_restore_the_complete_prior_state
         );
         assert!(!fixture.project.join(JOURNAL_PATH).exists());
         drop(recovered);
-        assert!(ProjectLock::acquire(&fixture.project).is_ok());
+        ProjectLock::acquire(&fixture.project)
+            .expect("acquiring the project lock after recovery must succeed");
     }
 }
 
