@@ -1,0 +1,2640 @@
+id: https://publicschema.org/linkml/identity
+name: publicschema-identity
+title: PublicSchema identity domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- assessment
+- biometric
+- common
+- core
+- misc
+- vocabularies
+- external/dhs
+- external/mics
+classes:
+  Address:
+    class_uri: publicschema:Address
+    title: Address
+    description: 'A structured physical or postal location used to reach a person, household, or organization.
+      Addresses combine spatial and administrative components such as street, settlement, district, and
+      postal code.
+
+      '
+    slots:
+    - full_address
+    - street_address
+    - house_number
+    - building_name
+    - address_area
+    - city
+    - administrative_area
+    - postal_code
+    - country
+    - location
+    status: bibo:status/published
+    exact_mappings:
+    - locn:Address
+    close_mappings:
+    - dci:data/Address
+    annotations:
+      label_es: Dirección
+      label_fr: Adresse
+      description_es: Una ubicación física o postal estructurada utilizada para contactar a una persona,
+        hogar u organización. Las direcciones combinan componentes espaciales y administrativos como calle,
+        localidad, distrito y código postal.
+      description_fr: Un emplacement physique ou postal structuré, utilisé pour joindre une personne,
+        un ménage ou une organisation. Les adresses combinent des composantes spatiales et administratives
+        telles que la rue, la localité, le district et le code postal.
+      external_alignments_json: '[{"label": "Address", "match": "exact", "uri": "http://www.w3.org/ns/locn#Address",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}, {"label": "Address", "match": "close",
+        "note": "Same concept, different property decomposition; DCI uses address_line_1/2 while PublicSchema
+        decomposes into street, house number, and building name", "uri": "https://schema.spdci.org/core/v1/data/Address",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}, {"confidence": "high", "label": "Address",
+        "match": "exact", "note": "PublicSchema Address represents a structured address compatible with
+        locn:Address for exchange.", "predicate": "http://www.w3.org/2004/02/skos/core#exactMatch", "review_status":
+        "accepted", "source_id": "semic-core-location", "source_version": "2.1.1", "uri": "http://www.w3.org/ns/locn#Address",
+        "vocabulary": "SEMIC Core Location alignments"}]'
+      convergence_json: '{"notes": "Present in 5 of 6 mapped systems. EBSI PID and PDA1 schemas informed
+        additional decomposition properties (house_number, building_name) not present in the original
+        convergence systems.\n", "system_count": 5, "total_systems": 6}'
+      property_groups_json: '[{"category": "location", "properties": ["full_address", "street_address",
+        "house_number", "building_name"]}, {"category": "administrative", "properties": ["address_area",
+        "city", "administrative_area", "postal_code", "country", "location"]}]'
+      bibliography_refs: '["ebsi-eidas-pid", "schema-org", "semic-core-location", "spdci-common-standards"]'
+  Person:
+    class_uri: publicschema:Person
+    title: Person
+    description: 'The unique individual human being who is a subject of record within a social protection
+      system. Person is the persistent, indivisible unit of identity in registries; operational statuses
+      such as Registrant, Applicant, or Beneficiary are transient roles defined by the person''s relationship
+      to a specific Program, not properties of the person themselves.
+
+      '
+    is_a: Party
+    mixins:
+    - Agent
+    slots:
+    - date_of_birth
+    - date_of_death
+    - country_of_birth
+    - given_name
+    - family_name
+    - family_name_at_birth
+    - given_name_at_birth
+    - preferred_name
+    - patronymic_name
+    - matronymic_name
+    - gender
+    - nationality
+    - sex
+    - marital_status
+    - number_of_spouses
+    - education_level
+    - preferred_language
+    - occupation
+    - literacy
+    - religion
+    - ethnic_group
+    - employment_status
+    - status_in_employment
+    - industry
+    - phone_number
+    - email_address
+    - domicile
+    - group_memberships
+    - biometric_samples
+    - pregnancy_status
+    - displacement_status
+    - functioning_status
+    - nutrition_status
+    status: bibo:status/forthcoming
+    exact_mappings:
+    - person:Person
+    close_mappings:
+    - dci:data/Person
+    annotations:
+      label_es: Persona
+      label_fr: Personne
+      description_es: El individuo único que es sujeto de registro en un sistema de protección social.
+        La persona es la unidad indivisible y persistente de identidad en los registros; los estados operacionales
+        como inscrito, solicitante o beneficiario son roles transitorios definidos por la relación de
+        la persona con un programa específico.
+      description_fr: L'individu unique qui fait l'objet d'un enregistrement dans un système de protection
+        sociale. La personne est l'unité indivisible et persistante d'identité dans les registres. Les
+        statuts opérationnels tels que Registrant, demandeur ou bénéficiaire sont des rôles transitoires
+        définis par la relation de la personne à un programme spécifique.
+      featured: true
+      external_alignments_json: '[{"label": "Person", "match": "exact", "uri": "http://www.w3.org/ns/person#Person",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "Person", "match": "close",
+        "note": "DCI Person carries only basic demographics (name, sex, birth/death dates, contact); attributes
+        like marital status, education, and occupation live on DCI Member instead", "uri": "https://schema.spdci.org/core/v1/data/Person",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}, {"confidence": "high", "label": "Person", "match":
+        "exact", "note": "PublicSchema Person represents the same natural-person class for PublicSchema''s
+        social-protection scope.", "predicate": "http://www.w3.org/2004/02/skos/core#exactMatch", "review_status":
+        "accepted", "source_id": "semic-core-person", "source_version": "2.1.1", "uri": "http://www.w3.org/ns/person#Person",
+        "vocabulary": "SEMIC Core Person alignments"}]'
+      convergence_json: '{"notes": "Universal across all 6 mapped systems. The most consistently represented
+        concept in social protection delivery systems. All systems maintain a person-level record as the
+        primary unit of identity. Detailed point-in-time functioning observations live on FunctioningProfile
+        records; anthropometric observations live on dedicated profile types in a sibling schema (see
+        ADR-011). Person keeps only a coarse current-state summary (functioning_status, nutrition_status)
+        for targeting and reporting workflows. Practitioner review confirmed this hybrid matches operational
+        systems such as UNHCR proGres Specific Needs, Brazil Cadastro Unico, and Philippines Listahanan.\n",
+        "system_count": 6, "total_systems": 6}'
+      property_groups_json: '[{"category": "identity", "properties": ["name", "identifiers", "identity_documents",
+        "given_name", "family_name", "given_name_at_birth", "family_name_at_birth", "preferred_name",
+        "patronymic_name", "matronymic_name"]}, {"category": "demographics", "properties": ["date_of_birth",
+        "date_of_death", "country_of_birth", "sex", "gender", "nationality", "marital_status", "number_of_spouses",
+        "religion", "ethnic_group", "pregnancy_status", "displacement_status", "functioning_status", "nutrition_status"]},
+        {"category": "education", "properties": ["education_level", "literacy"]}, {"category": "employment",
+        "properties": ["occupation", "employment_status", "status_in_employment", "industry"]}, {"category":
+        "contact", "properties": ["preferred_language", "phone_number", "email_address", "domicile"]},
+        {"category": "other", "properties": ["group_memberships", "biometric_samples"]}]'
+      bibliography_refs: '["barca-2017-integrating-data", "barca-2021-inclusive-information-systems",
+        "dhs-recode7", "ebsi-eidas-pid", "egriss-iris", "loinc-pregnancy-status", "mics6", "mosip-identity-schema",
+        "schema-org", "semic-core-person", "spdci-common-standards", "un-vital-stats-rev3", "washington-group-cfm",
+        "who-muac-cutoffs"]'
+  Family:
+    class_uri: publicschema:Family
+    title: Family
+    description: 'A kinship network of persons connected by blood, marriage, or adoption. A family is
+      defined by relational ties, not by co-residence or shared budget: members may live across multiple
+      households or geographic areas. Kinship links between members are represented as Relationship records
+      between Person instances. Systems that use "family" to mean the co-residential unit should set group_type:
+      family on their Household record for interoperability.
+
+      '
+    is_a: Group
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Familia
+      label_fr: Famille
+      description_es: 'Una red de parentesco formada por personas unidas por lazos de sangre, matrimonio
+        o adopción. La familia se define por los vínculos relacionales, no por la corresidencia ni el
+        presupuesto compartido: los miembros pueden residir en varios hogares o áreas geográficas distintas.
+        Los vínculos de parentesco entre miembros se representan como registros Relationship entre instancias
+        Person. Los sistemas que usan "familia" para referirse a la unidad corresidente deben establecer
+        group_type: family en su registro Household a efectos de interoperabilidad.'
+      description_fr: 'Un réseau de parenté composé de personnes liées par le sang, le mariage ou l''adoption.
+        La famille est définie par les liens relationnels, et non par la corésidence ou le budget commun
+        : les membres peuvent résider dans plusieurs ménages ou zones géographiques distinctes. Les liens
+        de parenté entre membres sont représentés par des enregistrements Relationship entre instances
+        Person. Les systèmes qui utilisent « famille » pour désigner l''unité corésidente doivent définir
+        group_type: family sur leur enregistrement Household à des fins d''interopérabilité.'
+      convergence_json: '{"notes": "No OpenCRVS equivalent. OpenIMIS uses ''family'' where other systems
+        use ''household''. Family currently carries no local properties: kinship, marriage, and adoption
+        ties named in the definition are represented via Relationship records between Person instances
+        rather than as dedicated properties on Family. The group_type: family code on Household provides
+        an interoperability bridge for systems that model co-residential units under the \"family\" label.\n",
+        "system_count": 5, "total_systems": 6}'
+      bibliography_refs: '["un-census-rev3"]'
+  Group:
+    class_uri: publicschema:Group
+    title: Group
+    description: 'An abstract collection of persons that serves as the base for concrete group types such
+      as Household, Family, and Farm. Groups are linked to their members via membership links. In native
+      PublicSchema modeling, the concrete subtype carries the authoritative semantics; group_type is kept
+      as an interoperability classifier for systems that exchange groups through a flatter category field.
+
+      '
+    is_a: Party
+    slots:
+    - group_type
+    - formation_date
+    - member_count
+    - memberships
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/Group
+    annotations:
+      label_es: Grupo
+      label_fr: Groupe
+      description_es: Una colección abstracta de personas que sirve como base para tipos de grupos concretos
+        como Hogar, Familia y Explotación Agrícola. Los grupos se vinculan a sus miembros a través de
+        relaciones de pertenencia. En el modelado nativo de PublicSchema, el subtipo concreto lleva la
+        semántica autorizada; group_type se conserva como clasificador de interoperabilidad para sistemas
+        que intercambian grupos mediante un campo de categoría más plano.
+      description_fr: Un regroupement abstrait de personnes qui sert de base aux types de groupes concrets
+        tels que Ménage, Famille et Exploitation agricole. Les groupes sont liés à leurs membres via des
+        liens d'appartenance. Dans la modélisation native de PublicSchema, le sous-type concret porte
+        la sémantique faisant autorité; group_type est conservé comme classificateur d'interopérabilité
+        pour les systèmes qui échangent les groupes au moyen d'un champ de catégorie plus plat.
+      featured: true
+      external_alignments_json: '[{"label": "Group", "match": "close", "note": "DCI Group embeds member
+        lists and poverty scoring directly; PublicSchema separates membership into GroupMembership records
+        and scoring into ScoringEvent", "uri": "https://schema.spdci.org/core/v1/data/Group", "vocabulary":
+        "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 5, "total_systems": 6}'
+      bibliography_refs: '["spdci-common-standards"]'
+    abstract: true
+  HealthFacility:
+    class_uri: publicschema:HealthFacility
+    title: Health Facility
+    description: 'A service point where clinical or preventive health services are delivered, such as
+      a hospital, health center, health post, dispensary, specialty clinic, pharmacy, or diagnostic laboratory.
+      HealthFacility specializes ServicePoint for the health sector and carries additional properties
+      for facility type (SARA/HHFA category) and facility level (primary / secondary / tertiary / quaternary
+      tier of care). HealthFacility is distinct from the Organization that owns or manages it (captured
+      via managed_by) and from its administrative site (captured via located_at): the organization can
+      change without the physical facility moving, and a facility can serve several administrative Locations.
+      Facility typology references the WHO Service Availability and Readiness Assessment (SARA) and the
+      Harmonized Health Facility Assessment (HHFA) taxonomies.
+
+      '
+    is_a: ServicePoint
+    slots:
+    - facility_type
+    - facility_level
+    status: bibo:draft
+    close_mappings:
+    - schema:MedicalOrganization
+    annotations:
+      label_es: Establecimiento de salud
+      label_fr: Établissement de santé
+      description_es: 'Un punto de servicio donde se prestan servicios de salud clínicos o preventivos,
+        como un hospital, centro de salud, puesto de salud, dispensario, clínica especializada, farmacia
+        o laboratorio diagnóstico. HealthFacility especializa ServicePoint para el sector salud y lleva
+        propiedades adicionales para el tipo de establecimiento (categoría SARA/HHFA) y el nivel de establecimiento
+        (primaria / secundaria / terciaria / cuaternaria). HealthFacility es distinto de la Organization
+        que lo posee o gestiona (capturada mediante managed_by) y de su sitio administrativo (capturado
+        mediante located_at): la organización puede cambiar sin que el establecimiento físico se mueva,
+        y un establecimiento puede atender varias Locations administrativas. La tipología de establecimientos
+        se apoya en la Evaluación de la disponibilidad y capacidad operativa de los servicios (SARA) de
+        la OMS y en la Evaluación Armonizada de Establecimientos de Salud (HHFA).'
+      description_fr: 'Un point de service où sont fournis des soins cliniques ou préventifs, tels qu''un
+        hôpital, un centre de santé, un poste de santé, un dispensaire, une clinique spécialisée, une
+        pharmacie ou un laboratoire de diagnostic. HealthFacility spécialise ServicePoint pour le secteur
+        de la santé et porte des propriétés supplémentaires pour le type d''établissement (catégorie SARA/HHFA)
+        et le niveau d''établissement (primaire / secondaire / tertiaire / quaternaire). HealthFacility
+        est distinct de l''Organization qui le possède ou le gère (capturée via managed_by) et de son
+        site administratif (capturé via located_at) : l''organisation peut changer sans que l''établissement
+        physique ne bouge, et un établissement peut desservir plusieurs Locations administratives. La
+        typologie des établissements s''appuie sur l''Évaluation de la disponibilité et de la capacité
+        opérationnelle des services (SARA) de l''OMS et sur l''Évaluation harmonisée des établissements
+        de santé (HHFA).'
+      featured: true
+      external_alignments_json: '[{"label": "MedicalOrganization", "match": "close", "note": "schema.org
+        MedicalOrganization conflates the medical organization and the physical place where care is delivered
+        into a single class. PublicSchema separates them: HealthFacility is the physical facility (subtype
+        of ServicePoint), and the operating Organization is referenced via managed_by. The overlap is
+        close on the facility-level concept and partial on the organizational side.", "uri": "https://schema.org/MedicalOrganization",
+        "vocabulary": "schema.org", "vocabulary_id": "schema-org"}]'
+      convergence_json: '{"notes": "HealthFacility is informed primarily by two WHO-maintained non-PublicSchema
+        systems: the Service Availability and Readiness Assessment (SARA) Reference Manual, which defines
+        the canonical facility-type taxonomy, and the Harmonized Health Facility Assessment (HHFA), which
+        consolidates and extends SARA alongside the Service Delivery Indicators (SDI) into a unified assessment
+        framework. Neither of the six v1 convergence systems (OpenCRVS, openIMIS, OpenSPP, DHIS2, DCI,
+        SEMIC) carries a first-class HealthFacility concept at this level of specification, though DHIS2
+        organisation units and openIMIS health facility records cover adjacent responsibilities. A broader
+        convergence pass including HeRAMS and national health facility registries is expected to raise
+        the system_count.\n", "system_count": 2, "total_systems": 6}'
+      property_groups_json: '[{"category": "identity", "properties": ["name", "identifiers"]}, {"category":
+        "classification", "properties": ["service_point_type", "facility_type", "facility_level", "operational_status"]},
+        {"category": "location", "properties": ["located_at"]}, {"category": "governance", "properties":
+        ["managed_by"]}]'
+      bibliography_refs: '["schema-org", "who-health-systems", "who-herams", "who-sara"]'
+  Household:
+    class_uri: publicschema:Household
+    title: Household
+    description: 'A social and economic unit of one or more persons who share food and other essentials
+      for living. The operational definition varies across countries and programs, combining criteria
+      of co-residence, shared budget, shared cooking, kinship, and administrative registration.
+
+      '
+    is_a: Group
+    slots:
+    - address
+    - location
+    - food_security_level
+    - pregnant_or_lactating_count
+    - chronic_illness_in_household
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Hogar
+      label_fr: Ménage
+      description_es: Una unidad social y económica de una o más personas que comparten alimentos y otros
+        elementos esenciales para la vida. La definición operacional varía según los países y programas,
+        combinando criterios de corresidencia, presupuesto compartido, cocina común, parentesco y registro
+        administrativo.
+      description_fr: Une unité sociale et économique d'une ou plusieurs personnes qui partagent la nourriture
+        et d'autres biens essentiels à la vie. La définition opérationnelle varie selon les pays et les
+        programmes, combinant des critères de corésidence, de budget partagé, de cuisine commune, de parenté
+        et d'enregistrement administratif.
+      featured: true
+      external_alignments_json: '[{"label": "N/A", "match": "none", "note": "SEMIC Core Person does not
+        define a household concept. Residence-related data attaches to Person via address.", "vocabulary":
+        "Core Person", "vocabulary_id": "semic"}, {"label": "N/A", "match": "none", "note": "DCI does
+        not define a standalone household entity. Household-like grouping is handled through Group with
+        role-based membership.", "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "No OpenCRVS or standalone OpenIMIS match. Detailed point-in-time socio-economic
+        and living-conditions data (dwelling, WASH, energy, assets, ICT, income source, settlement type)
+        lives on SocioEconomicProfile records; Household keeps only identity, location, and a coarse food_security_level
+        current-state summary. Practitioner review confirmed that operational social registries commonly
+        read a current-state food-security flag off the household record even when the survey evidence
+        is stored separately.\n", "system_count": 4, "total_systems": 6}'
+      property_groups_json: '[{"category": "identity", "properties": ["name", "identifiers", "identity_documents"]},
+        {"category": "administrative", "properties": ["group_type", "formation_date", "member_count",
+        "memberships"]}, {"category": "demographics", "properties": ["pregnant_or_lactating_count"]},
+        {"category": "location", "properties": ["address", "location"]}, {"category": "food_security",
+        "properties": ["food_security_level"]}, {"category": "other", "properties": ["chronic_illness_in_household"]}]'
+      bibliography_refs: '["barca-2017-integrating-data", "dhs-recode7", "fao-fies", "itu-core-ict", "mics6",
+        "spdci-common-standards", "un-census-rev3", "un-degurba", "who-household-energy", "who-unicef-jmp"]'
+  Identifier:
+    class_uri: publicschema:Identifier
+    title: Identifier
+    description: 'A coded value assigned to an entity within an identification scheme. Identifiers disambiguate
+      entities such as persons, groups, locations, administrative areas, or records within a specific
+      registry or catalog. The identifier is the value and its scheme; documents that carry identifiers
+      (passports, national ID cards, beneficiary cards) are modeled separately as IdentityDocument.
+
+      '
+    slots:
+    - identifier_value
+    - identifier_scheme_id
+    - identifier_scheme_name
+    - identifier_type
+    status: bibo:status/published
+    exact_mappings:
+    - adms:Identifier
+    - dci:data/Identifier
+    annotations:
+      label_es: Identificador
+      label_fr: Identifiant
+      description_es: Un valor codificado asignado a una entidad dentro de un esquema de identificación.
+        Los identificadores distinguen entidades como personas, grupos, ubicaciones, áreas administrativas
+        o registros dentro de un registro o catálogo específico. El identificador es el valor y su esquema;
+        los documentos que portan identificadores (pasaportes, tarjetas de identidad nacional, tarjetas
+        de beneficiario) se modelan separadamente como IdentityDocument.
+      description_fr: Une valeur codée attribuée à une entité au sein d'un schéma d'identification. Les
+        identifiants lèvent l'ambiguïté sur des entités telles que des personnes, des groupes, des lieux,
+        des zones administratives ou des enregistrements dans un registre ou catalogue spécifique. L'identifiant
+        est la valeur et son schéma; les documents qui portent des identifiants (passeports, cartes d'identité
+        nationale, cartes de bénéficiaire) sont modélisés séparément comme IdentityDocument.
+      featured: true
+      external_alignments_json: '[{"label": "Identifier", "match": "exact", "note": "ADMS Identifier is
+        a generic notation-plus-scheme value, aligning with this Identifier. Document-level lifecycle
+        metadata (issuer, issue date) is carried on IdentityDocument.", "uri": "http://www.w3.org/ns/adms#Identifier",
+        "vocabulary": "ADMS", "vocabulary_id": "semic"}, {"label": "Identifier", "match": "exact", "note":
+        "DCI Identifier is also a (type, value) pair without document lifecycle fields.", "uri": "https://schema.spdci.org/core/v1/data/Identifier",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "All mapped systems carry coded values identifying persons, groups,
+        or administrative areas, though most conflate the value with document metadata. After the split,
+        Identifier covers only the value and scheme; the lifecycle concerns live on IdentityDocument.\n",
+        "system_count": 6, "total_systems": 6}'
+      property_groups_json: '[{"category": "identity", "properties": ["identifier_value", "identifier_type"]},
+        {"category": "administrative", "properties": ["identifier_scheme_id", "identifier_scheme_name"]}]'
+      bibliography_refs: '["barca-2017-integrating-data", "ebsi-eidas-pid", "fhir-identifier-type-v2-0203",
+        "icao-doc-9303", "mosip-identity-schema", "semic-adms", "semic-core-person", "spdci-common-standards"]'
+  Organization:
+    class_uri: publicschema:Organization
+    title: Organization
+    description: 'A legally or administratively identifiable body that can act within a public delivery
+      process: a government agency, ministry, NGO, UN agency, statistical office, health facility, civil
+      registration office, court, or standards publisher. Organizations are the institutional actors that
+      administer instruments, publish methodologies, evaluate submissions, issue certificates, and operate
+      programs. An Organization''s location refers to its own registered or primary site, not to the place
+      where an action it performed happened. Event-level place remains a property of the event record.
+
+      '
+    is_a: Agent
+    slots:
+    - name
+    - identifiers
+    - location
+    status: bibo:status/forthcoming
+    exact_mappings:
+    - foaf:Organization
+    - prov:Organization
+    - schema:Organization
+    close_mappings:
+    - cpov:PublicOrganisation
+    - fhir:Organization
+    - legal:LegalEntity
+    annotations:
+      label_es: Organización
+      label_fr: Organisation
+      description_es: 'Un organismo identificable jurídica o administrativamente capaz de actuar en un
+        proceso de prestación pública: una agencia gubernamental, un ministerio, una ONG, una agencia
+        de las Naciones Unidas, una oficina estadística, un establecimiento de salud, una oficina de registro
+        civil, un tribunal o un editor de normas. Las organizaciones son los actores institucionales que
+        administran instrumentos, publican metodologías, evalúan expedientes, emiten certificados y operan
+        programas. La ubicación de una Organization se refiere a su propio sitio registrado o principal,
+        no al lugar donde ocurrió una acción que realizó. La ubicación a nivel de evento sigue siendo
+        una propiedad del registro del evento.'
+      description_fr: 'Un organisme identifiable juridiquement ou administrativement capable d''agir dans
+        un processus de prestation publique : agence gouvernementale, ministère, ONG, agence des Nations
+        unies, office statistique, établissement de santé, office d''état civil, tribunal ou éditeur de
+        normes. Les organisations sont les acteurs institutionnels qui administrent des instruments, publient
+        des méthodologies, évaluent des dossiers, délivrent des certificats et opèrent des programmes.
+        La localisation d''une Organization désigne son propre site enregistré ou principal, et non le
+        lieu où une action qu''elle a accomplie s''est déroulée. La localisation d''un événement reste
+        une propriété du registre de l''événement.'
+      external_alignments_json: '[{"label": "Organization", "match": "exact", "note": "foaf:Organization
+        is the direct equivalent: a kind of agent corresponding to social institutions such as companies,
+        societies, and so on.", "uri": "http://xmlns.com/foaf/0.1/Organization", "vocabulary": "FOAF",
+        "vocabulary_id": "foaf"}, {"label": "Public Organisation", "match": "close", "note": "SEMIC CPOV
+        defines PublicOrganisation as a formally recognised public-sector body with classification, legal
+        status, and spatial jurisdiction slots. Our Organization covers the broader set of institutional
+        actors in public delivery (government agencies and ministries, but also NGOs, UN agencies, health
+        facilities, and standards publishers). The overlap is exact for public bodies and partial for
+        the rest. CPOV''s richer shape (jurisdiction, legal status, purpose, contact point) is a natural
+        target if Organization is later extended.", "uri": "http://data.europa.eu/m8g/PublicOrganisation",
+        "vocabulary": "CPOV", "vocabulary_id": "semic"}, {"label": "Organization", "match": "exact", "note":
+        "schema.org Organization is the direct equivalent, sibling to schema:Person under schema:Thing.
+        Richer subtypes (GovernmentOrganization, NGO, MedicalOrganization) are available in schema.org
+        but not yet mirrored here.", "uri": "https://schema.org/Organization", "vocabulary": "schema.org",
+        "vocabulary_id": "schema-org"}, {"label": "Organization", "match": "exact", "note": "prov:Organization
+        is the PROV-O equivalent: an agent that is a social institution. Sibling to prov:Person and prov:SoftwareAgent
+        under prov:Agent.", "uri": "http://www.w3.org/ns/prov#Organization", "vocabulary": "PROV-O", "vocabulary_id":
+        "prov"}, {"label": "Organization", "match": "close", "note": "FHIR Organization covers formally
+        or informally recognised groupings of people or organizations formed for the purpose of achieving
+        some form of collective action. Our Organization starts with a minimum property set (name, identifiers,
+        location); FHIR adds contact points, active flag, and type categorization that may be added in
+        future iterations.", "uri": "http://hl7.org/fhir/Organization", "vocabulary": "FHIR R4", "vocabulary_id":
+        "fhir"}, {"confidence": "medium", "label": "LegalEntity", "match": "close", "note": "PublicSchema
+        Organization covers public and private organizations; Core Business LegalEntity is a close legal-identity
+        alignment.", "predicate": "http://www.w3.org/2004/02/skos/core#closeMatch", "review_status": "accepted",
+        "source_id": "semic-core-business", "source_version": "2.2.0", "uri": "http://www.w3.org/ns/legal#LegalEntity",
+        "vocabulary": "SEMIC Core Business alignments"}]'
+      convergence_json: '{"notes": "No mapped delivery system carries a first-class Organization concept.
+        In practice, organizations appear as free-text publisher names on instruments, as implicit issuers
+        on certificates, and as unmodelled administrative context around program operations. Standards
+        bodies are consistent: FOAF, schema.org, PROV-O, and FHIR all have a named Organization concept.
+        Minimum property set (name, identifiers, location) is pragmatic; richer modelling (parent_organization,
+        legal_form, jurisdiction, contact points, multi-site locations) is deferred to a later iteration.\n",
+        "system_count": 0, "total_systems": 6}'
+      property_groups_json: '[{"category": "identity", "properties": ["name", "identifiers"]}, {"category":
+        "location", "properties": ["location"]}]'
+      bibliography_refs: '["fhir-r4", "foaf", "schema-org", "semic-cpov", "w3c-prov-o"]'
+  RegistrationOffice:
+    class_uri: publicschema:RegistrationOffice
+    title: Registration Office
+    description: 'A service point where civil or administrative registration services are delivered, such
+      as a civil registration office, a district branch, a mobile registration unit, a refugee registration
+      center, or an identity enrollment center. RegistrationOffice specializes ServicePoint for the registration
+      and identity domain and carries additional properties for the functional category of the office
+      and for the jurisdictional coverage of the office. RegistrationOffice is domain-agnostic at the
+      root level: it covers civil registration (birth, death, marriage), refugee and asylum registration,
+      and national identity enrollment, which cuts across social protection, CRVS, and humanitarian workflows.
+      It is distinct from the Organization that operates it (captured via managed_by) and from its administrative
+      location (captured via located_at). The CRVS domain uses RegistrationOffice as the physical facility
+      where civil registrars operate; the same concept serves humanitarian identity programs and social
+      protection enrollment offices.
+
+      '
+    is_a: ServicePoint
+    slots:
+    - registration_office_type
+    - jurisdiction
+    status: bibo:draft
+    close_mappings:
+    - schema:GovernmentOffice
+    annotations:
+      label_es: Oficina de registro
+      label_fr: Bureau d'enregistrement
+      description_es: 'Un punto de servicio donde se prestan servicios de registro civil o administrativo,
+        como una oficina de registro civil, una sucursal de distrito, una unidad de registro móvil, un
+        centro de registro de refugiados o un centro de enrolamiento de identidad. RegistrationOffice
+        especializa ServicePoint para el dominio del registro y la identidad y lleva propiedades adicionales
+        para la categoría funcional de la oficina y para la cobertura jurisdiccional de la oficina. RegistrationOffice
+        es independiente del dominio en el nivel raíz: abarca el registro civil (nacimientos, defunciones,
+        matrimonios), el registro de refugiados y solicitantes de asilo, y el enrolamiento de identidad
+        nacional, lo que atraviesa los flujos de trabajo de protección social, CRVS y humanitarios. Es
+        distinto de la Organization que lo opera (capturada mediante managed_by) y de su ubicación administrativa
+        (capturada mediante located_at). El dominio CRVS utiliza RegistrationOffice como el establecimiento
+        físico donde operan los registradores civiles; el mismo concepto sirve a los programas humanitarios
+        de identidad y a las oficinas de enrolamiento de protección social.'
+      description_fr: 'Un point de service où sont fournis des services d''enregistrement civil ou administratif,
+        tel qu''un bureau d''état civil, une branche de district, une unité d''enregistrement mobile,
+        un centre d''enregistrement des réfugiés ou un centre d''enrôlement d''identité. RegistrationOffice
+        spécialise ServicePoint pour le domaine de l''enregistrement et de l''identité et porte des propriétés
+        supplémentaires pour la catégorie fonctionnelle du bureau et pour la couverture juridictionnelle
+        du bureau. RegistrationOffice est indépendant du domaine au niveau racine : il couvre l''enregistrement
+        civil (naissances, décès, mariages), l''enregistrement des réfugiés et des demandeurs d''asile,
+        et l''enrôlement d''identité nationale, ce qui traverse les flux de travail de la protection sociale,
+        de l''état civil et de l''action humanitaire. Il est distinct de l''Organization qui l''exploite
+        (capturée via managed_by) et de sa localisation administrative (capturée via located_at). Le domaine
+        CRVS utilise RegistrationOffice comme l''établissement physique où opèrent les officiers d''état
+        civil ; le même concept s''applique aux programmes humanitaires d''identité et aux bureaux d''enrôlement
+        de la protection sociale.'
+      external_alignments_json: '[{"label": "GovernmentOffice", "match": "close", "note": "schema.org
+        GovernmentOffice is a subtype of LocalBusiness and Place, covering government offices broadly.
+        PublicSchema RegistrationOffice is narrower (only registration and identity services) and is modelled
+        as a ServicePoint (physical facility) rather than as an organization. The overlap on government
+        registration premises is close; the organizational side and the WASH/distribution scopes diverge.",
+        "uri": "https://schema.org/GovernmentOffice", "vocabulary": "schema.org", "vocabulary_id": "schema-org"}]'
+      convergence_json: '{"notes": "RegistrationOffice is informed primarily by the OpenCRVS office and
+        location management model, which distinguishes CRVS_OFFICE (a civil registration facility) from
+        ADMIN_STRUCTURE (an administrative location). No other v1 convergence system carries a first-class
+        RegistrationOffice concept at this level of specification, though UNHCR refugee registration operational
+        frameworks and national civil registration systems manage equivalent entities. A broader convergence
+        pass including UNHCR ProGres and national CRVS platform data is expected to raise the system_count.\n",
+        "system_count": 1, "total_systems": 6}'
+      property_groups_json: '[{"category": "identity", "properties": ["name", "identifiers"]}, {"category":
+        "classification", "properties": ["service_point_type", "registration_office_type", "operational_status"]},
+        {"category": "location", "properties": ["located_at", "jurisdiction"]}, {"category": "governance",
+        "properties": ["managed_by"]}]'
+      bibliography_refs: '["schema-org"]'
+  Relationship:
+    class_uri: publicschema:Relationship
+    title: Relationship
+    description: 'A link defining the social, legal, or administrative connection between an individual
+      and another person or group. Three broad types exist: kinship (biological or legal ties), administrative
+      (grantee, caregiver, payment proxy), and economic (dependent, survivor).
+
+      '
+    slots:
+    - subject_person
+    - object_person
+    - relationship_type
+    - start_date
+    - end_date
+    status: bibo:status/forthcoming
+    close_mappings:
+    - dci:data/RelatedPerson
+    annotations:
+      label_es: Relación
+      label_fr: Relation
+      description_es: 'Un vínculo que define la relación social, legal o administrativa entre un individuo
+        y otra persona o grupo. Existen tres tipos generales: parentesco (vínculos biológicos o legales),
+        administrativo (beneficiario, cuidador, apoderado de pago) y económico (dependiente, sobreviviente).'
+      description_fr: 'Un lien définissant la connexion sociale, légale ou administrative entre un individu
+        et une autre personne ou un groupe. Trois grands types existent : la parenté (liens biologiques
+        ou juridiques), les liens administratifs (ayant droit, soignant, mandataire de paiement) et les
+        liens économiques (personne à charge, survivant).'
+      external_alignments_json: '[{"label": "RelatedPerson", "match": "close", "note": "Same concept;
+        DCI has relationship_type and related_member while PublicSchema adds explicit subject/object persons
+        and temporal bounds (start_date, end_date)", "uri": "https://schema.spdci.org/core/v1/data/RelatedPerson",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 6, "total_systems": 6}'
+      property_groups_json: '[{"category": "identity", "properties": ["subject_person", "object_person",
+        "relationship_type"]}, {"category": "administrative", "properties": ["start_date", "end_date"]}]'
+      bibliography_refs: '["fhir-v3-role-code", "spdci-common-standards"]'
+  School:
+    class_uri: publicschema:School
+    title: School
+    description: 'A service point where formal or non-formal education is delivered, such as a primary
+      school, secondary school, vocational training center, or early childhood education center. School
+      specializes ServicePoint for the education sector and carries additional properties for the ISCED
+      education level(s) served and the management type of the school (public, private, faith-based, or
+      community), per UNESCO UIS classification. School is distinct from the Organization that manages
+      it (captured via managed_by) and from its administrative location (captured via located_at). A single
+      school campus may serve multiple ISCED levels (e.g., a combined primary-and-lower-secondary school).
+
+      '
+    is_a: ServicePoint
+    slots:
+    - school_level_served
+    - school_type
+    status: bibo:draft
+    close_mappings:
+    - schema:School
+    annotations:
+      label_es: Escuela
+      label_fr: École
+      description_es: Un punto de servicio donde se imparte educación formal o no formal, como una escuela
+        primaria, un colegio secundario, un centro de formación profesional o un centro de educación en
+        la primera infancia. School especializa ServicePoint para el sector educativo y lleva propiedades
+        adicionales para el o los niveles educativos ISCED atendidos y el tipo de gestión de la escuela
+        (pública, privada, confesional o comunitaria), según la clasificación del Instituto de Estadística
+        de la UNESCO. School es distinto de la Organization que lo gestiona (capturada mediante managed_by)
+        y de su ubicación administrativa (capturada mediante located_at). Un mismo establecimiento puede
+        atender varios niveles ISCED (por ejemplo, una escuela que combina primaria y secundaria baja).
+      description_fr: Un point de service où est dispensée une éducation formelle ou non formelle, tel
+        qu'une école primaire, un collège ou lycée, un centre de formation professionnelle ou un centre
+        d'éducation de la petite enfance. School spécialise ServicePoint pour le secteur éducatif et porte
+        des propriétés supplémentaires pour le ou les niveaux d'éducation ISCED desservis et le type de
+        gestion de l'école (publique, privée, confessionnelle ou communautaire), selon la classification
+        de l'Institut de statistique de l'UNESCO. School est distinct de l'Organization qui le gère (capturée
+        via managed_by) et de sa localisation administrative (capturée via located_at). Un même établissement
+        peut desservir plusieurs niveaux ISCED (par exemple, une école combinant le primaire et le secondaire
+        inférieur).
+      external_alignments_json: '[{"label": "School", "match": "close", "note": "schema.org School is
+        a subtype of EducationalOrganization, which conflates the organization and the physical facility.
+        PublicSchema School is a subtype of ServicePoint (the physical facility), with the operating organization
+        referenced separately via managed_by. The physical-facility semantics align closely; the organizational
+        side diverges.", "uri": "https://schema.org/School", "vocabulary": "schema.org", "vocabulary_id":
+        "schema-org"}]'
+      convergence_json: '{"notes": "School is newly introduced in PublicSchema as a signal of cross-sector
+        extensibility for the ServicePoint hierarchy. No direct School concept has been mapped in the
+        six v1 convergence systems. Education management information systems (EMIS) and UNESCO UIS education
+        facility registries are the natural candidates for a future convergence pass.\n", "system_count":
+        0, "total_systems": 6}'
+      property_groups_json: '[{"category": "identity", "properties": ["name", "identifiers"]}, {"category":
+        "classification", "properties": ["service_point_type", "school_type", "school_level_served", "operational_status"]},
+        {"category": "location", "properties": ["located_at"]}, {"category": "governance", "properties":
+        ["managed_by"]}]'
+      bibliography_refs: '["schema-org"]'
+  ServicePoint:
+    class_uri: publicschema:ServicePoint
+    title: Service Point
+    description: 'A named physical point where an organization delivers a public service. ServicePoint
+      is domain-agnostic: it covers health facilities, schools, water points, sanitation blocks, distribution
+      sites, protection desks, civil registration offices, community centers, markets, libraries, and
+      post offices. A ServicePoint is distinct from a Location (a named administrative or geographic area
+      where the service point sits) and from the Organization that operates it. Location answers "where
+      on the map or in the admin hierarchy?"; Organization answers "who runs it?"; ServicePoint answers
+      "what is the operational facility?" and carries service category, operational status, and the link
+      back to the managing organization.
+
+      '
+    slots:
+    - name
+    - identifiers
+    - service_point_type
+    - located_at
+    - managed_by
+    - operational_status
+    status: bibo:draft
+    close_mappings:
+    - schema:Place
+    annotations:
+      label_es: Punto de servicio
+      label_fr: Point de service
+      description_es: 'Un punto físico con nombre donde una organización presta un servicio público. ServicePoint
+        es independiente del dominio: abarca establecimientos de salud, escuelas, puntos de agua, bloques
+        sanitarios, sitios de distribución, mostradores de protección, oficinas de registro civil, centros
+        comunitarios, mercados, bibliotecas y oficinas de correos. Un ServicePoint es distinto de una
+        Location (un área administrativa o geográfica con nombre donde se sitúa el punto de servicio)
+        y de la Organization que lo opera. Location responde a «¿dónde en el mapa o en la jerarquía administrativa?»;
+        Organization responde a «¿quién lo gestiona?»; ServicePoint responde a «¿cuál es el establecimiento
+        operativo?» y lleva la categoría de servicio, el estado operativo y el vínculo con la organización
+        gestora.'
+      description_fr: 'Un point physique nommé où une organisation fournit un service public. ServicePoint
+        est indépendant du domaine : il couvre les établissements de santé, les écoles, les points d''eau,
+        les blocs sanitaires, les sites de distribution, les guichets de protection, les bureaux d''état
+        civil, les centres communautaires, les marchés, les bibliothèques et les bureaux de poste. Un
+        ServicePoint est distinct d''une Location (une zone administrative ou géographique nommée où se
+        situe le point de service) et de l''Organization qui l''exploite. Location répond à la question
+        « où sur la carte ou dans la hiérarchie administrative ? » ; Organization répond à « qui le gère
+        ? » ; ServicePoint répond à « quel est l''établissement opérationnel ? » et porte la catégorie
+        de service, le statut opérationnel et le lien vers l''organisation gestionnaire.'
+      featured: true
+      external_alignments_json: '[{"label": "Place", "match": "broad", "note": "schema.org Place is a
+        geometric entity (any spatial thing with a geo location), whereas PS ServicePoint is a functional/operational
+        entity (a named site where a public service is delivered with a service category, operational
+        status, and managing organization). Every ServicePoint is a Place, but most Places are not ServicePoints.",
+        "uri": "https://schema.org/Place", "vocabulary": "schema.org", "vocabulary_id": "schema-org"}]'
+      convergence_json: '{"notes": "ServicePoint is newly introduced in PublicSchema and has not yet been
+        mapped against the v1 convergence systems. No mapped social-protection or CRVS delivery system
+        carries a first-class ServicePoint concept today; facility-like data appears as free-text site
+        names or as administrative location entries. Adjacent systems that do model the concept (WHO HeRAMS,
+        EMIS education registries, WASH facility registries, humanitarian logistics service-delivery-point
+        registries) will be surveyed in a follow-up convergence pass, at which point the system_count
+        and external_equivalents are expected to grow.\n", "system_count": 0, "total_systems": 6}'
+      property_groups_json: '[{"category": "identity", "properties": ["name", "identifiers"]}, {"category":
+        "classification", "properties": ["service_point_type", "operational_status"]}, {"category": "location",
+        "properties": ["located_at"]}, {"category": "governance", "properties": ["managed_by"]}]'
+      bibliography_refs: '["schema-org", "who-herams"]'
+  SocioEconomicProfile:
+    class_uri: publicschema:SocioEconomicProfile
+    title: Socio-Economic Profile
+    description: 'A point-in-time record of socio-economic and living-conditions data about a household
+      or person, collected through a registration survey or questionnaire. Covers dwelling characteristics,
+      water and sanitation service, energy access, household assets, ICT access, income source, settlement
+      type, and a high-level food_security_level summary. Typical instruments are a social registry registration
+      form, a proxy means test (PMT) questionnaire, a multidimensional poverty module, or a household
+      economy survey. The housing and WASH properties (dwelling_type, wall_material, floor_material, roof_material,
+      water_source, sanitation_facility, electricity_access) may also appear on shelter-damage assessment
+      profiles published in a sibling schema (see ADR-011); the baseline reading here describes the dwelling''s
+      usual characteristics. When a program collects item-level food security data (FCS, rCSI, LCS, HDDS,
+      FIES, HHS, MDD-W, MAHFP), those responses belong on a dedicated food-security profile in that sibling
+      schema rather than on this profile; SocioEconomicProfile retains only the derived food_security_level
+      summary.
+
+      '
+    is_a: Profile
+    slots:
+    - dwelling_type
+    - floor_material
+    - wall_material
+    - roof_material
+    - water_source
+    - water_service_level
+    - water_collection_time_minutes
+    - sanitation_facility
+    - sanitation_service_level
+    - sanitation_shared_households
+    - cooking_fuel
+    - electricity_access
+    - household_assets
+    - ict_access
+    - income_source
+    - settlement_type
+    - food_security_level
+    status: bibo:status/forthcoming
+    close_mappings:
+    - https://schema.spdci.org/extensions/social-registries/v1/data/SocioEconomicProfile
+    annotations:
+      label_es: Perfil socioeconómico
+      label_fr: Profil socio-économique
+      description_es: Un registro puntual de datos socioeconómicos y de condiciones de vida de un hogar
+        o persona, recopilados mediante una encuesta de registro o cuestionario. Cubre características
+        de la vivienda, servicio de agua y saneamiento, acceso a la energía, bienes del hogar, acceso
+        a TIC, fuente de ingresos, tipo de asentamiento y un resumen de alto nivel food_security_level.
+        Los instrumentos típicos son un formulario de registro al registro social, un cuestionario de
+        prueba proxy de medios de vida (PMT), un módulo de pobreza multidimensional o una encuesta de
+        economía del hogar. Las propiedades de vivienda y WASH (dwelling_type, wall_material, floor_material,
+        roof_material, water_source, sanitation_facility, electricity_access) también pueden aparecer
+        en perfiles de evaluación de daños a refugios publicados en un esquema hermano (véase ADR-011);
+        la lectura de base aquí describe las características habituales de la vivienda. Cuando un programa
+        recopila datos de seguridad alimentaria a nivel de ítems (FCS, rCSI, LCS, HDDS, FIES, HHS, MDD-W,
+        MAHFP), esas respuestas pertenecen a un perfil de seguridad alimentaria dedicado en ese esquema
+        hermano en lugar de a este perfil; SocioEconomicProfile conserva solo el resumen food_security_level
+        derivado.
+      description_fr: Un enregistrement ponctuel de données socio-économiques et de conditions de vie
+        concernant un ménage ou une personne, collectées au moyen d'une enquête d'enregistrement ou d'un
+        questionnaire. Couvre les caractéristiques du logement, le service d'eau et d'assainissement,
+        l'accès à l'énergie, les biens du ménage, l'accès aux TIC, la source de revenus, le type d'établissement
+        humain et un résumé de haut niveau food_security_level. Les instruments typiques sont un formulaire
+        d'enregistrement au registre social, un questionnaire de test de substitution des ressources (PMT),
+        un module de pauvreté multidimensionnelle ou une enquête sur l'économie des ménages. Les propriétés
+        de logement et WASH (dwelling_type, wall_material, floor_material, roof_material, water_source,
+        sanitation_facility, electricity_access) peuvent aussi figurer sur des profils d'évaluation de
+        dommages aux abris publiés dans un schéma frère (voir ADR-011) ; le relevé de base décrit ici
+        les caractéristiques habituelles du logement. Lorsqu'un programme collecte des données de sécurité
+        alimentaire au niveau des items (FCS, rCSI, LCS, HDDS, FIES, HHS, MDD-W, MAHFP), ces réponses
+        appartiennent à un profil de sécurité alimentaire dédié dans ce schéma frère plutôt qu'à ce profil
+        ; SocioEconomicProfile ne conserve que le résumé food_security_level dérivé.
+      featured: true
+      external_alignments_json: '[{"label": "SocioEconomicProfile", "match": "close", "note": "Direct
+        peer; DCI defines a socio-economic profile as a typed addition on the social registry side", "uri":
+        "https://schema.spdci.org/extensions/social-registries/v1/data/SocioEconomicProfile", "vocabulary":
+        "DCI Social Registry", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "DCI Social Registry is the only v1 system that names this concept
+        directly. OpenSPP, OpenCRVS, and openIMIS do not carry socio-economic survey data in core; where
+        national deployments collect it (Cadastro Unico, Listahanan, Kenya SR-NIS, Indonesia DTKS, Turkiye
+        ISAS), it lives in a separate registration-survey module whose shape matches this concept even
+        when the name differs. FHIR can serialize these as a QuestionnaireResponse for a PMT or registration
+        questionnaire. Household retains food_security_level as a current-state summary; survey-collected
+        dwelling, WASH, energy, assets, ICT, income, and settlement data belong here.\n", "system_count":
+        1, "total_systems": 6}'
+      property_groups_json: '[{"category": "administrative", "properties": ["identifiers", "subject",
+        "observation_date", "performed_by", "instrument_used", "software_used", "administration_mode",
+        "respondent", "respondent_relationship", "items_asked"]}, {"category": "housing", "properties":
+        ["dwelling_type", "floor_material", "wall_material", "roof_material"]}, {"category": "wash", "properties":
+        ["water_source", "water_service_level", "water_collection_time_minutes", "sanitation_facility",
+        "sanitation_service_level", "sanitation_shared_households"]}, {"category": "energy", "properties":
+        ["cooking_fuel", "electricity_access"]}, {"category": "assets", "properties": ["household_assets"]},
+        {"category": "ict", "properties": ["ict_access"]}, {"category": "economic", "properties": ["income_source"]},
+        {"category": "demographics", "properties": ["settlement_type"]}, {"category": "food_security",
+        "properties": ["food_security_level"]}]'
+      bibliography_refs: '["dhs-recode7", "mics6", "spdci-social-registry"]'
+  WaterPoint:
+    class_uri: publicschema:WaterPoint
+    title: Water Point
+    description: 'A service point where drinking water or household water is made accessible to a population,
+      such as a borehole, public tap or standpipe, protected dug well, protected spring, or water kiosk.
+      WaterPoint specializes ServicePoint for the water and sanitation sector (WASH) and carries additional
+      properties for the physical type of the water source, per the WHO/UNICEF Joint Monitoring Programme
+      (JMP) improved-source typology, and for the JMP drinking water service level (safely managed, basic,
+      limited, unimproved, or no service), which is derived from source type and collection time. WaterPoint
+      is relevant to SDG 6.1 monitoring and to WASH-cluster operational tracking. It is distinct from
+      a sanitation facility or handwashing station, which are separate service-point types.
+
+      '
+    is_a: ServicePoint
+    slots:
+    - water_point_type
+    - water_service_level
+    status: bibo:draft
+    close_mappings:
+    - schema:Place
+    annotations:
+      label_es: Punto de agua
+      label_fr: Point d'eau
+      description_es: Un punto de servicio donde el agua potable o el agua doméstica se pone a disposición
+        de una población, como una perforación, un grifo público o surtidor, un pozo excavado protegido,
+        un manantial protegido o un quiosco de agua. WaterPoint especializa ServicePoint para el sector
+        agua y saneamiento (WASH) y lleva propiedades adicionales para el tipo físico de la fuente de
+        agua, según la tipología de fuentes mejoradas del Programa Conjunto de Monitoreo OMS/UNICEF (JMP),
+        y para el nivel de servicio de agua potable JMP (gestión segura, básico, limitado, no mejorado
+        o sin servicio), derivado del tipo de fuente y el tiempo de recolección. WaterPoint es relevante
+        para el monitoreo del ODS 6.1 y para el seguimiento operacional del clúster WASH. Es distinto
+        de una instalación sanitaria o estación de lavado de manos, que son tipos de puntos de servicio
+        separados.
+      description_fr: Un point de service où l'eau potable ou l'eau ménagère est rendue accessible à une
+        population, tel qu'un forage, un robinet public ou une borne-fontaine, un puits creusé protégé,
+        une source protégée ou une borne-fontaine payante. WaterPoint spécialise ServicePoint pour le
+        secteur eau et assainissement (EAH) et porte des propriétés supplémentaires pour le type physique
+        de la source d'eau, selon la typologie des sources améliorées du Programme commun OMS/UNICEF de
+        surveillance de l'approvisionnement en eau et de l'assainissement (JMP), et pour le niveau de
+        service d'eau potable JMP (gestion sécurisée, de base, limité, non amélioré ou sans service),
+        dérivé du type de source et du temps de collecte. WaterPoint est pertinent pour le suivi de l'ODD
+        6.1 et pour le suivi opérationnel du cluster EAH. Il est distinct d'une installation sanitaire
+        ou d'une station de lavage des mains, qui sont des types de points de service distincts.
+      external_alignments_json: '[{"label": "Place", "match": "broad", "note": "schema.org has no specific
+        water point or water facility type. The closest is schema.org Place (a broad geometric entity).
+        PublicSchema WaterPoint is a functional operational concept carrying service-level and source-type
+        semantics from the JMP monitoring framework.", "uri": "https://schema.org/Place", "vocabulary":
+        "schema.org", "vocabulary_id": "schema-org"}]'
+      convergence_json: '{"notes": "WaterPoint is newly introduced in PublicSchema as a signal of cross-sector
+        extensibility for the ServicePoint hierarchy. No direct WaterPoint concept has been mapped in
+        the six v1 convergence systems. WHO/UNICEF JMP facility assessment data and WASH-cluster service-delivery-point
+        registries are the natural candidates for a future convergence pass.\n", "system_count": 0, "total_systems":
+        6}'
+      property_groups_json: '[{"category": "identity", "properties": ["name", "identifiers"]}, {"category":
+        "classification", "properties": ["service_point_type", "water_point_type", "water_service_level",
+        "operational_status"]}, {"category": "location", "properties": ["located_at"]}, {"category": "governance",
+        "properties": ["managed_by"]}]'
+      bibliography_refs: '["schema-org"]'
+slots:
+  address:
+    slot_uri: publicschema:address
+    title: Address
+    description: The physical or postal address associated with this household.
+    range: Address
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Dirección
+      label_fr: Adresse
+      description_es: La dirección física o postal asociada a este hogar.
+      description_fr: L'adresse physique ou postale associée à ce ménage.
+      category: location
+      convergence_json: '{"notes": "DHIS2 and OpenSPP use a plain string; DCI uses a structured Address.
+        High convergence but type divergence between inline string and linked entity. The definition still
+        refers to \"this household\" because Household is the only concept that currently carries this
+        property; generalising the definition and broadening applicability to other subject types was
+        considered alongside the Location generalisation in ADR-008 decision 8, and deferred. Future extensions
+        should revisit.\n", "system_count": 3, "total_systems": 4}'
+      bibliography_refs: '["spdci-common-standards"]'
+  address_area:
+    slot_uri: publicschema:address_area
+    title: Address area
+    description: The name of a geographic area such as a neighborhood, quarter, or ward that groups addresses
+      below the city level.
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    exact_mappings:
+    - locn:addressArea
+    annotations:
+      label_es: Área de dirección
+      label_fr: Zone d'adresse
+      description_es: El nombre de un área geográfica como un barrio, sector o circunscripción que agrupa
+        direcciones por debajo del nivel de la ciudad.
+      description_fr: Le nom d'une zone géographique telle qu'un quartier ou un secteur regroupant des
+        adresses en dessous du niveau de la ville.
+      external_alignments_json: '[{"label": "addressArea", "match": "exact", "uri": "http://www.w3.org/ns/locn#addressArea",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}]'
+      bibliography_refs: '["semic-core-location"]'
+  administrative_area:
+    slot_uri: publicschema:administrative_area
+    title: Administrative area
+    description: The first-level administrative subdivision (province, state, region) containing the address.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - schema:addressRegion
+    close_mappings:
+    - dci:data/region_code
+    - locn:adminUnitL2
+    annotations:
+      label_es: Área administrativa
+      label_fr: Zone administrative
+      description_es: La primera subdivisión administrativa (provincia, estado, región) que contiene la
+        dirección.
+      description_fr: La première subdivision administrative (province, État, région) contenant l'adresse.
+      external_alignments_json: '[{"label": "adminUnitL2", "match": "close", "note": "SEMIC adminUnitL2
+        is specifically the second-level admin unit (region/state); ours is a general administrative area
+        field", "uri": "http://www.w3.org/ns/locn#adminUnitL2", "vocabulary": "Core Location", "vocabulary_id":
+        "semic"}, {"label": "region_code", "match": "close", "note": "Both capture the first-level subnational
+        division; DCI uses a code, PublicSchema uses a name", "uri": "https://schema.spdci.org/core/v1/data/region_code",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 2 of 5 mapped systems as an explicit field. Equivalent
+        data is often captured via a linked Location reference rather than a free-text field.", "system_count":
+        2, "total_systems": 5}'
+      bibliography_refs: '["schema-org", "semic-core-location", "spdci-common-standards"]'
+  biometric_samples:
+    slot_uri: publicschema:biometric_samples
+    title: Biometric samples
+    description: Biometric samples associated with this person, linking to fingerprint, iris, face, and
+      other biometric records.
+    range: BiometricSample
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Muestras biométricas
+      label_fr: Échantillons biométriques
+      description_es: Muestras biométricas asociadas con esta persona, vinculando a registros de huellas
+        dactilares, iris, rostro y otros datos biométricos.
+      description_fr: Échantillons biométriques associés à cette personne, reliant aux enregistrements
+        d'empreintes digitales, d'iris, de visage et autres données biométriques.
+      category: other
+      convergence_json: '{"notes": "No v1 system mappings exist yet. MOSIP and OSIA both link biometric
+        records to a person; this property provides the inverse navigation.", "system_count": 0, "total_systems":
+        6}'
+  building_name:
+    slot_uri: publicschema:building_name
+    title: Building name
+    description: The name of a building, estate, or compound, used in contexts where locations are identified
+      by name rather than street number.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - locn:locatorName
+    annotations:
+      label_es: Nombre del edificio
+      label_fr: Nom du bâtiment
+      description_es: El nombre de un edificio, finca o complejo, utilizado en contextos donde las ubicaciones
+        se identifican por nombre en lugar de por número de calle.
+      description_fr: Le nom d'un bâtiment, d'un domaine ou d'un complexe, utilisé dans les contextes
+        où les lieux sont identifiés par leur nom plutôt que par un numéro de rue.
+      external_alignments_json: '[{"label": "locatorName", "match": "close", "note": "SEMIC locatorName
+        is a proper name for a passage or building; ours is specifically building name", "uri": "http://www.w3.org/ns/locn#locatorName",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}]'
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["ebsi-eidas-pid", "semic-core-location"]'
+  chronic_illness_in_household:
+    slot_uri: publicschema:chronic_illness_in_household
+    title: Chronic illness in household
+    description: Whether any household member is reported to have a chronic illness or long-term medical
+      condition (e.g. hypertension, diabetes, HIV, TB, asthma). Recorded at household level for vulnerability
+      triage and case-management referral; the specific condition and the affected member are recorded
+      on Person-scoped or program-specific records, not here.
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Enfermedad crónica en el hogar
+      label_fr: Maladie chronique dans le ménage
+      description_es: Si se reporta que algún miembro del hogar tiene una enfermedad crónica o una condición
+        médica de largo plazo (por ejemplo hipertensión, diabetes, VIH, tuberculosis, asma). Registrado
+        a nivel de hogar para el triaje de vulnerabilidad y la derivación de gestión de casos; la condición
+        específica y el miembro afectado se registran en registros a nivel de Person o específicos del
+        programa, no aquí.
+      description_fr: Si un membre du ménage est déclaré atteint d'une maladie chronique ou d'une condition
+        médicale de longue durée (par exemple hypertension, diabète, VIH, tuberculose, asthme). Enregistré
+        au niveau du ménage pour le triage de vulnérabilité et l'orientation de gestion de cas ; la condition
+        spécifique et le membre concerné sont enregistrés sur des dossiers individuels (Person) ou propres
+        au programme, pas ici.
+      sensitivity: sensitive
+  city:
+    slot_uri: publicschema:city
+    title: City
+    description: The city, town, or village component of the address.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - dci:data/locality
+    - schema:addressLocality
+    close_mappings:
+    - locn:postName
+    annotations:
+      label_es: Ciudad
+      label_fr: Ville
+      description_es: El componente ciudad, pueblo o aldea de la dirección.
+      description_fr: La composante ville, bourg ou village de l'adresse.
+      external_alignments_json: '[{"label": "postName", "match": "close", "note": "SEMIC postName is the
+        city or locality associated with the postal address, which may differ from the municipality",
+        "uri": "http://www.w3.org/ns/locn#postName", "vocabulary": "Core Location", "vocabulary_id": "semic"},
+        {"label": "locality", "match": "exact", "note": "DCI calls this field ''locality''; same concept
+        as PublicSchema ''city''", "uri": "https://schema.spdci.org/core/v1/data/locality", "vocabulary":
+        "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 3 of 5 mapped systems. Settlement-level specificity varies;
+        some systems use administrative area codes rather than free-text city names.", "system_count":
+        3, "total_systems": 5}'
+      bibliography_refs: '["schema-org", "semic-core-location", "spdci-common-standards"]'
+  cooking_fuel:
+    slot_uri: publicschema:cooking_fuel
+    title: Cooking fuel
+    description: The primary fuel used by the household for cooking.
+    range: CookingFuel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Combustible para cocinar
+      label_fr: Combustible de cuisson
+      description_es: El combustible principal utilizado por el hogar para cocinar.
+      description_fr: Le combustible principal utilisé par le ménage pour la cuisine.
+      category: energy
+      bibliography_refs: '["dhs-recode7", "mics6", "who-household-energy"]'
+  country:
+    slot_uri: publicschema:country
+    title: Country
+    description: The country, expressed as an ISO 3166-1 alpha-2 code where possible.
+    range: Country
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - schema:addressCountry
+    close_mappings:
+    - dci:data/country_code
+    - locn:adminUnitL1
+    annotations:
+      label_es: País
+      label_fr: Pays
+      description_es: El país, expresado como código ISO 3166-1 alfa-2 cuando sea posible.
+      description_fr: Le pays, exprimé sous forme de code ISO 3166-1 alpha-2 si possible.
+      external_alignments_json: '[{"label": "adminUnitL1", "match": "close", "note": "SEMIC adminUnitL1
+        is the top-level admin unit (country); ours is explicitly a country field with ISO 3166 coding",
+        "uri": "http://www.w3.org/ns/locn#adminUnitL1", "vocabulary": "Core Location", "vocabulary_id":
+        "semic"}, {"label": "country_code", "match": "close", "note": "Both capture the country; DCI field
+        is ''country_code''", "uri": "https://schema.spdci.org/core/v1/data/country_code", "vocabulary":
+        "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 3 of 5 mapped systems. Typically only relevant for systems
+        operating across multiple countries or managing migrant populations.", "system_count": 3, "total_systems":
+        5}'
+      bibliography_refs: '["iso-3166-1", "schema-org", "semic-core-location", "spdci-common-standards"]'
+  country_of_birth:
+    slot_uri: publicschema:country_of_birth
+    title: Country of birth
+    description: The country where the person was born, expressed as an ISO 3166-1 code.
+    range: Country
+    multivalued: false
+    status: bibo:status/forthcoming
+    close_mappings:
+    - person:countryOfBirth
+    annotations:
+      label_es: País de nacimiento
+      label_fr: Pays de naissance
+      description_es: El país donde nació la persona, expresado como código ISO 3166-1.
+      description_fr: Le pays où la personne est née, exprimé sous forme de code ISO 3166-1.
+      category: demographics
+      external_alignments_json: '[{"label": "countryOfBirth", "match": "close", "note": "SEMIC countryOfBirth
+        references a Location object; ours is a coded string (ISO 3166)", "uri": "http://www.w3.org/ns/person#countryOfBirth",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}]'
+      bibliography_refs: '["iso-3166-1", "semic-core-person"]'
+  date_of_birth:
+    slot_uri: publicschema:date_of_birth
+    title: Date of birth
+    description: The date on which the person was born.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - cpov:birthDate
+    - dci:data/birth_date
+    - schema:birthDate
+    annotations:
+      label_es: Fecha de nacimiento
+      label_fr: Date de naissance
+      description_es: La fecha de nacimiento de la persona.
+      description_fr: La date de naissance de la personne.
+      category: demographics
+      external_alignments_json: '[{"label": "birthDate", "match": "exact", "uri": "http://data.europa.eu/m8g/birthDate",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "birth_date", "match": "exact",
+        "uri": "https://schema.spdci.org/core/v1/data/birth_date", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"notes": "Universal across all 6 mapped systems. Some systems also store birth
+        year separately for approximate dates.", "system_count": 6, "total_systems": 6}'
+      bibliography_refs: '["schema-org", "semic-core-person", "spdci-common-standards"]'
+  date_of_death:
+    slot_uri: publicschema:date_of_death
+    title: Date of death
+    description: The date on which the person died.
+    range: date
+    multivalued: false
+    status: bibo:status/forthcoming
+    exact_mappings:
+    - cpov:deathDate
+    - dci:data/death_date
+    - schema:deathDate
+    annotations:
+      label_es: Fecha de defunción
+      label_fr: Date de décès
+      description_es: La fecha de fallecimiento de la persona.
+      description_fr: La date de décès de la personne.
+      category: demographics
+      external_alignments_json: '[{"label": "deathDate", "match": "exact", "uri": "http://data.europa.eu/m8g/deathDate",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "death_date", "match": "exact",
+        "uri": "https://schema.spdci.org/core/v1/data/death_date", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      bibliography_refs: '["schema-org", "semic-core-person", "spdci-common-standards"]'
+  displacement_status:
+    slot_uri: publicschema:displacement_status
+    title: Displacement status
+    description: The legal, administrative, or protection status of the person with respect to displacement
+      and migration.
+    range: DisplacementStatus
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado de desplazamiento
+      label_fr: Statut de déplacement
+      description_es: El estado jurídico, administrativo o de protección de la persona en relación con
+        el desplazamiento y la migración.
+      description_fr: Le statut juridique, administratif ou de protection de la personne en matière de
+        déplacement et de migration.
+      category: demographics
+      sensitivity: sensitive
+      bibliography_refs: '["egriss-iris"]'
+  domicile:
+    slot_uri: publicschema:domicile
+    title: Domicile
+    description: The place that the person treats as their permanent home, which may differ from the address
+      of their current household.
+    range: Address
+    multivalued: false
+    status: bibo:status/forthcoming
+    close_mappings:
+    - cpov:domicile
+    annotations:
+      label_es: Domicilio
+      label_fr: Domicile
+      description_es: El lugar que la persona considera su domicilio permanente, el cual puede diferir
+        de la dirección de su hogar actual.
+      description_fr: Le lieu que la personne considère comme son domicile permanent, qui peut différer
+        de l'adresse de son ménage actuel.
+      category: contact
+      external_alignments_json: '[{"label": "domicile", "match": "close", "note": "Both represent permanent
+        home; SEMIC uses locn:Address as range, ours references our Address concept", "uri": "http://data.europa.eu/m8g/domicile",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}]'
+      bibliography_refs: '["semic-core-person"]'
+  dwelling_type:
+    slot_uri: publicschema:dwelling_type
+    title: Dwelling type
+    description: The type of dwelling occupied by the household (e.g., permanent structure, temporary
+      shelter, shared housing).
+    range: DwellingType
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Tipo de vivienda
+      label_fr: Type de logement
+      description_es: El tipo de vivienda ocupada por el hogar (por ejemplo, estructura permanente, refugio
+        temporal, vivienda compartida).
+      description_fr: Le type de logement occupé par le ménage (par exemple, structure permanente, abri
+        temporaire, logement partagé).
+      category: housing
+      convergence_json: '{"notes": "Proxy means testing input, not a standard registry field.", "system_count":
+        0, "total_systems": 4}'
+      bibliography_refs: '["un-census-rev3"]'
+  education_level:
+    slot_uri: publicschema:education_level
+    title: Education level
+    description: The highest level of formal education completed by a person.
+    range: EducationLevel
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/education_level
+    annotations:
+      label_es: Nivel de educación
+      label_fr: Niveau d'éducation
+      description_es: El nivel más alto de educación formal alcanzado por una persona.
+      description_fr: Le plus haut niveau d'éducation formelle atteint par une personne.
+      category: education
+      sensitivity: sensitive
+      external_alignments_json: '[{"label": "education_level", "match": "close", "note": "Same concept;
+        DCI uses EducationCodeEnum, PublicSchema references ISCED. Lives on Member in DCI, Person in PublicSchema",
+        "uri": "https://schema.spdci.org/core/v1/data/education_level", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"system_count": 2, "total_systems": 5}'
+      bibliography_refs: '["dhs-recode7", "isced-2011", "mics6", "spdci-common-standards"]'
+  electricity_access:
+    slot_uri: publicschema:electricity_access
+    title: Electricity access
+    description: Whether the household has access to electricity from any source.
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Acceso a electricidad
+      label_fr: Accès à l'électricité
+      description_es: Si el hogar tiene acceso a electricidad de cualquier fuente.
+      description_fr: Si le ménage a accès à l'électricité, quelle qu'en soit la source.
+      category: energy
+      system_mappings_json: '{"dhs": {"note": "DHS Recode7 hv206. Binary indicator. Maps to boolean: 0=false,
+        1=true.", "values": [{"code": "0", "label": "No", "maps_to": 0}, {"code": "1", "label": "Yes",
+        "maps_to": 1}], "vocabulary_name": "hv206 - Has electricity"}, "mics": {"note": "MICS6 HC8. Binary
+        indicator. Maps to boolean: 1=true, 2=false. MICS also captures source type (HC8A-HC8E) which
+        is not represented in this boolean property.", "values": [{"code": "1", "label": "Yes", "maps_to":
+        1}, {"code": "2", "label": "No", "maps_to": 0}], "vocabulary_name": "HC8 - Electricity"}}'
+      bibliography_refs: '["dhs-recode7", "mics6"]'
+  email_address:
+    slot_uri: publicschema:email_address
+    title: Email address
+    description: An email address through which the person can be contacted.
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    exact_mappings:
+    - schema:email
+    close_mappings:
+    - cpov:email
+    - dci:data/email
+    annotations:
+      label_es: Correo electrónico
+      label_fr: Adresse électronique
+      description_es: Una dirección de correo electrónico a través de la cual se puede contactar a la
+        persona.
+      description_fr: Une adresse électronique par laquelle la personne peut être contactée.
+      category: contact
+      external_alignments_json: '[{"label": "email", "match": "close", "note": "SEMIC places email on
+        ContactPoint, not directly on Person", "uri": "http://data.europa.eu/m8g/email", "vocabulary":
+        "Core Person", "vocabulary_id": "semic"}, {"label": "email", "match": "close", "note": "Same concept;
+        DCI uses ''email'', PublicSchema uses ''email_address''", "uri": "https://schema.spdci.org/core/v1/data/email",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      bibliography_refs: '["schema-org", "semic-core-person", "spdci-common-standards"]'
+  employment_status:
+    slot_uri: publicschema:employment_status
+    title: Employment status
+    description: 'The labour force participation status of the person: whether they are employed, unemployed,
+      or outside the labour force.'
+    range: EmploymentStatus
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado de empleo
+      label_fr: Statut d'emploi
+      description_es: 'La situación laboral de la persona en cuanto a su participación en la fuerza de
+        trabajo: si está empleada, desempleada o inactiva.'
+      description_fr: 'Le statut de participation à la population active de la personne : si elle est
+        employée, au chômage ou hors de la population active.'
+      category: employment
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        does not include an employment status field.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
+        "opencrvs"}]'
+  ethnic_group:
+    slot_uri: publicschema:ethnic_group
+    title: Ethnic group
+    description: The ethnic or cultural group of the person, as self-identified. The UNSD recommends nationally
+      defined categories based on self-identification; no international classification exists.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Grupo étnico
+      label_fr: Groupe ethnique
+      description_es: El grupo étnico o cultural de la persona, según autodeclaración. La ONU recomienda
+        categorías definidas a nivel nacional basadas en la autoidentificación; no existe una clasificación
+        internacional.
+      description_fr: Le groupe ethnique ou culturel de la personne, tel que déclaré par elle-même. La
+        Division de statistique des Nations Unies recommande des catégories définies au niveau national
+        basées sur l'auto-identification; aucune classification internationale n'existe.
+      category: demographics
+      sensitivity: restricted
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        does not include an ethnicity field.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
+        "opencrvs"}]'
+  facility_level:
+    slot_uri: publicschema:facility_level
+    title: Facility level
+    description: The tier of care provided per national/WHO classification (primary, secondary, tertiary,
+      quaternary).
+    range: HealthFacilityLevel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Nivel de establecimiento
+      label_fr: Niveau d'établissement
+      description_es: El nivel de atención proporcionado según la clasificación nacional/OMS (primario,
+        secundario, terciario, cuaternario).
+      description_fr: Le niveau de soins fourni selon la classification nationale/OMS (primaire, secondaire,
+        tertiaire, quaternaire).
+      category: classification
+      bibliography_refs: '["who-health-systems"]'
+  facility_type:
+    slot_uri: publicschema:facility_type
+    title: Facility type
+    description: The functional category of a health facility per WHO SARA/HHFA (hospital, health center,
+      health post, etc.).
+    range: HealthFacilityType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de establecimiento
+      label_fr: Type d'établissement
+      description_es: La categoría funcional de un establecimiento de salud según SARA/HHFA de la OMS
+        (hospital, centro de salud, puesto de salud, etc.).
+      description_fr: La catégorie fonctionnelle d'un établissement de santé selon SARA/HHFA de l'OMS
+        (hôpital, centre de santé, poste de santé, etc.).
+      category: classification
+      bibliography_refs: '["who-sara"]'
+  family_name:
+    slot_uri: publicschema:family_name
+    title: Family name
+    description: The family (last) name or surname of the person.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - foaf:familyName
+    - schema:familyName
+    close_mappings:
+    - dci:data/surname
+    annotations:
+      label_es: Apellido
+      label_fr: Nom de famille
+      description_es: El apellido de la persona.
+      description_fr: Le nom de famille ou patronyme de la personne.
+      category: identity
+      external_alignments_json: '[{"label": "familyName", "match": "exact", "uri": "http://xmlns.com/foaf/0.1/familyName",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "surname", "match": "close",
+        "note": "Same concept; DCI uses ''surname'', PublicSchema uses ''family_name''", "uri": "https://schema.spdci.org/core/v1/data/surname",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 5 of 6 mapped systems. Some systems store only a single
+        composite name field.", "system_count": 5, "total_systems": 6}'
+      bibliography_refs: '["schema-org", "semic-core-person", "spdci-common-standards"]'
+  family_name_at_birth:
+    slot_uri: publicschema:family_name_at_birth
+    title: Family name at birth
+    description: The family name of the person at the time of birth, before any change due to marriage
+      or other legal event.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/maiden_name
+    - person:birthName
+    annotations:
+      label_es: Apellido al nacer
+      label_fr: Nom de famille à la naissance
+      description_es: El apellido de la persona en el momento del nacimiento, antes de cualquier cambio
+        debido a matrimonio u otro evento legal.
+      description_fr: Le nom de famille de la personne au moment de la naissance, avant tout changement
+        dû à un mariage ou autre événement juridique.
+      category: identity
+      external_alignments_json: '[{"label": "birthName", "match": "broad", "note": "SEMIC birthName is
+        the full name at birth; ours is only the family name component", "uri": "http://www.w3.org/ns/person#birthName",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "maiden_name", "match": "close",
+        "note": "DCI ''maiden_name'' is a specific sub-case; PublicSchema ''family_name_at_birth'' covers
+        any legal name change", "uri": "https://schema.spdci.org/core/v1/data/maiden_name", "vocabulary":
+        "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["ebsi-eidas-pid", "semic-core-person", "spdci-common-standards"]'
+  floor_material:
+    slot_uri: publicschema:floor_material
+    title: Floor material
+    description: The primary material of the floor in the household's dwelling.
+    range: FloorMaterial
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Material del piso
+      label_fr: Matériau du sol
+      description_es: El material principal del piso en la vivienda del hogar.
+      description_fr: Le matériau principal du sol dans le logement du ménage.
+      category: housing
+      bibliography_refs: '["dhs-recode7", "mics6"]'
+  food_security_level:
+    slot_uri: publicschema:food_security_level
+    title: Food security level
+    description: 'A coarse current-state summary of the household''s food insecurity, used by operational
+      systems for targeting and referral queries. This is NOT the raw output of a specific food-security
+      assessment instrument: item-level responses (FCS, rCSI, LCS, HDDS, FIES, HHS, MDD-W, MAHFP) belong
+      on a dedicated food-security profile published in a sibling schema (see ADR-011). Populate food_security_level
+      from a Profile only by citing the instrument and cutoff rule that produced the band via a ScoringEvent;
+      otherwise treat it as a self-declared or enumerator-judged summary.'
+    range: FoodSecurityLevel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Nivel de seguridad alimentaria
+      label_fr: Niveau de sécurité alimentaire
+      description_es: 'Un resumen grueso del estado actual de inseguridad alimentaria del hogar, usado
+        por sistemas operativos para consultas de focalización y derivación. Esto NO es la salida cruda
+        de un instrumento específico de evaluación: las respuestas a nivel de ítem (FCS, rCSI, LCS, HDDS,
+        FIES, HHS, MDD-W, MAHFP) pertenecen a un perfil de seguridad alimentaria dedicado publicado en
+        un esquema hermano (véase ADR-011). Complete food_security_level a partir de un Profile solo citando
+        el instrumento y la regla de corte que produjo la banda mediante un ScoringEvent; de lo contrario
+        trátelo como un resumen autodeclarado o juzgado por el encuestador.'
+      description_fr: 'Un résumé grossier de l''état actuel d''insécurité alimentaire du ménage, utilisé
+        par les systèmes opérationnels pour les requêtes de ciblage et d''orientation. Ce n''est PAS le
+        résultat brut d''un instrument d''évaluation spécifique : les réponses au niveau des items (FCS,
+        rCSI, LCS, HDDS, FIES, HHS, MDD-W, MAHFP) appartiennent à un profil de sécurité alimentaire dédié
+        publié dans un schéma frère (voir ADR-011). Renseignez food_security_level à partir d''un Profile
+        uniquement en citant l''instrument et la règle de seuil qui a produit la bande via un ScoringEvent
+        ; sinon, considérez-le comme un résumé auto-déclaré ou jugé par l''enquêteur.'
+      category: food_security
+      bibliography_refs: '["fao-fies"]'
+  formation_date:
+    slot_uri: publicschema:formation_date
+    title: Formation date
+    description: The date on which this group was formed or registered.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/registration_date
+    annotations:
+      label_es: Fecha de formación
+      label_fr: Date de formation
+      description_es: La fecha en que este grupo fue formado o registrado.
+      description_fr: La date à laquelle ce groupe a été formé ou enregistré.
+      category: administrative
+      external_alignments_json: '[{"label": "registration_date", "match": "close", "note": "DCI records
+        when the group was registered; PublicSchema distinguishes group formation from registration",
+        "uri": "https://schema.spdci.org/core/v1/data/registration_date", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"notes": "Present in only 1 of 5 mapped systems. Uncommon in practice; most
+        systems record the date of first registration rather than group formation.", "system_count": 1,
+        "total_systems": 5}'
+      bibliography_refs: '["spdci-common-standards"]'
+  full_address:
+    slot_uri: publicschema:full_address
+    title: Full address
+    description: The complete address written as a single text string. Coexists with structured address
+      components for systems that store addresses as free text.
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    exact_mappings:
+    - locn:fullAddress
+    annotations:
+      label_es: Dirección completa
+      label_fr: Adresse complète
+      description_es: La dirección completa escrita como una sola cadena de texto. Coexiste con los componentes
+        estructurados de la dirección para los sistemas que almacenan direcciones como texto libre.
+      description_fr: L'adresse complète rédigée sous forme d'une seule chaîne de texte. Coexiste avec
+        les composantes structurées de l'adresse pour les systèmes qui stockent les adresses en texte
+        libre.
+      external_alignments_json: '[{"label": "fullAddress", "match": "exact", "uri": "http://www.w3.org/ns/locn#fullAddress",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}]'
+      bibliography_refs: '["semic-core-location"]'
+  functioning_status:
+    slot_uri: publicschema:functioning_status
+    title: Functioning status
+    description: 'A coarse current-state summary of the person''s functioning difficulty, used by operational
+      systems for targeting and eligibility queries. This is NOT a Washington Group or Child Functioning
+      Module classification of the person: WG and CFM items are measured at the point of administration
+      through a FunctioningProfile, and deriving a disability identifier requires applying a documented
+      cutoff rule. Populate functioning_status from a FunctioningProfile only by citing the cutoff rule
+      alongside; otherwise treat it as a self-declared or enumerator-judged summary.'
+    range: FunctionalDifficultySeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado funcional
+      label_fr: Statut fonctionnel
+      description_es: 'Un resumen grueso del estado actual de la dificultad funcional de la persona, usado
+        por sistemas operativos para consultas de focalización y elegibilidad. Esto NO es una clasificación
+        Washington Group o Módulo de Funcionamiento Infantil de la persona: los ítems WG y CFM se miden
+        en el momento de la administración mediante un FunctioningProfile, y derivar un identificador
+        de discapacidad requiere aplicar una regla de corte documentada. Complete functioning_status a
+        partir de un FunctioningProfile solo citando la regla de corte; de lo contrario trátelo como un
+        resumen autodeclarado o juzgado por el encuestador.'
+      description_fr: 'Un résumé grossier de l''état actuel des difficultés fonctionnelles de la personne,
+        utilisé par les systèmes opérationnels pour les requêtes de ciblage et d''éligibilité. Ce n''est
+        PAS une classification Washington Group ou Module de fonctionnement de l''enfant de la personne
+        : les items WG et CFM se mesurent au moment de l''administration via un FunctioningProfile, et
+        dériver un identifiant de handicap exige d''appliquer une règle de seuil documentée. Renseignez
+        functioning_status à partir d''un FunctioningProfile uniquement en citant la règle de seuil utilisée
+        ; sinon, considérez-le comme un résumé auto-déclaré ou jugé par l''enquêteur.'
+      sensitivity: sensitive
+  gender:
+    slot_uri: publicschema:gender
+    title: Gender
+    description: The gender of the person as recorded in a social protection registry or identity document.
+    range: GenderType
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - cpov:gender
+    annotations:
+      label_es: Género
+      label_fr: Genre
+      description_es: El género de la persona tal como se registra en un registro de protección social
+        o documento de identidad.
+      description_fr: Le genre de la personne tel qu'enregistré dans un registre de protection sociale
+        ou un document d'identité.
+      category: demographics
+      external_alignments_json: '[{"label": "gender", "match": "exact", "uri": "http://data.europa.eu/m8g/gender",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"confidence": "high", "label": "gender",
+        "match": "exact", "note": "Both properties capture administrative or recorded gender for a person.",
+        "predicate": "http://www.w3.org/2004/02/skos/core#exactMatch", "review_status": "accepted", "source_id":
+        "semic-core-person", "source_version": "2.1.1", "uri": "http://data.europa.eu/m8g/gender", "vocabulary":
+        "SEMIC Core Person alignments"}]'
+      convergence_json: '{"notes": "Present in 5 of 6 mapped systems. Value sets vary: some systems use
+        binary male/female only, others include additional categories.", "system_count": 5, "total_systems":
+        6}'
+      bibliography_refs: '["barca-2021-inclusive-information-systems", "fhir-administrative-gender", "semic-core-person"]'
+  given_name:
+    slot_uri: publicschema:given_name
+    title: Given name
+    description: The given (first) name of the person.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - dci:data/given_name
+    - foaf:givenName
+    - schema:givenName
+    annotations:
+      label_es: Nombre de pila
+      label_fr: Prénom
+      description_es: El nombre de pila de la persona.
+      description_fr: Le prénom de la personne.
+      category: identity
+      external_alignments_json: '[{"label": "givenName", "match": "exact", "uri": "http://xmlns.com/foaf/0.1/givenName",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "given_name", "match": "exact",
+        "uri": "https://schema.spdci.org/core/v1/data/given_name", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"notes": "Present in 5 of 6 mapped systems. Some systems store only a single
+        composite name field.", "system_count": 5, "total_systems": 6}'
+      bibliography_refs: '["schema-org", "semic-core-person", "spdci-common-standards"]'
+  given_name_at_birth:
+    slot_uri: publicschema:given_name_at_birth
+    title: Given name at birth
+    description: The given name of the person at the time of birth, before any legal name change.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/given_name
+    annotations:
+      label_es: Nombre de pila al nacer
+      label_fr: Prénom à la naissance
+      description_es: El nombre de pila de la persona en el momento del nacimiento, antes de cualquier
+        cambio legal de nombre.
+      description_fr: Le prénom de la personne au moment de la naissance, avant tout changement légal
+        de nom.
+      category: identity
+      external_alignments_json: '[{"label": "given_name", "match": "broad", "note": "DCI has no birth-name
+        distinction; closest is the generic given_name field on the Name object", "uri": "https://schema.spdci.org/core/v1/data/given_name",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["ebsi-eidas-pid", "semic-core-person", "spdci-common-standards"]'
+  group_memberships:
+    slot_uri: publicschema:group_memberships
+    title: Group memberships
+    description: Group memberships held by this person, linking them to households, families, or other
+      groups.
+    range: GroupMembership
+    multivalued: true
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Membresías de grupos
+      label_fr: Appartenances à des groupes
+      description_es: Membresías de grupos que posee esta persona, vinculándola con hogares, familias
+        u otros grupos.
+      description_fr: Appartenances à des groupes détenues par cette personne, la reliant aux ménages,
+        familles ou autres groupes.
+      category: other
+      convergence_json: '{"notes": "Present in 5 of 6 mapped systems. The person-to-group relationship
+        is many-to-many; group_memberships is the person-side view of this join.", "system_count": 5,
+        "total_systems": 6}'
+  group_type:
+    slot_uri: publicschema:group_type
+    title: Group type
+    description: An interoperability classifier for the category of group record being exchanged or exported.
+      In native PublicSchema modeling, the concrete Group subtype is the authoritative signal when known.
+    range: GroupType
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/group_type
+    annotations:
+      label_es: Tipo de grupo
+      label_fr: Type de groupe
+      description_es: Un clasificador de interoperabilidad para la categoría del registro de grupo que
+        se intercambia o exporta. En el modelado nativo de PublicSchema, el subtipo concreto de Group
+        es la señal autorizada cuando se conoce.
+      description_fr: Un classificateur d'interopérabilité pour la catégorie d'enregistrement de groupe
+        échangé ou exporté. Dans la modélisation native de PublicSchema, le sous-type concret de Group
+        est le signal faisant autorité lorsqu'il est connu.
+      category: administrative
+      external_alignments_json: '[{"label": "group_type", "match": "close", "note": "Both classify the
+        category of group record for exchange purposes; DCI uses AssistanceUnitEnum, while PublicSchema
+        uses a broader interoperability vocabulary alongside native Group subtypes.", "uri": "https://schema.spdci.org/core/v1/data/group_type",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 4 of 5 mapped systems. Systems commonly expose a flat classifier
+        for household, family, or farm-like records even when their native model differs. PublicSchema
+        treats this property as an interoperability classifier rather than the authoritative source of
+        Group semantics.", "system_count": 4, "total_systems": 5}'
+      bibliography_refs: '["spdci-common-standards"]'
+  house_number:
+    slot_uri: publicschema:house_number
+    title: House number
+    description: The house, building, or plot number within a street or road.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - locn:locatorDesignator
+    annotations:
+      label_es: Número de casa
+      label_fr: Numéro de maison
+      description_es: El número de casa, edificio o parcela dentro de una calle o carretera.
+      description_fr: Le numéro de maison, de bâtiment ou de parcelle dans une rue ou une route.
+      external_alignments_json: '[{"label": "locatorDesignator", "match": "close", "note": "SEMIC locatorDesignator
+        covers house number plus unit/floor/stairway; ours is house number only", "uri": "http://www.w3.org/ns/locn#locatorDesignator",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}]'
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["ebsi-eidas-pid", "semic-core-location"]'
+  household_assets:
+    slot_uri: publicschema:household_assets
+    title: Household assets
+    description: Durable goods owned by the household, used as wealth proxy indicators in targeting and
+      proxy means testing.
+    range: HouseholdAsset
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Activos del hogar
+      label_fr: Biens du ménage
+      description_es: Bienes duraderos del hogar, utilizados como indicadores sustitutos de riqueza en
+        la focalización y las pruebas de medios indirectas.
+      description_fr: Biens durables possédés par le ménage, utilisés comme indicateurs substituts de
+        richesse dans le ciblage et les tests de ressources indirects.
+      category: assets
+      bibliography_refs: '["dhs-recode7", "mics6"]'
+  ict_access:
+    slot_uri: publicschema:ict_access
+    title: ICT access
+    description: Information and communication technology devices and services accessible to the household.
+    range: IctAccess
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Acceso a TIC
+      label_fr: Accès aux TIC
+      description_es: Dispositivos y servicios de tecnología de la información y la comunicación accesibles
+        al hogar.
+      description_fr: Appareils et services de technologie de l'information et de la communication accessibles
+        au ménage.
+      category: ict
+      bibliography_refs: '["dhs-recode7", "itu-core-ict", "mics6"]'
+  identifier_scheme_id:
+    slot_uri: publicschema:identifier_scheme_id
+    title: Identifier scheme ID
+    description: A URI or code that identifies the scheme or system under which the identifier was assigned.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dct:conformsTo
+    annotations:
+      label_es: ID del esquema de identificador
+      label_fr: Identifiant du schéma d'identification
+      description_es: Un URI o código que identifica el esquema o sistema bajo el cual se asignó el identificador.
+      description_fr: Un URI ou un code qui identifie le schéma ou le système dans le cadre duquel l'identifiant
+        a été attribué.
+      external_alignments_json: '[{"label": "conformsTo", "match": "close", "note": "SEMIC uses dc:conformsTo
+        linking to a standard; ours is the scheme identifier string", "uri": "http://purl.org/dc/terms/conformsTo",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}]'
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["ebsi-eidas-pid", "semic-core-person"]'
+  identifier_scheme_name:
+    slot_uri: publicschema:identifier_scheme_name
+    title: Identifier scheme name
+    description: The human-readable name of the identifier scheme, such as 'National Identity Number'
+      or 'Social Security Number'.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - rdfs:label
+    annotations:
+      label_es: Nombre del esquema de identificador
+      label_fr: Nom du schéma d'identification
+      description_es: El nombre legible del esquema de identificación, como 'Número de identidad nacional'
+        o 'Número de seguridad social'.
+      description_fr: Le nom lisible du schéma d'identification, tel que 'Numéro d'identité nationale'
+        ou 'Numéro de sécurité sociale'.
+      external_alignments_json: '[{"label": "label", "match": "close", "note": "SEMIC uses rdfs:label
+        on the Identifier for the scheme name; ours is a dedicated field", "uri": "http://www.w3.org/2000/01/rdf-schema#label",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}]'
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["ebsi-eidas-pid", "semic-core-person"]'
+  identifier_type:
+    slot_uri: publicschema:identifier_type
+    title: Identifier type
+    description: The category of identifier value (for example, national ID number, passport number, P-code).
+    range: IdentifierType
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - dci:data/identifier_type
+    annotations:
+      label_es: Tipo de identificador
+      label_fr: Type d'identifiant
+      description_es: La categoría del valor del identificador (por ejemplo, número de identidad nacional,
+        número de pasaporte, P-code).
+      description_fr: La catégorie de valeur de l'identifiant (par exemple, numéro d'identité nationale,
+        numéro de passeport, P-code).
+      external_alignments_json: '[{"label": "identifier_type", "match": "exact", "uri": "https://schema.spdci.org/core/v1/data/identifier_type",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 4 of 5 mapped systems. Categories vary; national ID and
+        program-assigned ID are the most common across systems.", "system_count": 4, "total_systems":
+        5}'
+      bibliography_refs: '["fhir-identifier-type-v2-0203", "icao-doc-9303", "mosip-identity-schema", "spdci-common-standards"]'
+  identifier_value:
+    slot_uri: publicschema:identifier_value
+    title: Identifier value
+    description: The alphanumeric value of the identifier as issued or recorded.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - dci:data/identifier_value
+    close_mappings:
+    - skos:notation
+    annotations:
+      label_es: Valor del identificador
+      label_fr: Valeur de l'identifiant
+      description_es: El valor alfanumérico del identificador tal como fue emitido o registrado.
+      description_fr: La valeur alphanumérique de l'identifiant tel qu'il a été délivré ou enregistré.
+      external_alignments_json: '[{"label": "notation", "match": "close", "note": "SEMIC uses skos:notation
+        for the literal value of an identifier", "uri": "http://www.w3.org/2004/02/skos/core#notation",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "identifier_value", "match":
+        "exact", "uri": "https://schema.spdci.org/core/v1/data/identifier_value", "vocabulary": "DCI Core",
+        "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 2 of 5 mapped systems as an explicit field. Often stored
+        as the primary key or embedded within the identifier record rather than named separately.", "system_count":
+        2, "total_systems": 5}'
+      bibliography_refs: '["semic-core-person", "spdci-common-standards"]'
+  income_source:
+    slot_uri: publicschema:income_source
+    title: Income source
+    description: The primary reported source of income for the household, used in targeting and proxy
+      means testing.
+    range: IncomeSource
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Fuente de ingresos
+      label_fr: Source de revenus
+      description_es: La principal fuente de ingresos declarada para el hogar, utilizada en la focalización
+        y las pruebas de medios indirectos.
+      description_fr: La principale source de revenus déclarée pour le ménage, utilisée dans le ciblage
+        et les tests des moyens par approximation.
+      category: economic
+      convergence_json: '{"notes": "Proxy means testing input, not a standard registry field.", "system_count":
+        0, "total_systems": 4}'
+  industry:
+    slot_uri: publicschema:industry
+    title: Industry
+    description: The branch of economic activity in which the person works, classified according to the
+      International Standard Industrial Classification (ISIC Rev.4). Too large to enumerate; countries
+      use national adaptations.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sector industrial
+      label_fr: Branche d'activité
+      description_es: La rama de actividad económica en la que trabaja la persona, clasificada según la
+        Clasificación Industrial Internacional Uniforme (CIIU Rev.4). Demasiado extensa para enumerar;
+        los países utilizan adaptaciones nacionales.
+      description_fr: La branche d'activité économique dans laquelle la personne travaille, classée selon
+        la Classification internationale type, par industrie (CITI Rév.4). Trop volumineuse pour être
+        énumérée; les pays utilisent des adaptations nationales.
+      category: employment
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        does not include an industry field.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
+        "opencrvs"}]'
+  literacy:
+    slot_uri: publicschema:literacy
+    title: Literacy
+    description: Whether the person can, with understanding, both read and write a short simple statement
+      on everyday life.
+    range: Literacy
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Alfabetización
+      label_fr: Alphabétisation
+      description_es: Si la persona puede, con comprensión, leer y escribir una declaración breve y sencilla
+        sobre la vida cotidiana.
+      description_fr: Si la personne peut, avec compréhension, lire et écrire un court énoncé simple sur
+        la vie quotidienne.
+      category: education
+      sensitivity: sensitive
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        does not include a literacy field.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
+        "opencrvs"}]'
+      bibliography_refs: '["dhs-recode7", "mics6"]'
+  located_at:
+    slot_uri: publicschema:located_at
+    title: Located at
+    description: The administrative or geographic location where this service point sits.
+    range: Location
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Ubicado en
+      label_fr: Situé à
+      description_es: La ubicación administrativa o geográfica donde se encuentra este punto de servicio.
+      description_fr: La zone administrative ou géographique où se situe ce point de service.
+      category: location
+  managed_by:
+    slot_uri: publicschema:managed_by
+    title: Managed by
+    description: The organization that operates or manages this service point (government agency, NGO,
+      UN agency, private provider).
+    range: Organization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Gestionado por
+      label_fr: Géré par
+      description_es: La organización que opera o gestiona este punto de servicio (agencia gubernamental,
+        ONG, agencia de las Naciones Unidas, proveedor privado).
+      description_fr: L'organisation qui exploite ou gère ce point de service (agence gouvernementale,
+        ONG, agence des Nations unies, prestataire privé).
+      category: governance
+  marital_status:
+    slot_uri: publicschema:marital_status
+    title: Marital status
+    description: The marital or civil status of a person as recorded in an administrative system.
+    range: MaritalStatus
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/marital_status
+    annotations:
+      label_es: Estado civil
+      label_fr: état civil matrimonial
+      description_es: El estado civil de una persona tal como se registra en un sistema administrativo.
+      description_fr: Le statut matrimonial ou civil d'une personne tel qu'enregistré dans un système
+        administratif.
+      category: demographics
+      sensitivity: sensitive
+      external_alignments_json: '[{"label": "marital_status", "match": "close", "note": "Same concept;
+        lives on Member in DCI but on Person in PublicSchema", "uri": "https://schema.spdci.org/core/v1/data/marital_status",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 3, "total_systems": 5}'
+      bibliography_refs: '["fhir-v3-marital-status", "spdci-common-standards", "un-census-rev3", "un-census-rev4",
+        "un-world-marriage-2019"]'
+  matronymic_name:
+    slot_uri: publicschema:matronymic_name
+    title: Matronymic name
+    description: A name derived from the given name of the person's mother.
+    range: string
+    multivalued: false
+    status: bibo:status/forthcoming
+    exact_mappings:
+    - cpov:matronymicName
+    close_mappings:
+    - dci:data/second_name
+    annotations:
+      label_es: Nombre matronímico
+      label_fr: Nom matronymique
+      description_es: Un nombre derivado del nombre de pila de la madre de la persona.
+      description_fr: Un nom dérivé du prénom de la mère de la personne.
+      category: identity
+      external_alignments_json: '[{"label": "matronymicName", "match": "exact", "uri": "http://data.europa.eu/m8g/matronymicName",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "second_name", "match": "broad",
+        "note": "DCI ''second_name'' covers middle names broadly; matronymics are a specific naming convention
+        not modeled by DCI", "uri": "https://schema.spdci.org/core/v1/data/second_name", "vocabulary":
+        "DCI Core", "vocabulary_id": "dci"}]'
+      bibliography_refs: '["semic-core-person", "spdci-common-standards"]'
+  member_count:
+    slot_uri: publicschema:member_count
+    title: Member count
+    description: The total number of members in this household or group.
+    range: integer
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/group_size
+    annotations:
+      label_es: Número de miembros
+      label_fr: Nombre de membres
+      description_es: El número total de miembros en este hogar o grupo.
+      description_fr: Le nombre total de membres dans ce ménage ou ce groupe.
+      category: administrative
+      external_alignments_json: '[{"label": "group_size", "match": "close", "note": "Same concept (integer
+        count of group members); DCI uses ''group_size''", "uri": "https://schema.spdci.org/core/v1/data/group_size",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in OpenSPP and DCI. Often derived at query time rather than
+        stored as a field.", "system_count": 2, "total_systems": 5}'
+      bibliography_refs: '["spdci-common-standards"]'
+  memberships:
+    slot_uri: publicschema:memberships
+    title: Memberships
+    description: The membership links connecting persons to this group, each carrying role and lifecycle
+      dates.
+    range: GroupMembership
+    multivalued: true
+    status: bibo:status/forthcoming
+    close_mappings:
+    - dci:data/member_list
+    annotations:
+      label_es: Afiliaciones
+      label_fr: Appartenances
+      description_es: Los vínculos de pertenencia que conectan personas a este grupo, cada uno con el
+        rol y las fechas de ciclo de vida.
+      description_fr: Les liens d'appartenance reliant des personnes à ce groupe, chacun indiquant le
+        rôle et les dates d'entrée et de sortie.
+      category: administrative
+      external_alignments_json: '[{"label": "member_list", "match": "close", "note": "Both link group
+        to its members; DCI uses a flat Member list, PublicSchema uses GroupMembership links with roles
+        and dates", "uri": "https://schema.spdci.org/core/v1/data/member_list", "vocabulary": "DCI Core",
+        "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 3 of 5 mapped systems. This is the group-side view of person-to-group
+        membership via GroupMembership.", "system_count": 3, "total_systems": 5}'
+      bibliography_refs: '["spdci-common-standards"]'
+  nationality:
+    slot_uri: publicschema:nationality
+    title: Nationality
+    description: The country of citizenship or nationality, expressed as an ISO 3166-1 alpha-2 code where
+      possible.
+    range: Country
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - person:citizenship
+    annotations:
+      label_es: Nacionalidad
+      label_fr: Nationalité
+      description_es: El pais de ciudadania o nacionalidad, expresado preferiblemente como codigo ISO
+        3166-1 alfa-2.
+      description_fr: Le pays de citoyenneté ou de nationalité, exprimé sous forme de code ISO 3166-1
+        alpha-2 lorsque possible.
+      category: demographics
+      external_alignments_json: '[{"label": "citizenship", "match": "broad", "note": "SEMIC citizenship
+        is an object property linking to a Jurisdiction; ours is a coded string (ISO 3166). Also, citizenship
+        has legal connotations that nationality does not always carry.", "uri": "http://www.w3.org/ns/person#citizenship",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}]'
+      convergence_json: '{"notes": "Present in 3 of 6 mapped systems. More common in systems handling
+        migrants or refugees.", "system_count": 3, "total_systems": 6}'
+      bibliography_refs: '["iso-3166-1", "semic-core-person", "spdci-common-standards"]'
+  number_of_spouses:
+    slot_uri: publicschema:number_of_spouses
+    title: Number of spouses
+    description: The number of current spouses the person has. Captures polygamous or polyandrous union
+      type separately from marital status, following the UN census framework and DHS approach.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Número de cónyuges
+      label_fr: Nombre de conjoints
+      description_es: El número de cónyuges actuales de la persona. Captura el tipo de unión polígama
+        o poliándrica por separado del estado civil, siguiendo el marco del censo de las Naciones Unidas
+        y el enfoque EDS.
+      description_fr: Le nombre de conjoints actuels de la personne. Recueille le type d'union polygame
+        ou polyandrique séparément du statut matrimonial, conformément au cadre du recensement des Nations
+        Unies et à l'approche des Enquêtes Démographiques et de Santé (EDS).
+      category: demographics
+  nutrition_status:
+    slot_uri: publicschema:nutrition_status
+    title: Nutrition status
+    description: 'A coarse current-state summary of the person''s acute malnutrition status, used by operational
+      systems for targeting and referral queries. This is NOT a z-score classification on a specific measurement:
+      band classifications depend on a growth reference, an age at measurement, and oedema status captured
+      on a dedicated anthropometric profile published in a sibling schema (see ADR-011). Populate nutrition_status
+      from an anthropometric profile only by citing the cutoff rule alongside.'
+    range: AcuteMalnutritionSeverity
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado nutricional
+      label_fr: Statut nutritionnel
+      description_es: 'Un resumen grueso del estado actual de desnutrición aguda de la persona, usado
+        por sistemas operativos para consultas de focalización y derivación. Esto NO es una clasificación
+        por puntaje z sobre una medición específica: las clasificaciones por bandas dependen de una referencia
+        de crecimiento, una edad al momento de medición y un estado de edema consignados en un perfil
+        antropométrico dedicado publicado en un esquema hermano (véase ADR-011). Complete nutrition_status
+        a partir de un perfil antropométrico solo citando la regla de corte.'
+      description_fr: 'Un résumé grossier de l''état actuel de malnutrition aiguë de la personne, utilisé
+        par les systèmes opérationnels pour les requêtes de ciblage et d''orientation. Ce n''est PAS une
+        classification par score z sur une mesure donnée : les classifications en bandes dépendent d''une
+        référence de croissance, d''un âge à la mesure et d''un statut œdémateux consignés sur un profil
+        anthropométrique dédié publié dans un schéma frère (voir ADR-011). Renseignez nutrition_status
+        à partir d''un profil anthropométrique uniquement en citant la règle de seuil utilisée.'
+      sensitivity: sensitive
+      bibliography_refs: '["who-child-growth-standards"]'
+  object_person:
+    slot_uri: publicschema:object_person
+    title: Related person
+    description: The person to whom the subject person is related (the object of the relationship statement).
+    range: Person
+    multivalued: false
+    status: bibo:status/forthcoming
+    close_mappings:
+    - dci:data/related_member
+    annotations:
+      label_es: Persona relacionada
+      label_fr: Personne liée
+      description_es: La persona con quien la persona sujeto está relacionada (el objeto del enunciado
+        de relación).
+      description_fr: La personne à laquelle se rapporte la relation (le pôle objet de l'énoncé de relation).
+      external_alignments_json: '[{"label": "related_member", "match": "close", "note": "Both represent
+        the other party in a relationship; DCI uses ''related_member''", "uri": "https://schema.spdci.org/core/v1/data/related_member",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 4, "total_systems": 6}'
+      bibliography_refs: '["spdci-common-standards"]'
+  occupation:
+    slot_uri: publicschema:occupation
+    title: Occupation
+    description: The person's primary occupation, classified according to the ISCO-08 sub-major groups.
+    range: Occupation
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/occupation
+    annotations:
+      label_es: Ocupación
+      label_fr: Profession
+      description_es: La ocupación principal de la persona, clasificada según los subgrupos principales
+        ISCO-08.
+      description_fr: La profession principale de la personne, classée selon les sous-grands groupes de
+        la CITP-08 (ISCO-08).
+      category: employment
+      external_alignments_json: '[{"label": "occupation", "match": "close", "note": "Same concept; DCI
+        uses OccupationEnum, PublicSchema references ISCO-08. Lives on Member in DCI, Person in PublicSchema",
+        "uri": "https://schema.spdci.org/core/v1/data/occupation", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"notes": "Present in 2 of 6 mapped systems. Social protection systems that track
+        occupation typically use it for eligibility or labor market analysis.", "system_count": 2, "total_systems":
+        6}'
+      bibliography_refs: '["isco-08", "spdci-common-standards"]'
+  operational_status:
+    slot_uri: publicschema:operational_status
+    title: Operational status
+    description: Whether the service point is currently operational, partially operational, or non-functional.
+    range: FacilityOperationalStatus
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado operativo
+      label_fr: Statut opérationnel
+      description_es: Indica si el punto de servicio está actualmente operativo, parcialmente operativo
+        o no funcional.
+      description_fr: Indique si le point de service est actuellement opérationnel, partiellement opérationnel
+        ou non fonctionnel.
+      category: classification
+      bibliography_refs: '["who-herams"]'
+  patronymic_name:
+    slot_uri: publicschema:patronymic_name
+    title: Patronymic name
+    description: A name derived from the given name of the person's father or a paternal ancestor, used
+      in naming conventions where patronymics are a distinct component of a person's full name.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - person:patronymicName
+    close_mappings:
+    - dci:data/second_name
+    annotations:
+      label_es: Nombre patronímico
+      label_fr: Nom patronymique
+      description_es: Un nombre derivado del nombre de pila del padre de la persona o de un antepasado
+        paterno, utilizado en convenciones de denominación donde los patronímicos son un componente distinto
+        del nombre completo.
+      description_fr: Un nom dérivé du prénom du père de la personne ou d'un ancêtre paternel, utilisé
+        dans les conventions de dénomination où les patronymes constituent un élément distinct du nom
+        complet.
+      category: identity
+      external_alignments_json: '[{"label": "patronymicName", "match": "exact", "uri": "http://www.w3.org/ns/person#patronymicName",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "second_name", "match": "broad",
+        "note": "DCI ''second_name'' covers middle names broadly; patronymics are a specific naming convention
+        not modeled by DCI", "uri": "https://schema.spdci.org/core/v1/data/second_name", "vocabulary":
+        "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["semic-core-person", "spdci-common-standards"]'
+  phone_number:
+    slot_uri: publicschema:phone_number
+    title: Phone number
+    description: A contact phone number for the person, including country code.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - dci:data/phone_number
+    - schema:telephone
+    close_mappings:
+    - cpov:telephone
+    annotations:
+      label_es: Número de teléfono
+      label_fr: Numéro de téléphone
+      description_es: Un número de teléfono de contacto para la persona, incluido el prefijo del país.
+      description_fr: Un numéro de téléphone de contact pour la personne, incluant l'indicatif de pays.
+      category: contact
+      external_alignments_json: '[{"label": "telephone", "match": "close", "note": "SEMIC places telephone
+        on ContactPoint, not directly on Person", "uri": "http://data.europa.eu/m8g/telephone", "vocabulary":
+        "Core Person", "vocabulary_id": "semic"}, {"label": "phone_number", "match": "exact", "uri": "https://schema.spdci.org/core/v1/data/phone_number",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 3 of 6 mapped systems. Increasingly important as mobile
+        money becomes a payment channel.", "system_count": 3, "total_systems": 6}'
+      bibliography_refs: '["schema-org", "semic-core-person", "spdci-common-standards"]'
+  postal_code:
+    slot_uri: publicschema:postal_code
+    title: Postal code
+    description: The postal or zip code of the address.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - dci:data/postal_code
+    - locn:postCode
+    - schema:postalCode
+    annotations:
+      label_es: Código postal
+      label_fr: Code postal
+      description_es: El código postal o código zip de la dirección.
+      description_fr: Le code postal de l'adresse (ou code ZIP aux États-Unis).
+      external_alignments_json: '[{"label": "postCode", "match": "exact", "uri": "http://www.w3.org/ns/locn#postCode",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}, {"label": "postal_code", "match": "exact",
+        "uri": "https://schema.spdci.org/core/v1/data/postal_code", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"notes": "Present in 3 of 5 mapped systems. Less reliable in low-income country
+        contexts where formal postal systems have limited coverage.", "system_count": 3, "total_systems":
+        5}'
+      bibliography_refs: '["schema-org", "semic-core-location", "spdci-common-standards"]'
+  preferred_language:
+    slot_uri: publicschema:preferred_language
+    title: Preferred language
+    description: The preferred language of communication for a person, using ISO 639-3 codes.
+    range: Language
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dci:data/language_code
+    annotations:
+      label_es: Idioma preferido
+      label_fr: Langue préférée
+      description_es: El idioma de comunicación preferido de una persona, utilizando códigos ISO 639-3.
+      description_fr: La langue de communication préférée d'une personne, utilisant les codes ISO 639-3.
+      category: contact
+      external_alignments_json: '[{"label": "language_code", "match": "close", "note": "DCI records languages
+        spoken; PublicSchema records preferred communication language", "uri": "https://schema.spdci.org/core/v1/data/language_code",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 2, "total_systems": 5}'
+      bibliography_refs: '["iso-639-3", "spdci-common-standards"]'
+  preferred_name:
+    slot_uri: publicschema:preferred_name
+    title: Preferred name
+    description: The name a person is commonly known by, when it differs from their legal name. Covers
+      chosen names, professional names, and naming conventions where given name plus family name is insufficient.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - schema:alternateName
+    close_mappings:
+    - dci:data/given_name
+    - dct:alternative
+    annotations:
+      label_es: Nombre preferido
+      label_fr: Nom préféré
+      description_es: El nombre por el que una persona es comúnmente conocida, cuando difiere de su nombre
+        legal. Cubre nombres de elección, nombres profesionales y convenciones de denominación donde nombre
+        y apellido son insuficientes.
+      description_fr: Le nom sous lequel une personne est couramment connue, lorsqu'il diffère de son
+        nom légal. Couvre les noms choisis, les noms professionnels et les conventions de dénomination
+        où prénom et nom de famille sont insuffisants.
+      category: identity
+      external_alignments_json: '[{"label": "alternative", "match": "close", "note": "SEMIC uses dc:alternative
+        for any alternative name; ours is specifically the preferred display name", "uri": "http://purl.org/dc/terms/alternative",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "given_name", "match": "broad",
+        "note": "DCI has no preferred or chosen name concept; closest is the generic given_name field",
+        "uri": "https://schema.spdci.org/core/v1/data/given_name", "vocabulary": "DCI Core", "vocabulary_id":
+        "dci"}]'
+      convergence_json: '{"notes": "Not present in original convergence systems. Added based on EBSI PID/PDA1/ELM
+        schema analysis.", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["ebsi-eidas-pid", "schema-org", "semic-core-person", "spdci-common-standards"]'
+  pregnancy_status:
+    slot_uri: publicschema:pregnancy_status
+    title: Pregnancy status
+    description: The current pregnancy status of the person.
+    range: PregnancyStatus
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado de embarazo
+      label_fr: Statut de grossesse
+      description_es: El estado de embarazo actual de la persona.
+      description_fr: Le statut de grossesse actuel de la personne.
+      category: demographics
+      sensitivity: sensitive
+      age_applicability_json: '["adult"]'
+      bibliography_refs: '["dhs-recode7", "fhir-r4", "loinc-pregnancy-status", "mics6"]'
+  pregnant_or_lactating_count:
+    slot_uri: publicschema:pregnant_or_lactating_count
+    title: Pregnant or lactating women count
+    description: The number of pregnant or lactating women currently living in the household. Used by
+      humanitarian programs to size nutrition, health, and protection interventions (PLW-targeted food
+      rations, antenatal care outreach, MIYCN counselling). Recorded at household level because the eligibility
+      unit for most PLW programming is the household, not the individual; an individual-level pregnancy_status
+      property is also available on Person for case-management workflows.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Número de mujeres embarazadas o lactantes
+      label_fr: Nombre de femmes enceintes ou allaitantes
+      description_es: El número de mujeres embarazadas o lactantes que viven actualmente en el hogar.
+        Utilizado por programas humanitarios para dimensionar intervenciones de nutrición, salud y protección
+        (raciones alimentarias dirigidas a MEL, divulgación de atención prenatal, consejería ANIN). Registrado
+        a nivel de hogar porque la unidad de elegibilidad para la mayoría de la programación dirigida
+        a MEL es el hogar, no el individuo; también está disponible una propiedad pregnancy_status a nivel
+        individual en Person para los flujos de gestión de casos.
+      description_fr: Le nombre de femmes enceintes ou allaitantes vivant actuellement dans le ménage.
+        Utilisé par les programmes humanitaires pour dimensionner les interventions de nutrition, de santé
+        et de protection (rations alimentaires ciblant les FEFA, sensibilisation aux soins prénatals,
+        conseil ANJE). Enregistré au niveau du ménage car l'unité d'éligibilité de la plupart des programmes
+        FEFA est le ménage, et non l'individu ; une propriété pregnancy_status au niveau individuel est
+        également disponible sur Person pour les flux de gestion de cas.
+      category: demographics
+      sensitivity: sensitive
+  registration_office_type:
+    slot_uri: publicschema:registration_office_type
+    title: Registration office type
+    description: The functional category of a registration office (civil registration office, district
+      branch, mobile unit, refugee registration center, or identity enrollment center).
+    range: RegistrationOfficeType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de oficina de registro
+      label_fr: Type de bureau d'enregistrement
+      description_es: La categoría funcional de una oficina de registro (oficina de registro civil, sucursal
+        de distrito, unidad móvil, centro de registro de refugiados o centro de enrolamiento de identidad).
+      description_fr: La catégorie fonctionnelle d'un bureau d'enregistrement (bureau d'état civil, branche
+        de district, unité mobile, centre d'enregistrement des réfugiés ou centre d'enrôlement d'identité).
+      category: classification
+  relationship_type:
+    slot_uri: publicschema:relationship_type
+    title: Relationship type
+    description: The nature of the relationship between two persons (e.g., spouse, parent, child, sibling,
+      guardian, caregiver).
+    range: RelationshipType
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - dci:data/relationship_type
+    annotations:
+      label_es: Tipo de relación
+      label_fr: Type de relation
+      description_es: La naturaleza de la relación entre dos personas (p. ej., cónyuge, padre/madre, hijo/a,
+        hermano/a, tutor, cuidador).
+      description_fr: La nature de la relation entre deux personnes (par ex., conjoint, parent, enfant,
+        frère/sœur, tuteur, soignant).
+      external_alignments_json: '[{"label": "relationship_type", "match": "exact", "uri": "https://schema.spdci.org/core/v1/data/relationship_type",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 6, "total_systems": 6}'
+      bibliography_refs: '["fhir-v3-role-code", "spdci-common-standards", "un-census-rev3"]'
+  religion:
+    slot_uri: publicschema:religion
+    title: Religion
+    description: The religion, religious denomination, or sect of the person, as self-identified. No international
+      classification exists; countries define their own value sets.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Religión
+      label_fr: Religion
+      description_es: La religión, denominación religiosa o secta de la persona, según autodeclaración.
+        No existe una clasificación internacional; los países definen sus propios conjuntos de valores.
+      description_fr: La religion, confession religieuse ou secte de la personne, telle que déclarée par
+        elle-même. Aucune classification internationale n'existe; les pays définissent leurs propres jeux
+        de valeurs.
+      category: demographics
+      sensitivity: restricted
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        does not include a religion field.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
+        "opencrvs"}]'
+  roof_material:
+    slot_uri: publicschema:roof_material
+    title: Roof material
+    description: The primary material of the roof in the household's dwelling.
+    range: RoofMaterial
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Material del techo
+      label_fr: Matériau du toit
+      description_es: El material principal del techo en la vivienda del hogar.
+      description_fr: Le matériau principal du toit dans le logement du ménage.
+      category: housing
+      bibliography_refs: '["dhs-recode7", "mics6"]'
+  sanitation_facility:
+    slot_uri: publicschema:sanitation_facility
+    title: Sanitation facility
+    description: The type of toilet or sanitation facility used by the household.
+    range: SanitationFacility
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Instalación sanitaria
+      label_fr: Installation sanitaire
+      description_es: El tipo de instalación sanitaria o letrina utilizada por el hogar.
+      description_fr: Le type de toilettes ou d'installation sanitaire utilisé par le ménage.
+      category: wash
+      bibliography_refs: '["dhs-recode7", "mics6", "who-unicef-jmp"]'
+  sanitation_service_level:
+    slot_uri: publicschema:sanitation_service_level
+    title: Sanitation service level
+    description: The WHO/UNICEF JMP classification of the household's sanitation service. Derived from
+      facility type and sharing status; not directly observed.
+    range: SanitationServiceLevel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Nivel de servicio de saneamiento
+      label_fr: Niveau de service d'assainissement
+      description_es: La clasificación JMP OMS/UNICEF del servicio de saneamiento del hogar. Derivada
+        del tipo de instalación y el estado de uso compartido, no observada directamente.
+      description_fr: La classification JMP OMS/UNICEF du service d'assainissement du ménage. Dérivée
+        du type d'installation et du statut de partage, non observée directement.
+      category: wash
+      bibliography_refs: '["who-unicef-jmp"]'
+  sanitation_shared_households:
+    slot_uri: publicschema:sanitation_shared_households
+    title: Sanitation shared households
+    description: Number of households sharing the sanitation facility. Zero or null indicates an unshared
+      (private) facility. Any value greater than zero indicates a shared facility and prevents classification
+      as JMP Basic service, regardless of count.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Hogares que comparten saneamiento
+      label_fr: Ménages partageant l'assainissement
+      description_es: Número de hogares que comparten la instalación de saneamiento. Cero o nulo indica
+        una instalación no compartida (privada). Cualquier valor mayor que cero indica una instalación
+        compartida e impide la clasificación como servicio Básico del JMP, independientemente del conteo.
+      description_fr: Nombre de ménages partageant l'installation d'assainissement. Zéro ou nul indique
+        une installation non partagée (privée). Toute valeur supérieure à zéro indique une installation
+        partagée et empêche la classification comme service de Base du JMP, quel que soit le nombre.
+      category: wash
+      valid_instruments_json: '["jmp_core_hh"]'
+      bibliography_refs: '["who-unicef-jmp"]'
+  school_level_served:
+    slot_uri: publicschema:school_level_served
+    title: School level served
+    description: The ISCED 2011 education level(s) served by this school. A school covering multiple levels
+      (e.g., combined primary and lower secondary) should list all applicable levels.
+    range: SchoolLevel
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Nivel escolar atendido
+      label_fr: Niveau scolaire desservi
+      description_es: El o los niveles educativos ISCED 2011 atendidos por esta escuela. Una escuela que
+        cubre múltiples niveles (por ejemplo, primaria y secundaria baja combinadas) debe listar todos
+        los niveles aplicables.
+      description_fr: Le ou les niveaux d'éducation ISCED 2011 desservis par cette école. Une école couvrant
+        plusieurs niveaux (par exemple, primaire et secondaire inférieur combinés) doit lister tous les
+        niveaux applicables.
+      category: classification
+  school_type:
+    slot_uri: publicschema:school_type
+    title: School type
+    description: The management and funding classification of a school (public, private, faith-based,
+      or community), per UNESCO UIS categories.
+    range: SchoolType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de escuela
+      label_fr: Type d'école
+      description_es: La clasificación de gestión y financiamiento de una escuela (pública, privada, confesional
+        o comunitaria), según las categorías del Instituto de Estadística de la UNESCO.
+      description_fr: La classification de gestion et de financement d'une école (publique, privée, confessionnelle
+        ou communautaire), selon les catégories de l'Institut de statistique de l'UNESCO.
+      category: classification
+  service_point_type:
+    slot_uri: publicschema:service_point_type
+    title: Service point type
+    description: The category of service this point provides (health, education, distribution, WASH, etc.).
+    range: ServicePointType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de punto de servicio
+      label_fr: Type de point de service
+      description_es: La categoría de servicio que proporciona este punto (salud, educación, distribución,
+        APS, etc.).
+      description_fr: La catégorie de service fournie par ce point (santé, éducation, distribution, EAH,
+        etc.).
+      category: classification
+  settlement_type:
+    slot_uri: publicschema:settlement_type
+    title: Settlement type
+    description: The classification of the area where the household is located by degree of urbanization.
+    range: SettlementType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de asentamiento
+      label_fr: Type de localité
+      description_es: La clasificación del área donde se ubica el hogar según el grado de urbanización.
+      description_fr: La classification de la zone où se trouve le ménage selon le degré d'urbanisation.
+      category: demographics
+      bibliography_refs: '["dhs-recode7", "mics6", "un-degurba"]'
+  sex:
+    slot_uri: publicschema:sex
+    title: Sex
+    description: The biological sex of a person as recorded in an official register or identity document.
+    range: Sex
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - cpov:sex
+    - dci:data/sex
+    annotations:
+      label_es: Sexo
+      label_fr: Sexe
+      description_es: El sexo biológico de una persona tal como se registra en un registro oficial o documento
+        de identidad.
+      description_fr: Le sexe biologique d'une personne tel qu'enregistré dans un registre officiel ou
+        un document d'identité.
+      category: demographics
+      external_alignments_json: '[{"label": "sex", "match": "exact", "uri": "http://data.europa.eu/m8g/sex",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "sex", "match": "exact", "uri":
+        "https://schema.spdci.org/core/v1/data/sex", "vocabulary": "DCI Core", "vocabulary_id": "dci"},
+        {"confidence": "high", "label": "sex", "match": "exact", "note": "Both properties capture recorded
+        biological sex.", "predicate": "http://www.w3.org/2004/02/skos/core#exactMatch", "review_status":
+        "accepted", "source_id": "semic-core-person", "source_version": "2.1.1", "uri": "http://data.europa.eu/m8g/sex",
+        "vocabulary": "SEMIC Core Person alignments"}]'
+      convergence_json: '{"system_count": 4, "total_systems": 5}'
+      bibliography_refs: '["barca-2021-inclusive-information-systems", "iso-5218", "semic-core-person",
+        "spdci-common-standards"]'
+  status_in_employment:
+    slot_uri: publicschema:status_in_employment
+    title: Status in employment
+    description: 'The type of employment relationship: whether the person is an employee, employer, own-account
+      worker, contributing family worker, or cooperative member.'
+    range: StatusInEmployment
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Situación en el empleo
+      label_fr: Situation dans l'emploi
+      description_es: 'El tipo de relación de empleo: si la persona es empleado asalariado, empleador,
+        trabajador por cuenta propia, trabajador familiar auxiliar o miembro de una cooperativa.'
+      description_fr: 'Le type de relation d''emploi : si la personne est salariée, employeur, travailleur
+        à son propre compte, travailleur familial collaborant ou membre d''une coopérative.'
+      category: employment
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        does not include a status-in-employment field.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
+        "opencrvs"}]'
+  street_address:
+    slot_uri: publicschema:street_address
+    title: Street address
+    description: The street name, number, and any apartment or building identifiers.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - schema:streetAddress
+    close_mappings:
+    - dci:data/address_line_1
+    - locn:thoroughfare
+    annotations:
+      label_es: Dirección de calle
+      label_fr: Adresse de rue
+      description_es: El nombre de la calle, número y cualquier identificador de apartamento o edificio.
+      description_fr: Le nom de la rue, le numéro et tout identifiant d'appartement ou de bâtiment.
+      external_alignments_json: '[{"label": "thoroughfare", "match": "close", "note": "SEMIC thoroughfare
+        is specifically the street name; ours may include the full street line with number", "uri": "http://www.w3.org/ns/locn#thoroughfare",
+        "vocabulary": "Core Location", "vocabulary_id": "semic"}, {"label": "address_line_1", "match":
+        "close", "note": "PublicSchema uses a single street_address field; DCI splits into address_line_1
+        and address_line_2", "uri": "https://schema.spdci.org/core/v1/data/address_line_1", "vocabulary":
+        "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Present in 3 of 5 mapped systems. Often stored as a single free-text
+        field rather than parsed into sub-components.", "system_count": 3, "total_systems": 5}'
+      bibliography_refs: '["schema-org", "semic-core-location", "spdci-common-standards"]'
+  subject_person:
+    slot_uri: publicschema:subject_person
+    title: Subject person
+    description: The person who holds the described relationship (the subject of the relationship statement).
+    range: Person
+    multivalued: false
+    status: bibo:status/forthcoming
+    close_mappings:
+    - dci:data/Member
+    annotations:
+      label_es: Persona sujeto
+      label_fr: Personne sujet
+      description_es: La persona que mantiene la relación descrita (el sujeto del enunciado de relación).
+      description_fr: La personne qui entretient la relation décrite (le sujet de l'énoncé de relation).
+      external_alignments_json: '[{"label": "member", "match": "broad", "note": "DCI embeds the related_person
+        list on a Member; the subject is the Member itself rather than an explicit field", "uri": "https://schema.spdci.org/core/v1/data/Member",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"system_count": 2, "total_systems": 6}'
+      bibliography_refs: '["spdci-common-standards"]'
+  wall_material:
+    slot_uri: publicschema:wall_material
+    title: Wall material
+    description: The primary material of the exterior walls in the household's dwelling.
+    range: WallMaterial
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Material de las paredes
+      label_fr: Matériau des murs
+      description_es: El material principal de las paredes exteriores en la vivienda del hogar.
+      description_fr: Le matériau principal des murs extérieurs dans le logement du ménage.
+      category: housing
+      bibliography_refs: '["dhs-recode7", "mics6"]'
+  water_collection_time_minutes:
+    slot_uri: publicschema:water_collection_time_minutes
+    title: Water collection time (minutes)
+    description: Round-trip time in minutes to the household's main drinking water source, including queuing.
+      JMP classifies an improved source with collection time of 30 minutes or less as Basic service; more
+      than 30 minutes as Limited service. Zero or near-zero indicates water on premises.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tiempo de recolección de agua (minutos)
+      label_fr: Temps de collecte d'eau (minutes)
+      description_es: Tiempo de ida y vuelta en minutos hasta la fuente principal de agua potable del
+        hogar, incluyendo la espera. El JMP clasifica una fuente mejorada con tiempo de recolección de
+        30 minutos o menos como servicio Básico; más de 30 minutos como servicio Limitado. Cero o cercano
+        a cero indica agua en las instalaciones.
+      description_fr: Temps aller-retour en minutes vers la source d'eau potable principale du ménage,
+        y compris l'attente. Le JMP classe une source améliorée avec un temps de collecte de 30 minutes
+        ou moins comme service de Base ; plus de 30 minutes comme service Limité. Zéro ou proche de zéro
+        indique l'eau sur place.
+      category: wash
+      valid_instruments_json: '["jmp_core_hh"]'
+      bibliography_refs: '["who-unicef-jmp"]'
+  water_point_type:
+    slot_uri: publicschema:water_point_type
+    title: Water point type
+    description: The physical type of this water access point per the WHO/UNICEF JMP improved-source typology
+      (borehole, protected dug well, public tap, etc.). The water point type determines whether the source
+      is classified as improved or unimproved on the JMP drinking water service ladder.
+    range: WaterPointType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de punto de agua
+      label_fr: Type de point d'eau
+      description_es: El tipo físico de este punto de acceso al agua según la tipología de fuentes mejoradas
+        del JMP OMS/UNICEF (perforación, pozo excavado protegido, grifo público, etc.). El tipo de punto
+        de agua determina si la fuente se clasifica como mejorada o no mejorada en la escala del servicio
+        de agua potable del JMP.
+      description_fr: Le type physique de ce point d'accès à l'eau selon la typologie des sources améliorées
+        JMP OMS/UNICEF (forage, puits creusé protégé, robinet public, etc.). Le type de point d'eau détermine
+        si la source est classée améliorée ou non améliorée sur l'échelle des services d'eau potable JMP.
+      category: classification
+  water_service_level:
+    slot_uri: publicschema:water_service_level
+    title: Water service level
+    description: The WHO/UNICEF JMP classification of the household's drinking water service. Derived
+      from water source type and collection time; not directly observed.
+    range: WaterServiceLevel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Nivel de servicio de agua
+      label_fr: Niveau de service en eau
+      description_es: La clasificación JMP OMS/UNICEF del servicio de agua potable del hogar. Derivada
+        del tipo de fuente de agua y el tiempo de recolección, no observada directamente.
+      description_fr: La classification JMP OMS/UNICEF du service d'eau potable du ménage. Dérivée du
+        type de source d'eau et du temps de collecte, non observée directement.
+      category: wash
+      bibliography_refs: '["who-unicef-jmp"]'
+  water_source:
+    slot_uri: publicschema:water_source
+    title: Water source
+    description: The main source of drinking water used by the household.
+    range: WaterSource
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fuente de agua
+      label_fr: Source d'eau
+      description_es: La principal fuente de agua potable utilizada por el hogar.
+      description_fr: La principale source d'eau potable utilisée par le ménage.
+      category: wash
+      bibliography_refs: '["dhs-recode7", "mics6", "who-unicef-jmp"]'

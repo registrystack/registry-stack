@@ -51,6 +51,7 @@ SHARDS = {
         "registry-breg-client-node",
         "registry-breg-client-py",
         "registry-bregctl",
+        "registry-linkml",
     ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (

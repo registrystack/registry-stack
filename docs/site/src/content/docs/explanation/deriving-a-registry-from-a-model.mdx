@@ -1,0 +1,174 @@
+---
+title: How a registry is derived from a model
+description: The rules that turn a PublicSchema selection into entities, field types, classifications, and links between entities, what the derivation refuses, and the attribution the snapshot carries.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-07"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+`bregctl init --from publicschema` reads a selection document naming concepts and properties of the
+embedded PublicSchema snapshot, and writes a Base Registry Engine (BReg) project. The selection says
+what to carry; every rule turning it into entities, fields, types, and classifications belongs to the
+derivation, and the same rules apply whether the selection came from a starter, a file, or the
+interactive questions. This page states those rules, so a reader can predict a derived project
+before running anything and can tell which parts of the result are theirs to change.
+
+The derivation is a starting point, not a governance decision. It gives a project the shape of the
+model; what a registry may hold, who may read it, and what its records mean in law stay with the
+institution that runs it.
+
+## A concept becomes an entity
+
+Each selected concept becomes one entity, named by the concept in kebab case and routed under the
+plural of that name. `Person` becomes the entity `person` under the route `persons`, `ServicePoint`
+becomes `service-point` under `service-points`. Titles and descriptions come from the model in every
+language it carries them for, and the concept's IRI is carried into the project's Registry Manifest
+projection, so a catalogue reader can tell what an entity means without reading `registry.yaml`.
+
+Every entity gains an identifier field the model does not supply, because PublicSchema describes what
+a record means and not how a registry addresses it. The field is named after the entity with `-code`
+appended, is required and unique, holds 1 to 64 characters, and is supplied by the caller when a
+record is created. No field derived from a property is required, so a selection can be wide without
+forcing a caller to fill it.
+
+A property becomes a field of the same name in kebab case. A property whose name would shadow a name
+the compiler reserves for its own columns, `id`, `record-id`, `revision`, `created-at`, `updated-at`,
+or `deleted-at`, is prefixed `declared-` instead, which keeps the concept while leaving the reserved
+name alone.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, resolve_entity(), field_id(), kebab_case(), pluralize(), and reserved_field_id();
+    crates/registry-breg/src/logical_names.rs, reserved_logical_name(). */}
+
+## A property becomes a field by its type
+
+A scalar property takes the field type its value type implies, bounded so a record cannot grow
+without limit.
+
+| Value type in the model | Field |
+| --- | --- |
+| Text | `string`, at most 255 characters |
+| URI | `string`, at most 2048 characters |
+| Whole number | `int64` |
+| Decimal number | `decimal`, precision 18, scale 6 |
+| Date | `date` |
+| Date and time | `timestamp` |
+| Yes or no | `boolean` |
+
+Everything else depends on what the property points at rather than what it is called.
+
+| What the property holds | Field |
+| --- | --- |
+| An enumeration of at most 300 values | `vocabulary-code` over a closed vocabulary listing every value |
+| A larger enumeration | `string` sized to the longest code, between 64 and 128 characters |
+| Another selected concept | `reference` to that entity |
+| A concept that was not selected | `structured`, carrying that concept's scalar properties inline under a closed schema |
+| Many values of a scalar or an enumeration | `structured`, carrying a bounded list of at most 50 items |
+
+The 300-value line is about what belongs in a project rather than what a database can hold. A code
+list short enough to read is worth declaring in full, because the compiler can then refuse an
+unknown code and a catalogue reader can see the permitted values. A longer one would bury the
+project's own model in imported data, so the derivation keeps the code and drops the list. A
+selection's `vocabularies` list overrides that judgement per enumeration in either direction, up to
+the 1024 values a code list may hold; asking for a larger one inline is refused.
+
+An inline structured field is a compromise of the same kind. The concept it carries was not selected,
+so it has no records and no route; carrying its scalar properties whole keeps the information without
+inventing a registry for it. The field's schema is closed, so a caller cannot add properties the
+model does not describe.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, field_kind(), scalar_kind(), enum_schema(), object_schema(), code_max_length(), and INLINE_VOCABULARY_THRESHOLD. */}
+
+## Sensitivity becomes classification
+
+PublicSchema marks some properties sensitive or restricted. Every such property becomes a field
+classified `restricted`; every other field is `internal`. A structured field takes the highest
+classification any property it carries inline earns, because the field holds that value whole and a
+caller reading the field reads all of it.
+
+An entity is `internal` unless the selection names a classification for it. The Registry Manifest
+projection's ceiling is the highest classification present anywhere in the project.
+
+That is a floor, not a policy. The derivation can see that a model calls a property sensitive; it
+cannot see who in a given country may read it. A derived project's access profiles are the first
+thing to revisit: the operator profile reads every field, including the restricted ones, and the
+project's own generated README names the findings that say so.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, slot_classification(), object_schema(), and resolve(). */}
+
+## What the derivation refuses
+
+A refusal is a design question handed back rather than a defect. Each one names the property and says
+what to do instead.
+
+A property holding many values of another concept is refused outright. A person's many memberships
+are not a list inside a person record; they are records of their own, and the model that carries them
+is an entity with a reference back. Collapsing them into a field would make history unwritable and
+the relationship unqueryable, so the derivation asks for the entity instead.
+
+A property pointing at a concept that was not selected, and that has no scalar property to carry
+inline, is refused: there is nothing to hold and nothing to point at. Selecting that concept turns
+the property into a reference.
+
+A property whose value type the project has no field type for is refused by name, which is what keeps
+the type table honest as the model grows.
+
+A reference that fits more than one selected entity is refused unless the selection names one,
+because guessing would link the wrong records without saying so. The interactive questions settle the same ambiguity
+by asking.
+
+Beyond property refusals, the derivation refuses a selection naming an unknown or abstract concept,
+one giving two entities the same identifier or route, one selecting a property twice, one whose
+properties would produce two fields of the same identifier or the same API or database name, one
+naming an identifying field after a column the compiler keeps for itself, one giving a target to a
+property that does not point at a concept, one naming an unknown or unused enumeration, and one whose
+model version does not match the embedded snapshot. Nothing is written when a selection is refused.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, field_kind(), property_support(), and resolve(). */}
+
+## What links entities, and what does not
+
+Two entities are linked when a field of one is a reference to the other. In PublicSchema, the concept
+carrying that reference is usually a third concept: a membership joins a household and a person, an
+assessment joins a respondent and a subject. Selecting the two ends alone leaves two unrelated
+collections, and selecting the joining concept as an entity of its own is what connects them.
+
+A project can be derived either way. A registry of unrelated collections is a legitimate answer, and
+the derivation does not force a link on a selection that did not ask for one. What it will not do is
+leave the outcome unstated: when a project of two or more entities contains one that no field of any
+entity references and that references nothing itself, the generated README carries a "What is not
+linked" section naming that entity, naming the concepts in the model whose references would reach it,
+and saying which property of each would do so. A selection can then be widened and derived again.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, connectors() and unlinked_entities();
+    crates/registry-bregctl/src/init_from_model/render.rs, readme(). */}
+
+## The attribution the snapshot carries
+
+The embedded snapshot is PublicSchema 0.3.0, licensed CC-BY-4.0. That licence permits derived works
+and requires attribution, and a derived project is a derived work: the derivation selects a subset of
+the concepts, renames them into identifiers a registry can route, and retypes their properties into
+bounded field types. Nothing that comes out is the model unchanged.
+
+The generated README opens with an attribution section naming the model, its version, its repository,
+its licence, and the licence URL, and stating that the project is a modified form. The obligation
+travels with the project: keep the notice with the source, and with any package built from it. It is
+a copyright notice about the vocabulary, not a claim about the records a registry goes on to hold.
+
+{/* Evidence: crates/registry-linkml/publicschema/PIN.yaml, version and license;
+    crates/registry-bregctl/src/init_from_model/render.rs, readme(). */}
+
+## Next
+
+- [Derive a registry from PublicSchema](../../tutorials/derive-a-registry-from-publicschema/) applies
+  these rules to a shipped selection.
+- [PublicSchema wizard prompts](../../reference/bregctl-publicschema-wizard/) records the questions
+  that build a selection at a terminal.
+- [A registry is defined by configuration](../configuration-defined-registry/) explains what the
+  compiler does with the project once it exists.
+- [Modeling patterns for registries](../registry-modeling-patterns/) covers the shapes to reach for
+  when the model runs out.

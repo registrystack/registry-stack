@@ -1,0 +1,2126 @@
+id: https://publicschema.org/linkml/civil_status
+name: publicschema-civil_status
+title: PublicSchema civil status domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- identity
+- misc
+- vocabularies
+classes:
+  Adoption:
+    class_uri: publicschema:crvs/Adoption
+    title: Adoption
+    description: 'A legal act by which one or more persons acquire the status of parent to a child, creating
+      a parent-child relationship that did not previously exist in law. Distinguishes full adoption (where
+      prior biological filiation is replaced) from simple adoption (where it is preserved alongside the
+      new bond), following civil-law traditions and the Hague Convention on Intercountry Adoption.
+
+      '
+    is_a: VitalEvent
+    slots:
+    - adoptee
+    - adoptive_parents
+    - previous_parents
+    - adoption_type
+    - judgment_date
+    - judgment_reference
+    - court
+    status: bibo:draft
+    annotations:
+      label_es: Adopción
+      label_fr: Adoption
+      description_es: Un acto jurídico por el cual una o varias personas adquieren la calidad de progenitores
+        de un niño o niña, creando una relación de filiación que no existía previamente en derecho. Distingue
+        la adopción plena (donde la filiación biológica anterior es sustituida) de la adopción simple
+        (donde se conserva junto al nuevo vínculo), siguiendo las tradiciones de derecho civil y el Convenio
+        de La Haya sobre adopción internacional.
+      description_fr: Un acte juridique par lequel une ou plusieurs personnes acquièrent le statut de
+        parent d'un enfant, créant une relation parent-enfant qui n'existait pas auparavant en droit.
+        Distingue l'adoption plénière (où la filiation biologique antérieure est remplacée) de l'adoption
+        simple (où elle est conservée parallèlement au nouveau lien), suivant les traditions de droit
+        civil et la Convention de La Haye sur l'adoption internationale.
+      source_domain: crvs
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "Adoption is
+        not modelled as a distinct event type in OpenCRVS v2 core or the Farajaland reference config.
+        Adoption scenarios would require a country-specific EventConfig.", "vocabulary": "OpenCRVS v2
+        event service", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["crc-convention", "hague-intercountry-adoption", "un-vital-stats-rev3"]'
+  Birth:
+    class_uri: publicschema:crvs/Birth
+    title: Birth
+    description: 'A live birth, meaning the complete expulsion or extraction of a product of conception
+      from its mother, irrespective of duration of pregnancy, which after such separation breathes or
+      shows any other evidence of life. Captures the child, the parents, and attributes used by civil
+      registration and vital statistics (sex at birth, birth order, attendant, weight, place type).
+
+      '
+    is_a: VitalEvent
+    slots:
+    - child
+    - parents
+    - sex_at_birth
+    - nationality_at_birth
+    - place_type
+    - birth_type
+    - birth_order
+    - weight_at_birth
+    - attendant_at_birth
+    status: bibo:status/forthcoming
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent
+    annotations:
+      label_es: Nacimiento
+      label_fr: Naissance
+      description_es: Un nacimiento vivo, es decir, la expulsión o extracción completa del producto de
+        la concepción fuera del cuerpo de la madre, independientemente de la duración del embarazo, que
+        tras dicha separación respira o muestra cualquier otra señal de vida. Recoge al niño o niña, a
+        los padres y los atributos utilizados por el registro civil y las estadísticas vitales (sexo al
+        nacer, orden de nacimiento, persona que atendió, peso, tipo de lugar).
+      description_fr: Une naissance vivante, c'est-à-dire l'expulsion ou l'extraction complète du produit
+        de la conception hors du corps de la mère, indépendamment de la durée de la grossesse, et qui,
+        après cette séparation, respire ou manifeste tout autre signe de vie. Recueille les données relatives
+        à l'enfant, aux parents et aux attributs utilisés par l'état civil et les statistiques vitales
+        (sexe à la naissance, ordre de naissance, personne ayant assisté à l'accouchement, poids, type
+        de lieu).
+      featured: true
+      source_domain: crvs
+      external_alignments_json: '[{"label": "EventDocument (type=''birth'', country-configured)", "match":
+        "broad", "note": "In v2 core, a birth is an EventDocument whose type string is the country-configured
+        birth event id. All birth-specific fields (child name, parents, birth type, attendant, weight)
+        live in EventConfig.declaration. The EventDocument envelope is broader than our Birth concept;
+        Farajaland''s birthEvent defines the reference implementation.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["crc-convention", "fhir-bfdr", "un-vital-stats-rev3", "who-intrapartum-care-2018",
+        "who-preterm-lbw-care-2022", "who-skilled-birth-attendants-2018"]'
+  Certificate:
+    class_uri: publicschema:crvs/Certificate
+    title: Certificate
+    description: 'A document issued from a civil status record or vital event that attests to the event
+      for external use. Distinct from the underlying record: certificates can be issued repeatedly, in
+      different formats (full copy, extract, multilingual extract under ICCS/CIEC conventions), and by
+      different offices (for example, an embassy issuing an extract of a record held in the country of
+      origin).
+
+      '
+    is_a: CivilStatusDocument
+    slots:
+    - vital_event
+    - civil_status_record
+    - certificate_number
+    - issue_date
+    - issuing_office
+    - certificate_document_type
+    - certificate_format
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/ActionDocument.ts#PrintCertificateAction
+    annotations:
+      label_es: Certificado
+      label_fr: Certificat
+      description_es: 'Un documento emitido a partir de un acta de estado civil o de un evento vital,
+        que acredita dicho evento para uso externo. Distinto del acta subyacente: los certificados pueden
+        emitirse repetidamente, en distintos formatos (copia íntegra, extracto, extracto multilingüe bajo
+        las convenciones CIEC) y por distintas oficinas (por ejemplo, una embajada que emite un extracto
+        de un acta conservada en el país de origen).'
+      description_fr: 'Un document délivré à partir d''un acte d''état civil ou d''un fait vital, attestant
+        de cet événement pour un usage externe. Distinct de l''acte sous-jacent: les certificats peuvent
+        être délivrés de manière répétée, sous différents formats (copie intégrale, extrait, extrait plurilingue
+        selon les conventions CIEC) et par différents bureaux (par exemple, une ambassade délivrant un
+        extrait d''un acte conservé dans le pays d''origine).'
+      featured: true
+      source_domain: crvs
+      external_alignments_json: '[{"label": "PrintCertificateAction", "match": "related", "note": "PrintCertificateAction
+        is an ActionDocument variant (type=PRINT_CERTIFICATE) that carries an optional content.templateId.
+        This records the act of printing rather than the certificate as a legal document object; the match
+        has narrowed from v1''s close to related because the v2 action is structurally thinner than our
+        Certificate concept.", "uri": "https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/ActionDocument.ts#PrintCertificateAction",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["eu-reg-2016-1191", "iccs-convention-16", "iccs-convention-26", "iccs-convention-33",
+        "iccs-convention-34", "un-vital-stats-rev3"]'
+  CivilStatusAnnotation:
+    class_uri: publicschema:crvs/CivilStatusAnnotation
+    title: Civil Status Annotation
+    description: 'A marginal annotation (mention marginale) added to a civil status record to reflect
+      a later vital event or administrative change. Examples include a marriage noted on the birth record
+      of a spouse, a divorce noted on a marriage record, or a court-ordered correction. The annotation
+      mechanism is how civil-law registries maintain a coherent civil identity over time without rewriting
+      the original acte.
+
+      '
+    slots:
+    - civil_status_record
+    - triggering_vital_event
+    - annotation_date
+    - annotating_authority
+    - annotation_type
+    - annotation_text
+    status: bibo:draft
+    annotations:
+      label_es: Anotación de estado civil
+      label_fr: Annotation d'état civil
+      description_es: 'Una anotación marginal añadida a un acta de estado civil para reflejar un evento
+        vital posterior o un cambio administrativo. Entre los ejemplos se encuentran: un matrimonio anotado
+        en el acta de nacimiento de un cónyuge, un divorcio anotado en un acta de matrimonio o una corrección
+        ordenada por un tribunal. El mecanismo de anotaciones es la forma en que los registros de derecho
+        civil mantienen una identidad civil coherente en el tiempo sin reescribir el acta original.'
+      description_fr: 'Une mention marginale ajoutée à un acte d''état civil pour refléter un événement
+        d''état civil ultérieur ou une modification administrative. Exemples: un mariage indiqué sur l''acte
+        de naissance d''un conjoint, un divorce indiqué sur un acte de mariage, ou une correction ordonnée
+        par le tribunal. C''est par ce mécanisme des mentions que les registres d''état civil maintiennent
+        une identité civile cohérente dans le temps sans réécrire l''acte original.'
+      source_domain: crvs
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        has no reified marginal-annotation type. Corrections flow through the correction action sequence
+        (REQUEST_CORRECTION/APPROVE_CORRECTION) recorded in the action log, which is a trail of actions
+        rather than a typed annotation with its own authority and triggering event.", "vocabulary": "OpenCRVS
+        v2 event service", "vocabulary_id": "opencrvs"}]'
+  CivilStatusDocument:
+    class_uri: publicschema:crvs/CivilStatusDocument
+    title: Civil Status Document
+    description: 'An administrative document that records civil-status facts about one or more persons.
+      Distinct from the concepts (Birth, Marriage, Death, etc.) that describe the underlying events themselves:
+      those are the occurrences; CivilStatusDocument is the paper or electronic artefact that attests
+      to or summarises them. Examples include a birth certificate, a marriage certificate, and a family
+      register (livret de famille, koseki, hukou).
+
+      '
+    slots:
+    - issuing_authority
+    - issue_date
+    status: bibo:draft
+    annotations:
+      label_es: Documento de estado civil
+      label_fr: Document d'état civil
+      description_es: 'Un documento administrativo que registra hechos del estado civil de una o más personas.
+        Distinto de los conceptos (Nacimiento, Matrimonio, Defunción, etc.) que describen los propios
+        eventos subyacentes: esos son las ocurrencias; CivilStatusDocument es el artefacto en papel o
+        electrónico que los acredita o resume. Ejemplos: certificado de nacimiento, certificado de matrimonio,
+        registro familiar (livret de famille, koseki, hukou).'
+      description_fr: 'Un document administratif qui consigne des faits d''état civil concernant une ou
+        plusieurs personnes. Distinct des concepts (Naissance, Mariage, Décès, etc.) qui décrivent les
+        événements sous-jacents eux-mêmes : ceux-ci sont les faits; CivilStatusDocument est la pièce papier
+        ou électronique qui en atteste ou les résume. Exemples: certificat de naissance, certificat de
+        mariage, registre de famille (livret de famille, koseki, hukou).'
+      source_domain: crvs
+      external_alignments_json: '[{"label": "No direct equivalent", "match": "none", "note": "OpenCRVS
+        v2 models Certificate separately from registration records and has no family-register concept.
+        A shared document supertype has no counterpart.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
+        "opencrvs"}]'
+    abstract: true
+  CivilStatusRecord:
+    class_uri: publicschema:crvs/CivilStatusRecord
+    title: Civil Status Record
+    description: 'The official written record (acte) held by a civil registration authority that attests
+      to a vital event. In civil-law traditions, this is the persistent legal document that accumulates
+      marginal annotations over time and from which certificates are issued. Distinct from the vital event
+      itself (the underlying occurrence) and from certificates (the documents produced from the record
+      on demand).
+
+      '
+    slots:
+    - identifiers
+    - record_type
+    - originating_event
+    - annotations
+    - person
+    - issuing_authority_location
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/ActionDocument.ts#RegisterAction
+    annotations:
+      label_es: Registro de estado civil
+      label_fr: Registre d'état civil
+      description_es: El registro oficial escrito (acta) que conserva una autoridad de registro civil
+        y que acredita un evento vital. En las tradiciones de derecho civil, es el documento jurídico
+        permanente que acumula anotaciones marginales a lo largo del tiempo y a partir del cual se emiten
+        los certificados. Distinto del evento vital en sí (el suceso subyacente) y de los certificados
+        (los documentos que se producen a partir del acta a solicitud).
+      description_fr: L'acte officiel conservé par une autorité d'état civil qui atteste d'un événement
+        d'état civil. Dans les traditions de droit civil, il s'agit du document juridique pérenne qui
+        accumule des mentions marginales au fil du temps et à partir duquel les certificats sont délivrés.
+        Distinct de l'événement d'état civil lui-même (l'occurrence sous-jacente) et des certificats (les
+        documents produits à partir de l'acte à la demande).
+      source_domain: crvs
+      external_alignments_json: '[{"label": "RegisterAction", "match": "related", "note": "RegisterAction
+        is an ActionDocument variant (type=REGISTER) that carries the registrationNumber. This is the
+        closest v2 core equivalent to CivilStatusRecord: the act of registration produces a legal identifier.
+        However, RegisterAction is an action within an EventDocument, not a standalone record; the structural
+        roles differ.", "uri": "https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/ActionDocument.ts#RegisterAction",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["iccs-convention-26", "iccs-convention-33", "un-vital-stats-rev3"]'
+  Death:
+    class_uri: publicschema:crvs/Death
+    title: Death
+    description: 'The permanent disappearance of all evidence of life at any time after a live birth has
+      taken place. Captures the deceased person, the cause and manner of death, the method used to ascertain
+      cause, and the medical certifier. Aligned with the WHO definition and the ICD structure for cause-of-death
+      classification.
+
+      '
+    is_a: VitalEvent
+    slots:
+    - deceased
+    - place_type
+    - cause_of_death
+    - cause_of_death_code
+    - cause_of_death_coding_system
+    - manner_of_death
+    - cause_of_death_method
+    - medical_certifier
+    status: bibo:status/forthcoming
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent
+    annotations:
+      label_es: Defunción
+      label_fr: Décès
+      description_es: La desaparición permanente de toda manifestación de vida en cualquier momento tras
+        haber ocurrido un nacimiento vivo. Recoge a la persona fallecida, la causa y la manera de la defunción,
+        el método utilizado para determinar la causa y el certificador médico. Alineado con la definición
+        de la OMS y la estructura CIE para la clasificación de causas de defunción.
+      description_fr: La disparition permanente de toute trace de vie à un moment quelconque après la
+        naissance vivante. Recueille les données relatives à la personne décédée, à la cause et à la manière
+        du décès, à la méthode utilisée pour déterminer la cause et au certificateur médical. Conforme
+        à la définition de l'OMS et à la structure de la CIM pour la classification des causes de décès.
+      featured: true
+      source_domain: crvs
+      external_alignments_json: '[{"label": "EventDocument (type=''death'', country-configured)", "match":
+        "broad", "note": "In v2 core, a death is an EventDocument whose type string is the country-configured
+        death event id. All death-specific fields (deceased name, cause of death, manner of death, medical
+        certifier) live in EventConfig.declaration. Farajaland''s deathEvent defines the reference implementation.",
+        "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-vrdr", "icd-10", "icd-11", "un-vital-stats-rev3", "who-icd-manner-of-death",
+        "who-medical-cert-death", "who-verbal-autopsy-2022"]'
+  FamilyRegister:
+    class_uri: publicschema:crvs/FamilyRegister
+    title: Family Register
+    description: 'A record that tracks a family unit over time, centered on a head of household. Members
+      are reached through the linked Family, which exposes GroupMembership entries for each person with
+      their role (head, spouse, child, etc.) and entry or exit dates. Distinct from the event-based acte
+      tradition: family registers (koseki in Japan, hukou in China, livret de famille in France) maintain
+      a running view of the family as vital events occur. Status captures whether the register is active,
+      closed, split, or merged.
+
+      '
+    is_a: CivilStatusDocument
+    slots:
+    - family
+    - head_of_household
+    - register_number
+    - register_authority
+    - creation_date
+    - family_register_status
+    status: bibo:draft
+    annotations:
+      label_es: Registro de familia
+      label_fr: Registre de famille
+      description_es: 'Un registro que da seguimiento a una unidad familiar a lo largo del tiempo, centrado
+        en una jefatura de hogar. Se accede a los miembros a través de la Familia vinculada, que expone
+        las entradas de GroupMembership de cada persona con su rol (jefe de hogar, cónyuge, hijo, etc.)
+        y las fechas de entrada o salida. Distinto de la tradición de actas por evento: los registros
+        familiares (koseki en Japón, hukou en China, libro de familia en Francia) mantienen una visión
+        continua de la familia a medida que ocurren los eventos vitales. El estado indica si el registro
+        está activo, cerrado, dividido o fusionado.'
+      description_fr: 'Un registre qui suit une unité familiale dans le temps, centré sur un chef de famille.
+        Les membres sont accessibles via la Famille liée, qui expose les GroupMembership de chaque personne
+        avec son rôle (chef de famille, conjoint, enfant, etc.) et ses dates d''entrée ou de sortie. Distinct
+        de la tradition des actes par événement: les registres familiaux (koseki au Japon, hukou en Chine,
+        livret de famille en France) maintiennent une vue continue de la famille à mesure que surviennent
+        les événements d''état civil. Le statut indique si le registre est actif, clôturé, scindé ou fusionné.'
+      source_domain: crvs
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        is event-record centric and has no concept of a family register (livret de famille, koseki, hukou).
+        Families are not modelled as a tracked unit.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
+        "opencrvs"}]'
+      bibliography_refs: '["un-vital-stats-rev3"]'
+  FetalDeath:
+    class_uri: publicschema:crvs/FetalDeath
+    title: Fetal Death
+    description: 'Death prior to the complete expulsion or extraction of a product of conception from
+      its mother, irrespective of the duration of pregnancy. Distinct from live Birth followed by Death,
+      and from miscarriages below viability thresholds set by national law. Captures gestational age,
+      weight, and coded cause of fetal death using ICD-PM where available.
+
+      '
+    is_a: VitalEvent
+    slots:
+    - parents
+    - place_type
+    - attendant_at_birth
+    - gestational_age
+    - weight
+    - cause_of_fetal_death
+    - cause_of_fetal_death_code
+    - cause_of_fetal_death_coding_system
+    - medical_certifier
+    status: bibo:draft
+    annotations:
+      label_es: Muerte fetal
+      label_fr: Mort fœtale
+      description_es: Defunción ocurrida antes de la expulsión o extracción completa del producto de la
+        concepción del cuerpo de la madre, con independencia de la duración del embarazo. Distinta de
+        un nacimiento vivo seguido de defunción, y de los abortos espontáneos por debajo de los umbrales
+        de viabilidad fijados por la ley nacional. Captura la edad gestacional, el peso y la causa codificada
+        de muerte fetal utilizando la CIE-PM cuando esté disponible.
+      description_fr: Décès survenu avant l'expulsion ou l'extraction complète du produit de la conception
+        hors du corps de la mère, indépendamment de la durée de la grossesse. Distinct d'une naissance
+        vivante suivie d'un décès, et des fausses couches en deçà des seuils de viabilité fixés par la
+        loi nationale. Recueille l'âge gestationnel, le poids et la cause codée de décès fœtal, en utilisant
+        la CIM-PM lorsqu'elle est disponible.
+      source_domain: crvs
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        does not model fetal death as a distinct event. The field BirthRegistration.foetalDeathsToMother
+        is a statistical count on the mother''s birth record, not a registration of the fetal death itself.",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-bfdr", "fhir-vrdr", "icd-pm", "un-vital-stats-rev3", "who-cert-perinatal-death",
+        "who-preterm-lbw-care-2022"]'
+  Legitimation:
+    class_uri: publicschema:crvs/Legitimation
+    title: Legitimation
+    description: 'The act by which a child previously born outside marriage acquires the legal status
+      of a child born within marriage, typically following the subsequent marriage of the biological parents.
+      Relevant in jurisdictions where the status of the child still varies by marital context.
+
+      '
+    is_a: VitalEvent
+    slots:
+    - child
+    - parents
+    - birth_ref
+    - judgment_date
+    - judgment_reference
+    - court
+    status: bibo:draft
+    annotations:
+      label_es: Legitimación
+      label_fr: Légitimation
+      description_es: El acto por el cual un hijo o hija nacido previamente fuera del matrimonio adquiere
+        el estatus jurídico de hijo o hija nacido dentro del matrimonio, generalmente tras el matrimonio
+        posterior de los progenitores biológicos. Relevante en jurisdicciones en las que la condición
+        jurídica del menor aún varía según el contexto marital.
+      description_fr: L'acte par lequel un enfant précédemment né hors mariage acquiert le statut juridique
+        d'enfant né dans le mariage, généralement à la suite du mariage ultérieur des parents biologiques.
+        Pertinent dans les juridictions où le statut de l'enfant varie encore selon la situation matrimoniale
+        des parents.
+      source_domain: crvs
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "Legitimation
+        is not modelled in OpenCRVS v2 core. Like paternity recognition, it would be handled operationally
+        as a correction on an existing birth record rather than as a distinct event type.", "vocabulary":
+        "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["un-vital-stats-rev3"]'
+  MarriageTermination:
+    class_uri: publicschema:crvs/MarriageTermination
+    title: Marriage Termination
+    description: 'The legal end of a marriage while both parties are alive, whether by divorce (dissolution
+      of a valid marriage) or annulment (declaration that the marriage was invalid from the outset). The
+      termination_type property distinguishes the two. Death of a spouse ends the marriage but is recorded
+      as a Death, not a MarriageTermination.
+
+      '
+    is_a: VitalEvent
+    slots:
+    - party_1
+    - party_2
+    - marriage_ref
+    - termination_type
+    - judgment_date
+    - judgment_reference
+    - court
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Disolución del matrimonio
+      label_fr: Dissolution du mariage
+      description_es: El fin jurídico de un matrimonio cuando ambas partes están vivas, ya sea por divorcio
+        (disolución de un matrimonio válido) o por anulación (declaración de que el matrimonio era nulo
+        desde el origen). La propiedad termination_type distingue ambos casos. La defunción de un cónyuge
+        pone fin al matrimonio pero se registra como una Defunción, no como una MarriageTermination.
+      description_fr: La fin juridique d'un mariage du vivant des deux parties, que ce soit par divorce
+        (dissolution d'un mariage valide) ou par annulation (déclaration que le mariage était nul dès
+        l'origine). La propriété termination_type distingue les deux cas. Le décès d'un conjoint met fin
+        au mariage mais est enregistré comme un Décès, pas comme une MarriageTermination.
+      source_domain: crvs
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "Neither divorce
+        nor annulment is modelled in OpenCRVS v2 core, so this concept has no counterpart.", "vocabulary":
+        "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["un-vital-stats-rev3"]'
+  Marriage:
+    class_uri: publicschema:crvs/Marriage
+    title: Marriage
+    description: 'The legal union of two persons under the applicable law. Captures the two parties, witnesses,
+      and the type of marriage (civil, religious, customary, common law). Treated as a vital event rather
+      than a standing relationship, since what is being registered is the occurrence that creates legal
+      spousal status.
+
+      '
+    is_a: VitalEvent
+    slots:
+    - party_1
+    - party_2
+    - witnesses
+    - type_of_marriage
+    status: bibo:status/forthcoming
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event
+    annotations:
+      label_es: Matrimonio
+      label_fr: Mariage
+      description_es: La unión legal de dos personas según la ley aplicable. Captura a las dos partes,
+        los testigos y el tipo de matrimonio (civil, religioso, consuetudinario, de hecho). Tratada como
+        un evento vital y no como una relación permanente, ya que lo que se registra es el suceso que
+        crea el estatus jurídico de cónyuge.
+      description_fr: L'union légale de deux personnes selon la loi applicable. Saisit les deux parties,
+        les témoins et le type de mariage (civil, religieux, coutumier, de fait). Traité comme un événement
+        d'état civil plutôt que comme une relation permanente, car ce qui est enregistré est l'événement
+        qui crée le statut juridique de conjoint.
+      featured: true
+      source_domain: crvs
+      external_alignments_json: '[{"label": "EventDocument (type=''marriage'', country-configured)", "match":
+        "broad", "note": "In v2 core, a marriage is an EventDocument whose type string is the country-configured
+        marriage event id (Farajaland Event enum defines Event.Marriage=''marriage''). All marriage-specific
+        fields live in EventConfig.declaration. No full marriage EventConfig is present in the Farajaland
+        reference clone; the Event enum confirms the convention.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["un-vital-stats-rev3"]'
+  CrvsPerson:
+    class_uri: publicschema:crvs/Person
+    title: Person
+    description: "A temporal snapshot of a Person as observed at the time of a vital event. Carries the
+      same demographic properties as Person, but frozen at event time rather than reflecting current values.
+      Used wherever a vital event needs to record who a person was (occupation, residence, education, etc.)
+      at the moment the event occurred.\n"
+    slots:
+    - person
+    - nationality
+    - occupation
+    - education_level
+    - marital_status
+    - literacy
+    - religion
+    - ethnic_group
+    - employment_status
+    - status_in_employment
+    - industry
+    - place_of_usual_residence
+    - age_at_event
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Persona
+      label_fr: Personne
+      description_es: "Una instantánea temporal de una Persona tal como se observó en el momento de un
+        evento vital. Lleva las mismas propiedades demográficas que Persona, pero fijadas en el momento
+        del evento, en lugar de reflejar los valores actuales. Se utiliza siempre que un evento vital
+        necesite registrar quién era una persona (ocupación, residencia, educación, etc.) en el momento
+        en que ocurrió el evento.\n"
+      description_fr: "Un instantané temporel d'une Personne telle qu'observée au moment d'un événement
+        d'état civil. Porte les mêmes propriétés démographiques que Personne, mais figées au moment de
+        l'événement plutôt que de refléter les valeurs actuelles. Utilisé partout où un événement d'état
+        civil doit enregistrer qui était une personne (profession, résidence, éducation, etc.) au moment
+        où l'événement s'est produit.\n"
+      featured: true
+      source_domain: crvs
+      property_groups_json: '[{"category": "other", "properties": ["person"]}, {"category": "demographics",
+        "properties": ["nationality", "marital_status", "religion", "ethnic_group", "age_at_event"]}, {"category":
+        "education", "properties": ["education_level", "literacy"]}, {"category": "employment", "properties":
+        ["occupation", "employment_status", "status_in_employment", "industry"]}, {"category": "location",
+        "properties": ["place_of_usual_residence"]}]'
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        has no temporal-snapshot concept. Demographic fields (occupation, education, marital status) sit
+        directly on the Person type and are implicitly current-at-registration.", "vocabulary": "OpenCRVS
+        v2 event service", "vocabulary_id": "opencrvs"}]'
+  Parent:
+    class_uri: publicschema:crvs/Parent
+    title: Parent
+    description: 'A crvs/Person subtype that captures a parental role alongside the inherited person-of-record
+      properties. Used on Birth, Adoption, PaternityRecognition, and Legitimation so that biological and
+      legal parentage can be captured explicitly rather than collapsed into a single parent slot.
+
+      A Parent instance is scoped to a single event context: the parental_role, establishment_basis, and
+      certificate_label recorded here are the values asserted at the time of that event. Reusing the same
+      Parent instance across multiple events would break snapshot semantics because the role or establishment
+      basis may differ. The canonical way to assert parenthood across contexts is via Relationship records
+      between Person instances, while Parent captures a point-in-time declaration tied to an event.
+
+      The parental_role property carries the role-nature (biological, gestational, legal, or adoptive),
+      decoupled from gender. The establishment_basis property captures the legal route by which parentage
+      was established (for example, marital presumption, voluntary recognition, or adoption order). The
+      certificate_label property is a free-text field for the jurisdiction-specific label that must appear
+      on the printed certificate.
+
+      '
+    is_a: CrvsPerson
+    slots:
+    - parental_role
+    - establishment_basis
+    - certificate_label
+    status: bibo:draft
+    annotations:
+      label_es: Progenitor
+      label_fr: Parent
+      description_es: 'Un subtipo de crvs/Person que porta un rol parental junto con las propiedades heredadas
+        de persona objeto del registro. Se utiliza en Nacimiento, Adopción, Reconocimiento de paternidad
+        y Legitimación para que la filiación biológica y la jurídica puedan representarse de forma explícita
+        en lugar de reducirse a un único campo de progenitor.
+
+        Una instancia de Parent está delimitada a un único contexto de evento: el parental_role, el establishment_basis
+        y el certificate_label registrados aquí son los valores declarados en el momento de ese evento.
+        Reutilizar la misma instancia de Parent en múltiples eventos rompería la semántica de la instantánea,
+        ya que el rol o la base de establecimiento pueden diferir. La forma canónica de afirmar la parentalidad
+        en distintos contextos es mediante registros Relationship entre instancias de Person, mientras
+        que Parent captura una declaración puntual vinculada a un evento.
+
+        La propiedad parental_role lleva la naturaleza del rol (biológico, gestacional, legal o adoptivo),
+        desacoplada del género. La propiedad establishment_basis captura la vía legal por la que se estableció
+        la parentalidad (por ejemplo, presunción matrimonial, reconocimiento voluntario o resolución de
+        adopción). La propiedad certificate_label es un campo de texto libre para la etiqueta específica
+        de la jurisdicción que debe aparecer en el certificado impreso.'
+      description_fr: 'Un sous-type de crvs/Person qui porte un rôle parental à côté des propriétés de
+        personne concernée héritées. Utilisé dans les actes de Naissance, d''Adoption, de Reconnaissance
+        de paternité et de Légitimation afin que les filiations biologique et juridique puissent être
+        saisies de manière explicite plutôt que fusionnées dans un seul champ parent.
+
+        Une instance de Parent est délimitée à un seul contexte d''événement : le parental_role, l''establishment_basis
+        et le certificate_label consignés ici sont les valeurs déclarées au moment de cet événement. Réutiliser
+        la même instance de Parent dans plusieurs événements romprait la sémantique de l''instantané,
+        car le rôle ou le fondement de l''établissement peut différer. La manière canonique d''affirmer
+        la parenté dans différents contextes est d''utiliser des enregistrements Relationship entre des
+        instances de Person, tandis que Parent capture une déclaration ponctuelle liée à un événement.
+
+        La propriété parental_role porte la nature du rôle (biologique, gestationnel, légal ou adoptif),
+        découplée du genre. La propriété establishment_basis capture la voie juridique par laquelle la
+        parenté a été établie (par exemple, présomption maritale, reconnaissance volontaire ou jugement
+        d''adoption). La propriété certificate_label est un champ de texte libre pour l''étiquette spécifique
+        à la juridiction qui doit figurer sur le certificat imprimé.'
+      source_domain: crvs
+      external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
+        uses declaration field-key conventions (e.g. mother.*, father.*) with roles implicit in field
+        names rather than a reified link entity. Adoptive, legal, and gestational roles are not representable
+        in v1.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-v3-role-code", "hague-intercountry-adoption"]'
+  PaternityRecognition:
+    class_uri: publicschema:crvs/PaternityRecognition
+    title: Paternity Recognition
+    description: 'A formal act in which a parent, typically a father, establishes legal parentage for
+      a child born outside marriage. Takes place before a registrar, notary, or court and is often annotated
+      on the child''s original birth record. Distinct from Legitimation, which additionally establishes
+      the child as born within marriage.
+
+      '
+    is_a: VitalEvent
+    slots:
+    - recognizing_parent
+    - child
+    - mother
+    - birth_ref
+    - judgment_date
+    - judgment_reference
+    - court
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/ActionDocument.ts#RequestedCorrectionAction
+    annotations:
+      label_es: Reconocimiento de paternidad
+      label_fr: Reconnaissance de paternité
+      description_es: Un acto formal mediante el cual un progenitor, habitualmente el padre, establece
+        la filiación jurídica de un hijo o hija nacido fuera del matrimonio. Se efectúa ante un oficial
+        del registro civil, un notario o un tribunal, y se suele anotar al margen del acta de nacimiento
+        original del menor. Distinto de la Legitimación, que además establece al menor como nacido dentro
+        del matrimonio.
+      description_fr: Un acte formel par lequel un parent, généralement le père, établit la filiation
+        juridique d'un enfant né hors mariage. Reçu par un officier d'état civil, un notaire ou un tribunal,
+        et souvent consigné en mention marginale sur l'acte de naissance de l'enfant. Distinct de la Légitimation,
+        qui établit en outre l'enfant comme né dans le cadre du mariage.
+      source_domain: crvs
+      external_alignments_json: '[{"label": "RequestedCorrectionAction / ApprovedCorrectionAction", "match":
+        "related", "note": "PaternityRecognition has no first-class event type in v2. The correction workflow
+        (ActionType.REQUEST_CORRECTION followed by ActionType.APPROVE_CORRECTION) is the operational mechanism
+        for amending a birth record to add or change parentage. The match is related because the target
+        is a workflow action pair, not an event type.", "uri": "https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/ActionDocument.ts#RequestedCorrectionAction",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["un-vital-stats-rev3"]'
+  VitalEvent:
+    class_uri: publicschema:crvs/VitalEvent
+    title: Vital Event
+    description: 'An event of legal and statistical importance that marks a change in a person''s civil
+      status, such as birth, death, fetal death, marriage, divorce, annulment, adoption, paternity recognition,
+      or legitimation. VitalEvent is an abstract supertype that groups shared properties (when and where
+      the event occurred, who registered it, and the registration lifecycle). Aligned with the UN Principles
+      and Recommendations for Vital Statistics.
+
+      '
+    is_a: Event
+    slots:
+    - event_date
+    - event_date_estimated
+    - event_location
+    - registration_date
+    - registration_location
+    - registration_type
+    - registrar
+    - informant
+    - registration_status
+    status: bibo:status/forthcoming
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventDocument.ts#EventDocument
+    annotations:
+      label_es: Evento vital
+      label_fr: Événement d'état civil
+      description_es: Un evento de relevancia jurídica y estadística que marca un cambio en el estado
+        civil de una persona, como un nacimiento, una defunción, una muerte fetal, un matrimonio, un divorcio,
+        una anulación, una adopción, un reconocimiento de paternidad o una legitimación. VitalEvent es
+        un supertipo abstracto que agrupa las propiedades comunes (cuándo y dónde ocurrió el evento, quién
+        lo registró y el ciclo de vida del registro). Alineado con los Principios y Recomendaciones de
+        las Naciones Unidas para un Sistema de Estadísticas Vitales.
+      description_fr: Un événement d'importance juridique et statistique qui marque un changement dans
+        l'état civil d'une personne, tel qu'une naissance, un décès, une mortinaissance, un mariage, un
+        divorce, une annulation, une adoption, une reconnaissance de paternité ou une légitimation. VitalEvent
+        est un supertype abstrait qui regroupe les propriétés communes (quand et où l'événement s'est
+        produit, qui l'a enregistré et le cycle de vie de l'enregistrement). Aligné sur les Principes
+        et Recommandations des Nations Unies en matière de statistiques de l'état civil.
+      featured: true
+      source_domain: crvs
+      external_alignments_json: '[{"label": "EventDocument", "match": "close", "note": "EventDocument
+        is the generic event envelope in v2 (id, type, trackingId, createdAt, updatedAt, actions). VitalEvent
+        and EventDocument share the role of the occurrence entity; the correspondence is close but EventDocument
+        carries no domain fields at the core level.", "uri": "https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventDocument.ts#EventDocument",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["un-vital-stats-rev3"]'
+    abstract: true
+slots:
+  adoptee:
+    slot_uri: publicschema:crvs/adoptee
+    title: Adoptee
+    description: The person being adopted in an adoption event. Typically a minor, but adult adoption
+      exists in some jurisdictions.
+    range: CrvsPerson
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Adoptado
+      label_fr: Adopté
+      description_es: La persona que es adoptada en un evento de adopción. Generalmente un menor, aunque
+        la adopción de personas adultas existe en algunas jurisdicciones.
+      description_fr: La personne adoptée dans le cadre d'une adoption. Généralement un mineur, bien que
+        l'adoption de majeurs existe dans certaines juridictions.
+      domain_override: crvs
+  adoption_type:
+    slot_uri: publicschema:crvs/adoption_type
+    title: Adoption type
+    description: Whether the adoption is full (biological filiation is entirely replaced) or simple (biological
+      filiation is preserved alongside the new parental link). Key distinction in civil-law traditions.
+    range: AdoptionType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de adopción
+      label_fr: Type d'adoption
+      description_es: Indica si la adopción es plena (la filiación biológica queda totalmente sustituida)
+        o simple (la filiación biológica se conserva junto al nuevo vínculo parental). Distinción clave
+        en las tradiciones de derecho civil.
+      description_fr: Indique si l'adoption est plénière (la filiation biologique est entièrement remplacée)
+        ou simple (la filiation biologique est conservée parallèlement au nouveau lien parental). Distinction
+        clé dans les traditions de droit civil.
+      domain_override: crvs
+      bibliography_refs: '["hague-intercountry-adoption"]'
+  adoptive_parents:
+    slot_uri: publicschema:crvs/adoptive_parents
+    title: Adoptive parents
+    description: The parents who acquire parental rights through the adoption, each captured as a Parent
+      link entity with parental_role set to adoptive.
+    range: Parent
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Padres adoptivos
+      label_fr: Parents adoptifs
+      description_es: Los progenitores que adquieren derechos parentales mediante la adopción, cada uno
+        representado como una entidad de enlace Parent con parental_role establecido en adoptivo.
+      description_fr: Les parents qui acquièrent les droits parentaux par l'adoption, chacun représenté
+        par une entité de lien Parent dont le parental_role est défini sur adoptif.
+      domain_override: crvs
+  annotating_authority:
+    slot_uri: publicschema:crvs/annotating_authority
+    title: Annotating authority
+    description: The civil registration office that added the annotation to the record. May differ from
+      the office that issued the original record if the person has moved.
+    range: Location
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Autoridad anotante
+      label_fr: Autorité d'annotation
+      description_es: La oficina de registro civil que añadió la anotación al acta. Puede diferir de la
+        oficina que emitió el acta original si la persona se ha trasladado.
+      description_fr: Le bureau d'état civil qui a ajouté la mention à l'acte. Peut différer du bureau
+        qui a délivré l'acte original si la personne a déménagé.
+      domain_override: crvs
+  annotation_date:
+    slot_uri: publicschema:crvs/annotation_date
+    title: Annotation date
+    description: The date on which the annotation was added to the civil status record. Typically after
+      the originating record was created, reflecting a later vital event.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de anotación
+      label_fr: Date de la mention
+      description_es: La fecha en que se añadió la anotación al acta de estado civil. Generalmente posterior
+        a la creación del acta original, reflejando un evento vital posterior.
+      description_fr: La date à laquelle la mention a été ajoutée à l'acte d'état civil. Généralement
+        postérieure à la création de l'acte d'origine, reflétant un événement d'état civil ultérieur.
+      domain_override: crvs
+  annotation_text:
+    slot_uri: publicschema:crvs/annotation_text
+    title: Annotation text
+    description: The full text of the marginal annotation as recorded on the civil status record. Preserves
+      the exact wording used by the registration authority.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Texto de la anotación
+      label_fr: Texte de la mention
+      description_es: El texto íntegro de la anotación marginal tal como figura en el acta de estado civil.
+        Conserva la redacción exacta utilizada por la autoridad de registro.
+      description_fr: Le texte intégral de la mention marginale tel qu'il figure sur l'acte d'état civil.
+        Conserve la formulation exacte utilisée par l'autorité d'enregistrement.
+      domain_override: crvs
+  annotation_type:
+    slot_uri: publicschema:crvs/annotation_type
+    title: Annotation type
+    description: 'The category of annotation: a court-ordered correction, a nationality change, or similar
+      administrative modifications to the record''s meaning.'
+    range: AnnotationType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de anotación
+      label_fr: Type de mention
+      description_es: 'La categoría de anotación: corrección ordenada por tribunal, cambio de nacionalidad
+        u otras modificaciones administrativas que afectan el contenido o significado del acta.'
+      description_fr: 'La catégorie de mention : correction ordonnée par un tribunal, changement de nationalité,
+        ou autres modifications administratives touchant à la teneur de l''acte.'
+      domain_override: crvs
+  annotations:
+    slot_uri: publicschema:crvs/annotations
+    title: Annotations
+    description: Marginal annotations (mentions marginales) added to a civil status record over time as
+      subsequent vital events occur, such as a marriage noted on a birth record.
+    range: CivilStatusAnnotation
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Anotaciones marginales
+      label_fr: Mentions marginales
+      description_es: Anotaciones marginales añadidas a un acta de estado civil a lo largo del tiempo
+        a medida que ocurren eventos vitales posteriores, como la nota de un matrimonio consignada al
+        margen de un acta de nacimiento.
+      description_fr: Mentions marginales ajoutées à un acte d'état civil au fil du temps à mesure que
+        surviennent des événements ultérieurs, par exemple l'indication d'un mariage en marge d'un acte
+        de naissance.
+      domain_override: crvs
+  attendant_at_birth:
+    slot_uri: publicschema:crvs/attendant_at_birth
+    title: Attendant at birth
+    description: The type of person who attended the delivery (physician, midwife, nurse, traditional
+      birth attendant, other, or none). Used as a proxy for safe delivery in health statistics.
+    range: BirthAttendant
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent
+    annotations:
+      label_es: Asistente en el parto
+      label_fr: Personnel présent à la naissance
+      description_es: El tipo de persona que atendió el parto (médico, partera profesional, enfermero/a,
+        partera tradicional, otro o ninguno). Utilizado como indicador de parto seguro en las estadísticas
+        de salud.
+      description_fr: Le type de personne ayant assisté à l'accouchement (médecin, sage-femme, infirmier,
+        accoucheuse traditionnelle, autre ou aucune). Utilisé comme indicateur d'accouchement en sécurité
+        dans les statistiques de santé.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Attendant at birth declaration field (country-configured)",
+        "match": "close", "note": "In v2 there is no core attendantAtBirth field. The field is a country-configured
+        SELECT in EventConfig.declaration. Our birth-attendant vocabulary recommends a canonical set of
+        values.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-bfdr", "un-vital-stats-rev3", "who-skilled-birth-attendants-2018"]'
+  birth_order:
+    slot_uri: publicschema:crvs/birth_order
+    title: Birth order
+    description: For multiple births, the sequence number of this infant among the siblings born in the
+      same delivery (1 for first-born, 2 for second-born, etc.).
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent
+    annotations:
+      label_es: Orden de nacimiento
+      label_fr: Rang de naissance
+      description_es: Para partos múltiples, el número de orden de este recién nacido entre los hermanos
+        nacidos en el mismo parto (1 para el primogénito, 2 para el segundo, etc.).
+      description_fr: Pour les naissances multiples, le numéro d'ordre de ce nouveau-né parmi les frères
+        et sœurs nés lors du même accouchement (1 pour le premier né, 2 pour le deuxième, etc.).
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Birth declaration field (country-configured)", "match": "close",
+        "note": "In v2 there is no core birth-order or multipleBirth field. The field would be a country-configured
+        integer or SELECT in EventConfig.declaration.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-bfdr", "un-vital-stats-rev3"]'
+  birth_ref:
+    slot_uri: publicschema:crvs/birth_ref
+    title: Birth record reference
+    description: A reference to the Birth record of the child whose parentage is being recognized, legitimized,
+      or otherwise modified. Links the current event back to the original birth record.
+    range: Birth
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Referencia al registro de nacimiento
+      label_fr: Référence à l'acte de naissance
+      description_es: Una referencia al registro de Nacimiento del hijo o hija cuya filiación se está
+        reconociendo, legitimando o modificando de otro modo. Vincula el evento actual con el registro
+        de nacimiento original.
+      description_fr: Une référence à l'acte de Naissance de l'enfant dont la filiation est reconnue,
+        légitimée ou autrement modifiée. Relie l'événement en cours à l'acte de naissance d'origine.
+      domain_override: crvs
+  birth_type:
+    slot_uri: publicschema:crvs/birth_type
+    title: Birth type
+    description: Whether the birth was single, twin, triplet, or higher-order multiple. Captured at the
+      level of the delivery, not per infant.
+    range: BirthType
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent
+    annotations:
+      label_es: Tipo de nacimiento
+      label_fr: Type de naissance
+      description_es: Indica si el parto fue simple, gemelar, triple o de orden mayor. Se captura al nivel
+        del parto, no por cada recién nacido.
+      description_fr: Indique si la naissance est unique, gémellaire, triple ou d'un ordre plus élevé.
+        La valeur est enregistrée au niveau de l'accouchement, et non par nouveau-né.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Birth type declaration field (country-configured)", "match":
+        "close", "note": "In v2 there is no core birth-type field. The field is a country-configured SELECT
+        in EventConfig.declaration. Our birth-type vocabulary recommends a canonical set of values.",
+        "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-bfdr", "un-vital-stats-rev3"]'
+  cause_of_death:
+    slot_uri: publicschema:crvs/cause_of_death
+    title: Cause of death
+    description: A free-text description of the underlying cause of death as stated on the death certificate.
+      Captured alongside a coded cause_of_death_code when classification is available.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    exact_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent
+    annotations:
+      label_es: Causa de defunción
+      label_fr: Cause du décès
+      description_es: Una descripción en texto libre de la causa subyacente de la defunción tal como figura
+        en el certificado de defunción. Se captura junto con un cause_of_death_code codificado cuando
+        hay clasificación disponible.
+      description_fr: Une description en texte libre de la cause sous-jacente du décès, telle qu'indiquée
+        sur l'acte de décès. Renseigné conjointement avec cause_of_death_code lorsqu'une classification
+        est disponible.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Cause of death declaration field (country-configured)", "match":
+        "exact", "note": "In v2 there is no core causeOfDeath field. The field is a country-configured
+        text field in EventConfig.declaration. Free text on both sides.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-vrdr", "icd-10", "icd-11", "who-medical-cert-death", "who-verbal-autopsy-2022"]'
+  cause_of_death_code:
+    slot_uri: publicschema:crvs/cause_of_death_code
+    title: Cause of death code
+    description: The coded underlying cause of death, typically an ICD-10 or ICD-11 code. The coding scheme
+      in use is specified by cause_of_death_coding_system.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Código de causa de defunción
+      label_fr: Code de la cause du décès
+      description_es: La causa subyacente de la defunción en forma codificada, típicamente un código CIE-10
+        o CIE-11. El sistema de codificación utilizado se especifica en cause_of_death_coding_system.
+      description_fr: La cause sous-jacente du décès sous forme codée, généralement un code CIM-10 ou
+        CIM-11. Le système de codage utilisé est précisé par cause_of_death_coding_system.
+      domain_override: crvs
+      bibliography_refs: '["fhir-vrdr", "icd-10", "icd-11", "who-verbal-autopsy-2022"]'
+  cause_of_death_coding_system:
+    slot_uri: publicschema:crvs/cause_of_death_coding_system
+    title: Cause of death coding system
+    description: The classification system used to code the cause of death (for example ICD-10, ICD-11,
+      or a national variant). Required when comparing coded causes across jurisdictions.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sistema de codificación de la causa de defunción
+      label_fr: Système de codage de la cause du décès
+      description_es: El sistema de clasificación utilizado para codificar la causa de la defunción (por
+        ejemplo CIE-10, CIE-11 o una variante nacional). Es necesario al comparar causas codificadas entre
+        jurisdicciones.
+      description_fr: Le système de classification utilisé pour coder la cause du décès (par exemple CIM-10,
+        CIM-11 ou une variante nationale). Nécessaire pour comparer les causes codées entre juridictions.
+      domain_override: crvs
+      bibliography_refs: '["fhir-vrdr", "icd-10", "icd-11"]'
+  cause_of_death_method:
+    slot_uri: publicschema:crvs/cause_of_death_method
+    title: Cause of death method
+    description: 'The method used to ascertain the cause of death: physician certified, verbal autopsy,
+      coroner, lay reporting, or other. Important for judging data quality, since verbal autopsy and lay
+      reporting are less precise than physician certification.'
+    range: CauseOfDeathMethod
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent
+    annotations:
+      label_es: Método de determinación de la causa de defunción
+      label_fr: Méthode de détermination de la cause du décès
+      description_es: 'El método utilizado para determinar la causa de la defunción: certificación médica,
+        autopsia verbal, médico forense, declaración no profesional u otro. Importante para juzgar la
+        calidad de los datos, dado que la autopsia verbal y la declaración no profesional son menos precisas
+        que la certificación médica.'
+      description_fr: 'La méthode utilisée pour déterminer la cause du décès: certification médicale,
+        autopsie verbale, coroner, déclaration par un non-professionnel, ou autre. Importante pour apprécier
+        la qualité des données, l''autopsie verbale et la déclaration non professionnelle étant moins
+        précises que la certification médicale.'
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Cause-of-death method declaration field (country-configured)",
+        "match": "close", "note": "In v2 there is no core causeOfDeathMethod field. The field is a country-configured
+        SELECT in EventConfig.declaration. Our cause-of-death-method vocabulary recommends a canonical
+        set.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-vrdr", "who-medical-cert-death", "who-verbal-autopsy-2022"]'
+  cause_of_fetal_death:
+    slot_uri: publicschema:crvs/cause_of_fetal_death
+    title: Cause of fetal death
+    description: A free-text description of the cause of a fetal death. Captured alongside cause_of_fetal_death_code
+      when an ICD-PM or equivalent code is assigned.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Causa de muerte fetal
+      label_fr: Cause de la mortinaissance
+      description_es: Una descripción en texto libre de la causa de la muerte fetal. Se captura junto
+        con cause_of_fetal_death_code cuando se asigna un código CIE-PM o equivalente.
+      description_fr: Une description en texte libre de la cause d'une mortinaissance. Renseigné conjointement
+        avec cause_of_fetal_death_code lorsqu'un code CIM-PM ou équivalent est attribué.
+      domain_override: crvs
+      bibliography_refs: '["fhir-bfdr", "icd-pm", "who-cert-perinatal-death"]'
+  cause_of_fetal_death_code:
+    slot_uri: publicschema:crvs/cause_of_fetal_death_code
+    title: Cause of fetal death code
+    description: The coded cause of a fetal death, typically an ICD-PM (Perinatal Mortality) code. The
+      coding system is specified by cause_of_fetal_death_coding_system.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Código de causa de muerte fetal
+      label_fr: Code de la cause de la mortinaissance
+      description_es: La causa codificada de la muerte fetal, típicamente un código CIE-PM (Mortalidad
+        perinatal). El sistema de codificación se especifica en cause_of_fetal_death_coding_system.
+      description_fr: La cause codée d'une mortinaissance, généralement un code CIM-PM (Mortalité périnatale).
+        Le système de codage est précisé par cause_of_fetal_death_coding_system.
+      domain_override: crvs
+      bibliography_refs: '["fhir-bfdr", "icd-pm", "who-cert-perinatal-death"]'
+  cause_of_fetal_death_coding_system:
+    slot_uri: publicschema:crvs/cause_of_fetal_death_coding_system
+    title: Cause of fetal death coding system
+    description: The classification system used to code the cause of a fetal death (for example ICD-PM,
+      ICD-10, or a national variant).
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sistema de codificación de la causa de muerte fetal
+      label_fr: Système de codage de la cause de la mortinaissance
+      description_es: El sistema de clasificación utilizado para codificar la causa de una muerte fetal
+        (por ejemplo CIE-PM, CIE-10 o una variante nacional).
+      description_fr: Le système de classification utilisé pour coder la cause d'une mortinaissance (par
+        exemple CIM-PM, CIM-10 ou une variante nationale).
+      domain_override: crvs
+      bibliography_refs: '["fhir-bfdr", "icd-pm", "who-cert-perinatal-death"]'
+  certificate_document_type:
+    slot_uri: publicschema:crvs/certificate_document_type
+    title: Certificate document type
+    description: The type of event the certificate attests to (birth, death, marriage, divorce, adoption).
+      Describes what the document is about, orthogonal to its format.
+    range: CertificateDocumentType
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/ActionDocument.ts#PrintCertificateAction
+    annotations:
+      label_es: Tipo de documento del certificado
+      label_fr: Type de document du certificat
+      description_es: El tipo de evento que acredita el certificado (nacimiento, defunción, matrimonio,
+        divorcio, adopción). Describe de qué trata el documento, con independencia de su formato.
+      description_fr: Le type d'événement attesté par le certificat (naissance, décès, mariage, divorce,
+        adoption). Décrit l'objet du document, indépendamment de son format.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "PrintCertificateAction.content.templateId", "match": "broad",
+        "note": "PrintCertificateAction carries an optional templateId string. The mapping from template
+        ID to document type is country-configured; v2 core imposes no constraint on template identifier
+        values.", "uri": "https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/ActionDocument.ts#PrintCertificateAction",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+  certificate_format:
+    slot_uri: publicschema:crvs/certificate_format
+    title: Certificate format
+    description: 'The format of the certificate: full copy (reproducing the acte including marginal annotations),
+      extract (summary only), or a multilingual extract for international use.'
+    range: CertificateFormat
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Formato del certificado
+      label_fr: Format du certificat
+      description_es: 'El formato del certificado: copia íntegra (que reproduce el acta incluyendo las
+        anotaciones marginales), extracto (solo resumen), o extracto multilingüe para uso internacional.'
+      description_fr: 'Le format du certificat: copie intégrale (reproduisant l''acte y compris les mentions
+        marginales), extrait (résumé uniquement), ou extrait plurilingue pour un usage international.'
+      domain_override: crvs
+      bibliography_refs: '["iccs-convention-16", "iccs-convention-34"]'
+  certificate_label:
+    slot_uri: publicschema:crvs/certificate_label
+    title: Certificate label
+    description: A free-text field carrying the role label as it must appear on the printed legal certificate.
+      Jurisdictions that require gendered designations (for example, 'mother', 'father') or positional
+      labels ('parent 1', 'parent 2') on the certificate use this field. The underlying role-nature is
+      already carried on parental_role; certificate_label is purely a display hint for document generation.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Etiqueta de certificado
+      label_fr: Étiquette de certificat
+      description_es: Un campo de texto libre que contiene la etiqueta de rol tal como debe aparecer en
+        el certificado legal impreso. Las jurisdicciones que exigen designaciones por género (por ejemplo,
+        'madre', 'padre') o etiquetas posicionales ('progenitor 1', 'progenitor 2') en el certificado
+        utilizan este campo. La naturaleza del rol subyacente ya está recogida en parental_role; certificate_label
+        es únicamente una indicación de visualización para la generación de documentos.
+      description_fr: Un champ de texte libre portant l'étiquette de rôle telle qu'elle doit figurer sur
+        le certificat légal imprimé. Les juridictions qui exigent des désignations genrées (par exemple,
+        'mère', 'père') ou des étiquettes positionnelles ('parent 1', 'parent 2') sur le certificat utilisent
+        ce champ. La nature du rôle sous-jacent est déjà portée par parental_role ; certificate_label
+        est uniquement un indicateur d'affichage pour la génération de documents.
+      domain_override: crvs
+  certificate_number:
+    slot_uri: publicschema:crvs/certificate_number
+    title: Certificate number
+    description: The number printed on the issued certificate. Distinct from the registration number of
+      the underlying event or record, since multiple certificates can be issued from the same record over
+      time.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Número de certificado
+      label_fr: Numéro de certificat
+      description_es: El número impreso en el certificado emitido. Distinto del número de registro del
+        evento o acta subyacente, dado que pueden emitirse varios certificados a partir del mismo acta
+        a lo largo del tiempo.
+      description_fr: Le numéro imprimé sur le certificat délivré. Distinct du numéro d'enregistrement
+        de l'événement ou de l'acte sous-jacent, puisque plusieurs certificats peuvent être délivrés à
+        partir du même acte au fil du temps.
+      domain_override: crvs
+  child:
+    slot_uri: publicschema:crvs/child
+    title: Child
+    description: The child whose birth, adoption, or legitimation is recorded in this event.
+    range: CrvsPerson
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/forms/pages/child.ts
+    annotations:
+      label_es: Niño o niña
+      label_fr: Enfant
+      description_es: El niño o la niña cuyo nacimiento, adopción o legitimación se registra en este evento.
+      description_fr: L'enfant dont la naissance, l'adoption ou la légitimation est consignée dans cet
+        événement.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Birth declaration field group (country-configured)", "match":
+        "close", "note": "In v2 there is no typed child field at the core level. Farajaland''s birth declaration
+        form defines a ''child'' field group (child.firstname, child.surname, child.dob, child.gender,
+        etc.) in EventConfig.declaration. The semantic role matches but the structure is entirely country-configured.",
+        "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/forms/pages/child.ts",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+  civil_status_record:
+    slot_uri: publicschema:crvs/civil_status_record
+    title: Civil status record
+    description: A reference to a CivilStatusRecord. Used on annotations to point to the record being
+      annotated, and on certificates to point to the record from which the certificate is issued.
+    range: CivilStatusRecord
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Acta de estado civil
+      label_fr: Acte d'état civil
+      description_es: Una referencia a un CivilStatusRecord. Se utiliza en las anotaciones para remitir
+        al acta que se anota, y en los certificados para remitir al acta a partir de la cual se emite
+        el certificado.
+      description_fr: Une référence à un CivilStatusRecord. Utilisée sur les mentions marginales pour
+        désigner l'acte annoté, et sur les certificats pour désigner l'acte à partir duquel le certificat
+        est délivré.
+      domain_override: crvs
+  court:
+    slot_uri: publicschema:crvs/court
+    title: Court
+    description: The court that issued the judgment for a divorce, annulment, adoption, paternity recognition,
+      or other court-ordered vital event.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tribunal
+      label_fr: Tribunal
+      description_es: El tribunal que dictó la sentencia para un divorcio, anulación, adopción, reconocimiento
+        de paternidad u otro evento vital ordenado por tribunal.
+      description_fr: Le tribunal qui a rendu le jugement pour un divorce, une annulation, une adoption,
+        une reconnaissance de paternité ou un autre événement d'état civil ordonné par un tribunal.
+      domain_override: crvs
+  creation_date:
+    slot_uri: publicschema:crvs/creation_date
+    title: Creation date
+    description: The date on which the family register was created, typically at marriage, at the birth
+      of the first child, or when a new household is administratively constituted.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de creación
+      label_fr: Date de création
+      description_es: La fecha en que se creó el registro familiar, generalmente al contraerse matrimonio,
+        al nacimiento del primer hijo o al constituirse administrativamente un nuevo hogar.
+      description_fr: La date à laquelle le registre familial a été créé, généralement lors d'un mariage,
+        à la naissance du premier enfant ou lors de la constitution administrative d'un nouveau ménage.
+      domain_override: crvs
+  deceased:
+    slot_uri: publicschema:crvs/deceased
+    title: Deceased
+    description: The person whose death is recorded. Remains a Person entity so that existing identifiers
+      and attributes can still be referenced after death.
+    range: CrvsPerson
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/forms/pages/eventDetails.ts
+    annotations:
+      label_es: Fallecido
+      label_fr: Défunt
+      description_es: La persona cuyo fallecimiento se registra. Sigue siendo una entidad Persona para
+        que los identificadores y atributos existentes puedan consultarse tras la defunción.
+      description_fr: La personne dont le décès est enregistré. Reste une entité Personne afin que les
+        identifiants et attributs existants puissent toujours être référencés après le décès.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Death declaration field group (country-configured)", "match":
+        "close", "note": "In v2 there is no typed deceased field at the core level. Farajaland''s death
+        declaration form defines the deceased''s data as field groups in EventConfig.declaration. The
+        semantic role matches but the structure is country-configured.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/forms/pages/eventDetails.ts",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+  establishment_basis:
+    slot_uri: publicschema:crvs/establishment_basis
+    title: Establishment basis
+    description: 'The legal route by which the parent''s parentage was established: marital presumption,
+      voluntary recognition, judicial declaration, adoption order, or surrogacy order. Complements parental_role,
+      which captures the role-nature (biological, gestational, legal, adoptive); establishment_basis captures
+      the mechanism.'
+    range: ParentEstablishmentBasis
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Base de establecimiento
+      label_fr: Fondement de l'établissement
+      description_es: 'La vía legal por la que se estableció la parentalidad del progenitor: presunción
+        matrimonial, reconocimiento voluntario, declaración judicial, resolución de adopción o resolución
+        de gestación subrogada. Complementa parental_role, que captura la naturaleza del rol (biológico,
+        gestacional, legal, adoptivo); establishment_basis captura el mecanismo.'
+      description_fr: 'Le fondement juridique par lequel la parenté du parent a été établie : présomption
+        maritale, reconnaissance volontaire, déclaration judiciaire, jugement d''adoption ou jugement
+        de gestation pour autrui. Complète parental_role, qui capture la nature du rôle (biologique, gestationnel,
+        légal, adoptif) ; establishment_basis capture le mécanisme.'
+      domain_override: crvs
+      bibliography_refs: '["hague-intercountry-adoption"]'
+  event_date:
+    slot_uri: publicschema:crvs/event_date
+    title: Event date
+    description: The date on which the vital event (birth, death, marriage, etc.) occurred. Distinct from
+      the registration date, which is when the event was recorded by a registration authority.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventMetadata.ts#EventMetadata
+    annotations:
+      label_es: Fecha del evento
+      label_fr: Date de l'événement
+      description_es: La fecha en que ocurrió el evento vital (nacimiento, defunción, matrimonio, etc.).
+        Distinta de la fecha de registro, que es cuando el evento fue registrado por una autoridad de
+        registro.
+      description_fr: La date à laquelle l'événement d'état civil (naissance, décès, mariage, etc.) s'est
+        produit. Distincte de la date d'enregistrement, qui est la date à laquelle l'événement a été consigné
+        par une autorité d'enregistrement.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "EventMetadata.dateOfEvent (country-configured)", "match":
+        "related", "note": "In v2, EventMetadata.dateOfEvent is a nullable date field set from the country-configured
+        declaration field referenced by EventConfig.dateOfEvent. For births, Farajaland uses the child''s
+        date of birth; for deaths, the date of death. No top-level event date exists at the v2 core level
+        independent of country configuration.", "uri": "https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventMetadata.ts#EventMetadata",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+  event_date_estimated:
+    slot_uri: publicschema:crvs/event_date_estimated
+    title: Event date estimated
+    description: Whether the event date is an estimate rather than a known exact date. Common for late-registered
+      births or deaths where the precise date is not documented.
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha estimada del evento
+      label_fr: Date estimée de l'événement
+      description_es: Indica si la fecha del evento es una estimación en lugar de una fecha exacta conocida.
+        Común para nacimientos o defunciones registrados tardíamente cuya fecha precisa no está documentada.
+      description_fr: Indique si la date de l'événement est une estimation plutôt qu'une date exacte connue.
+        Fréquent pour les naissances ou décès enregistrés tardivement dont la date précise n'est pas documentée.
+      domain_override: crvs
+  event_location:
+    slot_uri: publicschema:crvs/event_location
+    title: Event location
+    description: The specific place where the vital event occurred (for example, the hospital of birth
+      or the place of death). Distinct from the registration location, which is where the event was recorded.
+    range: Location
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventMetadata.ts#EventMetadata
+    annotations:
+      label_es: Lugar del evento
+      label_fr: Lieu de l'événement
+      description_es: El lugar específico donde ocurrió el evento vital (por ejemplo, el hospital de nacimiento
+        o el lugar de defunción). Distinto del lugar de registro, que es donde se registró el evento.
+      description_fr: Le lieu précis où l'événement d'état civil s'est produit (par exemple, l'hôpital
+        de naissance ou le lieu du décès). Distinct du lieu d'enregistrement, qui est l'endroit où l'événement
+        a été consigné.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "EventMetadata.placeOfEvent (UUID reference)", "match": "close",
+        "note": "In v2, EventMetadata.placeOfEvent is a nullable UUID referencing a location in the Location
+        service. Farajaland''s EventConfig sets this from a country-configured location picker field.
+        The semantic role (where the event occurred) aligns well.", "uri": "https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventMetadata.ts#EventMetadata",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+  family:
+    slot_uri: publicschema:crvs/family
+    title: Family
+    description: The family group tracked by a family register. Modeled as a Group so that household-level
+      and family-level concepts can share structure.
+    range: Group
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Familia
+      label_fr: Famille
+      description_es: El grupo familiar registrado en un registro familiar. Modelado como un Grupo para
+        que los conceptos a nivel de hogar y a nivel de familia puedan compartir la misma estructura.
+      description_fr: Le groupe familial suivi par un registre familial. Modélisé comme un Groupe afin
+        que les concepts de niveau ménage et de niveau famille puissent partager la même structure.
+      domain_override: crvs
+  family_register_status:
+    slot_uri: publicschema:crvs/family_register_status
+    title: Family register status
+    description: 'The lifecycle status of the family register: active, closed, split into multiple registers,
+      or merged with another. Tracks how vital events reshape the register over time.'
+    range: FamilyRegisterStatus
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Estado del registro familiar
+      label_fr: Statut du registre familial
+      description_es: 'El estado del ciclo de vida del registro familiar: activo, cerrado, dividido en
+        varios registros o fusionado con otro. Da seguimiento a cómo los eventos vitales transforman el
+        registro a lo largo del tiempo.'
+      description_fr: 'Le statut du cycle de vie du registre familial: actif, clôturé, scindé en plusieurs
+        registres ou fusionné avec un autre. Retrace la manière dont les événements d''état civil transforment
+        le registre au fil du temps.'
+      domain_override: crvs
+  gestational_age:
+    slot_uri: publicschema:crvs/gestational_age
+    title: Gestational age
+    description: The completed weeks of gestation at the time of the event. Used for fetal death and birth
+      records to distinguish viability and to apply the ICD-PM mortality classification.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Edad gestacional
+      label_fr: Âge gestationnel
+      description_es: Las semanas completas de gestación al momento del evento. Utilizado en registros
+        de muerte fetal y nacimiento para distinguir la viabilidad y aplicar la clasificación de mortalidad
+        CIE-PM.
+      description_fr: Le nombre de semaines de gestation révolues au moment de l'événement. Utilisé pour
+        les actes de mortinaissance et de naissance afin de distinguer la viabilité et d'appliquer la
+        classification de mortalité CIM-PM.
+      domain_override: crvs
+      bibliography_refs: '["fhir-bfdr", "un-vital-stats-rev3", "who-preterm-lbw-care-2022"]'
+  head_of_household:
+    slot_uri: publicschema:crvs/head_of_household
+    title: Head of household
+    description: The person designated as head of the family register, around whom the register is organized.
+      Terminology and legal significance vary (koseki hittosha in Japan, hu zhu in China, chef de famille
+      in French-inspired systems).
+    range: CrvsPerson
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Jefe de hogar
+      label_fr: Chef de ménage
+      description_es: La persona designada como cabeza del registro familiar, en torno a la cual se organiza
+        el registro. La terminología y el alcance jurídico varían (koseki hittosha en Japón, hu zhu en
+        China, jefe de familia en los sistemas de inspiración francesa).
+      description_fr: La personne désignée comme chef du registre familial, autour de laquelle le registre
+        est organisé. La terminologie et la portée juridique varient (koseki hittosha au Japon, hu zhu
+        en Chine, chef de famille dans les systèmes inspirés du droit français).
+      domain_override: crvs
+      bibliography_refs: '["un-census-rev3"]'
+  informant:
+    slot_uri: publicschema:crvs/informant
+    title: Informant
+    description: The person who declares the vital event to the civil registration authority. Typically
+      a parent for births, a relative or medical professional for deaths, or the parties themselves for
+      marriages.
+    range: CrvsPerson
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/forms/pages/informant.ts
+    annotations:
+      label_es: Declarante
+      label_fr: Déclarant
+      description_es: La persona que declara el evento vital ante la autoridad de registro civil. Típicamente
+        un padre o madre en nacimientos, un familiar o profesional médico en defunciones, o las propias
+        partes en matrimonios.
+      description_fr: La personne qui déclare l'événement à l'autorité d'état civil. Habituellement un
+        parent pour les naissances, un proche ou un professionnel de santé pour les décès, ou les parties
+        elles-mêmes pour les mariages.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Informant declaration field group (country-configured)",
+        "match": "close", "note": "In v2, informant data lives in country-configured EventConfig.declaration
+        fields. Farajaland''s birth declaration defines an informant field group. The semantic role matches
+        but the structure is country-configured.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/forms/pages/informant.ts",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+  issuing_authority_location:
+    slot_uri: publicschema:crvs/issuing_authority_location
+    title: Issuing authority location
+    description: The civil registration office that issued the record, modeled as a Location. Distinct
+      from the string-valued issuing_authority property used on generic identifiers.
+    range: Location
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Ubicación de la autoridad emisora
+      label_fr: Localisation de l'autorité émettrice
+      description_es: La oficina de registro civil que emitió el acta, modelada como una Ubicación. Distinta
+        de la propiedad issuing_authority, de tipo cadena, utilizada en identificadores genéricos.
+      description_fr: Le bureau d'état civil qui a délivré l'acte, représenté comme un Lieu. Distinct
+        de la propriété issuing_authority, de type chaîne, utilisée sur les identifiants génériques.
+      domain_override: crvs
+  issuing_office:
+    slot_uri: publicschema:crvs/issuing_office
+    title: Issuing office
+    description: The civil registration or judicial office that issued the certificate. May differ from
+      the office that holds the underlying record, for example when an embassy issues a certificate based
+      on a record held elsewhere.
+    range: Location
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Oficina emisora
+      label_fr: Bureau émetteur
+      description_es: La oficina de registro civil o la oficina judicial que emitió el certificado. Puede
+        diferir de la oficina que conserva el acta subyacente, por ejemplo cuando una embajada emite un
+        certificado a partir de un acta conservada en otro lugar.
+      description_fr: Le bureau d'état civil ou l'office judiciaire qui a délivré le certificat. Peut
+        différer du bureau qui conserve l'acte sous-jacent, par exemple lorsqu'une ambassade délivre un
+        certificat sur la base d'un acte conservé ailleurs.
+      domain_override: crvs
+  judgment_date:
+    slot_uri: publicschema:crvs/judgment_date
+    title: Judgment date
+    description: The date of the court judgment that granted a divorce, annulment, adoption, paternity
+      recognition, or other court-ordered vital event. Distinct from the registration date.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de la sentencia
+      label_fr: Date du jugement
+      description_es: La fecha de la sentencia judicial que otorgó un divorcio, anulación, adopción, reconocimiento
+        de paternidad u otro evento vital ordenado por tribunal. Distinta de la fecha de registro.
+      description_fr: La date du jugement ayant prononcé un divorce, une annulation, une adoption, une
+        reconnaissance de paternité ou un autre événement d'état civil ordonné par tribunal. Distincte
+        de la date d'enregistrement.
+      domain_override: crvs
+  judgment_reference:
+    slot_uri: publicschema:crvs/judgment_reference
+    title: Judgment reference
+    description: The case number or other identifier of the court judgment that ordered this vital event.
+      Enables retrieval of the underlying judicial record.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Referencia de la sentencia
+      label_fr: Référence du jugement
+      description_es: El número de expediente u otro identificador de la sentencia judicial que ordenó
+        este evento vital. Permite recuperar la resolución judicial subyacente.
+      description_fr: Le numéro de dossier ou autre identifiant du jugement ayant ordonné cet événement
+        d'état civil. Permet de retrouver la décision judiciaire sous-jacente.
+      domain_override: crvs
+  manner_of_death:
+    slot_uri: publicschema:crvs/manner_of_death
+    title: Manner of death
+    description: 'The circumstances under which the death occurred: natural, accident, intentional self-harm,
+      assault, legal intervention, war, pending investigation, or could not be determined. Follows the
+      WHO death certificate structure.'
+    range: MannerOfDeath
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent
+    annotations:
+      label_es: Circunstancias de la defunción
+      label_fr: Circonstances du décès
+      description_es: 'Las circunstancias en las que ocurrió la defunción: natural, accidente, lesión
+        autoinfligida intencional, agresión, intervención legal, guerra, investigación pendiente o no
+        determinada. Sigue la estructura del certificado de defunción de la OMS.'
+      description_fr: 'Les circonstances dans lesquelles le décès s''est produit : naturel, accident,
+        violence auto-infligée intentionnelle, agression, intervention légale, guerre, enquête en cours
+        ou indéterminé. Suit la structure du certificat médical de cause de décès de l''OMS.'
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Manner of death declaration field (country-configured)",
+        "match": "close", "note": "In v2 there is no core mannerOfDeath field. The field is a country-configured
+        SELECT in EventConfig.declaration. Our manner-of-death vocabulary recommends a canonical set.",
+        "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-vrdr", "who-icd-manner-of-death"]'
+  marriage_ref:
+    slot_uri: publicschema:crvs/marriage_ref
+    title: Marriage reference
+    description: A reference to the Marriage record that this termination (divorce or annulment) dissolves.
+      Links the end of the union back to its formation.
+    range: Marriage
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Referencia al matrimonio
+      label_fr: Référence au mariage
+      description_es: Una referencia al registro de Matrimonio que esta terminación (divorcio o anulación)
+        disuelve. Vincula el fin de la unión con su formación.
+      description_fr: Une référence à l'acte de Mariage que cette dissolution (divorce ou annulation)
+        met fin. Relie la fin de l'union à sa formation.
+      domain_override: crvs
+  medical_certifier:
+    slot_uri: publicschema:crvs/medical_certifier
+    title: Medical certifier
+    description: The medical practitioner who certified the cause of death. Distinct from the registrar,
+      who records the death with the civil registration authority.
+    range: CrvsPerson
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent
+    annotations:
+      label_es: Certificador médico
+      label_fr: Certificateur médical
+      description_es: El profesional médico que certificó la causa de la defunción. Distinto del funcionario
+        de registro civil, que inscribe la defunción ante la autoridad de registro.
+      description_fr: Le praticien médical qui a certifié la cause du décès. Distinct de l'officier d'état
+        civil, qui consigne le décès auprès de l'autorité d'enregistrement.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Medical certifier declaration field group (country-configured)",
+        "match": "close", "note": "In v2 there is no core medicalPractitioner field. Medical certifier
+        data is a country-configured field group in EventConfig.declaration.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/death/index.ts#deathEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-vrdr", "who-cert-perinatal-death", "who-medical-cert-death"]'
+  mother:
+    slot_uri: publicschema:crvs/mother
+    title: Mother
+    description: 'A convenience reference to the Parent instance whose parental_role is gestational (or,
+      where no gestational parent is recorded, whose certificate_label indicates ''mother''). Retained
+      for compatibility with UN DESA Principles and Recommendations for a Vital Statistics System, Rev
+      3 (2014), which organizes birth-statistics variables under ''Characteristics of the mother'' (Table
+      III.1). Systems that satisfy UN DESA Rev 3 tabulation requirements can derive the ''mother'' statistical
+      category by mapping parental_role: gestational to ''mother''. This is a statistical-tabulation helper
+      field, not a modelling assertion that only one parent is a ''mother'' or that parenthood is gendered.'
+    range: Parent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Madre
+      label_fr: Mère
+      description_es: 'Referencia de conveniencia a la instancia de Parent cuyo parental_role es gestacional
+        (o, cuando no se registra ningún progenitor gestacional, cuyo certificate_label indica ''madre'').
+        Se conserva para compatibilidad con los Principios y Recomendaciones para un Sistema de Estadísticas
+        Vitales de ONU DESA, Rev. 3 (2014), que organiza las variables estadísticas de nacimientos bajo
+        ''Características de la madre'' (Tabla III.1). Los sistemas que satisfacen los requisitos de tabulación
+        de ONU DESA Rev. 3 pueden derivar la categoría estadística ''madre'' asignando parental_role:
+        gestacional a ''madre''. Este es un campo auxiliar de tabulación estadística, no una afirmación
+        de modelado de que solo un progenitor es ''madre'' o de que la parentalidad esté determinada por
+        el género.'
+      description_fr: 'Référence pratique à l''instance de Parent dont le parental_role est gestationnel
+        (ou, en l''absence de parent gestationnel enregistré, dont le certificate_label indique ''mère'').
+        Conservé pour la compatibilité avec les Principes et recommandations pour un système de statistiques
+        de l''état civil de l''ONU DESA, Rév. 3 (2014), qui organise les variables statistiques relatives
+        aux naissances sous ''Caractéristiques de la mère'' (Tableau III.1). Les systèmes qui satisfont
+        aux exigences de tabulation de l''ONU DESA Rév. 3 peuvent dériver la catégorie statistique ''mère''
+        en associant parental_role : gestationnel à ''mère''. Ce champ est un auxiliaire de tabulation
+        statistique, et non une affirmation de modélisation selon laquelle un seul parent serait une ''mère''
+        ou que la parenté serait genrée.'
+      domain_override: crvs
+      bibliography_refs: '["un-vital-stats-rev3"]'
+  nationality_at_birth:
+    slot_uri: publicschema:crvs/nationality_at_birth
+    title: Nationality at birth
+    description: The nationality acquired by the child at the time of birth, typically derived from parentage
+      (jus sanguinis) or place of birth (jus soli) according to the applicable national law.
+    range: Country
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Nacionalidad al nacer
+      label_fr: Nationalité à la naissance
+      description_es: La nacionalidad adquirida por el niño o la niña al momento del nacimiento, típicamente
+        derivada de la filiación (jus sanguinis) o del lugar de nacimiento (jus soli) según la ley nacional
+        aplicable.
+      description_fr: La nationalité acquise par l'enfant au moment de la naissance, généralement déterminée
+        par la filiation (jus sanguinis) ou le lieu de naissance (jus soli) selon la loi nationale applicable.
+      domain_override: crvs
+      bibliography_refs: '["iso-3166-1"]'
+  originating_event:
+    slot_uri: publicschema:crvs/originating_event
+    title: Originating event
+    description: The vital event that this civil status record attests to (the birth behind a birth record,
+      the marriage behind a marriage record, etc.). Anchors the record to its underlying occurrence.
+    range: VitalEvent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Evento de origen
+      label_fr: événement d'origine
+      description_es: El evento vital que esta acta de estado civil acredita (el nacimiento que dio origen
+        al acta de nacimiento, el matrimonio que dio origen al acta de matrimonio, etc.). Vincula el acta
+        al suceso subyacente.
+      description_fr: L'événement d'état civil que cet acte atteste (la naissance derrière un acte de
+        naissance, le mariage derrière un acte de mariage, etc.). Rattache l'acte à l'événement sous-jacent.
+      domain_override: crvs
+  parental_role:
+    slot_uri: publicschema:crvs/parental_role
+    title: Parental role
+    description: The role-nature of the parent relationship (biological, gestational, legal, or adoptive),
+      decoupled from gender. Makes the nature of parentage explicit and separable from the parent's identity.
+      For jurisdictions requiring gendered or positional labels on the printed certificate, use certificate_label
+      alongside this property.
+    range: ParentalRole
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Rol parental
+      label_fr: Rôle parental
+      description_es: La naturaleza del rol parental (biológico, gestacional, legal o adoptivo), desacoplada
+        del género. Hace explícita y separable la naturaleza de la parentalidad respecto a la identidad
+        del progenitor. Para las jurisdicciones que exigen etiquetas de género o posicionales en el certificado
+        impreso, use certificate_label junto con esta propiedad.
+      description_fr: La nature du rôle parental (biologique, gestationnel, légal ou adoptif), découplée
+        du genre. Rend explicite et séparable la nature de la parenté par rapport à l'identité du parent.
+        Pour les juridictions qui exigent des étiquettes genrées ou positionnelles sur le certificat imprimé,
+        utilisez certificate_label en complément de cette propriété.
+      domain_override: crvs
+      bibliography_refs: '["fhir-v3-role-code"]'
+  parents:
+    slot_uri: publicschema:crvs/parents
+    title: Parents
+    description: The parents of the child, each captured as a Parent link entity that combines a Person
+      with a parental role-nature (biological, gestational, legal, or adoptive).
+    range: Parent
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/forms/pages/mother.ts
+    annotations:
+      label_es: Progenitores
+      label_fr: Parents
+      description_es: Los progenitores del niño o de la niña, cada uno representado por una entidad de
+        enlace Parent que combina una Persona con una naturaleza de rol parental (biológico, gestacional,
+        legal o adoptivo).
+      description_fr: Les parents de l'enfant, chacun représenté par une entité de lien Parent qui associe
+        une Personne à une nature de rôle parental (biologique, gestationnel, légal ou adoptif).
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Birth declaration field groups (mother.*, father.*, country-configured)",
+        "match": "broad", "note": "In v2 there are no typed mother/father fields at the core level. Farajaland''s
+        birth declaration form defines separate ''mother'' and ''father'' field groups in EventConfig.declaration
+        using key prefixes. The semantic role matches but the structure is country-configured.", "uri":
+        "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/forms/pages/mother.ts",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+  party_1:
+    slot_uri: publicschema:crvs/party_1
+    title: Party 1
+    description: One of the two parties to a marriage, divorce, or annulment. Ordering between party_1
+      and party_2 is arbitrary and does not imply a role or precedence.
+    range: CrvsPerson
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event
+    annotations:
+      label_es: Parte 1
+      label_fr: Partie 1
+      description_es: Una de las dos partes de un matrimonio, divorcio o anulación. El orden entre party_1
+        y party_2 es arbitrario y no implica rol ni precedencia.
+      description_fr: L'une des deux parties à un mariage, un divorce ou une annulation. L'ordre entre
+        party_1 et party_2 est arbitraire et n'implique ni rôle ni préséance.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Marriage party_1 declaration field (country-configured)",
+        "match": "close", "note": "In v2 there are no core gendered marriage party slots. Party data lives
+        in country-configured EventConfig.declaration fields. The gender-neutral party_1 maps to the first
+        spouse defined by the country config.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+  party_2:
+    slot_uri: publicschema:crvs/party_2
+    title: Party 2
+    description: The second of the two parties to a marriage, divorce, or annulment. Ordering between
+      party_1 and party_2 is arbitrary and does not imply a role or precedence.
+    range: CrvsPerson
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event
+    annotations:
+      label_es: Parte 2
+      label_fr: Partie 2
+      description_es: La segunda de las dos partes de un matrimonio, divorcio o anulación. El orden entre
+        party_1 y party_2 es arbitrario y no implica rol ni precedencia.
+      description_fr: La seconde des deux parties à un mariage, un divorce ou une annulation. L'ordre
+        entre party_1 et party_2 est arbitraire et n'implique ni rôle ni préséance.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Marriage party_2 declaration field (country-configured)",
+        "match": "close", "note": "In v2 there are no core gendered marriage party slots. Party data lives
+        in country-configured EventConfig.declaration fields. The gender-neutral party_2 maps to the second
+        spouse defined by the country config.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+  place_type:
+    slot_uri: publicschema:crvs/place_type
+    title: Place type
+    description: The category of place where the vital event occurred (health facility, home, en route,
+      etc.). Complements the specific Location by describing what kind of setting it was.
+    range: PlaceType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de lugar
+      label_fr: Type de lieu
+      description_es: La categoría de lugar donde ocurrió el evento vital (establecimiento de salud, hogar,
+        en camino, etc.). Complementa la ubicación específica al describir qué tipo de entorno era.
+      description_fr: La catégorie de lieu où l'événement d'état civil s'est produit (établissement de
+        santé, domicile, en chemin, etc.). Complète la Localisation spécifique en décrivant le type de
+        milieu concerné.
+      domain_override: crvs
+  previous_parents:
+    slot_uri: publicschema:crvs/previous_parents
+    title: Previous parents
+    description: The parents whose legal relationship with the adoptee is modified or terminated by the
+      adoption. Present in full adoption (where biological parental rights end); often absent in simple
+      adoption (where they are preserved).
+    range: Parent
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Progenitores anteriores
+      label_fr: Parents précédents
+      description_es: Los padres cuya relación legal con la persona adoptada se modifica o termina con
+        la adopción. Presentes en la adopción plena (donde cesan los derechos parentales biológicos);
+        a menudo ausentes en la adopción simple (donde se conservan).
+      description_fr: Les parents dont le lien juridique avec l'adopté est modifié ou rompu par l'adoption.
+        Présents dans l'adoption plénière (où les droits parentaux biologiques cessent); souvent absents
+        dans l'adoption simple (où ils sont conservés).
+      domain_override: crvs
+      bibliography_refs: '["hague-intercountry-adoption"]'
+  recognizing_parent:
+    slot_uri: publicschema:crvs/recognizing_parent
+    title: Recognizing parent
+    description: The parent who is formally recognizing parentage of a child, for example a person acknowledging
+      a child born outside marriage. Captured as a Parent link entity so the parental role-nature and
+      establishment basis are explicit.
+    range: Parent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Progenitor reconociente
+      label_fr: Parent reconnaissant
+      description_es: El progenitor que reconoce formalmente la filiación de un hijo o hija, por ejemplo
+        una persona que reconoce a un hijo nacido fuera del matrimonio. Representado como una entidad
+        de enlace Parent para que la naturaleza del rol parental y la base de establecimiento sean explícitas.
+      description_fr: Le parent qui reconnaît formellement la filiation d'un enfant, par exemple une personne
+        reconnaissant un enfant né hors mariage. Représenté comme une entité de lien Parent afin que la
+        nature du rôle parental et le fondement de l'établissement soient explicites.
+      domain_override: crvs
+  record_type:
+    slot_uri: publicschema:crvs/record_type
+    title: Record type
+    description: 'The type of civil status record: birth, marriage, death, paternity recognition, supplementary
+      judgment (jugement supplétif), or a court-ordered substitute record. Determines which original vital
+      event the record attests to.'
+    range: CivilStatusRecordType
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventDocument.ts#EventDocument
+    annotations:
+      label_es: Tipo de acta
+      label_fr: Type d'acte
+      description_es: 'El tipo de acta de estado civil: nacimiento, matrimonio, defunción, reconocimiento
+        de paternidad, sentencia supletoria, o acta sustitutiva ordenada por tribunal. Determina a qué
+        evento vital original acredita el acta.'
+      description_fr: 'Le type d''acte d''état civil: naissance, mariage, décès, reconnaissance de paternité,
+        jugement supplétif, ou acte de substitution ordonné par tribunal. Détermine à quel événement d''état
+        civil original l''acte se rattache.'
+      domain_override: crvs
+      external_alignments_json: '[{"label": "EventDocument.type (country-configured string)", "match":
+        "close", "note": "In v2, EventDocument.type is a free string set by the country config (e.g. ''birth'',
+        ''death'', ''marriage''). This is the closest v2 equivalent to our record_type property; the correspondence
+        is close but the v2 field is a string rather than an enum.", "uri": "https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventDocument.ts#EventDocument",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+  register_authority:
+    slot_uri: publicschema:crvs/register_authority
+    title: Register authority
+    description: The authority that maintains the family register. Typically a municipal or ward-level
+      civil registration office.
+    range: Location
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Autoridad del registro
+      label_fr: Autorité du registre
+      description_es: La autoridad que mantiene el registro familiar. Generalmente una oficina de registro
+        civil a nivel municipal o de distrito.
+      description_fr: L'autorité qui tient le registre familial. Généralement un bureau d'état civil au
+        niveau municipal ou d'arrondissement.
+      domain_override: crvs
+  register_number:
+    slot_uri: publicschema:crvs/register_number
+    title: Register number
+    description: The unique number that identifies the family register within its issuing jurisdiction.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Número de registro
+      label_fr: Numéro de registre
+      description_es: El número único que identifica el registro familiar dentro de la jurisdicción que
+        lo emite.
+      description_fr: Le numéro unique qui identifie le registre familial au sein de la juridiction qui
+        le délivre.
+      domain_override: crvs
+  registrar:
+    slot_uri: publicschema:crvs/registrar
+    title: Registrar
+    description: The civil registration officer who recorded the event. In many jurisdictions this is
+      the officer whose signature appears on the acte.
+    range: CrvsPerson
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Registrador
+      label_fr: Officier d'état civil
+      description_es: El funcionario de registro civil que registró el evento. En muchas jurisdicciones,
+        es el funcionario cuya firma aparece en el acta.
+      description_fr: L'officier d'état civil qui a enregistré l'événement. Dans de nombreuses juridictions,
+        il s'agit de l'officier dont la signature figure sur l'acte.
+      domain_override: crvs
+  registration_date:
+    slot_uri: publicschema:crvs/registration_date
+    title: Registration date
+    description: The date on which the vital event was officially registered with the civil registration
+      authority. May be later than the event date, especially for late registrations.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de registro
+      label_fr: Date d'enregistrement
+      description_es: La fecha en que el evento vital fue registrado oficialmente ante la autoridad de
+        registro civil. Puede ser posterior a la fecha del evento, especialmente para registros tardíos.
+      description_fr: La date à laquelle l'événement d'état civil a été officiellement enregistré auprès
+        de l'autorité d'état civil. Peut être postérieure à la date de l'événement, en particulier pour
+        les enregistrements tardifs.
+      domain_override: crvs
+  registration_location:
+    slot_uri: publicschema:crvs/registration_location
+    title: Registration location
+    description: The civil registration office where the vital event was registered. Often a municipal
+      or district-level registry distinct from the place of occurrence.
+    range: Location
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Lugar de registro
+      label_fr: Lieu d'enregistrement
+      description_es: La oficina de registro civil donde se registró el evento vital. A menudo es un registro
+        municipal o distrital, distinto del lugar donde ocurrió el evento.
+      description_fr: Le bureau d'état civil où l'événement a été enregistré. Souvent un bureau municipal
+        ou de district, distinct du lieu où l'événement s'est produit.
+      domain_override: crvs
+  registration_status:
+    slot_uri: publicschema:crvs/registration_status
+    title: Registration status
+    description: 'The lifecycle state of the registration process for this vital event: whether it is
+      declared, pending validation, registered, rejected, cancelled, or has been corrected or archived.'
+    range: RegistrationStatus
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventMetadata.ts#EventStatus
+    annotations:
+      label_es: Estado del registro
+      label_fr: Statut de l'enregistrement
+      description_es: 'El estado del ciclo de vida del proceso de registro para este evento vital: declarado,
+        pendiente de validación, registrado, rechazado, cancelado, corregido o archivado.'
+      description_fr: 'L''état du cycle de vie du processus d''enregistrement pour cet événement d''état
+        civil: déclaré, en attente de validation, enregistré, rejeté, annulé, corrigé ou archivé.'
+      domain_override: crvs
+      external_alignments_json: '[{"label": "EventMetadata.status (EventStatus)", "match": "related",
+        "note": "In v2, EventMetadata.status is derived from the action log and carries one of five values
+        (CREATED, NOTIFIED, DECLARED, REGISTERED, ARCHIVED). PublicSchema records only the current status;
+        the action log provides the full audit trail.", "uri": "https://github.com/opencrvs/opencrvs-core/blob/develop/packages/commons/src/events/EventMetadata.ts#EventStatus",
+        "vocabulary": "OpenCRVS v2 event service", "vocabulary_id": "opencrvs"}]'
+  registration_type:
+    slot_uri: publicschema:crvs/registration_type
+    title: Registration type
+    description: 'The regime under which the registration was processed: current (within the legal window),
+      late, court-ordered, or reconstruction of a lost record. Affects legal weight and downstream uses.'
+    range: RegistrationType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de registro
+      label_fr: Type d'enregistrement
+      description_es: 'El régimen bajo el cual se procesó el registro: corriente (dentro del plazo legal),
+        tardío, ordenado por tribunal, o reconstitución de un acta perdida. Afecta el peso legal y los
+        usos posteriores.'
+      description_fr: 'Le régime selon lequel l''enregistrement a été traité: courant (dans le délai légal),
+        tardif, ordonné par un tribunal, ou reconstitution d''un acte perdu. Influe sur la valeur juridique
+        et les usages ultérieurs.'
+      domain_override: crvs
+  sex_at_birth:
+    slot_uri: publicschema:crvs/sex_at_birth
+    title: Sex at birth
+    description: The sex of the child as observed and recorded at the time of birth. Distinct from any
+      later legal or administrative sex marker.
+    range: Sex
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/forms/pages/child.ts
+    annotations:
+      label_es: Sexo al nacer
+      label_fr: Sexe à la naissance
+      description_es: El sexo del niño o de la niña tal como se observa y registra en el momento del nacimiento.
+        Distinto de cualquier marcador de sexo legal o administrativo posterior.
+      description_fr: Le sexe de l'enfant tel qu'observé et consigné au moment de la naissance. Distinct
+        de tout marqueur de sexe légal ou administratif ultérieur.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Child gender/sex declaration field (country-configured)",
+        "match": "close", "note": "In v2 there is no core gender/sex enum. Farajaland''s birth declaration
+        defines a gender field on the child field group as a country-configured SELECT. The sex vocabulary
+        system_mappings apply.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/forms/pages/child.ts",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-bfdr", "iso-5218"]'
+  termination_type:
+    slot_uri: publicschema:crvs/termination_type
+    title: Termination type
+    description: Whether the marriage was terminated by divorce (dissolution of a valid marriage) or by
+      annulment (declaration that the marriage was void from its inception).
+    range: MarriageTerminationType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de disolución
+      label_fr: Type de dissolution
+      description_es: Indica si el matrimonio fue disuelto por divorcio (disolución de un matrimonio válido)
+        o por anulación (declaración de que el matrimonio era nulo desde el origen).
+      description_fr: Indique si le mariage a été dissous par divorce (dissolution d'un mariage valide)
+        ou par annulation (déclaration que le mariage était nul ab initio).
+      domain_override: crvs
+  triggering_vital_event:
+    slot_uri: publicschema:crvs/triggering_vital_event
+    title: Triggering vital event
+    description: The vital event that triggered this record. On CivilStatusAnnotation the referenced VitalEvent
+      identifies the later marriage, divorce, death, paternity recognition, or adoption that prompted
+      the marginal annotation on the original acte.
+    range: VitalEvent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Evento vital desencadenante
+      label_fr: Événement d'état civil déclencheur
+      description_es: El evento vital que desencadenó este registro. En CivilStatusAnnotation, el VitalEvent
+        referenciado identifica el matrimonio, divorcio, defunción, reconocimiento de paternidad o adopción
+        posterior que motivó la anotación marginal en el acta original.
+      description_fr: L'événement d'état civil qui a déclenché cet enregistrement. Sur CivilStatusAnnotation,
+        le VitalEvent référencé identifie le mariage, le divorce, le décès, la reconnaissance de paternité
+        ou l'adoption ultérieurs qui ont motivé la mention marginale sur l'acte original.
+      category: vital_event
+  type_of_marriage:
+    slot_uri: publicschema:crvs/type_of_marriage
+    title: Type of marriage
+    description: 'The legal regime under which the marriage was contracted: civil, religious, customary,
+      or common law. Determines which authority registered or recognized the union and how subsequent
+      terminations are handled.'
+    range: MarriageType
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event
+    annotations:
+      label_es: Tipo de matrimonio
+      label_fr: Type de mariage
+      description_es: 'El régimen jurídico bajo el cual se contrajo el matrimonio: civil, religioso, consuetudinario
+        o de hecho. Determina qué autoridad registró o reconoció la unión y cómo se gestionan las terminaciones
+        posteriores.'
+      description_fr: 'Le régime juridique sous lequel le mariage a été contracté: civil, religieux, coutumier
+        ou de fait. Détermine quelle autorité a enregistré ou reconnu l''union et la manière dont les
+        dissolutions ultérieures sont traitées.'
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Type of marriage declaration field (country-configured)",
+        "match": "close", "note": "In v2 there is no core typeOfMarriage field. The field is a country-configured
+        SELECT in EventConfig.declaration. Our marriage-type vocabulary recommends a canonical set.",
+        "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+  vital_event:
+    slot_uri: publicschema:crvs/vital_event
+    title: Vital event
+    description: The vital event that this certificate attests to. Used on certificates issued directly
+      from a vital event record rather than from a stored civil status record.
+    range: VitalEvent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Evento vital
+      label_fr: Événement d'état civil
+      description_es: El evento vital que acredita este certificado. Utilizado en certificados emitidos
+        directamente a partir de un registro de evento vital, en lugar de un acta de estado civil almacenada.
+      description_fr: L'événement d'état civil attesté par ce certificat. Utilisé sur les certificats
+        délivrés directement à partir d'un enregistrement d'événement d'état civil plutôt qu'à partir
+        d'un acte d'état civil conservé.
+      domain_override: crvs
+  weight:
+    slot_uri: publicschema:crvs/weight
+    title: Weight
+    description: The weight of the fetus at the time of a fetal death, recorded in grams. Combined with
+      gestational age, used to classify viability and stillbirth type.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Peso
+      label_fr: Poids
+      description_es: El peso del feto al momento de la muerte fetal, registrado en gramos. Combinado
+        con la edad gestacional, se utiliza para clasificar la viabilidad y el tipo de muerte fetal.
+      description_fr: Le poids du fœtus au moment de la mortinaissance, enregistré en grammes. Combiné
+        à l'âge gestationnel, sert à classer la viabilité et le type de mortinaissance.
+      domain_override: crvs
+      bibliography_refs: '["who-preterm-lbw-care-2022"]'
+  weight_at_birth:
+    slot_uri: publicschema:crvs/weight_at_birth
+    title: Weight at birth
+    description: The weight of the child at birth, recorded in grams. A core UN Principles and Recommendations
+      vital statistics variable used to identify low birth weight.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    exact_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent
+    annotations:
+      label_es: Peso al nacer
+      label_fr: Poids à la naissance
+      description_es: El peso del niño o de la niña al nacer, registrado en gramos. Variable clave de
+        los Principios y Recomendaciones de las Naciones Unidas sobre estadísticas vitales, utilizada
+        para identificar el bajo peso al nacer.
+      description_fr: Le poids de l'enfant à la naissance, enregistré en grammes. Variable essentielle
+        des Principes et Recommandations des Nations Unies sur les statistiques de l'état civil, utilisée
+        pour identifier l'insuffisance pondérale à la naissance.
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Weight at birth declaration field (country-configured)",
+        "match": "exact", "note": "In v2 there is no core weightAtBirth field. The field is a country-configured
+        numeric field in EventConfig.declaration.", "uri": "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/birth/index.ts#birthEvent",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'
+      bibliography_refs: '["fhir-bfdr", "un-vital-stats-rev3", "who-preterm-lbw-care-2022"]'
+  witnesses:
+    slot_uri: publicschema:crvs/witnesses
+    title: Witnesses
+    description: People who witnessed the vital event and attested to it at the time of registration.
+      Witness requirements vary by jurisdiction and event type (marriages most commonly require them).
+    range: CrvsPerson
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event
+    annotations:
+      label_es: Testigos
+      label_fr: Témoins
+      description_es: Personas que presenciaron el evento vital y lo atestiguaron al momento del registro.
+        Los requisitos de testigos varían según la jurisdicción y el tipo de evento (los matrimonios los
+        exigen con mayor frecuencia).
+      description_fr: Personnes qui ont été témoins de l'événement d'état civil et qui l'ont attesté au
+        moment de l'enregistrement. Les exigences en matière de témoins varient selon la juridiction et
+        le type d'événement (les mariages en exigent le plus souvent).
+      domain_override: crvs
+      external_alignments_json: '[{"label": "Witness declaration field group (country-configured)", "match":
+        "broad", "note": "In v2 there are no core witness fields. Witness data is a country-configured
+        field group in EventConfig.declaration. Our witnesses list has unlimited cardinality.", "uri":
+        "https://github.com/opencrvs/opencrvs-farajaland/blob/develop/src/events/utils/types.ts#Event",
+        "vocabulary": "OpenCRVS v2 country config (Farajaland)", "vocabulary_id": "opencrvs"}]'

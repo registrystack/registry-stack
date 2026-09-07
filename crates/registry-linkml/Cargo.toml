@@ -1,0 +1,18 @@
+[package]
+name = "registry-linkml"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Reader for the LinkML subset adopter tooling consumes, with the embedded PublicSchema reference model snapshot."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+thiserror.workspace = true

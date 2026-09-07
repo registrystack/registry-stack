@@ -1,0 +1,197 @@
+id: https://publicschema.org/linkml/core
+name: publicschema-core
+title: PublicSchema core domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- document
+classes:
+  Agent:
+    class_uri: publicschema:Agent
+    title: Agent
+    description: 'An entity that can act within a public delivery process: a person, an organization,
+      or a software system. Agent is the shared supertype for actors that perform, publish, evaluate,
+      decide, or execute. Actor-side references such as performed_by, evaluator, and publisher accept
+      any Agent, letting the schema name the accountable party whether it is a named individual, an administrative
+      body, or a piece of software. Agent is distinct from Party, which groups the entities that receive
+      services (Person and Group). Person is the only concept that belongs to both hierarchies: a person
+      can both receive services and perform them.
+
+      '
+    status: bibo:status/published
+    exact_mappings:
+    - foaf:Agent
+    - prov:Agent
+    close_mappings:
+    - fhir:Practitioner
+    - schema:Thing
+    annotations:
+      label_es: Agente
+      label_fr: Agent
+      description_es: 'Una entidad capaz de actuar en un proceso de prestación pública: una persona, una
+        organización o un sistema de software. Agent es el supertipo compartido de los actores que ejecutan,
+        publican, evalúan, deciden o realizan. Las referencias del lado del actor como performed_by, evaluator
+        y publisher aceptan cualquier Agent, lo que permite al esquema nombrar a la parte responsable,
+        ya sea una persona con nombre, un organismo administrativo o un programa informático. Agent es
+        distinto de Party, que agrupa a las entidades que reciben servicios (Person y Group). Person es
+        el único concepto que pertenece a ambas jerarquías: una persona puede tanto recibir servicios
+        como ejecutarlos.'
+      description_fr: 'Une entité capable d''agir dans un processus de prestation publique : une personne,
+        une organisation ou un système logiciel. Agent est le supertype partagé des acteurs qui exécutent,
+        publient, évaluent, décident ou réalisent. Les références côté acteur telles que performed_by,
+        evaluator et publisher acceptent tout Agent, ce qui permet au schéma de désigner la partie responsable,
+        qu''il s''agisse d''une personne nommée, d''un organisme administratif ou d''un logiciel. Agent
+        est distinct de Party, qui regroupe les entités qui reçoivent des services (Person et Group).
+        Person est le seul concept appartenant aux deux hiérarchies : une personne peut à la fois recevoir
+        des services et en exécuter.'
+      external_alignments_json: '[{"label": "Agent", "match": "exact", "note": "W3C PROV-O prov:Agent
+        is the direct equivalent: an entity that bears some form of responsibility for an activity. PROV''s
+        subtypes prov:Person, prov:Organization, and prov:SoftwareAgent align one-to-one with ours.",
+        "uri": "http://www.w3.org/ns/prov#Agent", "vocabulary": "PROV-O", "vocabulary_id": "prov"}, {"label":
+        "Agent", "match": "exact", "note": "foaf:Agent is the canonical broad supertype for persons, organisations,
+        and software. Our Agent hierarchy matches FOAF''s structure.", "uri": "http://xmlns.com/foaf/0.1/Agent",
+        "vocabulary": "FOAF", "vocabulary_id": "foaf"}, {"label": "Person and Organization (sibling pattern)",
+        "match": "related", "note": "schema.org has no single Agent supertype; instead Person and Organization
+        are sibling subtypes of Thing, and properties that accept either name both in their range. Our
+        Agent captures the same intent under a named abstract.", "uri": "https://schema.org/Thing", "vocabulary":
+        "schema.org", "vocabulary_id": "schema-org"}, {"label": "Practitioner, Organization, Device (actor
+        split)", "match": "related", "note": "FHIR splits actors across Practitioner, Organization, and
+        Device (plus PractitionerRole for role-qualified assignments). Our Agent is the supertype that
+        covers the same ground; PractitionerRole-style reification is deferred.", "uri": "http://hl7.org/fhir/Practitioner",
+        "vocabulary": "FHIR R4", "vocabulary_id": "fhir"}]'
+      convergence_json: '{"notes": "No mapped delivery system carries an Agent supertype directly. The
+        convergence case comes from standards bodies: W3C PROV-O, FOAF, schema.org, and FHIR all split
+        the actor role across persons, organizations, and (in PROV and FHIR) software or devices. Agent
+        gives those actor-side references a single honest range in the schema so that performed_by, evaluator,
+        and publisher no longer have to sit on Party, which is reserved for receivers of services.\n",
+        "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["fhir-r4", "foaf", "schema-org", "w3c-prov-o"]'
+    abstract: true
+  Event:
+    class_uri: publicschema:Event
+    title: Event
+    description: 'Something that happens at a specific time or over a bounded period within a delivery
+      system. Event is the shared supertype for records that capture occurrences (assessments, decisions,
+      payments, deliveries, referrals, etc.), as distinct from standing entities like persons, groups,
+      or programs.
+
+      '
+    slots:
+    - identifiers
+    status: bibo:status/published
+    annotations:
+      label_es: Evento
+      label_fr: Événement
+      description_es: Algo que ocurre en un momento específico o durante un período delimitado dentro
+        de un sistema de prestación. Event es el supertipo compartido para los registros que capturan
+        ocurrencias (evaluaciones, decisiones, pagos, entregas, derivaciones, etc.), distintos de las
+        entidades permanentes como personas, grupos o programas.
+      description_fr: Quelque chose qui se produit à un moment précis ou sur une période délimitée au
+        sein d'un système de prestation. Event est le supertype partagé pour les enregistrements qui capturent
+        des occurrences (évaluations, décisions, paiements, remises de prestations, orientations, etc.),
+        distincts des entités permanentes comme les personnes, les groupes ou les programmes.
+      external_alignments_json: '[{"label": "N/A", "match": "none", "note": "SEMIC Core Vocabularies do
+        not define a generic event supertype. Domain-specific events are modeled directly.", "vocabulary":
+        "Core Vocabularies", "vocabulary_id": "semic"}, {"label": "N/A", "match": "none", "note": "DCI
+        does not define a generic event supertype. Timestamped occurrences are modeled as properties on
+        domain entities.", "vocabulary": "DCI Core", "vocabulary_id": "dci"}]'
+      convergence_json: '{"notes": "Event is a PublicSchema abstract supertype; no mapped system exposes
+        an event supertype by that name, so system_count is reported as 0/6 per the convention stated
+        in design-principles.md section 3. All six systems nonetheless model timestamped occurrence records
+        (payments, assessments, decisions, referrals) that map to concrete Event subtypes, and those subtypes
+        carry their own convergence evidence.\n", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["schema-org", "semic-core-public-event"]'
+    abstract: true
+  Party:
+    class_uri: publicschema:Party
+    title: Party
+    description: 'A person or organized group of persons that can be identified, enrolled in programs,
+      and receive benefits or services. Party is the shared supertype for Person and Group, enabling references
+      that accept either.
+
+      '
+    slots:
+    - name
+    - identifiers
+    - identity_documents
+    status: bibo:status/published
+    close_mappings:
+    - person:Person
+    annotations:
+      label_es: Parte
+      label_fr: Partie
+      description_es: Una persona o grupo organizado de personas que puede ser identificado, inscrito
+        en programas y recibir beneficios o servicios. Party es el supertipo compartido para Person y
+        Group, que permite referencias que acepten cualquiera de los dos.
+      description_fr: Une personne ou un groupe organisé de personnes pouvant être identifié, inscrit
+        dans des programmes et recevoir des prestations ou des services. Party est le supertype commun
+        de Person et Group, permettant de les désigner indifféremment dans une référence.
+      external_alignments_json: '[{"label": "Person (Core Person)", "match": "related", "note": "SEMIC
+        Core Person covers the individual human. Party is the beneficiary-side supertype for persons and
+        organized groups of persons (Household, Family, Farm) that can be enrolled in programs and receive
+        services. The broader SEMIC/foaf:Agent vocabulary for acting entities maps to our Agent concept,
+        not to Party.", "uri": "http://www.w3.org/ns/person#Person", "vocabulary": "Core Person", "vocabulary_id":
+        "semic"}]'
+      convergence_json: '{"notes": "Party is a PublicSchema abstract supertype; no mapped system exposes
+        a party supertype by that name, so system_count is reported as 0/6 per the convention stated in
+        design-principles.md section 3. All six systems do distinguish between individual and group-level
+        records and share common identification and naming properties across both, with OpenSPP modelling
+        the split explicitly as \"Registrant\"; that evidence accrues to the concrete Party subtypes (Person,
+        Household, Family, Farm), not to the supertype itself.\n", "system_count": 0, "total_systems":
+        6}'
+      bibliography_refs: '["schema-org", "semic-core-person"]'
+    abstract: true
+slots:
+  identity_documents:
+    slot_uri: publicschema:identity_documents
+    title: Identity documents
+    description: Identity documents held by this party, such as passports, national identity cards, civil
+      registration certificates, and program-issued beneficiary cards.
+    range: IdentityDocument
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Documentos de identidad
+      label_fr: Documents d'identité
+      description_es: Documentos de identidad que posee esta parte, como pasaportes, tarjetas de identidad
+        nacional, actas de registro civil y tarjetas de beneficiario emitidas por programas.
+      description_fr: Documents d'identité détenus par cette partie, tels que passeports, cartes d'identité
+        nationale, actes d'état civil et cartes de bénéficiaire délivrées par des programmes.
+      category: identity

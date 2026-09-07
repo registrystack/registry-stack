@@ -312,8 +312,9 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "required scopes (all)",
         "allowed purposes (any)",
         "row restrictions (all)",
-        "district-reader",
-        "principal claim: registry_principal",
+        "  entity record (internal)\n",
+        "    profile district-reader\n",
+        "principal claim         registry_principal",
     ] {
         assert!(text.contains(expected), "{text}");
     }
@@ -472,6 +473,9 @@ struct RuntimePackageFixture {
     anchor: PathBuf,
     runtime_config: PathBuf,
     package_revision: String,
+    /// The key the trust anchor names, so a test that builds a successor of
+    /// this package can sign it for the same anchor.
+    signing: PrivateJwk,
 }
 
 impl RuntimePackageFixture {
@@ -540,6 +544,7 @@ impl RuntimePackageFixture {
             anchor,
             runtime_config,
             package_revision,
+            signing,
         }
     }
 
@@ -1240,6 +1245,14 @@ fn project_lock_writes_module_digests_and_is_idempotent() {
     );
     assert!(second_report.get("artifacts").is_none());
 
+    let unchanged = bregctl(&["project", "lock", path(project.path())]);
+    assert!(unchanged.status.success(), "{unchanged:?}");
+    let rendered = String::from_utf8(unchanged.stdout).expect("lock report is UTF-8");
+    assert!(
+        rendered.starts_with("Locked the project modules.\n  revision  sha256:"),
+        "a lock that wrote nothing counts no artifact: {rendered}"
+    );
+
     let check_only = bregctl(&[
         "--format",
         "json",
@@ -1578,6 +1591,393 @@ modules:
 }
 
 #[test]
+fn deny_findings_refuses_on_the_findings_that_refused_it() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("initialized");
+    assert!(bregctl(&["init", path(&destination)]).status.success());
+
+    let refused = bregctl(&["check", path(&destination), "--deny-findings"]);
+
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+    let rendered = String::from_utf8(refused.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with("bregctl check refused.\n"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.ends_with("\nrefused on 2 findings.\n"),
+        "a refusal names what refused it: {rendered}"
+    );
+    assert!(
+        !rendered.contains("0 errors"),
+        "a refusal never closes on a count of no errors: {rendered}"
+    );
+}
+
+/// One numbered step, read back out of the rendering: the ordinal line and the
+/// continuation lines hanging under it, checked for the column the renderer
+/// folds them into and rejoined into the sentence the step states.
+fn numbered_step(rendered: &str, ordinal: usize) -> String {
+    let prefix = format!("  {ordinal}. ");
+    let mut lines = rendered
+        .lines()
+        .skip_while(|line| !line.starts_with(&prefix));
+    let first = lines
+        .next()
+        .unwrap_or_else(|| panic!("step {ordinal} is not rendered: {rendered}"));
+    let mut sentence = first[prefix.len()..].to_owned();
+    for line in lines {
+        let Some(continuation) = line.strip_prefix(&" ".repeat(prefix.len())) else {
+            break;
+        };
+        assert!(
+            !continuation.starts_with(' '),
+            "a continuation of step {ordinal} left its hanging column: {line:?}"
+        );
+        sentence.push(' ');
+        sentence.push_str(continuation);
+    }
+    sentence
+}
+
+#[test]
+fn an_authored_claim_name_cannot_forge_a_line_of_the_access_report() {
+    // The entity, field, and profile identifiers a report prints are held to
+    // the closed identifier grammar, so a claim name is the authored value
+    // that reaches a rendered line with nothing removed from it.
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: forged-line-fixture
+  version: 1
+  defaultLanguage: en
+  canonicalBaseIri: https://forged-line-fixture.example.test
+entities:
+  - id: record
+    primaryDataset: test-dataset
+    route: records
+    mutationMode: create_only
+    fields:
+      - id: code
+        type: string
+        maxLength: 64
+        classification: internal
+accessProfiles:
+  - id: reader
+    principalClaim: "registry_principal\n  error  forged.code  forged"
+    grants:
+      - entity: record
+        operations: [get]
+        readableFields: [code]
+        rowBoundaries: []
+"#,
+    );
+
+    let explained = bregctl(&["explain", "access", path(project.path())]);
+
+    assert!(explained.status.success(), "{explained:?}");
+    let rendered = String::from_utf8(explained.stdout).expect("access report is UTF-8");
+    assert!(
+        rendered.contains(
+            "      principal claim         registry_principal\\n  error  forged.code  forged\n"
+        ),
+        "the authored claim name stays escaped on the line it was given: {rendered}"
+    );
+    assert!(
+        !rendered
+            .lines()
+            .any(|line| line.trim_start().starts_with("error  forged.code")),
+        "an authored claim name forged a report line: {rendered}"
+    );
+    assert!(
+        rendered
+            .lines()
+            .filter(|line| line.contains("forged.code"))
+            .count()
+            == 1,
+        "the authored claim name reached more than one line: {rendered}"
+    );
+}
+
+#[test]
+fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediately() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("derived");
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+        "--starter",
+        "household",
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("init reports JSON");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["command"], "init");
+    let artifacts: Vec<&str> = report["artifacts"]
+        .as_array()
+        .expect("artifacts")
+        .iter()
+        .map(|artifact| artifact["path"].as_str().expect("path"))
+        .collect();
+    assert_eq!(
+        artifacts,
+        [
+            "README.md",
+            "dev-clients.yaml",
+            "model/selection.yaml",
+            "registry.yaml",
+            "runtime.example.yaml",
+            "tests/journeys.yaml",
+        ]
+    );
+    for relative in &artifacts {
+        assert!(
+            destination.join(relative).is_file(),
+            "init writes {relative}"
+        );
+    }
+    assert!(
+        !destination.join("modules").exists(),
+        "a derived project locks no module"
+    );
+    let codes: Vec<&str> = report["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .map(|finding| finding["code"].as_str().expect("code"))
+        .collect();
+    assert!(
+        codes.contains(&"access.profile.unrestricted_collection"),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains(&"access.profile.higher_classification"),
+        "{codes:?}"
+    );
+    let next_steps = report["nextSteps"].as_array().expect("next steps");
+    assert!(next_steps.iter().any(|step| step
+        .as_str()
+        .is_some_and(|step| step.contains("model/selection.yaml"))));
+
+    let registry =
+        fs::read_to_string(destination.join("registry.yaml")).expect("derived project reads");
+    assert!(registry.contains("id: household-registry"));
+    assert!(registry.contains("conceptUri: https://publicschema.org/Person"));
+    assert!(registry.contains("route: group-memberships"));
+    assert!(registry
+        .contains("{id: person, type: reference, target: person, classification: restricted}"));
+    assert!(!registry.contains("generic-registry"));
+    let initialized_project =
+        parse_project_yaml(registry.as_bytes()).expect("derived project parses");
+    for profile in [CompileProfile::Authoring, CompileProfile::Production] {
+        compile_project(&initialized_project, &[], profile).expect("derived project compiles");
+    }
+
+    let check = bregctl(&["--format", "json", "check", path(&destination)]);
+    assert!(check.status.success(), "{check:?}");
+    let journeys =
+        fs::read_to_string(destination.join("tests/journeys.yaml")).expect("derived journeys read");
+    assert!(journeys.contains("scopes: [registry:household-registry:operate]"));
+    assert!(journeys.contains("person: {recordRef: example-person}"));
+    assert!(!journeys.contains("token"));
+    let selection =
+        fs::read_to_string(destination.join("model/selection.yaml")).expect("selection echo reads");
+    assert!(selection.contains("kind: ModelSelection"));
+    assert!(selection.contains("concept: GroupMembership"));
+}
+
+#[test]
+fn init_from_publicschema_reports_the_derived_project_in_the_report_shape() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("derived");
+
+    let output = bregctl(&[
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+        "--starter",
+        "household",
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("init stdout is UTF-8");
+    assert!(
+        stdout.starts_with(
+            "Initialized a registry project. 6 artifacts written.\n  revision  sha256:"
+        ),
+        "a derived project opens with the report lead sentence: {stdout}"
+    );
+    assert!(
+        stdout.contains("  finding  access.profile.unrestricted_collection  6 paths\n"),
+        "a repeated code counts the paths it collapsed: {stdout}"
+    );
+    assert!(
+        stdout.contains("\n0 errors, 8 findings.\n"),
+        "the report closes with the count to act on: {stdout}"
+    );
+    assert!(
+        numbered_step(&stdout, 5).starts_with(&format!(
+            "keep {}/model/selection.yaml beside the project",
+            destination.display()
+        )),
+        "the derived project names its selection in a numbered step: {stdout}"
+    );
+}
+
+#[test]
+fn init_from_publicschema_reads_a_selection_file_and_refuses_a_bad_one() {
+    let project = TestProject::asset_fixture();
+    let selection = project.path().join("selection.yaml");
+    fs::write(
+        &selection,
+        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+kind: ModelSelection
+model: publicschema
+registry:
+  id: places
+  title: Places
+entities:
+  - concept: Location
+    properties:
+      - name: location_name
+      - name: latitude
+      - name: longitude
+",
+    )
+    .expect("selection writes");
+    let destination = project.path().join("places");
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+        "--selection",
+        path(&selection),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let registry = fs::read_to_string(destination.join("registry.yaml")).expect("project reads");
+    assert!(registry.contains("route: locations"));
+    assert!(registry.contains(
+        "{id: latitude, type: decimal, precision: 18, scale: 6, classification: internal}"
+    ));
+    assert!(!registry.contains("vocabulary-code"));
+
+    fs::write(
+        &selection,
+        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+kind: ModelSelection
+model: publicschema
+registry:
+  id: places
+  title: Places
+entities:
+  - concept: Location
+    properties:
+      - name: altitude
+",
+    )
+    .expect("selection rewrites");
+    let refused_destination = project.path().join("places-again");
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&refused_destination),
+        "--from",
+        "publicschema",
+        "--selection",
+        path(&selection),
+    ]);
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        !refused_destination.exists(),
+        "a refused selection writes nothing"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("failure reports JSON");
+    assert_eq!(report["ok"], false);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "init.selection.property_unknown");
+    assert_eq!(diagnostic["artifact"], "model_selection");
+    assert_eq!(diagnostic["suggestedAction"], "correct_model_selection");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message")
+        .contains("location_name"));
+}
+
+#[test]
+fn init_from_publicschema_without_a_terminal_names_the_two_other_ways_in() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("derived");
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+    ]);
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(!destination.exists());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("failure reports JSON");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "init.selection.missing");
+    assert_eq!(diagnostic["suggestedAction"], "correct_command_usage");
+    let message = diagnostic["message"].as_str().expect("message");
+    assert!(message.contains("--selection"), "{message}");
+    assert!(message.contains("--starter"), "{message}");
+    assert!(message.contains("`household`"), "{message}");
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+        "--starter",
+        "missing",
+    ]);
+    assert!(!output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("failure reports JSON");
+    assert_eq!(report["diagnostics"][0]["code"], "init.starter.unknown");
+    assert!(report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("`household`"));
+}
+
+#[test]
+fn init_selection_flags_require_from() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("derived");
+
+    let output = bregctl(&["init", path(&destination), "--starter", "household"]);
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(!destination.exists());
+    let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
+    assert!(stderr.contains("--from"), "{stderr}");
+}
+
+#[test]
 fn init_prints_the_next_command_and_what_the_example_leaves_open() {
     let project = TestProject::asset_fixture();
     let destination = project.path().join("initialized");
@@ -1590,19 +1990,24 @@ fn init_prints_the_next_command_and_what_the_example_leaves_open() {
     let readme = destination.join("README.md");
     let registry = destination.join("registry.yaml");
     assert!(
-        stdout.contains(&format!(
-            "next: read {}, then run 'bregctl check {destination_argument}'",
+        stdout.contains("\nNext:\n"),
+        "init opens the steps with a heading: {stdout}"
+    );
+    assert_eq!(
+        numbered_step(&stdout, 1),
+        format!(
+            "read {}, then run 'bregctl check {destination_argument}'",
             readme.display()
-        )),
+        ),
         "init names the next command: {stdout}"
     );
     assert!(
-        stdout.contains("next: leave the findings above as they are;"),
+        numbered_step(&stdout, 2).starts_with("leave the findings above as they are;"),
         "init says the reported findings belong to the example: {stdout}"
     );
     assert!(
-        stdout.contains(&format!(
-            "next: replace canonicalBaseIri in {} before you build a production package;",
+        numbered_step(&stdout, 3).starts_with(&format!(
+            "replace canonicalBaseIri in {} before you build a production package;",
             registry.display()
         )),
         "init says the example base IRI is not shippable: {stdout}"
@@ -4438,9 +4843,14 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
     assert!(human.status.success(), "{human:?}");
     assert!(human.stderr.is_empty());
     let human = String::from_utf8(human.stdout).expect("verify human report is UTF-8");
-    assert!(human.starts_with("verify succeeded\nassurance: runtime_bound\n"));
-    assert!(human.contains(&format!("package revision: {}\n", fixture.package_revision)));
-    assert!(human.contains("registry id: verify-registry\n"));
+    assert!(human.starts_with(
+        "Verified the package against the runtime it is bound to.\n  assurance            runtime_bound\n"
+    ));
+    assert!(human.contains(&format!(
+        "package revision     {}\n",
+        fixture.package_revision
+    )));
+    assert!(human.contains("registry id          verify-registry\n"));
     assert!(!human.contains(path(&fixture.runtime_config)));
 }
 
@@ -4515,10 +4925,12 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
     assert!(human.status.success(), "{human:?}");
     assert!(human.stderr.is_empty());
     let human = String::from_utf8(human.stdout).expect("migration report is UTF-8");
-    assert!(human.starts_with("migration explain succeeded\nassurance: runtime_bound\n"));
-    assert!(human.contains("plan kind: initial\n"));
-    assert!(human.contains("change count: 0\n"));
-    assert!(human.contains("reviewed migration count: 0\n"));
+    assert!(human.starts_with(
+        "Explained the migration plan. 0 changes, 0 reviewed migrations.\n  assurance                            runtime_bound\n"
+    ));
+    assert!(human.contains("plan kind                            initial\n"));
+    assert!(human.contains("change count                         0\n"));
+    assert!(human.contains("reviewed migration count             0\n"));
     assert!(!human.contains(path(&fixture.runtime_config)));
 }
 

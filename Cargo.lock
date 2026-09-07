@@ -3458,13 +3458,19 @@ dependencies = [
 name = "registry-bregctl"
 version = "0.27.0"
 dependencies = [
+ "anstream",
+ "anstyle",
  "anyhow",
  "base64",
  "clap",
  "getrandom 0.4.3",
+ "inquire",
+ "jsonschema",
  "p256",
  "rcgen",
  "registry-breg",
+ "registry-linkml",
+ "registry-manifest-core",
  "registry-platform-buildinfo",
  "registry-platform-canonical-json",
  "registry-platform-crypto",
@@ -3880,6 +3886,16 @@ dependencies = [
  "tower-lsp-server",
  "tree-sitter",
  "tree-sitter-yaml",
+]
+
+[[package]]
+name = "registry-linkml"
+version = "0.27.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

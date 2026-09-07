@@ -297,15 +297,22 @@ bregctl project planner-test ./my-registry \
 ```
 
 ```text
-project planner-test succeeded
-compiled revision: sha256:<digest>
-request entity: person-name-change-request
-planner kind: rhai
-planner ABI: registry.change-request-plan/v1
-planner script SHA-256: sha256:<digest>
-disposition: apply
-effect effect-1: target=existing, operation=patch, fields=display-name, dependencies=
-counts: effects=1, field mutations=1, dependencies=0
+Ran the planner. Disposition apply, 1 effect.
+  compiled revision       sha256:<digest>
+  request entity          person-name-change-request
+  planner kind            rhai
+  planner ABI             registry.change-request-plan/v1
+  planner script SHA-256  sha256:<digest>
+  disposition             apply
+  effects                 1
+  field mutations         1
+  dependencies            0
+
+  effect effect-1
+    target        existing
+    operation     patch
+    fields        display-name
+    dependencies  none
 ```
 
 The report names the planner identity, the disposition, and each effect's target kind, operation, and fields; it never repeats the request values.

@@ -1,0 +1,230 @@
+id: https://publicschema.org/linkml/biometric
+name: publicschema-biometric
+title: PublicSchema biometric domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- vocabularies
+classes:
+  BiometricSample:
+    class_uri: publicschema:BiometricSample
+    title: Biometric Sample
+    description: 'A biometric measurement captured from a person, such as a fingerprint image, iris scan,
+      or facial photograph. Each record represents a single capture of a single biometric position (e.g.,
+      right index finger). A BiometricSample record may also document a capture exception: when exception_reason
+      is non-null, the record explains why the biometric could not be captured rather than holding actual
+      sample data.
+
+      '
+    slots:
+    - person
+    - biometric_modality
+    - biometric_subtype
+    - impression_type
+    - capture_date
+    - quality_score
+    - quality_algorithm
+    - sample_uri
+    - sample_format
+    - exception_reason
+    - capture_device
+    status: bibo:draft
+    annotations:
+      label_es: Muestra biométrica
+      label_fr: Échantillon biométrique
+      description_es: 'Una medición biométrica capturada de una persona, como una imagen de huella dactilar,
+        un escaneo de iris o una fotografía facial. Cada registro representa una captura única de una
+        posición biométrica única (p. ej., índice derecho). Un registro BiometricSample también puede
+        documentar una excepción de captura: cuando exception_reason no es nulo, el registro explica por
+        qué no se pudo capturar el biométrico en lugar de contener datos de muestra reales.'
+      description_fr: 'Une mesure biométrique capturée sur une personne, telle qu''une image d''empreinte
+        digitale, un scan de l''iris ou une photographie faciale. Chaque enregistrement représente une
+        capture unique d''une position biométrique unique (p. ex., index droit). Un enregistrement BiometricSample
+        peut aussi documenter une exception de capture: lorsque exception_reason n''est pas nul, l''enregistrement
+        explique pourquoi le biométrique n''a pas pu être capturé plutôt que de contenir des données d''échantillon
+        réelles.'
+      convergence_json: '{"notes": "No v1 system mappings exist yet. The concept is informed by OSIA BiometricData
+        and MOSIP CBEFF containers, both of which model biometric samples as standalone records linked
+        to a person.\n", "system_count": 0, "total_systems": 6}'
+      bibliography_refs: '["osia-itu-x1281"]'
+slots:
+  biometric_modality:
+    slot_uri: publicschema:biometric_modality
+    title: Biometric modality
+    description: The type of biometric measurement (face, fingerprint, iris, signature, voice).
+    range: BiometricModality
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Modalidad biométrica
+      label_fr: Modalité biométrique
+      description_es: El tipo de medición biométrica (rostro, huella dactilar, iris, firma, voz).
+      description_fr: Le type de mesure biométrique (visage, empreinte digitale, iris, signature, voix).
+  biometric_subtype:
+    slot_uri: publicschema:biometric_subtype
+    title: Biometric subtype
+    description: The specific body part or position within a biometric modality (e.g., right index finger,
+      left eye, portrait).
+    range: BiometricSubtype
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Subtipo biométrico
+      label_fr: Sous-type biométrique
+      description_es: La parte del cuerpo o posición específica dentro de una modalidad biométrica (p.
+        ej., índice derecho, ojo izquierdo, retrato).
+      description_fr: La partie du corps ou la position spécifique au sein d'une modalité biométrique
+        (p. ex., index droit, oeil gauche, portrait).
+  capture_date:
+    slot_uri: publicschema:capture_date
+    title: Capture date
+    description: The date on which the biometric sample was captured.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de captura
+      label_fr: Date de capture
+      description_es: La fecha en la que se capturó la muestra biométrica.
+      description_fr: La date à laquelle l'échantillon biométrique a été capturé.
+  capture_device:
+    slot_uri: publicschema:capture_device
+    title: Capture device
+    description: An identifier or description of the device used to capture the biometric sample.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dispositivo de captura
+      label_fr: Dispositif de capture
+      description_es: Un identificador o descripción del dispositivo utilizado para capturar la muestra
+        biométrica.
+      description_fr: Un identifiant ou une description du dispositif utilisé pour capturer l'échantillon
+        biométrique.
+  exception_reason:
+    slot_uri: publicschema:exception_reason
+    title: Exception reason
+    description: The reason a biometric sample could not be captured. When non-null, this record documents
+      a capture exception rather than holding biometric data.
+    range: BiometricExceptionReason
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Motivo de excepción
+      label_fr: Motif d'exception
+      description_es: La razón por la cual no se pudo capturar una muestra biométrica. Cuando no es nulo,
+        este registro documenta una excepción de captura en lugar de contener datos biométricos.
+      description_fr: La raison pour laquelle un échantillon biométrique n'a pas pu être capturé. Lorsque
+        non nul, cet enregistrement documente une exception de capture plutôt que de contenir des données
+        biométriques.
+  impression_type:
+    slot_uri: publicschema:impression_type
+    title: Impression type
+    description: The method by which a fingerprint biometric was captured (e.g., live scan plain, rolled,
+      latent).
+    range: ImpressionType
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de impresión
+      label_fr: Type d'empreinte
+      description_es: El método mediante el cual se capturó una huella dactilar biométrica (p. ej., escaneo
+        en vivo simple, rodado, latente).
+      description_fr: La méthode par laquelle une empreinte digitale biométrique a été capturée (p. ex.,
+        scan en direct simple, roulé, latent).
+  quality_algorithm:
+    slot_uri: publicschema:quality_algorithm
+    title: Quality algorithm
+    description: The algorithm or standard used to compute the quality score (e.g., NFIQ2, ISO_29794_4).
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Algoritmo de calidad
+      label_fr: Algorithme de qualité
+      description_es: El algoritmo o estándar utilizado para calcular el puntaje de calidad (p. ej., NFIQ2,
+        ISO_29794_4).
+      description_fr: L'algorithme ou la norme utilisé pour calculer le score de qualité (p. ex., NFIQ2,
+        ISO_29794_4).
+  quality_score:
+    slot_uri: publicschema:quality_score
+    title: Quality score
+    description: A quality score for the biometric sample, on a 0-100 scale per ISO 29794-1. Higher values
+      indicate better quality.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Puntaje de calidad
+      label_fr: Score de qualité
+      description_es: Un puntaje de calidad para la muestra biométrica, en una escala de 0 a 100 según
+        ISO 29794-1. Valores más altos indican mejor calidad.
+      description_fr: Un score de qualité pour l'échantillon biométrique, sur une échelle de 0 à 100 selon
+        ISO 29794-1. Des valeurs plus élevées indiquent une meilleure qualité.
+  sample_format:
+    slot_uri: publicschema:sample_format
+    title: Sample format
+    description: The MIME type of the biometric sample data (e.g., image/jp2, image/jpeg, application/octet-stream).
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Formato de la muestra
+      label_fr: Format de l'échantillon
+      description_es: El tipo MIME de los datos de la muestra biométrica (p. ej., image/jp2, image/jpeg,
+        application/octet-stream).
+      description_fr: Le type MIME des données de l'échantillon biométrique (p. ex., image/jp2, image/jpeg,
+        application/octet-stream).
+  sample_uri:
+    slot_uri: publicschema:sample_uri
+    title: Sample URI
+    description: A URI reference to the biometric sample data. The referenced resource contains the actual
+      biometric data (image, audio, or other signal).
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: URI de la muestra
+      label_fr: URI de l'échantillon
+      description_es: Una referencia URI a los datos de la muestra biométrica. El recurso referenciado
+        contiene los datos biométricos reales (imagen, audio u otra señal).
+      description_fr: Une référence URI vers les données de l'échantillon biométrique. La ressource référencée
+        contient les données biométriques réelles (image, audio ou autre signal).
+      sensitivity: restricted

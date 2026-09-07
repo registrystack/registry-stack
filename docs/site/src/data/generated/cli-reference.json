@@ -87,13 +87,13 @@
         {
           "name": "init",
           "invocation": "bregctl init",
-          "about": "Create a domain-neutral example authoring project in a new directory",
+          "about": "Create an authoring project in a new directory: a domain-neutral example, or one derived from an embedded reference model with `--from`",
           "long_about": null,
           "usage": "bregctl init [OPTIONS] <DESTINATION>",
           "arguments": [
             {
               "display": "<DESTINATION>",
-              "description": "New directory that will receive the example project closure. A symbolic link at any component of this path is refused.",
+              "description": "New directory that will receive the project closure. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -102,6 +102,35 @@
             }
           ],
           "options": [
+            {
+              "display": "--from <MODEL>",
+              "description": "Derive the project from an embedded reference model instead of writing the example. Without `--selection` or `--starter`, the command asks which concepts and properties to select at the terminal",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "publicschema"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--selection <FILE>",
+              "description": "A selection document naming the concepts and properties to derive; the written project echoes one under `model/selection.yaml`. A symbolic link at any component of this path is refused.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--starter <NAME>",
+              "description": "A selection shipped with the model, by name",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
@@ -118,7 +147,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -126,7 +155,30 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--selection <FILE>",
+              "arguments": [
+                "--from <MODEL>"
+              ]
+            },
+            {
+              "kind": "requires_all",
+              "when": "--starter <NAME>",
+              "arguments": [
+                "--from <MODEL>"
+              ]
+            },
+            {
+              "kind": "mutually_exclusive",
+              "when": null,
+              "arguments": [
+                "--selection <FILE>",
+                "--starter <NAME>"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {

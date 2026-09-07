@@ -72,6 +72,27 @@ Nothing in the runtime consults the identity provider for authorisation: the tok
 
 {/* Evidence: crates/registry-breg/src/auth.rs; crates/registry-breg/src/access.rs. */}
 
+### Local clients and their tokens
+
+A local development session has no identity provider, so `bregctl dev` starts Registry Mint beside the registry and registers the callers declared in the project's `dev-clients.yaml`.
+A client entry stands for one calling application.
+It names the access profiles the journeys exercise with that client, the scopes Mint puts in its tokens, and the claims those tokens carry: the principal, the purpose, and any value a row boundary compares a field against.
+
+The two files divide the work.
+`dev-clients.yaml` shapes the token; `registry.yaml` decides what a token may do.
+Naming a profile in a client entry grants nothing on its own, because the profile's own requirements still have to be met by the scopes and claims the token carries, and its grant still bounds the operations, fields, and rows a request can reach.
+
+A generated project shows both sides of that division.
+Its operator client carries the scope and purpose a registry-wide operator profile requires, while its reader client carries a record-status claim that the reader profile's row boundary compares with each record's own status, so one registry answers the two clients differently.
+The journeys run under both clients before a package is served, which is what turns a mismatch between the two files into a failed start rather than a refused request in production.
+
+The file holds no secret.
+`bregctl dev` generates a private key per client under the project's `.breg/dev/credentials/` directory, and neither the file nor those keys belong to a deployment.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, INIT_DEV_CLIENTS;
+    crates/registry-bregctl/src/dev/config.rs, Clients and prepare();
+    crates/registry-bregctl/src/dev/mod.rs, bind_journey_profiles(). */}
+
 ## Three ways to write
 
 Not every registry change should be a direct edit.
@@ -79,6 +100,7 @@ Base Registry Engine offers three write paths, and a profile can be granted any 
 
 **Direct mutations.** Create, patch, tombstone, and batch operations change records at once.
 Patch and tombstone require an `If-Match` header carrying the record's ETag, so two clients cannot overwrite each other unknowingly.
+Every mutation requires an `Idempotency-Key` header naming one write, so a client that lost a response can retry the request without creating a second record.
 Batch operations carry a change context that records why the change happened: a correction after a field audit, a bulk import, a routine update.
 
 **Change requests.** A change-request entity holds a proposed change as a record of its own.
@@ -95,7 +117,7 @@ Actions suit operations that must be atomic, such as registering an asset togeth
 
 Every write path produces revisions, audit records, and events in the same way.
 
-{/* Evidence: crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/rhai_planner.rs; crates/registry-breg/src/mutation/action.rs; crates/registry-breg/src/api/mod.rs, exact_mutation(). */}
+{/* Evidence: crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/rhai_planner.rs; crates/registry-breg/src/mutation/action.rs; crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/api/mod.rs, exact_mutation(). */}
 
 ## History, time, and erasure
 

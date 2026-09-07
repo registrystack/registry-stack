@@ -1,0 +1,42 @@
+# The household starter: three PublicSchema concepts that make a small
+# household registry, with the properties a first version usually carries.
+#
+# Use it as it is:
+#
+#   bregctl init my-registry --from publicschema --starter household
+#
+# or copy it, edit the copy, and pass the copy with `--selection`. Every
+# `properties` entry names a property of the concept above it, as PublicSchema
+# spells it; `bregctl init` refuses a name the concept does not carry and says
+# which names it does.
+apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+kind: ModelSelection
+model: publicschema
+modelVersion: "0.3.0"
+registry:
+  id: household-registry
+  title: Household Registry
+entities:
+  - concept: Person
+    properties:
+      - name: given_name
+      - name: family_name
+      - name: date_of_birth
+      - name: sex
+      - name: preferred_language
+      - name: phone_number
+      - name: marital_status
+  - concept: Household
+    properties:
+      - name: name
+      - name: group_type
+      - name: member_count
+      - name: address
+      - name: food_security_level
+  - concept: GroupMembership
+    properties:
+      - name: person
+      - name: group
+      - name: role
+      - name: start_date
+      - name: end_date
