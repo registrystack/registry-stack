@@ -635,3 +635,162 @@ fn reclamation_forgets_the_database_and_keeps_the_reusable_identities() {
     assert_eq!(state.database_port, 55448);
     assert_eq!(state.volume_name(), format!("breg-dev-{owner}"));
 }
+
+/// A retained session initialized from the project `bregctl init` writes,
+/// with the digest a start computes, so a later start compares real inputs.
+fn retained_session(project: &Path, container_id: Option<String>) -> State {
+    let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let clients = config::clients(&client_bytes).unwrap();
+    let captured = capture(project, &client_bytes).unwrap();
+    private::directory(&project.join(".breg")).unwrap();
+    let state = State {
+        version: 1,
+        project: project.to_path_buf(),
+        owner: uuid::Uuid::new_v4().to_string(),
+        status: Status::Stopped,
+        breg_port: 8094,
+        mint_port: 8095,
+        database_port: 55448,
+        clients_file: project.join("dev-clients.yaml"),
+        source_digest: captured.digest,
+        instance_id: captured.instance_id,
+        source_revision: captured.source_revision,
+        container_id,
+        tls_files_copied: false,
+        database_ready: false,
+        package_revision: None,
+        activated: false,
+        seeded: BTreeSet::new(),
+        outputs: vec![],
+        binaries: BTreeMap::new(),
+    };
+    initialize(&state.root(), &state, &clients, &captured.files).unwrap();
+    read_state(&state.root()).unwrap()
+}
+
+fn start_without_binaries(project: &Path) -> Result<Value> {
+    start(StartArgs {
+        project: project.to_path_buf(),
+        clients_file: None,
+        breg_port: None,
+        mint_port: None,
+        database_port: None,
+        breg_bin: Some(project.join("missing-breg")),
+        mint_bin: None,
+        docker_bin: None,
+    })
+}
+
+#[test]
+fn a_first_start_reads_the_projects_dev_clients_without_a_flag() {
+    let (_temporary, project) = write_init_project();
+    let expected = fs::canonicalize(project.join("dev-clients.yaml")).unwrap();
+    assert_eq!(clients_file(None, None, &project).unwrap(), expected);
+
+    // A retained session keeps the file it started with, wherever it is.
+    let (_temp, retained, _clients, _files) = fixture();
+    assert_eq!(
+        clients_file(None, Some(&retained), &project).unwrap(),
+        retained.clients_file
+    );
+
+    // An explicit file still wins, and must exist.
+    let explicit = project.join("tests/journeys.yaml");
+    assert_eq!(
+        clients_file(Some(&explicit), Some(&retained), &project).unwrap(),
+        fs::canonicalize(&explicit).unwrap()
+    );
+    let missing = clients_file(Some(&project.join("absent.yaml")), None, &project)
+        .expect_err("a named file must exist")
+        .to_string();
+    assert!(missing.contains("clients file does not exist"), "{missing}");
+
+    // A project without the generated file says which flag replaces it.
+    fs::remove_file(project.join("dev-clients.yaml")).unwrap();
+    let refusal = clients_file(None, None, &project)
+        .expect_err("no clients anywhere")
+        .to_string();
+    assert!(refusal.contains("dev-clients.yaml"), "{refusal}");
+    assert!(refusal.contains("--clients-file"), "{refusal}");
+}
+
+#[test]
+fn changed_inputs_are_refused_while_the_session_holds_records() {
+    let (_temporary, project) = write_init_project();
+    let state = retained_session(&project, Some("c".repeat(64)));
+    let registry = project.join("registry.yaml");
+    let mut edited = fs::read(&registry).unwrap();
+    edited.extend_from_slice(b"\n# edited after the first start\n");
+    fs::write(&registry, edited).unwrap();
+
+    let refusal = format!(
+        "{:#}",
+        start_without_binaries(&project).expect_err("records are retained")
+    );
+    assert!(refusal.contains("dev stop --remove"), "{refusal}");
+    let unchanged = read_state(&state.root()).unwrap();
+    assert_eq!(unchanged.source_digest, state.source_digest);
+    assert_eq!(unchanged.owner, state.owner);
+    assert!(state
+        .root()
+        .join("credentials/operator/assertion-key.jwk")
+        .is_file());
+}
+
+#[test]
+fn changed_inputs_replace_a_session_whose_records_were_discarded() {
+    // After `dev stop --remove` nothing remains for the source pin to protect,
+    // so an edited project starts a fresh session on the retained ports.
+    let (_temporary, project) = write_init_project();
+    let state = retained_session(&project, None);
+    let previous_key =
+        fs::read(state.root().join("credentials/operator/assertion-key.jwk")).unwrap();
+    let registry = project.join("registry.yaml");
+    let mut edited = fs::read(&registry).unwrap();
+    edited.extend_from_slice(b"\n# edited after the records were discarded\n");
+    fs::write(&registry, edited).unwrap();
+    let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let expected = capture(&project, &client_bytes).unwrap().digest;
+
+    // The start fails only once it looks for the breg binary, after the
+    // replaced session is on disk.
+    let failure = format!(
+        "{:#}",
+        start_without_binaries(&project).expect_err("no breg binary")
+    );
+    assert!(!failure.contains("dev stop --remove"), "{failure}");
+    let replaced = read_state(&state.root()).unwrap();
+    assert_eq!(replaced.source_digest, expected);
+    assert_ne!(replaced.owner, state.owner);
+    assert_eq!(
+        (
+            replaced.breg_port,
+            replaced.mint_port,
+            replaced.database_port
+        ),
+        (8094, 8095, 55448)
+    );
+    assert_eq!(replaced.clients_file, state.clients_file);
+    assert!(replaced.container_id.is_none());
+    let key = fs::read(state.root().join("credentials/operator/assertion-key.jwk")).unwrap();
+    assert_ne!(key, previous_key);
+}
+
+#[test]
+fn the_private_directory_is_ignored_by_version_control() {
+    // The lock beside the session directory would otherwise be the one
+    // private file a reader could commit.
+    let temporary = tempfile::tempdir().unwrap();
+    let project = fs::canonicalize(temporary.path()).unwrap();
+    let parent = parent_directory(&project).unwrap();
+    assert_eq!(parent, project.join(".breg"));
+    let ignore = parent.join(".gitignore");
+    assert_eq!(private::read(&ignore, MAX_BYTES).unwrap(), b"*\n");
+    assert_eq!(parent_directory(&project).unwrap(), parent);
+    assert_eq!(private::read(&ignore, MAX_BYTES).unwrap(), b"*\n");
+
+    // A file the reader wrote is theirs.
+    fs::write(&ignore, "dev/\n").unwrap();
+    parent_directory(&project).unwrap();
+    assert_eq!(fs::read(&ignore).unwrap(), b"dev/\n");
+}

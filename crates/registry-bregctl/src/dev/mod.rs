@@ -44,7 +44,7 @@ const IMAGE: &str =
 const LABEL: &str = "org.registrystack.bregctl.dev-owner";
 /// Refusal for a project that never started. Reporting a stopped session
 /// would claim owned services were stopped when none were ever created.
-const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check --project, or start one with bregctl dev --clients-file";
+const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check the project path, or start one with bregctl dev";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 /// Longest one supervised prerequisite command may run before the supervisor
 /// stops it and fails the start.
@@ -83,10 +83,11 @@ enum DevAction {
 #[derive(Debug, Args)]
 struct StartArgs {
     /// Existing authored registry project. Its package environment must be local.
-    #[arg(long, default_value = ".")]
+    #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
-    /// Explicit local clients, profile bindings, and optional seed records.
-    #[arg(long, alias = "clients")]
+    /// Local clients, profile bindings, and optional seed records (default on
+    /// first start: dev-clients.yaml in the project; retained for restarts).
+    #[arg(long, alias = "clients", value_name = "FILE")]
     clients_file: Option<PathBuf>,
     /// Registry loopback port on first start (default 8090; retained for restarts).
     #[arg(long)]
@@ -108,7 +109,7 @@ struct StartArgs {
 #[derive(Debug, Args)]
 struct StopArgs {
     /// Registry project whose owned services should stop while preserving records.
-    #[arg(long, default_value = ".")]
+    #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
     /// Also remove the owned container and its data volume, discarding records.
     #[arg(long)]
@@ -254,6 +255,40 @@ fn project(path: &Path) -> Result<PathBuf> {
     Ok(fs::canonicalize(path)?)
 }
 
+/// The project's private `.breg` directory, ignored by version control as a
+/// whole: the session directory ignores itself, and the lock beside it would
+/// otherwise be the one private file a reader could commit.
+fn parent_directory(project: &Path) -> Result<PathBuf> {
+    let parent = project.join(".breg");
+    private::directory(&parent)?;
+    let ignore = parent.join(".gitignore");
+    if !ignore.exists() {
+        private::create(&ignore, b"*\n")?;
+    }
+    Ok(parent)
+}
+
+/// The clients file a start reads: the one named, else the one the retained
+/// session started with, else the `dev-clients.yaml` the project carries.
+fn clients_file(
+    explicit: Option<&Path>,
+    retained: Option<&State>,
+    project: &Path,
+) -> Result<PathBuf> {
+    match (explicit, retained) {
+        (Some(path), _) => fs::canonicalize(path).context("clients file does not exist"),
+        (None, Some(state)) => Ok(state.clients_file.clone()),
+        (None, None) => {
+            let generated = project.join("dev-clients.yaml");
+            if generated.is_file() {
+                fs::canonicalize(&generated).context("clients file does not exist")
+            } else {
+                bail!("first start needs local clients: add dev-clients.yaml to the project, as bregctl init does, or name a clients file with --clients-file")
+            }
+        }
+    }
+}
+
 fn read_state(root: &Path) -> Result<State> {
     private::check(root, true)?;
     let state: State = serde_json::from_slice(&private::read(&root.join("state.json"), MAX_BYTES)?)
@@ -388,8 +423,7 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
 
 fn start(args: StartArgs) -> Result<Value> {
     let project = project(&args.project)?;
-    let parent = project.join(".breg");
-    private::directory(&parent)?;
+    let parent = parent_directory(&project)?;
     let _lock = private::lock(&parent.join("dev.lock"))?;
     let root = parent.join("dev");
     let existing = if root.exists() {
@@ -397,13 +431,7 @@ fn start(args: StartArgs) -> Result<Value> {
     } else {
         None
     };
-    let clients_file = match &args.clients_file {
-        Some(path) => fs::canonicalize(path).context("clients file does not exist")?,
-        None => existing
-            .as_ref()
-            .map(|s| s.clients_file.clone())
-            .context("first start requires --clients-file with explicit local clients")?,
-    };
+    let clients_file = clients_file(args.clients_file.as_deref(), existing.as_ref(), &project)?;
     let client_bytes =
         crate::read_bounded_source_file(&clients_file, "dev.clients", "clients", MAX_BYTES)
             .map_err(|_| anyhow::anyhow!("clients file must be one bounded ordinary file"))?;
@@ -415,14 +443,28 @@ fn start(args: StartArgs) -> Result<Value> {
         source_revision,
     } = capture(&project, &client_bytes)?;
     bind_journey_profiles(&files["tests/journeys.yaml"], &clients)?;
-    let mut state = if let Some(state) = existing {
-        if digest != state.source_digest
-            || args.breg_port.is_some_and(|p| p != state.breg_port)
-            || args.mint_port.is_some_and(|p| p != state.mint_port)
-            || args.database_port.is_some_and(|p| p != state.database_port)
+    // The source pin protects the records a session retains. Once `dev stop
+    // --remove` has discarded them, changed inputs start a fresh session on
+    // the ports and clients file the previous one used.
+    let mut previous = None;
+    let existing = match existing {
+        Some(state)
+            if digest != state.source_digest
+                || args.breg_port.is_some_and(|p| p != state.breg_port)
+                || args.mint_port.is_some_and(|p| p != state.mint_port)
+                || args.database_port.is_some_and(|p| p != state.database_port) =>
         {
-            bail!("authored package, clients or ports differ from retained dev state; restore the original inputs to restart, or copy authored files to a new project directory for a fresh experiment. Existing records remain in the stopped container. Use the normal reviewed package lifecycle for an operated upgrade");
+            if state.container_id.is_some() {
+                bail!("authored package, clients or ports differ from the retained development session, which still holds records; run bregctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records. Use the normal reviewed package lifecycle for an operated upgrade");
+            }
+            let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
+            fs::remove_dir_all(&root).context("cannot replace the owned development session")?;
+            previous = Some(state);
+            None
         }
+        existing => existing,
+    };
+    let mut state = if let Some(state) = existing {
         private::validate_tree(&root.join("credentials"))?;
         private::validate_tree(&root.join("secrets"))?;
         if control(&root, "status").is_ok_and(|status| status == "ready") {
@@ -433,14 +475,24 @@ fn start(args: StartArgs) -> Result<Value> {
         let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
         state
     } else {
+        let previous = previous.as_ref();
         let state = State {
             version: 1,
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
             status: Status::Stopped,
-            breg_port: args.breg_port.unwrap_or(8090),
-            mint_port: args.mint_port.unwrap_or(8091),
-            database_port: args.database_port.unwrap_or(55432),
+            breg_port: args
+                .breg_port
+                .or(previous.map(|s| s.breg_port))
+                .unwrap_or(8090),
+            mint_port: args
+                .mint_port
+                .or(previous.map(|s| s.mint_port))
+                .unwrap_or(8091),
+            database_port: args
+                .database_port
+                .or(previous.map(|s| s.database_port))
+                .unwrap_or(55432),
             clients_file,
             source_digest: digest,
             instance_id,

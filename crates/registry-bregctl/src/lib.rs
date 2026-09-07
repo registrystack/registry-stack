@@ -5219,8 +5219,8 @@ and Base Registry Engine serving the package it builds and tests from these
 files. It needs Docker and the installed `breg` and `mint` binaries.
 
 ```sh
-bregctl dev --project . --clients-file ./dev-clients.yaml
-bregctl dev stop --project .
+bregctl dev
+bregctl dev stop
 ```
 
 `bregctl test` alone replays `tests/journeys.yaml` over HTTP. It needs more
@@ -9948,8 +9948,8 @@ mod tests {
 
     #[test]
     fn dev_start_takes_no_detach_flag() {
-        assert!(Cli::try_parse_from(["bregctl", "dev", "--project", "."]).is_ok());
-        assert!(Cli::try_parse_from(["bregctl", "dev", "start", "--project", "."]).is_ok());
+        assert!(Cli::try_parse_from(["bregctl", "dev", "."]).is_ok());
+        assert!(Cli::try_parse_from(["bregctl", "dev", "start", "."]).is_ok());
         for arguments in [
             vec!["bregctl", "dev", "--detach"],
             vec!["bregctl", "dev", "start", "--detach"],
@@ -9959,11 +9959,50 @@ mod tests {
     }
 
     #[test]
+    fn dev_names_its_project_the_way_every_other_command_does() {
+        // `check`, `test`, `generate` and the rest take the project as their
+        // positional argument, so `dev` does too, defaulting to the current
+        // directory when it is absent. The clients file stays a flag because
+        // a first start reads the project's own dev-clients.yaml without it.
+        for arguments in [
+            vec!["bregctl", "dev"],
+            vec!["bregctl", "dev", "tutorial-work/project"],
+            vec!["bregctl", "dev", "start", "tutorial-work/project"],
+            vec!["bregctl", "dev", "stop", "tutorial-work/project"],
+            vec![
+                "bregctl",
+                "dev",
+                "stop",
+                "tutorial-work/project",
+                "--remove",
+            ],
+            vec![
+                "bregctl",
+                "dev",
+                "tutorial-work/project",
+                "--clients-file",
+                "clients.yaml",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(&arguments).is_ok(), "{arguments:?}");
+        }
+        for arguments in [
+            vec!["bregctl", "dev", "--project", "."],
+            vec!["bregctl", "dev", "start", "--project", "."],
+            vec!["bregctl", "dev", "stop", "--project", "."],
+            // A project before the action would stop a different directory
+            // than the one named, so the two forms do not combine.
+            vec!["bregctl", "dev", "tutorial-work/project", "stop"],
+            vec!["bregctl", "dev", "one", "two"],
+        ] {
+            assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
     fn dev_stop_reclaims_only_when_removal_is_explicit() {
-        assert!(Cli::try_parse_from(["bregctl", "dev", "stop", "--project", "."]).is_ok());
-        assert!(
-            Cli::try_parse_from(["bregctl", "dev", "stop", "--project", ".", "--remove"]).is_ok()
-        );
+        assert!(Cli::try_parse_from(["bregctl", "dev", "stop", "."]).is_ok());
+        assert!(Cli::try_parse_from(["bregctl", "dev", "stop", ".", "--remove"]).is_ok());
         for arguments in [
             vec!["bregctl", "dev", "--remove"],
             vec!["bregctl", "dev", "start", "--remove"],

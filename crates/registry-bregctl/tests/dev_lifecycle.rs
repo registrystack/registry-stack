@@ -33,12 +33,7 @@ impl Session {
         let docker = self.docker.to_str().unwrap();
         let mut invocation = vec!["dev"];
         invocation.extend_from_slice(args);
-        invocation.extend([
-            "--project",
-            self.project.to_str().unwrap(),
-            "--docker-bin",
-            docker,
-        ]);
+        invocation.extend([self.project.to_str().unwrap(), "--docker-bin", docker]);
         self.ctl(&invocation)
     }
     fn report(&self, output: std::process::Output) -> Value {
