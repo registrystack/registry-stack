@@ -145,7 +145,7 @@ Now see how the compiled project pairs the declaration with its retry profile:
 bregctl explain events "$webhook_run/project"
 ```
 
-After `explain succeeded` and the project's findings, the report has one delivery,
+After `Explained the compiled inventory.` and the project's findings, the report has one delivery,
 `events.establishment.operating-created-v1.webhook`.
 A delivery is one event bound to one destination, and the report shows what the project declares for it:
 `deliveryMode` is `after_commit`, `maximumAttempts` is `5` with `retryDelaysMs` of `1000, 2000, 4000, 8000`,
@@ -165,8 +165,9 @@ bregctl webhook sample "$webhook_run/project" --event operating-created-v1
 ```
 
 ```text
-webhook sample succeeded
-event: operating-created-v1
+Built the sample delivery. The canonical request follows.
+  event  operating-created-v1
+
 POST <configured-webhook-request-target> HTTP/1.1
 Accept: application/json
 Content-Type: application/json

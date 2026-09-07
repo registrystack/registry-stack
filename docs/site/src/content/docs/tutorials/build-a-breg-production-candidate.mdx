@@ -83,10 +83,19 @@ bregctl check --production tutorial-work/candidate-project
 ```
 
 ```text
-check succeeded
-revision: sha256:47bb7234a81ecd44fef51323c6d92f3291282b5faebb6645a9096f16b9059d5a
-finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+Production check passed.
+  revision  sha256:47bb7234a81ecd44fef51323c6d92f3291282b5faebb6645a9096f16b9059d5a
+
+  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+           this profile can list all rows, subject only to query bounds; caller filters
+           are not authorization. Add a claim-bound row restriction or review this
+           registry-wide access
+  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+           this profile has no claim-bound row restriction for its granted operations;
+           requestVisibility owner limits request reads only, and other lifecycle rules
+           still apply. Review this registry-wide access
+
+0 errors, 2 findings.
 ```
 
 The generated project ships both findings on purpose: the `operator` profile lists every record because
@@ -101,8 +110,18 @@ bregctl check --production --deny-findings tutorial-work/candidate-project
 ```
 
 ```text
-error access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-error access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+bregctl check refused.
+
+  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+           this profile can list all rows, subject only to query bounds; caller filters
+           are not authorization. Add a claim-bound row restriction or review this
+           registry-wide access
+  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+           this profile has no claim-bound row restriction for its granted operations;
+           requestVisibility owner limits request reads only, and other lifecycle rules
+           still apply. Review this registry-wide access
+
+refused on 2 findings.
 ```
 
 The command exits with status 1. That is the gate for a pipeline that must never build a candidate
@@ -348,14 +367,14 @@ SSL_CERT_FILE="$PWD/tutorial-work/candidate/postgres/ca.pem" bregctl test tutori
 ```
 
 ```text
-test succeeded
-profile: production
-package revision: sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
-schema fingerprint: sha256:d459608ae9792a4bc387ff3965652ead7a7a1ac2ffa11b81506b55c66ebc6c02
-signing input sha256: 248a359554982daa7e0ee627027acda85394b9c3154facbf60c821c6596952ee
-successful journeys: record-lifecycle
-receipt sha256: c8e518182c09c45c620163d2fe5b71d1cbcaae7581356c15944e000aff96c9cf
-receipt bytes: 1054
+Fixture run passed. 1 journey.
+  profile               production
+  package revision      sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
+  schema fingerprint    sha256:d459608ae9792a4bc387ff3965652ead7a7a1ac2ffa11b81506b55c66ebc6c02
+  signing input sha256  248a359554982daa7e0ee627027acda85394b9c3154facbf60c821c6596952ee
+  successful journeys   record-lifecycle
+  receipt sha256        c8e518182c09c45c620163d2fe5b71d1cbcaae7581356c15944e000aff96c9cf
+  receipt bytes         1054
 ```
 
 `SSL_CERT_FILE` points the TLS client at your certificate authority, and the URL host `localhost`
@@ -379,15 +398,15 @@ bregctl package tutorial-work/candidate-project \
 ```
 
 ```text
-package succeeded
-profile: production
-state: awaiting_signatures
-package revision: sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
-signature threshold: 1
-provided signatures: 0
-package files: 18
-signing input sha256: 248a359554982daa7e0ee627027acda85394b9c3154facbf60c821c6596952ee
-signing input bytes: 14921
+Sealed a deployment package. It is awaiting signatures.
+  profile               production
+  state                 awaiting_signatures
+  package revision      sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
+  signature threshold   1
+  provided signatures   0
+  package files         18
+  signing input sha256  248a359554982daa7e0ee627027acda85394b9c3154facbf60c821c6596952ee
+  signing input bytes   14921
 ```
 
 Nothing is published yet. The output directory holds `signing-input.json`, the exact bytes to sign,
@@ -406,7 +425,7 @@ bregctl package tutorial-work/candidate-project \
   --signatures "$PWD/tutorial-work/candidate/signatures.json"
 ```
 
-The report repeats with `state: published` and `provided signatures: 1`. The package is in
+The report repeats, its lead sentence now reading `Sealed and published a deployment package.`, with `state` at `published` and `provided signatures` at `1`. The package is in
 `tutorial-work/candidate/build-1/package`: the effective model, the DDL and migration plan, the
 OpenAPI document and JSON Schemas, the inventories, the manifest projection, the journeys, and the
 project source it was built from. Its revision binds all of them together with the environment, the
@@ -449,20 +468,20 @@ bregctl verify --runtime-config "$PWD/tutorial-work/candidate/runtime.yaml"
 ```
 
 ```text
-verify succeeded
-assurance: runtime_bound
-package revision: sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
-registry id: generic-registry
-registry version: 0.1.0
-registry revision: sha256:47bb7234a81ecd44fef51323c6d92f3291282b5faebb6645a9096f16b9059d5a
-modules: 1
-entities: 2
-routes: 8
-access entries: 8
-queries: 4
-event deliveries: 0
-DDL statements: 23
-generated artifacts: 14
+Verified the package against the runtime it is bound to.
+  assurance            runtime_bound
+  package revision     sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
+  registry id          generic-registry
+  registry version     0.1.0
+  registry revision    sha256:47bb7234a81ecd44fef51323c6d92f3291282b5faebb6645a9096f16b9059d5a
+  modules              1
+  entities             2
+  routes               8
+  access entries       8
+  queries              4
+  event deliveries     0
+  DDL statements       23
+  generated artifacts  14
 ```
 
 `runtime_bound` means the check ran with everything the runtime has at startup: the trust anchor,

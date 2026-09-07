@@ -292,6 +292,80 @@ fn reviewed_successor_is_shared_by_test_and_package_without_placeholder_fingerpr
 }
 
 #[test]
+fn migration_explain_names_every_bound_a_reviewed_migration_carries() {
+    let fixture = ReviewFixture::create();
+    let package = fixture.project.path().join("successor-package");
+    let signature = sign(
+        fixture.prepared.canonical_signed_bytes(),
+        &fixture.baseline.signing,
+    )
+    .expect("the successor package canonical bytes sign");
+    fixture
+        .prepared
+        .publish_to_directory(
+            &package,
+            vec![PackageSignature {
+                key_id: fixture.key_id.clone(),
+                signature_hex: hex(&signature),
+            }],
+        )
+        .expect("the successor package publishes");
+    let runtime_parent = fixture.project.path().join("successor-runtime");
+    fs::create_dir_all(&runtime_parent).expect("the successor runtime directory creates");
+    let runtime_config = write_runtime_config(
+        &runtime_parent,
+        &package,
+        &fixture.baseline.anchor,
+        fixture.prepared.package_revision(),
+        "127.0.0.1:1".parse().unwrap(),
+    );
+    let bound = fs::read_to_string(&runtime_config).expect("the runtime config reads");
+    fs::write(
+        &runtime_config,
+        bound.replace("activeSequence: 1", "activeSequence: 2"),
+    )
+    .expect("the runtime config binds the successor sequence");
+
+    let explained = bregctl(&[
+        "migration",
+        "explain",
+        "--runtime-config",
+        path(&runtime_config),
+    ]);
+
+    assert!(explained.status.success(), "{explained:?}");
+    assert!(explained.stderr.is_empty());
+    let rendered = String::from_utf8(explained.stdout).expect("the migration report is UTF-8");
+    assert!(
+        rendered.contains("\n  reviewed migration 1\n"),
+        "{rendered}"
+    );
+    let detail = |label: &str| {
+        rendered
+            .lines()
+            .find_map(|line| line.trim_start().strip_prefix(label))
+            .map(|value| value.trim().to_owned())
+    };
+    for (label, value) in [
+        ("change class", "access_or_disclosure_change"),
+        ("recovery", "exact_target_resume"),
+        ("lock timeout ms", "1000"),
+        ("statement timeout ms", "5000"),
+        ("transactional step count", "0"),
+        ("chunked step count", "0"),
+        ("pre-assertion count", "0"),
+        ("post-assertion count", "0"),
+        ("backup required", "false"),
+    ] {
+        assert_eq!(
+            detail(label).as_deref(),
+            Some(value),
+            "the reviewed migration reports {label}: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn reviewed_successor_changed_review_invalidates_the_schema_test_receipt() {
     let fixture = ReviewFixture::create();
     // This remains a valid review, but it is no longer the tested candidate.

@@ -1,0 +1,671 @@
+id: https://publicschema.org/linkml/common
+name: publicschema-common
+title: PublicSchema common domain
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  xsd: http://www.w3.org/2001/XMLSchema#
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  schema: http://schema.org/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  fhir: http://hl7.org/fhir/
+  cpov: http://data.europa.eu/m8g/
+  dpv: https://w3id.org/dpv#
+  dpv-gdpr: https://w3id.org/dpv/dpv-gdpr#
+  dci: https://schema.spdci.org/core/v1/
+  dhis2: https://dhis2.org/schemas/
+  dhs: https://dhsprogram.com/data/recode7/
+  dhs8: https://dhsprogram.com/data/recode8/
+  fhir-r4: http://hl7.org/fhir/R4/
+  fhir-r5: http://hl7.org/fhir/R5/
+  govstack-payments: https://govstack.global/specs/payments/
+  lsms-isa: https://www.worldbank.org/en/programs/lsms/initiatives/lsms-ISA/
+  mics: https://mics.unicef.org/tools/
+  ocha-cod-ab: https://data.humdata.org/dataset/cod-ab/
+  opencrvs: https://documentation.opencrvs.org/technology/event-service-v2/
+  openimis: https://openimis.atlassian.net/wiki/spaces/OP/
+  openspp: https://docs.openspp.org/
+  wg-es: https://www.washingtongroup-disability.com/question-sets/wg-extended-set/
+  legal: http://www.w3.org/ns/legal#
+  locn: http://www.w3.org/ns/locn#
+  adms: http://www.w3.org/ns/adms#
+  dct: http://purl.org/dc/terms/
+  person: http://www.w3.org/ns/person#
+  rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+  rdfs: http://www.w3.org/2000/01/rdf-schema#
+imports:
+- linkml:types
+- publicschema-extensions
+- core
+- identity
+- misc
+- vocabularies
+slots:
+  amount:
+    slot_uri: publicschema:amount
+    title: Amount
+    description: The monetary or quantitative value of the item being delivered, owed, or redeemed, expressed
+      as a decimal number in the associated currency.
+    range: decimal
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Monto
+      label_fr: Montant
+      description_es: El valor monetario o cuantitativo del elemento entregado, adeudado o canjeado, expresado
+        como un número decimal en la moneda asociada.
+      description_fr: La valeur monétaire ou quantitative de l'élément livré, dû ou échangé, exprimée
+        sous forme de nombre décimal dans la devise associée.
+      convergence_json: '{"system_count": 3, "total_systems": 5}'
+  conforms_to:
+    slot_uri: publicschema:conforms_to
+    title: Conforms to
+    description: URIs of standards or specifications this record conforms to (ISO/IEC TS 27560, Kantara
+      Consent Receipt, W3C DPV, etc.). Purely declarative; no validation is performed against the cited
+      standards at schema level.
+    range: uri
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Conforme a
+      label_fr: Conforme à
+      description_es: URIs de las normas o especificaciones con las que este registro es conforme (ISO/IEC
+        TS 27560, Kantara Consent Receipt, W3C DPV, etc.). Puramente declarativo; no se realiza ninguna
+        validación contra las normas citadas a nivel de esquema.
+      description_fr: URI des normes ou spécifications auxquelles cet enregistrement est conforme (ISO/IEC
+        TS 27560, Kantara Consent Receipt, W3C DPV, etc.). Purement déclaratif ; aucune validation n'est
+        effectuée par rapport aux normes citées au niveau du schéma.
+      category: administrative
+      bibliography_refs: '["kantara-ancr"]'
+  controllers:
+    slot_uri: publicschema:controllers
+    title: Controllers
+    description: Organizations determining the purposes and means of processing. Cardinality multiple
+      covers joint controllership (two or more organizations jointly responsible under GDPR Art 26 or
+      equivalent national provisions); the normative case is one controller. See 'recipient_role' to distinguish
+      processors from controllers among recipients.
+    range: Organization
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - dpv:hasDataController
+    annotations:
+      label_es: Responsables del tratamiento
+      label_fr: Responsables du traitement
+      description_es: Organizaciones que determinan los fines y los medios del tratamiento. La cardinalidad
+        múltiple cubre la corresponsabilidad (dos o más organizaciones conjuntamente responsables en virtud
+        del Art. 26 del RGPD o disposiciones nacionales equivalentes); el caso normativo es un único responsable
+        del tratamiento. Véase 'recipient_role' para distinguir los encargados del tratamiento de los
+        responsables entre los destinatarios.
+      description_fr: Organisations qui déterminent les finalités et les moyens du traitement. La cardinalité
+        multiple couvre la responsabilité conjointe (deux organisations ou plus conjointement responsables
+        au titre de l'article 26 du RGPD ou des dispositions nationales équivalentes) ; le cas normatif
+        est un seul responsable du traitement. Voir 'recipient_role' pour distinguer les sous-traitants
+        des responsables parmi les destinataires.
+      category: consent_parties
+      immutable_after_status: given
+      external_alignments_json: '[{"label": "has data controller", "match": "close", "note": "DPV models
+        this as a predicate (hasDataController) linking a record to a controller; we model it as a property
+        on ConsentRecord. Semantically equivalent.", "uri": "https://w3id.org/dpv#hasDataController",
+        "vocabulary": "DPV v2", "vocabulary_id": "dpv"}]'
+      bibliography_refs: '["iso-27560", "iso-29184", "kantara-consent-receipt", "w3c-dpv"]'
+  created_at:
+    slot_uri: publicschema:created_at
+    title: Created at
+    description: System-generated timestamp marking when this record was persisted. This is the digitisation
+      timestamp, not the consent-giving date. Distinct from 'signed_date' (the day the data subject indicated
+      consent) and 'effective_date' (when the record becomes operative). For paper-first workflows the
+      three timestamps may all differ.
+    range: datetime
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Creado el
+      label_fr: Créé le
+      description_es: Marca de tiempo generada por el sistema que indica cuándo se almacenó este registro.
+        Es la marca de tiempo de digitalización, no la fecha de otorgamiento del consentimiento. Distinta
+        de 'signed_date' (el día en que la persona interesada indicó su consentimiento) y de 'effective_date'
+        (cuando el registro entra en vigor). Para los flujos de trabajo en papel, las tres marcas de tiempo
+        pueden diferir.
+      description_fr: Horodatage généré par le système indiquant quand cet enregistrement a été conservé.
+        Il s'agit de l'horodatage de numérisation, et non de la date de consentement. Distinct de 'signed_date'
+        (le jour où la personne concernée a indiqué son consentement) et de 'effective_date' (quand l'enregistrement
+        entre en vigueur). Pour les flux de travail papier, les trois horodatages peuvent tous différer.
+      category: administrative
+      bibliography_refs: '["iso-27560", "kantara-consent-receipt"]'
+  currency:
+    slot_uri: publicschema:currency
+    title: Currency
+    description: The ISO 4217 currency code for a monetary value.
+    range: Currency
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Moneda
+      label_fr: Devise
+      description_es: El código de moneda ISO 4217 para un valor monetario.
+      description_fr: Le code de devise ISO 4217 pour une valeur monétaire.
+      convergence_json: '{"system_count": 1, "total_systems": 5}'
+      bibliography_refs: '["iso-4217"]'
+  description:
+    slot_uri: publicschema:description
+    title: Description
+    description: A free-text summary describing the event, situation, or record.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Descripción
+      label_fr: Description
+      description_es: Un resumen en texto libre que describe el evento, la situación o el registro.
+      description_fr: Un résumé en texte libre décrivant l'événement, la situation ou l'enregistrement.
+  effective_date:
+    slot_uri: publicschema:effective_date
+    title: Effective date
+    description: The date on which this record or notice becomes operative. On a ConsentRecord, it may
+      be later than signed_date (the day the data subject indicated consent) and later than created_at
+      (the digitisation timestamp); for paper workflows, signed_date is the day of the paper signature
+      and effective_date is typically the same day but may be delayed by program logic. On a PrivacyNotice,
+      it is the date from which this notice version applies; records collected before this date reference
+      the superseded version via supersedes_ref.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de vigencia
+      label_fr: Date d'entrée en vigueur
+      description_es: La fecha en que este registro o aviso se vuelve operativo. En un ConsentRecord,
+        puede ser posterior a signed_date (el día en que la persona afectada indicó su consentimiento)
+        y a created_at (la marca de tiempo de digitalización); en flujos en papel, signed_date es el día
+        de la firma del formulario en papel y effective_date es normalmente el mismo día, pero puede retrasarse
+        según la lógica del programa. En un PrivacyNotice, es la fecha a partir de la cual se aplica esta
+        versión del aviso; los registros recogidos antes de esa fecha remiten a la versión anterior mediante
+        supersedes_ref.
+      description_fr: La date à laquelle cet enregistrement ou cet avis devient opérationnel. Sur un ConsentRecord,
+        elle peut être postérieure à signed_date (le jour où la personne concernée a indiqué son consentement)
+        et à created_at (l'horodatage de numérisation); pour les flux sur support papier, signed_date
+        est le jour de la signature du formulaire papier et effective_date est généralement le même jour,
+        mais peut être retardée par la logique du programme. Sur un PrivacyNotice, il s'agit de la date
+        à partir de laquelle cette version de l'avis s'applique; les enregistrements recueillis avant
+        cette date renvoient à la version antérieure via supersedes_ref.
+      category: consent_validity
+      immutable_after_status: given
+      bibliography_refs: '["iso-27560", "w3c-dpv"]'
+  end_date:
+    slot_uri: publicschema:end_date
+    title: End date
+    description: The date on which this ceased to be effective.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - schema:endDate
+    annotations:
+      label_es: Fecha de fin
+      label_fr: Date de fin
+      description_es: La fecha en que esto dejó de ser efectivo.
+      description_fr: La date à laquelle ceci a cessé d'être effectif.
+      convergence_json: '{"system_count": 4, "total_systems": 6}'
+      bibliography_refs: '["schema-org"]'
+  enrollment_ref:
+    slot_uri: publicschema:enrollment_ref
+    title: Enrollment reference
+    description: Reference to the enrollment to which this entitlement belongs.
+    range: uri
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Referencia de inscripción
+      label_fr: Référence d'inscription
+      description_es: Referencia a la inscripción a la que pertenece esta prestación.
+      description_fr: Référence à l'inscription à laquelle cette prestation est rattachée.
+      convergence_json: '{"system_count": 0, "total_systems": 5}'
+  expiry_date:
+    slot_uri: publicschema:expiry_date
+    title: Expiry date
+    description: The date on which this record or document expires or becomes invalid.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    annotations:
+      label_es: Fecha de expiración
+      label_fr: Date d'expiration
+      description_es: La fecha en que este registro o documento expira o deja de ser válido.
+      description_fr: La date à laquelle cet enregistrement ou document expire ou devient invalide.
+      convergence_json: '{"notes": "Present in 1 of 5 mapped systems. Relevant for documents such as passports
+        and national IDs with fixed validity periods.", "system_count": 1, "total_systems": 5}'
+      bibliography_refs: '["w3c-dpv"]'
+  identifier:
+    slot_uri: publicschema:identifier
+    title: Record identifier
+    description: A unique identifier for this record (e.g., a ULID, UUID, or program-assigned ID). Scoped
+      to the record's namespace; not necessarily globally unique.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Identificador del registro
+      label_fr: Identifiant de l'enregistrement
+      description_es: Un identificador único para este registro (por ejemplo, un ULID, UUID o ID asignado
+        por el programa). Su alcance se limita al espacio de nombres del registro; no es necesariamente
+        único a nivel global.
+      description_fr: Un identifiant unique pour cet enregistrement (par exemple, un ULID, UUID ou identifiant
+        attribué par le programme). La portée est limitée à l'espace de nommage de l'enregistrement ;
+        il n'est pas nécessairement unique à l'échelle mondiale.
+      category: administrative
+      bibliography_refs: '["iso-27560", "kantara-consent-receipt"]'
+  identifiers:
+    slot_uri: publicschema:identifiers
+    title: Identifiers
+    description: Identifiers carried by this entity, such as national ID numbers, program IDs, or identifiers
+      asserted by an identity document.
+    range: Identifier
+    multivalued: true
+    status: bibo:status/published
+    annotations:
+      label_es: Identificadores
+      label_fr: Identifiants
+      description_es: Identificadores que porta esta entidad, como números de identidad nacional, ID de
+        programa o identificadores acreditados por un documento de identidad.
+      description_fr: Identifiants portés par cette entité, tels que numéros d'identité nationale, identifiants
+        de programme ou identifiants attestés par un document d'identité.
+      category: identity
+      convergence_json: '{"notes": "Present in 5 of 6 mapped systems. Structural approaches vary: some
+        embed identifiers inline on the person record, others maintain a separate identifier entity.",
+        "system_count": 5, "total_systems": 6}'
+      bibliography_refs: '["spdci-common-standards"]'
+  issue_date:
+    slot_uri: publicschema:issue_date
+    title: Issue date
+    description: The date on which this record or document was issued.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - dct:issued
+    annotations:
+      label_es: Fecha de emisión
+      label_fr: Date de délivrance
+      description_es: La fecha en que se emitió este registro o documento.
+      description_fr: La date à laquelle cet enregistrement ou document a été délivré.
+      external_alignments_json: '[{"label": "issued", "match": "exact", "uri": "http://purl.org/dc/terms/issued",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}]'
+      convergence_json: '{"notes": "Not found in any of the 5 mapped systems. Present in some civil registration
+        systems but not typically carried in social protection delivery databases.", "system_count": 0,
+        "total_systems": 5}'
+      bibliography_refs: '["semic-core-person"]'
+  issued_to:
+    slot_uri: publicschema:issued_to
+    title: Issued to
+    description: The party (person, household, or group) to whom the document, voucher, or credential
+      is issued.
+    range: Party
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Emitido a
+      label_fr: Délivré à
+      description_es: La parte (persona, hogar o grupo) a la que se emite el documento, vale o credencial.
+      description_fr: La partie (personne, ménage ou groupe) à laquelle le document, le bon ou l'attestation
+        est délivré.
+      convergence_json: '{"system_count": 0, "total_systems": 6}'
+  issuing_authority:
+    slot_uri: publicschema:issuing_authority
+    title: Issuing authority
+    description: The organization or government body that issued the document or credential.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    close_mappings:
+    - dct:creator
+    annotations:
+      label_es: Autoridad emisora
+      label_fr: Autorité émettrice
+      description_es: La organización o entidad gubernamental que emitió el documento o la credencial.
+      description_fr: L'organisation ou l'organe gouvernemental qui a délivré le document ou l'attestation.
+      external_alignments_json: '[{"label": "creator", "match": "close", "note": "SEMIC uses dc:creator
+        as an object property; ours is a string name of the issuing authority", "uri": "http://purl.org/dc/terms/creator",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}]'
+      convergence_json: '{"notes": "Not found in any of the 5 mapped systems. Considered best practice
+        for identity verification but rarely captured in current social protection systems.", "system_count":
+        0, "total_systems": 5}'
+      bibliography_refs: '["semic-core-person"]'
+  jurisdiction:
+    slot_uri: publicschema:jurisdiction
+    title: Jurisdiction
+    description: 'ISO 3166-1 alpha-2 country code of the jurisdiction whose data protection law governs
+      this record. Cardinality single: multi-jurisdictional records are the rare case; a follow-on ADR
+      will lift cardinality if adopters hit it. Under joint controllership, this is the lead controller''s
+      primary establishment jurisdiction.'
+    range: Country
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Jurisdicción
+      label_fr: Juridiction
+      description_es: 'Código de país ISO 3166-1 alpha-2 de la jurisdicción cuya ley de protección de
+        datos rige este registro. Cardinalidad simple: los registros multi-jurisdiccionales son el caso
+        excepcional; un ADR posterior podrá ampliar la cardinalidad si los adoptantes lo necesitan. En
+        caso de responsabilidad conjunta, corresponde a la jurisdicción de establecimiento principal del
+        responsable principal.'
+      description_fr: 'Code pays ISO 3166-1 alpha-2 de la juridiction dont la législation sur la protection
+        des données régit cet enregistrement. Cardinalité simple: les enregistrements multi-juridictionnels
+        sont rares; un ADR ultérieur lèvera la contrainte si les adoptants en ont besoin. En cas de responsabilité
+        conjointe, il s''agit de la juridiction du siège principal du responsable chef de file.'
+      category: consent_validity
+      immutable_after_status: given
+  legal_basis:
+    slot_uri: publicschema:legal_basis
+    title: Legal basis
+    description: 'The legal basis under GDPR Art 6(1) (or equivalent law) authorizing the processing.
+      Cardinality multiple because a single record may rely on more than one basis; normative usage on
+      a ConsentRecord is one basis. On a PrivacyNotice, multiple bases may coexist if the notice covers
+      multiple processing operations. Field-critical: populate even if your UI does not require it.'
+    range: LegalBasis
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - dpv:hasLegalBasis
+    annotations:
+      label_es: Base legal
+      label_fr: Base juridique
+      description_es: 'La base legal conforme al Art 6(1) del RGPD (o ley equivalente) que autoriza el
+        tratamiento. Cardinalidad múltiple porque un registro puede apoyarse en más de una base; el uso
+        normativo en un ConsentRecord es una sola base. En un PrivacyNotice, múltiples bases pueden coexistir
+        si el aviso cubre varias operaciones de tratamiento. Campo crítico: completar incluso si su interfaz
+        no lo exige.'
+      description_fr: 'La base juridique au sens de l''Art 6(1) du RGPD (ou équivalent national) autorisant
+        le traitement. Cardinalité multiple car un enregistrement peut s''appuyer sur plus d''une base
+        ; l''usage normatif sur un ConsentRecord est d''une base. Sur un PrivacyNotice, plusieurs bases
+        peuvent coexister si l''avis couvre plusieurs opérations de traitement. Champ critique : à renseigner
+        même si votre interface ne l''exige pas.'
+      category: consent_processing
+      immutable_after_status: given
+      external_alignments_json: '[{"label": "has legal basis", "match": "close", "note": "DPV models this
+        as a predicate linking a record to a legal basis class; we model it as a vocabulary-typed property
+        carrying coded values aligned to GDPR Art 6(1).", "uri": "https://w3id.org/dpv#hasLegalBasis",
+        "vocabulary": "DPV v2", "vocabulary_id": "dpv"}]'
+      bibliography_refs: '["kantara-consent-receipt", "w3c-dpv"]'
+  location:
+    slot_uri: publicschema:location
+    title: Location
+    description: The geographic location of the subject of this record, captured as coordinates or administrative
+      area.
+    range: Location
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Ubicación
+      label_fr: Localisation
+      description_es: La ubicación geográfica del sujeto de este registro, capturada como coordenadas
+        o área administrativa.
+      description_fr: La localisation géographique du sujet de cet enregistrement, capturée sous forme
+        de coordonnées ou de zone administrative.
+      category: location
+      convergence_json: '{"notes": "OpenSPP and DCI map location. Distinct from address: location is the
+        administrative area for targeting; address is the specific contact point.\n", "system_count":
+        2, "total_systems": 4}'
+  name:
+    slot_uri: publicschema:name
+    title: Name
+    description: The full display name of the record. Depending on the concept, this is a person's or
+      group's name, or the title of a program, instrument, scoring rule, or software product.
+    range: string
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - foaf:name
+    - schema:name
+    close_mappings:
+    - dci:data/name
+    - legal:legalName
+    annotations:
+      label_es: Nombre
+      label_fr: Nom
+      description_es: El nombre de visualización completo del registro. Según el concepto, es el nombre
+        de una persona o grupo, o el título de un programa, instrumento, regla de puntuación o producto
+        de software.
+      description_fr: Le nom d'affichage complet de l'enregistrement. Selon le concept, il s'agit du nom
+        d'une personne ou d'un groupe, ou du titre d'un programme, d'un instrument, d'une règle de notation
+        ou d'un produit logiciel.
+      category: identity
+      external_alignments_json: '[{"label": "name", "match": "exact", "uri": "http://xmlns.com/foaf/0.1/name",
+        "vocabulary": "Core Person", "vocabulary_id": "semic"}, {"label": "name", "match": "close", "note":
+        "PublicSchema ''name'' is a flat display string; DCI ''name'' is a structured Name object with
+        surname, given_name, and other components", "uri": "https://schema.spdci.org/core/v1/data/name",
+        "vocabulary": "DCI Core", "vocabulary_id": "dci"}, {"confidence": "medium", "label": "legalName",
+        "match": "close", "note": "PublicSchema name can carry an organization label; legalName is the
+        registered legal name when the organization is a legal entity.", "predicate": "http://www.w3.org/2004/02/skos/core#closeMatch",
+        "review_status": "accepted", "source_id": "semic-core-business", "source_version": "2.2.0", "uri":
+        "http://www.w3.org/ns/legal#legalName", "vocabulary": "SEMIC Core Business alignments"}]'
+      convergence_json: '{"notes": "Universal across all 6 mapped systems. May be stored as a composite
+        field or derived from given_name and family_name.", "system_count": 6, "total_systems": 6}'
+      bibliography_refs: '["iso-29184", "schema-org", "semic-core-person", "spdci-common-standards"]'
+  person:
+    slot_uri: publicschema:person
+    title: Person
+    description: A reference to the individual Person this record relates to.
+    range: Person
+    multivalued: false
+    status: bibo:status/forthcoming
+    annotations:
+      label_es: Persona
+      label_fr: Personne
+      description_es: Una referencia a la Persona individual a la que se refiere este registro.
+      description_fr: Une référence à la Personne à laquelle cet enregistrement se rapporte.
+      category: other
+      sensitivity: sensitive
+      convergence_json: '{"notes": "Present in 2 of 5 mapped systems as an explicit reference. Most systems
+        co-locate person data with the membership record rather than using a typed reference.", "system_count":
+        2, "total_systems": 5}'
+  personal_data_categories:
+    slot_uri: publicschema:personal_data_categories
+    title: Personal data categories
+    description: 'Values are W3C DPV URIs, normatively subclasses of `dpv:PersonalData` (from the DPV
+      core; the DPV-PD extension defines finer taxa). Cross-reference: this is distinct from biometric
+      capture method, which is `consent_expression = opt-in-biometric` on this record. Biometric data
+      categories are values of this property (e.g., a URI for fingerprint, face image).'
+    range: uri
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - dpv:hasPersonalData
+    annotations:
+      label_es: Categorías de datos personales
+      label_fr: Catégories de données personnelles
+      description_es: Los valores son URI W3C DPV, subclases normativas de `dpv:PersonalData` (del núcleo
+        DPV; la extensión DPV-PD define taxones más específicos). No confundir con el método de captura
+        biométrica, que es `consent_expression = opt-in-biometric` en este registro. Las categorías de
+        datos biométricos son valores de esta propiedad (por ejemplo, un URI para huella dactilar, imagen
+        facial).
+      description_fr: Les valeurs sont des URI W3C DPV, sous-classes normatives de `dpv:PersonalData`
+        (du noyau DPV ; l'extension DPV-PD définit des taxons plus fins). À ne pas confondre avec la méthode
+        de collecte biométrique, qui est `consent_expression = opt-in-biometric` sur cet enregistrement.
+        Les catégories de données biométriques sont des valeurs de cette propriété (par exemple, un URI
+        pour empreinte digitale, image faciale).
+      category: consent_processing
+      immutable_after_status: given
+      external_alignments_json: '[{"label": "has personal data", "match": "close", "note": "DPV models
+        this as a predicate linking a record to a personal data category; we model it as a property on
+        ConsentRecord carrying category URIs.", "uri": "https://w3id.org/dpv#hasPersonalData", "vocabulary":
+        "DPV v2", "vocabulary_id": "dpv"}]'
+      bibliography_refs: '["iso-29184", "kantara-consent-receipt", "w3c-dpv"]'
+  processing_operations:
+    slot_uri: publicschema:processing_operations
+    title: Processing operations
+    description: Values are W3C DPV URIs, normatively subclasses of `dpv:Processing` (e.g., `dpv:Collect`,
+      `dpv:Store`, `dpv:Share`). Describes the operations being consented to. Cross-reference GDPR Art
+      4(2) for the definition of 'processing'.
+    range: uri
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - dpv:hasProcessing
+    annotations:
+      label_es: Operaciones de tratamiento
+      label_fr: Opérations de traitement
+      description_es: 'Los valores son URI W3C DPV, subclases normativas de `dpv:Processing` (por ejemplo,
+        `dpv:Collect`, `dpv:Store`, `dpv:Share`). Describe las operaciones para las que se otorga el consentimiento.
+        Referencia: RGPD Art 4(2) para la definición de ''tratamiento''.'
+      description_fr: 'Les valeurs sont des URI W3C DPV, sous-classes normatives de `dpv:Processing` (par
+        exemple `dpv:Collect`, `dpv:Store`, `dpv:Share`). Décrit les opérations faisant l''objet du consentement.
+        Référence : RGPD Art 4(2) pour la définition du terme ''traitement''.'
+      category: consent_processing
+      immutable_after_status: given
+      external_alignments_json: '[{"label": "has processing", "match": "close", "note": "DPV models this
+        as a predicate linking a record to a processing operation; we model it as a property on ConsentRecord
+        carrying operation URIs.", "uri": "https://w3id.org/dpv#hasProcessing", "vocabulary": "DPV v2",
+        "vocabulary_id": "dpv"}]'
+      bibliography_refs: '["w3c-dpv"]'
+  purposes:
+    slot_uri: publicschema:purposes
+    title: Processing purposes
+    description: Values are W3C DPV URIs, normatively subclasses of `dpv:Purpose` (e.g., `dpv:ServiceProvision`,
+      `dpv:ResearchAndDevelopment`). Each URI identifies a purpose for which personal data is processed
+      under this record. See `docs/dpv-vocabulary-reference.md` for a curated starter list.
+    range: uri
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - dpv:hasPurpose
+    annotations:
+      label_es: Finalidades del tratamiento
+      label_fr: Finalités du traitement
+      description_es: Los valores son URI W3C DPV, subclases normativas de `dpv:Purpose` (por ejemplo,
+        `dpv:ServiceProvision`, `dpv:ResearchAndDevelopment`). Cada URI identifica una finalidad para
+        la cual se procesan datos personales en este registro. Consulte `docs/dpv-vocabulary-reference.md`
+        para una lista de inicio seleccionada.
+      description_fr: Les valeurs sont des URI W3C DPV, sous-classes normatives de `dpv:Purpose` (par
+        exemple `dpv:ServiceProvision`, `dpv:ResearchAndDevelopment`). Chaque URI identifie une finalité
+        pour laquelle des données personnelles sont traitées dans le cadre de cet enregistrement. Voir
+        `docs/dpv-vocabulary-reference.md` pour une liste de démarrage.
+      category: consent_processing
+      immutable_after_status: given
+      external_alignments_json: '[{"label": "has purpose", "match": "close", "note": "DPV models this
+        as a predicate linking a record to a purpose; we model it as a property on ConsentRecord carrying
+        purpose URIs.", "uri": "https://w3id.org/dpv#hasPurpose", "vocabulary": "DPV v2", "vocabulary_id":
+        "dpv"}]'
+      bibliography_refs: '["iso-29184", "kantara-consent-receipt", "w3c-dpv"]'
+  schema_version:
+    slot_uri: publicschema:schema_version
+    title: Schema version
+    description: Identifies the version of the PublicSchema (or other) consent record schema this instance
+      conforms to. Enables forward migration tooling. Typically a dereferenceable URI, for example 'https://publicschema.org/ConsentRecord/v1'.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Versión del esquema
+      label_fr: Version du schéma
+      description_es: Identifica la versión del esquema de registro de consentimiento de PublicSchema
+        (u otro) al que se ajusta esta instancia. Permite las herramientas de migración hacia versiones
+        posteriores. Normalmente es un URI desreferenciable, por ejemplo 'https://publicschema.org/ConsentRecord/v1'.
+      description_fr: Identifie la version du schéma d'enregistrement de consentement PublicSchema (ou
+        autre) auquel cette instance est conforme. Permet les outils de migration vers les versions ultérieures.
+        Il s'agit généralement d'un URI déréférençable, par exemple 'https://publicschema.org/ConsentRecord/v1'.
+      category: administrative
+  software_used:
+    slot_uri: publicschema:software_used
+    title: Software used
+    description: The software that performed this step, recorded so the result can be reproduced or audited.
+      Distinct from the accountable evaluator or performer (the person or organisation responsible), which
+      is recorded separately.
+    range: SoftwareAgent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Software utilizado
+      label_fr: Logiciel utilisé
+      description_es: El software que ejecutó este paso, registrado para que el resultado pueda reproducirse
+        o auditarse. Distinto del evaluador o ejecutor responsable (la persona u organismo que responde),
+        que se registra por separado.
+      description_fr: Le logiciel qui a effectué cette étape, enregistré afin que le résultat puisse être
+        reproduit ou audité. Distinct de l'évaluateur ou de l'exécutant responsable (la personne ou l'organisme
+        qui en répond), enregistré séparément.
+  special_category_basis:
+    slot_uri: publicschema:special_category_basis
+    title: Special category basis
+    description: 'When `personal_data_categories` includes a special category (GDPR Art 9 / `dpv:SpecialCategoryPersonalData`),
+      this property identifies the Art 9(2) basis that authorizes processing. Required when Art 9 data
+      is in scope; omitted otherwise. Field-critical: populate even if your UI does not require it.'
+    range: SpecialCategoryBasis
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Base de categoría especial
+      label_fr: Base catégorie spéciale
+      description_es: 'Cuando `personal_data_categories` incluye una categoría especial (RGPD Art 9 /
+        `dpv:SpecialCategoryPersonalData`), esta propiedad identifica la base del Art 9(2) que autoriza
+        el tratamiento. Obligatorio cuando hay datos Art 9 en alcance; omitido en caso contrario. Campo
+        crítico: completar incluso si su interfaz no lo exige.'
+      description_fr: 'Lorsque `personal_data_categories` comprend une catégorie particulière (RGPD Art
+        9 / `dpv:SpecialCategoryPersonalData`), cette propriété identifie la base au titre de l''Art 9(2)
+        qui autorise le traitement. Obligatoire lorsque des données Art 9 sont concernées ; omis sinon.
+        Champ critique : à renseigner même si votre interface ne l''exige pas.'
+      category: consent_processing
+      immutable_after_status: given
+  start_date:
+    slot_uri: publicschema:start_date
+    title: Start date
+    description: The date on which this became effective.
+    range: date
+    multivalued: false
+    status: bibo:status/published
+    exact_mappings:
+    - schema:startDate
+    annotations:
+      label_es: Fecha de inicio
+      label_fr: Date de début
+      description_es: La fecha en que esto entró en vigor.
+      description_fr: La date à laquelle ceci a pris effet.
+      convergence_json: '{"notes": "Near-universal temporal property.", "system_count": 5, "total_systems":
+        6}'
+      bibliography_refs: '["schema-org"]'
+  storage_duration_days:
+    slot_uri: publicschema:storage_duration_days
+    title: Storage duration (days)
+    description: 'Planned storage duration for the personal data covered by this record, expressed in
+      days. Drives retention logic in downstream systems. Zero means: do not persist after processing.
+      Null (unpopulated) means: duration is described in prose in the PrivacyNotice retention_description
+      rather than coded.'
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Plazo de conservación (días)
+      label_fr: Durée de conservation (jours)
+      description_es: 'Duración de almacenamiento planificada para los datos personales cubiertos por
+        este registro, expresada en días. Dirige la lógica de retención en sistemas posteriores. Cero
+        significa: no conservar tras el procesamiento. Nulo (no rellenado) significa: la duración se describe
+        en prosa en el campo retention_description de la PrivacyNotice en lugar de codificarse.'
+      description_fr: 'Durée de conservation prévue pour les données personnelles couvertes par cet enregistrement,
+        exprimée en jours. Pilote la logique de rétention dans les systèmes en aval. Zéro signifie: ne
+        pas conserver après le traitement. Null (non renseigné) signifie: la durée est décrite en prose
+        dans le champ retention_description de la PrivacyNotice plutôt que codée.'
+      category: consent_retention
+  subject:
+    slot_uri: publicschema:subject
+    title: Subject
+    description: 'The person or group that the profile or scoring event is about. Ranged at Party (not
+      Agent) because Profiles observe receivers: persons and organised groups of persons (Household, Family,
+      Farm). Institutional actors (Organizations) are described through their own Organization records,
+      not as subjects of a Profile.'
+    range: Party
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sujeto
+      label_fr: Sujet
+      description_es: 'La persona o grupo sobre el que trata el perfil o evento de puntuación. Tipado
+        como Party (no Agent) porque los Profile observan receptores: personas y grupos organizados de
+        personas (Household, Family, Farm). Los actores institucionales (Organizations) se describen mediante
+        sus propios registros Organization, no como sujetos de un Profile.'
+      description_fr: 'La personne ou le groupe sur lequel porte le profil ou l''événement de notation.
+        Typé sur Party (et non Agent) parce que les Profiles observent des bénéficiaires : personnes et
+        groupes organisés de personnes (Household, Family, Farm). Les acteurs institutionnels (Organizations)
+        sont décrits par leurs propres enregistrements Organization, non comme sujets d''un Profile.'
+      convergence_json: '{"system_count": 2, "total_systems": 3}'

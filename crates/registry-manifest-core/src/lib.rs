@@ -38,7 +38,8 @@ const MAX_TOP_LEVEL_COLLECTION_ITEMS: usize = 256;
 const MAX_DATASET_ENTITIES: usize = 256;
 const MAX_ENTITY_FIELDS: usize = 512;
 const MAX_ENTITY_RELATIONSHIPS: usize = 512;
-const MAX_CODELIST_CONCEPTS: usize = 1024;
+/// The largest number of concepts one codelist may carry.
+pub const MAX_CODELIST_CONCEPTS: usize = 1024;
 const MAX_URI_LIST_ITEMS: usize = 128;
 const ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE: &str = "governed-evidence";
 pub const REQUIRED_EVIDENCE_PACK_GATES: &[&str] = &[

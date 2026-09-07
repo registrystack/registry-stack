@@ -63,24 +63,47 @@ The command writes a working example project rather than a blank one:
 Every block in those files carries a comment saying what it does and what an adopter changes.
 Replace the placeholder identifiers with your own; they are deliberately generic.
 
+[Derive a registry from PublicSchema](../../tutorials/derive-a-registry-from-publicschema/) starts a project from named concepts instead of placeholders.
+
 `init` then compiles the project, prints the compiled revision, and reports two findings:
 
 ```text
-init succeeded
-revision: sha256:<digest>
-finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
-artifacts: 6
-next: read ./my-registry/README.md, then run 'bregctl check ./my-registry'
-next: leave the findings above as they are; the example operator profile lists a whole collection and the example evidence-source profile looks up any record, both on purpose, and ./my-registry/README.md says where to narrow them
-next: replace canonicalBaseIri in ./my-registry/registry.yaml before you build a production package; the example value is a reserved .invalid name that never resolves
+Initialized a registry project. 6 artifacts written.
+  revision  sha256:<digest>
+
+  README.md
+  dev-clients.yaml
+  modules/record-notes/module.yaml
+  registry.yaml
+  runtime.example.yaml
+  tests/journeys.yaml
+
+  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+           this profile can list all rows, subject only to query bounds; caller filters
+           are not authorization. Add a claim-bound row restriction or review this
+           registry-wide access
+  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+           this profile has no claim-bound row restriction for its granted operations;
+           requestVisibility owner limits request reads only, and other lifecycle rules
+           still apply. Review this registry-wide access
+
+0 errors, 2 findings.
+
+Next:
+  1. read ./my-registry/README.md, then run 'bregctl check ./my-registry'
+  2. leave the findings above as they are; the example operator profile lists a whole
+     collection and the example evidence-source profile looks up any record, both on
+     purpose, and ./my-registry/README.md says where to narrow them
+  3. replace canonicalBaseIri in ./my-registry/registry.yaml before you build a
+     production package; the example value is a reserved .invalid name that never
+     resolves
 ```
 
 A finding is an advisory the compiler attaches to a document path; it does not fail `check`, and [Test with journeys](../breg-journeys/) lists every finding the compiler can report and explains `--deny-findings` and `--production`.
 The first says the `operator` profile can list every row, which is right for a registry-wide operations role and wrong once the registry holds more than one caller's data.
 The second says the `evidence-source` profile can look up any record by its code, which is right for a source that vouches for the whole registry.
 The project's `record-reader` profile shows the row boundary that closes either one.
-The `next:` lines name the command to run after the README, the findings the example keeps on purpose, and the placeholder `canonicalBaseIri` that has to be replaced before a production package. Only `init` prints them.
+The steps under `Next:` name the command to run after the README, the findings the example keeps on purpose, and the placeholder `canonicalBaseIri` that has to be replaced before a production package. Only `init` prints them.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init() and write_files_with_before_publish(); products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
 
@@ -370,8 +393,9 @@ bregctl webhook sample ./my-registry --event record-status-changed-v1
 The sample prints the request line, the CloudEvents headers, and the body; only the placeholders for values the deployment supplies vary:
 
 ```text
-webhook sample succeeded
-event: record-status-changed-v1
+Built the sample delivery. The canonical request follows.
+  event  record-status-changed-v1
+
 POST <configured-webhook-request-target> HTTP/1.1
 Content-Type: application/json
 X-Registry-Signature: v1=<computed-at-delivery>

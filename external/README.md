@@ -30,3 +30,21 @@ semantics, and Crosswalk's transitive dependency graph.
 Crosswalk can return only through an explicit product and dependency review.
 Such a change would add a new current dependency; it must not rewrite the
 historical manifests that record earlier release inputs.
+
+## PublicSchema Snapshot
+
+`crates/registry-linkml/publicschema/` vendors a snapshot of the
+[PublicSchema](https://publicschema.org) reference model: repository
+`https://github.com/PublicSchema/publicschema.org`, commit
+`5fa11e869d73c5ee4fa78dc6c80ccd0422741f9e` from 2026-09-07, version 0.3.0,
+licensed Creative Commons Attribution 4.0 International. It is a current
+vendored input, not a historical one.
+
+`crates/registry-linkml/publicschema/sync-snapshot.sh` refreshes the vendored
+files from a local checkout of the upstream repository and writes `PIN.yaml`
+with the commit, date, and version it read.
+
+`registry-linkml` reads the snapshot at build time, and `bregctl init --from
+publicschema` depends on `registry-linkml` for it. The snapshot is data read
+at build time, not a Cargo dependency: no crate depends on a PublicSchema
+package, and the workspace lockfile carries no PublicSchema entry.
