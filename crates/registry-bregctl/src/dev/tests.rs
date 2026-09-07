@@ -89,6 +89,56 @@ fn initialization_keeps_distinct_keys_and_private_state_without_service_dependen
     assert_eq!(runtime["database"]["roles"]["runtime"], RUNTIME_ROLE);
 }
 
+fn write_init_project() -> (tempfile::TempDir, PathBuf) {
+    let temporary = tempfile::tempdir().expect("temporary");
+    let project = fs::canonicalize(temporary.path()).expect("canonical");
+    for (path, bytes) in crate::init_files() {
+        let full = project.join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(full, bytes).unwrap();
+    }
+    (temporary, project)
+}
+
+#[test]
+fn a_fresh_init_project_starts_without_edits() {
+    // `bregctl dev` initializes only a `local` package at sequence 1 and needs
+    // one client per profile the journeys use, so the project `bregctl init`
+    // writes must satisfy both with its own clients file: a reader's first
+    // start needs no edit between the two commands.
+    let (_temporary, project) = write_init_project();
+    let client_bytes = fs::read(project.join("dev-clients.yaml")).expect("init writes clients");
+    let clients = config::clients(&client_bytes).expect("the initialized clients parse");
+    let captured = capture(&project, &client_bytes).expect("a fresh init project is a dev project");
+    assert_eq!(captured.instance_id, "generic-registry-1");
+    bind_journey_profiles(&captured.files["tests/journeys.yaml"], &clients)
+        .expect("every journey profile has a client");
+}
+
+#[test]
+fn a_journey_profile_without_a_client_is_refused_before_any_service_starts() {
+    let (_temporary, project) = write_init_project();
+    let client_bytes = br#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims:
+      registry_principal: generic-registry-operator
+      registry_purpose: registry-operations
+"#;
+    let clients = config::clients(client_bytes).expect("clients");
+    let captured = capture(&project, client_bytes).expect("captured");
+    let refusal = bind_journey_profiles(&captured.files["tests/journeys.yaml"], &clients)
+        .expect_err("the reader profile has no client")
+        .to_string();
+    assert!(refusal.contains("record-reader"), "{refusal}");
+    assert!(
+        refusal.contains("read-record-within-the-claim"),
+        "{refusal}"
+    );
+}
+
 #[test]
 fn clients_require_explicit_unique_profile_bindings_and_closed_fields() {
     let (_, _, clients, _) = fixture();

@@ -288,6 +288,42 @@ fn probe(port: u16) -> Result<()> {
         .context("a requested local port is already occupied; stop its owner or choose other ports")
 }
 
+/// Name the first journey step whose access profile no local client binds.
+///
+/// The schema-test stage makes the same lookup, but by then the database has
+/// been pulled and Mint is serving. Refusing here, before any service starts,
+/// tells the author which profile the clients file still lacks while the fix
+/// is one edit away.
+fn bind_journey_profiles(journeys: &[u8], clients: &Clients) -> Result<()> {
+    let journeys: Value = serde_norway::from_slice(journeys)
+        .context("tests/journeys.yaml must parse before local development starts")?;
+    for journey in journeys["journeys"]
+        .as_array()
+        .context("journeys must contain an array")?
+    {
+        for step in journey["steps"]
+            .as_array()
+            .context("journey steps must be an array")?
+        {
+            let profile = step["accessProfile"]
+                .as_str()
+                .context("journey step requires an access profile")?;
+            if !clients
+                .clients
+                .iter()
+                .any(|client| client.access_profiles.iter().any(|p| p == profile))
+            {
+                bail!(
+                    "journey step {} of {} uses access profile {profile}, which no client in the clients file binds; add a client with that profile and the claims the step expects before first start",
+                    step["id"].as_str().unwrap_or("?"),
+                    journey["id"].as_str().unwrap_or("?")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 struct CapturedSource {
     files: BTreeMap<String, Vec<u8>>,
     digest: String,
@@ -378,6 +414,7 @@ fn start(args: StartArgs) -> Result<Value> {
         instance_id,
         source_revision,
     } = capture(&project, &client_bytes)?;
+    bind_journey_profiles(&files["tests/journeys.yaml"], &clients)?;
     let mut state = if let Some(state) = existing {
         if digest != state.source_digest
             || args.breg_port.is_some_and(|p| p != state.breg_port)
