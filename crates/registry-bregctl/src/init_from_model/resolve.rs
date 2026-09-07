@@ -565,14 +565,9 @@ fn field_kind(
                     "it holds many `{name}` values; model that relationship as its own entity carrying a reference back to this one"
                 ));
             }
-            // A concept may refer to itself (a location within a location),
-            // so the owning entity is a candidate like any other.
             let candidates: Vec<&EntityIndex> = index
                 .iter()
-                .filter(|entry| {
-                    &entry.class == name
-                        || model.is_subclass_of(&entry.class, name).unwrap_or(false)
-                })
+                .filter(|entry| fits_range(model, &entry.class, name))
                 .collect();
             if let Some(target) = &property.target {
                 return candidates
@@ -611,6 +606,55 @@ fn field_kind(
             }
         }
     }
+}
+
+/// True when a selected concept fits a property whose range is `range`: the
+/// concept itself, or one of its kinds. A concept may refer to itself (a
+/// location within a location), so the owning concept is a candidate like any
+/// other.
+pub(crate) fn fits_range(model: &Model, concept: &str, range: &str) -> bool {
+    concept == range || model.is_subclass_of(concept, range).unwrap_or(false)
+}
+
+/// Whether a property can become a field of a project that selects
+/// `concepts`, or the sentence saying why it cannot.
+///
+/// This is [`field_kind`] asked one property at a time, so the wizard offers
+/// exactly what the resolver accepts. A reference that fits several selected
+/// concepts is a question rather than a refusal: the answer becomes the
+/// property's `target`.
+pub(crate) fn property_support(
+    model: &Model,
+    slot: &SlotDef,
+    concepts: &[String],
+) -> Result<(), String> {
+    let index: Vec<EntityIndex> = concepts
+        .iter()
+        .map(|concept| {
+            let id = kebab_case(concept);
+            EntityIndex {
+                route: pluralize(&id),
+                id,
+                class: concept.clone(),
+            }
+        })
+        .collect();
+    if let Range::Class(range) = &slot.range {
+        if !slot.multivalued
+            && index
+                .iter()
+                .filter(|entry| fits_range(model, &entry.class, range))
+                .count()
+                > 1
+        {
+            return Ok(());
+        }
+    }
+    let property = PropertySelection {
+        name: slot.name.clone(),
+        target: None,
+    };
+    field_kind(model, slot, &property, &index, &BTreeMap::new()).map(|_| ())
 }
 
 fn bespoke_kind(bespoke: &str, multivalued: bool) -> Result<FieldKind, String> {
@@ -769,7 +813,7 @@ fn resolve_vocabulary(definition: &EnumDef) -> Result<PlannedVocabulary, Diagnos
     })
 }
 
-fn model_facts(model: &Model) -> Result<ModelFacts, Diagnostic> {
+pub(crate) fn model_facts(model: &Model) -> Result<ModelFacts, Diagnostic> {
     let pin = publicschema::pin().map_err(|error| {
         diagnostic(
             "init.model.pin",
@@ -889,6 +933,16 @@ pub(crate) fn pluralize(id: &str) -> String {
 /// The identifier grammar the compiler applies to registry, entity, field,
 /// and route identifiers alike.
 fn validate_identifier(value: &str, path: &str, what: &str) -> Result<(), Diagnostic> {
+    match identifier_refusal(value, what) {
+        None => Ok(()),
+        Some(message) => Err(diagnostic("init.selection.identifier", path, &message)),
+    }
+}
+
+/// The sentence refusing `value` as an identifier, or `None` when the grammar
+/// accepts it. The wizard shows the same sentence inline, so a typed answer
+/// is corrected at the prompt rather than after the project is derived.
+pub(crate) fn identifier_refusal(value: &str, what: &str) -> Option<String> {
     let valid = !value.is_empty()
         && value.len() <= 64
         && value
@@ -899,14 +953,10 @@ fn validate_identifier(value: &str, path: &str, what: &str) -> Result<(), Diagno
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
         });
     if valid {
-        Ok(())
+        None
     } else {
-        Err(diagnostic(
-            "init.selection.identifier",
-            path,
-            &format!(
-                "`{value}` is not valid as {what}: use 1 to 64 characters, starting with a lowercase letter, from a-z, 0-9, `-`, and `_`"
-            ),
+        Some(format!(
+            "`{value}` is not valid as {what}: use 1 to 64 characters, starting with a lowercase letter, from a-z, 0-9, `-`, and `_`"
         ))
     }
 }
@@ -917,7 +967,7 @@ fn names<'a>(items: impl Iterator<Item = &'a str>) -> String {
     names.join(", ")
 }
 
-fn model_error(path: &str, error: &registry_linkml::ModelError) -> Diagnostic {
+pub(crate) fn model_error(path: &str, error: &registry_linkml::ModelError) -> Diagnostic {
     diagnostic(
         "init.model.invalid",
         path,
@@ -925,7 +975,7 @@ fn model_error(path: &str, error: &registry_linkml::ModelError) -> Diagnostic {
     )
 }
 
-fn convention_error(path: &str, error: &publicschema::ConventionError) -> Diagnostic {
+pub(crate) fn convention_error(path: &str, error: &publicschema::ConventionError) -> Diagnostic {
     diagnostic(
         "init.model.invalid",
         path,

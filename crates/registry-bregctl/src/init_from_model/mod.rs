@@ -17,6 +17,7 @@
 mod render;
 mod resolve;
 mod selection;
+mod wizard;
 
 use std::io::IsTerminal;
 use std::path::Path;
@@ -50,6 +51,17 @@ pub(crate) fn run(
     model: ModelName,
     source: Source<'_>,
 ) -> Result<SuccessReport, FailureReport> {
+    // The model is read before the selection, because the wizard asks its
+    // questions about the concepts and properties this snapshot carries.
+    let model_data = match model {
+        ModelName::Publicschema => publicschema::model().map_err(|error| {
+            selection_failure(diagnostic(
+                "init.model.unreadable",
+                "model",
+                &format!("the embedded {model} snapshot does not read: {error}"),
+            ))
+        })?,
+    };
     let selection = match source {
         Source::File(path) => read_selection_file(path).map_err(selection_failure)?,
         Source::Starter(name) => starter_selection(model, name).map_err(usage_failure)?,
@@ -65,15 +77,7 @@ pub(crate) fn run(
                     ),
                 )));
             }
-            return Err(usage_failure(diagnostic(
-                "init.selection.missing",
-                "arguments",
-                &format!(
-                    "`init --from {model}` cannot ask its questions yet; pass `--selection \
-                     <FILE>` or `--starter <NAME>` (one of {})",
-                    starter_names(model)
-                ),
-            )));
+            wizard::gather(model, &model_data).map_err(usage_failure)?
         }
     };
     if selection.model != model {
@@ -86,15 +90,6 @@ pub(crate) fn run(
             ),
         )));
     }
-    let model_data = match model {
-        ModelName::Publicschema => publicschema::model().map_err(|error| {
-            selection_failure(diagnostic(
-                "init.model.unreadable",
-                "model",
-                &format!("the embedded {model} snapshot does not read: {error}"),
-            ))
-        })?,
-    };
     let plan = resolve::resolve(&selection, &model_data).map_err(selection_failure)?;
     let files = render::render(&plan, &selection);
     crate::write_source_files(destination, &files).map_err(|diagnostic| FailureReport {
