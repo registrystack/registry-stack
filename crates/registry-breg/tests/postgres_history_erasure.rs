@@ -800,10 +800,10 @@ async fn erasure_reports_an_unreadable_cached_response_rather_than_an_outage() {
             .expect("operational fields are an object");
         assert_eq!(
             fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
-            BTreeSet::from(["message", "site"])
+            BTreeSet::from(["message", "reader"])
         );
         assert_eq!(fields["message"], "stored bytes are unreadable as JSON");
-        assert_eq!(fields["site"], "idempotency_cache");
+        assert_eq!(fields["reader"], "idempotency_cache");
         for forbidden in [
             record_id.to_string().as_str(),
             ENTITY,

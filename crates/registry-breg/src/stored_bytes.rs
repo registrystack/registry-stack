@@ -8,13 +8,13 @@ use tokio_postgres::error::SqlState;
 /// names only the reader, so the operational log carries no row, key, byte, or
 /// statement text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Site {
+pub(crate) enum Reader {
     HistoryRead,
     RevisionRead,
     IdempotencyCache,
 }
 
-impl Site {
+impl Reader {
     const fn as_str(self) -> &'static str {
         match self {
             Self::HistoryRead => "history_read",
@@ -40,7 +40,7 @@ impl Site {
 /// surfaces answer the refusal they always answered, so the warning is where an
 /// operator sees that the refusal came from a row and not from the database.
 #[must_use]
-pub(crate) fn unreadable(error: &tokio_postgres::Error, site: Site) -> bool {
+pub(crate) fn unreadable(error: &tokio_postgres::Error, reader: Reader) -> bool {
     let unreadable = error.code().is_some_and(|code| {
         code == &SqlState::CHARACTER_NOT_IN_REPERTOIRE
             || code == &SqlState::INVALID_TEXT_REPRESENTATION
@@ -48,7 +48,7 @@ pub(crate) fn unreadable(error: &tokio_postgres::Error, site: Site) -> bool {
     if unreadable {
         tracing::warn!(
             target: "registry_breg::storage",
-            site = site.as_str(),
+            reader = reader.as_str(),
             "stored bytes are unreadable as JSON"
         );
     }
