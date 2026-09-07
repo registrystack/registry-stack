@@ -111,15 +111,24 @@ impl Lines {
 
     /// Render aligned `label  value` detail lines under one lead sentence.
     pub(crate) fn pairs(&mut self, pairs: &[(&str, String)]) {
+        self.pairs_at(1, pairs);
+    }
+
+    /// Render aligned detail nested `depth` levels under the lead sentence.
+    ///
+    /// Each depth is aligned on its own, so a nested group's labels line up
+    /// with each other rather than with the wider group above them.
+    pub(crate) fn pairs_at(&mut self, depth: usize, pairs: &[(&str, String)]) {
         let width = pairs
             .iter()
             .map(|(label, _)| label.len())
             .max()
             .unwrap_or_default();
+        let indent = INDENT.repeat(depth);
         for (label, value) in pairs {
             let padded = format!("{label:<width$}");
             self.lines.push(format!(
-                "{INDENT}{}{GAP}{}",
+                "{indent}{}{GAP}{}",
                 styled(LABEL, &padded),
                 escape_report_text(value)
             ));
@@ -130,6 +139,62 @@ impl Lines {
     pub(crate) fn bullet(&mut self, value: &str) {
         self.lines
             .push(format!("{INDENT}{}", escape_report_text(value)));
+    }
+
+    /// Name a group that the detail below it belongs to.
+    pub(crate) fn item(&mut self, value: &str) {
+        self.item_at(1, value);
+    }
+
+    /// Name a group nested `depth` levels under the lead sentence.
+    pub(crate) fn item_at(&mut self, depth: usize, value: &str) {
+        let indent = INDENT.repeat(depth);
+        self.lines.push(format!(
+            "{indent}{}",
+            styled(CODE, &escape_report_text(value))
+        ));
+    }
+
+    /// Fold one paragraph to the report width at `depth`.
+    pub(crate) fn prose(&mut self, depth: usize, text: &str) {
+        let indent = INDENT.repeat(depth);
+        for line in wrap(&escape_report_text(text), WRAP_WIDTH - indent.len()) {
+            self.lines.push(format!("{indent}{line}"));
+        }
+    }
+
+    /// Fold one sentence of a list of them, hanging its continuation.
+    ///
+    /// A list of sentences long enough to wrap reads as one paragraph without
+    /// this, because nothing marks where one sentence ends and the next
+    /// begins. The hanging indent is what `steps` uses for the same reason.
+    pub(crate) fn listed(&mut self, depth: usize, text: &str) {
+        let indent = INDENT.repeat(depth);
+        let hanging = INDENT.repeat(depth + 1);
+        let mut wrapped = wrap(&escape_report_text(text), WRAP_WIDTH - hanging.len()).into_iter();
+        let Some(first) = wrapped.next() else {
+            return;
+        };
+        self.lines.push(format!("{indent}{first}"));
+        for continuation in wrapped {
+            self.lines.push(format!("{hanging}{continuation}"));
+        }
+    }
+
+    /// Open a section with the answer it exists to give.
+    ///
+    /// The answer carries the attribute rather than the heading, because a
+    /// reader scanning for it should not have to read the heading to find it.
+    /// A verdict that does not hold is not an error: a refusal can be the
+    /// answer that was asked for.
+    pub(crate) fn verdict(&mut self, heading: &str, verdict: &str, held: bool) {
+        self.blank();
+        let style = if held { CLEAN } else { WARNING };
+        self.lines.push(format!(
+            "{} {}",
+            styled(HEADING, &escape_report_text(heading)),
+            styled(style, &escape_report_text(verdict))
+        ));
     }
 
     /// Number the steps the reader takes next, in the order they take them.
@@ -294,10 +359,29 @@ fn finding_summary(findings: &[Finding<'_>]) -> String {
 
 pub(crate) fn counted(count: usize, noun: &str) -> String {
     if count == 1 {
-        format!("{count} {noun}")
+        return format!("{count} {noun}");
+    }
+    // Every noun a report counts is a regular English one, so a consonant
+    // before a final `y` is the only irregularity the rule has to carry:
+    // `delivery` becomes `deliveries` where `journey` stays `journeys`.
+    let consonant_y = noun.ends_with('y')
+        && noun
+            .chars()
+            .nth_back(1)
+            .is_some_and(|letter| !"aeiou".contains(letter));
+    if consonant_y {
+        format!("{count} {}ies", &noun[..noun.len() - 1])
     } else {
         format!("{count} {noun}s")
     }
+}
+
+/// Render a count that reached the report as a stored total rather than the
+/// length of a collection. A total wider than this platform's `usize` cannot
+/// be counted into one, so it saturates rather than wrapping to a smaller
+/// number that would read as a true count.
+pub(crate) fn counted_total(count: u64, noun: &str) -> String {
+    counted(usize::try_from(count).unwrap_or(usize::MAX), noun)
 }
 
 /// Fold one already-escaped sentence to a column, breaking only between words.
@@ -583,6 +667,81 @@ mod tests {
         assert!(
             plain(&rendered).len() < rendered.len(),
             "stripping the attributes changed nothing"
+        );
+    }
+
+    #[test]
+    fn a_counted_noun_is_pluralized_the_way_english_pluralizes_it() {
+        assert_eq!(counted(1, "delivery"), "1 delivery");
+        assert_eq!(counted(0, "delivery"), "0 deliveries");
+        assert_eq!(counted(2, "dependency check"), "2 dependency checks");
+        // A vowel before the final `y` keeps the plain `s`.
+        assert_eq!(counted(3, "journey"), "3 journeys");
+        assert_eq!(counted(4, "artifact"), "4 artifacts");
+    }
+
+    #[test]
+    fn a_count_wider_than_the_platform_saturates_rather_than_wrapping() {
+        assert_eq!(counted_total(1, "record"), "1 record");
+        assert_eq!(
+            counted_total(u64::MAX, "record"),
+            format!("{} records", usize::MAX)
+        );
+    }
+
+    #[test]
+    fn a_listed_sentence_hangs_its_continuation_below_its_first_line() {
+        let mut lines = Lines::new();
+        lines.heading("Access:");
+        lines.listed(1, "all required scopes must be present");
+        lines.listed(
+            1,
+            "all claim-bound row predicates must hold; explicit empty boundaries mean no \
+             claim-bound row restriction",
+        );
+        assert_eq!(
+            plain(&lines.finish()),
+            concat!(
+                "Access:\n",
+                "  all required scopes must be present\n",
+                "  all claim-bound row predicates must hold; explicit empty boundaries mean no\n",
+                "    claim-bound row restriction\n",
+            )
+        );
+    }
+
+    #[test]
+    fn a_verdict_carries_the_attribute_the_heading_beside_it_does_not() {
+        let mut lines = Lines::new();
+        lines.verdict("Synthetic profile admission:", "allowed", true);
+        let allowed = lines.finish();
+        let mut lines = Lines::new();
+        lines.verdict("Synthetic profile admission:", "refused", false);
+        let refused = lines.finish();
+        assert_eq!(plain(&allowed), "Synthetic profile admission: allowed\n");
+        assert_eq!(plain(&refused), "Synthetic profile admission: refused\n");
+        // A refusal is an answer, not an error, so the two verdicts differ in
+        // their attributes rather than one of them reading as a failure.
+        assert_ne!(allowed, refused);
+    }
+
+    #[test]
+    fn nested_detail_aligns_within_its_own_group_not_the_group_above_it() {
+        let mut lines = Lines::new();
+        lines.lead("Explained the migration plan. 1 change, 1 reviewed migration.");
+        lines.pairs(&[("generated statement count", "3".to_owned())]);
+        lines.blank();
+        lines.item("reviewed migration 1");
+        lines.pairs_at(2, &[("recovery", "exact_target_resume".to_owned())]);
+        assert_eq!(
+            plain(&lines.finish()),
+            concat!(
+                "Explained the migration plan. 1 change, 1 reviewed migration.\n",
+                "  generated statement count  3\n",
+                "\n",
+                "  reviewed migration 1\n",
+                "    recovery  exact_target_resume\n",
+            )
         );
     }
 

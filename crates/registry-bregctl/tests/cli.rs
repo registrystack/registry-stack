@@ -313,7 +313,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "allowed purposes (any)",
         "row restrictions (all)",
         "district-reader",
-        "principal claim: registry_principal",
+        "principal claim         registry_principal",
     ] {
         assert!(text.contains(expected), "{text}");
     }
@@ -4446,9 +4446,14 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
     assert!(human.status.success(), "{human:?}");
     assert!(human.stderr.is_empty());
     let human = String::from_utf8(human.stdout).expect("verify human report is UTF-8");
-    assert!(human.starts_with("verify succeeded\nassurance: runtime_bound\n"));
-    assert!(human.contains(&format!("package revision: {}\n", fixture.package_revision)));
-    assert!(human.contains("registry id: verify-registry\n"));
+    assert!(human.starts_with(
+        "Verified the package against the runtime it is bound to.\n  assurance            runtime_bound\n"
+    ));
+    assert!(human.contains(&format!(
+        "package revision     {}\n",
+        fixture.package_revision
+    )));
+    assert!(human.contains("registry id          verify-registry\n"));
     assert!(!human.contains(path(&fixture.runtime_config)));
 }
 
@@ -4523,10 +4528,12 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
     assert!(human.status.success(), "{human:?}");
     assert!(human.stderr.is_empty());
     let human = String::from_utf8(human.stdout).expect("migration report is UTF-8");
-    assert!(human.starts_with("migration explain succeeded\nassurance: runtime_bound\n"));
-    assert!(human.contains("plan kind: initial\n"));
-    assert!(human.contains("change count: 0\n"));
-    assert!(human.contains("reviewed migration count: 0\n"));
+    assert!(human.starts_with(
+        "Explained the migration plan. 0 changes, 0 reviewed migrations.\n  assurance                            runtime_bound\n"
+    ));
+    assert!(human.contains("plan kind                            initial\n"));
+    assert!(human.contains("change count                         0\n"));
+    assert!(human.contains("reviewed migration count             0\n"));
     assert!(!human.contains(path(&fixture.runtime_config)));
 }
 

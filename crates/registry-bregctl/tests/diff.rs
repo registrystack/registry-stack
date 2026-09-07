@@ -131,7 +131,8 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
     ]);
     assert!(human.status.success(), "{human:?}");
     assert!(human.stderr.is_empty());
-    assert!(String::from_utf8_lossy(&human.stdout).contains("diff succeeded"));
+    assert!(String::from_utf8_lossy(&human.stdout)
+        .contains("Classified the candidate against the baseline."));
 
     let unsupported = write_project(&directory.path, "unsupported", "local", "internal");
     let project_path = unsupported.join("registry.yaml");
