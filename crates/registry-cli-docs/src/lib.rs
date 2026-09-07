@@ -650,10 +650,12 @@ mod tests {
 
     #[test]
     fn every_bregctl_path_argument_states_the_symbolic_link_refusal() {
+        // `argument_display` writes a required positional as `<NAME>` and an
+        // optional one as `[NAME]`, so both bracket forms name a path value.
         fn is_path_display(display: &str) -> bool {
-            PATH_VALUE_NAMES
-                .iter()
-                .any(|name| display.contains(&format!("<{name}>")))
+            PATH_VALUE_NAMES.iter().any(|name| {
+                display.contains(&format!("<{name}>")) || display.contains(&format!("[{name}]"))
+            })
         }
 
         fn check(command: &CommandReference, counted: &mut usize) {
