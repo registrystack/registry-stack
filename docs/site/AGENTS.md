@@ -107,6 +107,10 @@ loses data, exposes a secret, or cannot be undone. Show command output only when
 you ran the command and read what came back; otherwise describe what happens in a
 sentence. Do not ask a reader to paste guards, `exit 1`, or assertions that exist
 for this project's own test harness.
+A tutorial keeps a command or a line to check on every screen; an inventory of
+prompts, flags, or rules is a reference page, a model is an explanation page, and
+the tutorial links to both. The style guide's "Page-type patterns" holds the
+measure.
 
 The docs gate runs the commands the tutorials document and deliberately does not
 police prose. Wording, added reasons, and added recovery paths cannot break it, so
