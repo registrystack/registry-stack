@@ -57,10 +57,19 @@ bregctl check tutorial-work/project
 ```
 
 ```text
-check succeeded
-revision: sha256:<digest>
-finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+Authoring check passed.
+  revision  sha256:<digest>
+
+  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+           this profile can list all rows, subject only to query bounds; caller filters
+           are not authorization. Add a claim-bound row restriction or review this
+           registry-wide access
+  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+           this profile has no claim-bound row restriction for its granted operations;
+           requestVisibility owner limits request reads only, and other lifecycle rules
+           still apply. Review this registry-wide access
+
+0 errors, 2 findings.
 ```
 
 This is the project the first tutorial started as a registry, so the entity, fields, and profiles are
@@ -135,7 +144,7 @@ Check the project:
 bregctl check tutorial-work/project
 ```
 
-The command prints `check succeeded`, a new `revision`, and the findings.
+The command prints `Authoring check passed.`, a new `revision`, and the findings.
 `filterableFields` is unchanged on purpose: a note is something an operator reads and writes,
 not something a list is filtered by.
 
@@ -149,8 +158,14 @@ bregctl check tutorial-work/project
 ```
 
 ```text
-error module.lock.digest_mismatch at project.modules[].digest: an authored module does not match its locked digest
-error module.lock.version_mismatch at project.modules[].version: an authored module does not match its locked version
+bregctl check refused.
+
+  error    module.lock.digest_mismatch  project.modules[].digest
+           an authored module does not match its locked digest
+  error    module.lock.version_mismatch  project.modules[].version
+           an authored module does not match its locked version
+
+2 errors, 0 findings.
 ```
 
 A stale digest is an error, not a finding.
@@ -166,7 +181,7 @@ bregctl project lock tutorial-work/project
 bregctl check tutorial-work/project
 ```
 
-`project lock` prints `project lock succeeded` and a report of what it rewrote:
+`project lock` prints `Locked the project modules. 1 artifact written.`, the rewritten `registry.yaml`, the findings, and a report of what it rewrote:
 
 ```json
 {
@@ -182,7 +197,7 @@ bregctl check tutorial-work/project
 }
 ```
 
-`check` then prints `check succeeded` with the findings and nothing else.
+`check` then prints `Authoring check passed.` with the findings and nothing else.
 Open the `modules` entry in `registry.yaml` again: both the version and the digest changed.
 Rerun `project lock` after every module edit, and review a changed digest together with the module source it now pins.
 
@@ -196,7 +211,7 @@ Rerun `project lock` after every module edit, and review a changed digest togeth
 bregctl explain queries tutorial-work/project
 ```
 
-After `explain succeeded`, the report lists one operation per profile and entity.
+After `Explained the compiled inventory.`, the report lists one operation per profile and entity.
 In `records.record.operator.list`, the operator's list operation over `record`, find `internalNote` among the `apiFields`:
 
 ```json
@@ -228,7 +243,7 @@ bregctl generate schemas tutorial-work/project --output tutorial-work/schemas
 bregctl generate openapi tutorial-work/project --output tutorial-work/api
 ```
 
-Each command prints `generate succeeded` and an `artifacts` count: two schema files, then one OpenAPI document.
+Each command names what it wrote: two schema files, then one OpenAPI document.
 Read the record schema:
 
 ```sh
