@@ -1671,6 +1671,50 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
 }
 
 #[test]
+fn init_from_publicschema_reports_the_derived_project_in_the_report_shape() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("derived");
+
+    let output = bregctl(&[
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+        "--starter",
+        "household",
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("init stdout is UTF-8");
+    assert!(
+        stdout.starts_with(
+            "Initialized a registry project. 6 artifacts written.\n  revision  sha256:"
+        ),
+        "a derived project opens with the report lead sentence: {stdout}"
+    );
+    assert!(
+        stdout.contains("  finding  access.profile.unrestricted_collection  6 paths\n"),
+        "a repeated code counts the paths it collapsed: {stdout}"
+    );
+    assert!(
+        stdout.contains("\n0 errors, 8 findings.\n"),
+        "the report closes with the count to act on: {stdout}"
+    );
+    // The steps are numbered and folded to a fixed column, so the sentence is
+    // matched against the rendering with its line breaks and indentation
+    // collapsed back into single spaces.
+    let unwrapped = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        unwrapped.contains(&format!(
+            "5. keep {}/model/selection.yaml beside the project",
+            destination.display()
+        )),
+        "the derived project names its selection in a numbered step: {stdout}"
+    );
+}
+
+#[test]
 fn init_from_publicschema_reads_a_selection_file_and_refuses_a_bad_one() {
     let project = TestProject::asset_fixture();
     let selection = project.path().join("selection.yaml");
