@@ -408,11 +408,11 @@ class GateInventoryTest(unittest.TestCase):
             "  build-platforms:",
         )
         reused = workflow.replace(
-            "      - name: Build canonical Linux payload once",
+            "      - name: Build canonical Linux binary shard",
             "      - name: Unsafe reuse\n"
             "        uses: actions/download-artifact@fake\n"
             "\n"
-            "      - name: Build canonical Linux payload once",
+            "      - name: Build canonical Linux binary shard",
             1,
         )
         for mutated in (duplicate, reused):
@@ -1024,6 +1024,10 @@ class GateInventoryTest(unittest.TestCase):
             (
                 "release/scripts/test_zig_glibc_compiler.py",
                 "Zig glibc compiler wrapper tests",
+            ),
+            (
+                "release/scripts/test_merge_release_binary_shards.py",
+                "Canonical release binary shard merge tests",
             ),
             (
                 "release/scripts/test_verify_public_release.py",

@@ -825,6 +825,9 @@ jobs:
       - name: Test Zig glibc compiler wrapper
         run: python3 -m unittest release/scripts/test_zig_glibc_compiler.py
 
+      - name: Test canonical release binary shard merge
+        run: python3 -m unittest release/scripts/test_merge_release_binary_shards.py
+
       - name: Test release workflow structure
         run: python3 -m unittest release/scripts/test_release_workflow_structure.py
 

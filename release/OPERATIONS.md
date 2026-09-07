@@ -350,6 +350,12 @@ gh run watch "${rehearsal_run}" \
   --exit-status
 ```
 
+If either canonical binary shard or its consumer fails, keep that run as
+evidence, resolve the failure, and dispatch the complete rehearsal
+again with a new `rehearsal_request_id`. Do not rerun only the failed jobs: a
+fresh correlated dispatch keeps both shard artifacts and their consumer on one
+source and workflow attempt.
+
 When an image advisory baseline needs review for the prepared version, add
 `-f advisory_evidence=true` to the rehearsal dispatch. The canonical Linux job
 then builds every image in that version's owned roster from the same local

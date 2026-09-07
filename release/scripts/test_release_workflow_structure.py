@@ -383,6 +383,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             list(document["jobs"]),
             [
                 "validate",
+                "build-canonical-binaries",
                 "build-canonical",
                 "build-platforms",
                 "clients",
@@ -390,7 +391,12 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 "attest",
             ],
         )
-        for job in ("build-canonical", "build-platforms", "clients"):
+        for job in (
+            "build-canonical-binaries",
+            "build-canonical",
+            "build-platforms",
+            "clients",
+        ):
             permissions = document["jobs"][job]["permissions"]
             self.assertNotEqual(permissions.get("packages"), "write")
             self.assertNotEqual(permissions.get("id-token"), "write")
@@ -424,7 +430,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
 
     def test_builds_once_scans_exact_images_and_attests_the_candidate(self) -> None:
         text, document = workflow("release-candidate.yml")
-        self.assertIn("Build canonical Linux payload once", text)
+        self.assertIn("Build canonical Linux binary shard", text)
+        self.assertIn("Merge and smoke the canonical Linux payload", text)
         self.assertIn("Build private candidate image layouts once", text)
         self.assertIn("Verify and scan exact candidate images", text)
         self.assertIn("release-candidate-manifest.json", text)
@@ -471,12 +478,72 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             native.get("env"),
             {"REGISTRY_RELEASE_TAG": "${{ needs.validate.outputs.tag }}"},
         )
-        # The canonical Linux payload carries the same marker through
+        # The canonical Linux shard builder carries the same marker through
         # build-release-binaries.sh rather than a step-level environment.
         canonical = step_run(
-            document, "build-canonical", "Build canonical Linux payload once"
+            document, "build-canonical-binaries", "Build canonical Linux binary shard"
         )
         self.assertIn("release/scripts/build-release-binaries.sh", canonical)
+
+    def test_canonical_binary_shards_are_exact_source_inputs_to_one_consumer(
+        self,
+    ) -> None:
+        _, document = workflow("release-candidate.yml")
+        shards = document["jobs"]["build-canonical-binaries"]
+        self.assertEqual("validate", shards["needs"])
+        self.assertFalse(shards["strategy"]["fail-fast"])
+        self.assertEqual(["core", "breg"], shards["strategy"]["matrix"]["group"])
+        checkout = shards["steps"][0]
+        self.assertEqual(
+            "${{ needs.validate.outputs.source_sha }}", checkout["with"]["ref"]
+        )
+        build = next(
+            step
+            for step in shards["steps"]
+            if step.get("name") == "Build canonical Linux binary shard"
+        )
+        self.assertEqual(
+            "${{ needs.validate.outputs.source_sha }}",
+            build["env"]["RELEASE_SOURCE_SHA"],
+        )
+        self.assertIn('--group "${{ matrix.group }}"', build["run"])
+        upload = next(step for step in shards["steps"] if "upload-artifact@" in str(step))
+        self.assertIn("${{ matrix.group }}", upload["with"]["name"])
+        self.assertIn("${{ needs.validate.outputs.source_sha }}", upload["with"]["name"])
+        self.assertIn("${{ github.run_attempt }}", upload["with"]["name"])
+
+        consumer = document["jobs"]["build-canonical"]
+        self.assertEqual(["validate", "build-canonical-binaries"], consumer["needs"])
+        downloads = [
+            step for step in consumer["steps"] if "download-artifact@" in str(step)
+        ]
+        self.assertEqual(2, len(downloads))
+        self.assertEqual(
+            {"binary-shards/core", "binary-shards/breg"},
+            {step["with"]["path"] for step in downloads},
+        )
+        merge = step_run(
+            document, "build-canonical", "Merge and smoke the canonical Linux payload"
+        )
+        for binding in (
+            '--source-sha "${{ needs.validate.outputs.source_sha }}"',
+            "--core binary-shards/core",
+            "--breg binary-shards/breg",
+            '--builder-image "${RELEASE_BUILDER_IMAGE}"',
+        ):
+            self.assertIn(binding, merge)
+        assemble_download = next(
+            step
+            for step in document["jobs"]["assemble"]["steps"]
+            if step.get("name") == "Download exact build products"
+        )
+        self.assertTrue(assemble_download["with"]["pattern"].startswith("candidate-"))
+        self.assertTrue(
+            all(
+                not step["with"]["name"].startswith("candidate-")
+                for step in downloads
+            )
+        )
 
     def test_arm64_platform_runner_matches_the_glibc_floor_and_is_checked(
         self,
@@ -898,6 +965,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         text, document = workflow("release-candidate.yml")
         recipe_prefix = (
             "registry-stack-release-${{ runner.os }}-"
+            "${{ matrix.group }}-"
             "${{ hashFiles('rust-toolchain.toml', "
             "'release/scripts/build-release-binaries.sh', "
             "'release/docker/Dockerfile.builder', "
@@ -906,8 +974,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "'release/scripts/zig-glibc-compiler') }}-"
         )
         for filename, job_name in (
-            ("release-candidate.yml", "build-canonical"),
-            ("release-rehearsal.yml", "canonical-linux"),
+            ("release-candidate.yml", "build-canonical-binaries"),
+            ("release-rehearsal.yml", "canonical-linux-binaries"),
         ):
             with self.subTest(workflow=filename):
                 _, cache_workflow = workflow(filename)
