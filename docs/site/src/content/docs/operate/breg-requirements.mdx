@@ -61,9 +61,10 @@ with no database open, so an author can work on a laptop until the project is re
 ## How it ships
 
 Each release publishes the `breg` runtime and the `bregctl` authoring tool as reproducible
-binaries, with an installer that verifies both against the release checksums and installs both or
-neither. Keep the pair on one release: both compute the schema fingerprint that a test receipt
-binds. Each release also publishes a container image built on a distroless base with no shell,
+binaries, with an installer that verifies them against the release checksums and installs them, and
+the Registry Mint token issuer beside them, together or not at all. Keep the pair on one release:
+both compute the schema fingerprint that a test receipt binds. Each release also publishes a
+container image built on a distroless base with no shell,
 running as a non-root user, that holds the runtime binary and nothing else; configuration, package,
 trust anchor, and secrets mount read-only into it.
 

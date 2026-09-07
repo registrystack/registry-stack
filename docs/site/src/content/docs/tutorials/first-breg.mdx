@@ -37,28 +37,27 @@ Everything you keep goes into one directory, `tutorial-work`, and the next tutor
 
 ## Install Base Registry Engine
 
-Install `breg` and `bregctl`, then the Evidence Gateway toolset, because Registry Mint ships in it and
-the launcher runs Mint to issue the local access tokens:
+Install `breg`, `bregctl`, and `mint`. Registry Mint issues the local access tokens the launcher
+uses, standing in for the identity provider a deployment would have:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
 bregctl --version
 mint --version
 ```
 
-The URLs name `latest`, which this tutorial takes on purpose so an evaluation starts on the newest
+The URL names `latest`, which this tutorial takes on purpose so an evaluation starts on the newest
 release; a deployment pins a version instead, so the binary that was tested is the binary that runs.
-Each installer checks its binaries against the release `SHA256SUMS` before anything reaches
+The installer checks the three binaries against the release `SHA256SUMS` before anything reaches
 `~/.local/bin`, and installs them together or not at all.
 Keep that directory on your `PATH` in both terminals.
 
-The commands pipe a script from GitHub straight into `bash`; replace `| bash` with `| less` to read it first.
+The command pipes a script from GitHub straight into `bash`; replace `| bash` with `| less` to read it first.
 Before these binaries reach a host that serves anyone else, verify the release as described in
 [OpenSSF and release trust](../../security/openssf-evidence/), then rerun the installer with
 `BREG_ASSET_DIR` pointing at the verified directory.
 
-{/* Evidence: crates/registry-breg/install.sh; crates/registry-evidencectl/install.sh. */}
+{/* Evidence: crates/registry-breg/install.sh, binaries. */}
 
 ## Get the quickstart files
 
