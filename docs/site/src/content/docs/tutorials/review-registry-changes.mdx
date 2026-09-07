@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-07"
+last_reviewed: "2026-09-08"
 doc_type: tutorial
 persona:
   - data publisher
@@ -76,7 +76,7 @@ It does not leave the change-request example running as an HTTP service.
     crates/registry-breg/src/fixtures.rs;
     crates/registry-breg/src/change_request.rs. */}
 
-## 1. Check your first request type
+## Check the example project
 
 Copy the supplied example into a working directory so your edits leave the original unchanged,
 then check it:
@@ -87,9 +87,10 @@ cp -R products/breg/acceptance/asset-site-placement-change-requests tutorial-wor
 bregctl check tutorial-work/asset-corrections
 ```
 
-The check succeeds, prints the compiled configuration's digest, and lists 26 findings under four
+The check passes, prints the compiled configuration's digest, and lists 26 findings under four
 codes.
-A code reported against more than one path states its sentence once and lists the paths beneath it:
+A code reported against more than one path states its sentence once and lists the paths beneath it;
+the first group and the summary line are kept below, the other three groups omitted:
 
 ```text
 Authoring check passed.
@@ -106,50 +107,20 @@ Authoring check passed.
              entities[id=asset-site].accessProfiles[id=asset-operator].requiredScopes
              entities[id=asset-site].accessProfiles[id=site-planner].requiredScopes
              entities[id=inspection-event].accessProfiles[id=asset-operator].requiredScopes
-  finding  access.profile.unrestricted_collection  10 paths
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-             entities[id=asset-item].accessProfiles[id=asset-operator].rowBoundaries
-             entities[id=asset-item].accessProfiles[id=site-planner].rowBoundaries
-             entities[id=asset-placement].accessProfiles[id=asset-operator].rowBoundaries
-             entities[id=asset-placement].accessProfiles[id=correction-submitter].rowBoundaries
-             entities[id=asset-placement].accessProfiles[id=site-planner].rowBoundaries
-             entities[id=asset-site].accessProfiles[id=asset-operator].rowBoundaries
-             entities[id=asset-site].accessProfiles[id=correction-submitter].rowBoundaries
-             entities[id=asset-site].accessProfiles[id=site-planner].rowBoundaries
-             entities[id=inspection-event].accessProfiles[id=asset-operator].rowBoundaries
-             entities[id=placement-correction-request].accessProfiles[id=correction-reviewer].rowBoundaries
-  finding  access.profile.unrestricted_rows  4 paths
-           this profile has no claim-bound row restriction for its granted operations;
-           requestVisibility owner limits request reads only, and other lifecycle rules
-           still apply. Review this registry-wide access
-             entities[id=asset-item].accessProfiles[id=correction-submitter].rowBoundaries
-             entities[id=placement-correction-request].accessProfiles[id=correction-applier].rowBoundaries
-             entities[id=placement-correction-request].accessProfiles[id=correction-submitter].rowBoundaries
-             entities[id=placement-correction-request].accessProfiles[id=correction-supervisor].rowBoundaries
-  finding  access.target.unrestricted_rows  5 paths
-           this target grant has no claim-bound row restriction, within its configured
-           operation and field limits. Review this registry-wide target authority
-             entities[id=asset-placement].accessProfiles[id=asset-operator].requestPresence[requestType=placement-correction-request].rowBoundaries
-             entities[id=asset-placement].accessProfiles[id=site-planner].requestPresence[requestType=placement-correction-request].rowBoundaries
-             entities[id=placement-correction-request].accessProfiles[id=correction-applier].applyTargets[entity=asset-placement].rowBoundaries
-             entities[id=placement-correction-request].accessProfiles[id=correction-reviewer].reviewStages[stage=review].targets[entity=asset-placement].rowBoundaries
-             entities[id=placement-correction-request].accessProfiles[id=correction-supervisor].reviewStages[stage=final-approval].targets[entity=asset-placement].rowBoundaries
 
 0 errors, 26 findings.
 ```
 
 Findings are advisories, not failures.
 The example's `asset-operator` and `site-planner` profiles admit any authenticated caller with the
-right purpose and can list every row, and the correction submitter and reviewer can list every
-row they reach.
-The four correction profiles require scopes.
+right purpose and can list every row, and the three remaining codes say the same of other grants.
 Leave the findings as they are for this tutorial; `--deny-findings` turns them into failures when
 you want a project held to that bar.
+Every check in this tutorial repeats them, so read past them to the summary line.
 
-You have a valid request type without writing server code.
-No database has changed yet.
+## Explain the workflow
+
+You have a valid request type without writing server code, and no database has changed yet.
 Ask the CLI to describe what it compiled:
 
 ```sh
@@ -187,84 +158,50 @@ request_revision final-approval Idempotency-Key,If-Match,proposalVersion,effectD
 The example requires one approval at each of two stages.
 Every action needs an `Idempotency-Key` and an `If-Match`; a decision or an apply also binds to
 the `proposalVersion` and `effectDigest` the caller read.
-The JSON file also lists the compiled effects, the planner and application policy, the grants of each role, and the request bounds.
-A planner is the script that computes a request's effects when they depend on the request's own
-content, declared in place of a fixed `effects` list; this example declares `effects`, so the JSON
-reports its planner `kind` as `declarative`.
-See [plan effects with a Rhai script](../../configure/breg-change-control/#plan-effects-with-a-rhai-script)
-for the alternative.
+The JSON file also lists the compiled effects, the planner, the grants of each role, and the request bounds.
+This example declares a fixed `effects` list, so the planner `kind` is `declarative`;
+[plan effects with a Rhai script](../../configure/breg-change-control/#plan-effects-with-a-rhai-script)
+is the alternative.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, explain_change_requests;
     crates/registry-breg/src/rhai_planner.rs;
     products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
 
-## 2. Read the rule you are testing
+## Find the rule you are testing
 
-Open `registry.yaml` in `tutorial-work/asset-corrections`.
-The `placement-correction-request` entity has its own fields: a placement reference, a proposed site,
-and a reason.
-The relevant configuration, expanded for readability, is:
+Open `tutorial-work/asset-corrections/registry.yaml` and find the `placement-correction-request`
+entity.
+Its `changeRequest` block declares one effect, a `patch` of the referenced placement's `site`, and
+the two stages the explanation listed:
 
 ```yaml
-changeRequest:
-  retention:
-    mode: operator_erase
-  effects:
-    - target:
-        fromField: placement
-      operation: patch
-      set:
-        site:
-          fromField: proposed-site
-  review:
-    stages:
-      - id: review
-        approvals: 1
-        excludeSubmitter: true
-      - id: final-approval
-        approvals: 1
-        excludeSubmitter: true
+      review:
+        stages:
+          - {id: review, approvals: 1, excludeSubmitter: true}
+          - {id: final-approval, approvals: 1, excludeSubmitter: true}
 ```
 
-The request stores a proposal separately from the placement record.
-Its configured effect says which placement field changes when the request is applied.
-Submitting and approving the request do not apply that effect.
-`retention.mode` defaults to `retain`, which keeps every proposal version and refuses operator
-erasure.
-The example selects `operator_erase` so an operator can later erase the detail of a finished
-request with an explicit command; nothing is deleted on a schedule.
+Submitting and approving a request store a proposal; only an apply carries out the effect.
+Now find the `asset-placement` entity above it:
 
-The access profiles separate the work.
-Each grant lists the operations its role may perform on the request entity:
+```yaml
+    changeControl:
+      requiredFor: [patch]
+```
 
-| Profile | Operations | Responsibility |
-| --- | --- | --- |
-| `correction-submitter` | `create`, `get`, `patch`, `submit_request`, `revise_request`, `cancel_request` | Draft, edit, submit, and if asked, revise the request |
-| `correction-reviewer` | `get`, `list`, `approve_request`, `reject_request`, `request_revision` | Decide the `review` stage |
-| `correction-supervisor` | `get`, `approve_request`, `reject_request`, `request_revision` | Decide the `final-approval` stage |
-| `correction-applier` | `get`, `apply_request` | Apply the approved proposal to the placement |
-
-A reviewer's grant names the stages it may decide under `reviewStages`, with the placement fields
-it may see while deciding.
-The applier's grant names the placement under `applyTargets`.
-Each stage excludes the submitting principal from approving.
-That rule does not require a different person for every stage: access profiles and stage grants
-determine which other principals can approve.
-The example supplies different identities for the two reviewers.
-
-On `asset-placement`, `changeControl.requiredFor: [patch]` makes patching a controlled operation.
-The ordinary placement grants omit `patch`, and the generated API has no `PATCH` route for
-placements at all: the only way to change a placement's site is an applied request.
-Those grants carry `requestPresence` instead, so an operator reading a placement sees that a
-correction is pending.
+This makes patching a placement a controlled operation.
+The ordinary placement grants omit `patch`, so the only way to change a placement's site is an
+applied request, and you test that rule in the last step.
+The four `correction-*` profiles split the work between a submitter, a reviewer for the `review`
+stage, a supervisor for `final-approval`, and an applier;
+[split the roles across profiles](../../configure/breg-change-control/#split-the-roles-across-profiles)
+explains each grant and the `retention` mode the example selects.
 
 {/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
-    products/breg/scripts/test-change-request-examples.sh;
     crates/registry-breg/src/request_workflow.rs;
-    crates/registry-breg/src/request_retention.rs;
-    crates/registry-breg/tests/postgres_change_requests.rs. */}
+    crates/registry-breg/src/request_retention.rs. */}
 
-## 3. Run the approval workflow
+## Start a disposable database
 
 In a second terminal, at the root of the same clone, start the local quickstart.
 You are borrowing its disposable PostgreSQL cluster, which the runner reaches over TLS with the
@@ -291,8 +228,9 @@ Wait for this line, then leave the terminal running:
 Base Registry Engine generic quickstart is ready.
 ```
 
-Return to your first terminal.
-Create a Python environment for the example runner's YAML support:
+## Run the approval workflow
+
+Return to your first terminal and create a Python environment for the example runner's YAML support:
 
 ```sh
 uv venv tutorial-work/venv
@@ -356,24 +294,9 @@ Open `tests/journeys.yaml` in your copy.
 A journey is a sequence of API calls with the status and fields expected from each response.
 This one creates an asset, two sites, and a placement, drafts the correction, submits it, collects
 both approvals, and applies it.
-On a running server, the same journey is this sequence of HTTP calls:
-
-| Journey steps | Caller | HTTP call |
-| --- | --- | --- |
-| Create the asset, both sites, and the placement | `asset-operator` | `POST /v1/records/assets`, `/v1/records/sites`, and `/v1/records/placements` |
-| Create and edit the draft request | `correction-submitter` | `POST /v1/records/placement-correction-requests`, then `PATCH /v1/records/placement-correction-requests/{id}` with the record's `ETag` |
-| Submit | `correction-submitter` | `POST /v1/records/placement-correction-requests/{id}/actions/submit` |
-| Approve the `review` stage | `correction-reviewer` | `POST /v1/records/placement-correction-requests/{id}/actions/stages/review/approve` |
-| Approve the `final-approval` stage | `correction-supervisor` | `POST /v1/records/placement-correction-requests/{id}/actions/stages/final-approval/approve` |
-| Apply | `correction-applier` | `POST /v1/records/placement-correction-requests/{id}/actions/apply` |
-
-Before each action, the journey gets the request as the next caller.
-The response's `data.request.actions[]` lists what that caller may do next, each with its `href`,
-its own `ifMatch`, and, for decisions and apply, the `proposalVersion` and `effectDigest` it binds
-to.
-The journey's `etagRef`, `proposalVersionRef`, and `effectDigestRef` take those values from the
-captured response, and a client making HTTP calls itself reads the same members.
-The record's ordinary `ETag` header edits the draft; it is not an action's `ifMatch`.
+Each action step names its caller's profile, the operation, and for a decision the stage.
+The routes behind those steps, and the `request.actions[]` members a client reads before each call,
+are in the [API reference](../../reference/breg-api/#change-requests).
 
 {/* Evidence: products/breg/quickstart/run.sh;
     products/breg/quickstart/support/quickstart.py, prepare;
@@ -383,7 +306,7 @@ The record's ordinary `ETag` header edits the draft; it is not an action's `ifMa
     crates/registry-breg/src/fixtures.rs;
     crates/registry-breg/src/request_workflow.rs. */}
 
-## 4. Make the second stage your own
+## Rename the second stage
 
 Rename `final-approval` to `operations-approval` in your copied `registry.yaml`, in two places:
 the stage's `id` and the `correction-supervisor` grant's `reviewStages` entry.
@@ -394,26 +317,17 @@ The step and capture identifiers can keep their original names.
 Your stage, grant, and journey step now agree on who approves what:
 
 ```yaml
-# Under changeRequest.review.stages:
-- {id: operations-approval, approvals: 1, excludeSubmitter: true}
+          - {id: operations-approval, approvals: 1, excludeSubmitter: true}
 ```
 
 ```yaml
-# The correction-supervisor grant:
-- entity: placement-correction-request
-  operations: [get, approve_request, reject_request, request_revision]
-  readableFields: [placement, proposed-site, reason]
-  reviewStages:
-    - stage: operations-approval
-      targets:
-        - {entity: asset-placement, readableFields: [site], rowBoundaries: []}
+        reviewStages:
+          - stage: operations-approval
 ```
 
 ```yaml
-# The approve-final-stage step in tests/journeys.yaml:
-request:
-  operation: approve_request
-  stage: operations-approval
+          operation: approve_request
+          stage: operations-approval
 ```
 
 Run the structural check and the database journey again:
@@ -434,7 +348,7 @@ For a new stage rather than a rename, you would also add its GET and approval st
     products/breg/acceptance/asset-site-placement-change-requests/tests/journeys.yaml;
     products/breg/scripts/test-change-request-examples.sh. */}
 
-## 5. Check that a direct-write bypass is refused
+## Check that a direct write is refused
 
 In your copied `registry.yaml`, find the `asset-operator` grant for `asset-placement`.
 Temporarily add `patch` to its operations:
@@ -447,10 +361,17 @@ operations: [create, get, list, patch]
 bregctl check tutorial-work/asset-corrections
 ```
 
-The check fails with `change_control.direct_write_grant` and the message
-`a controlled mutation operation cannot remain directly granted`.
+```text
+bregctl check refused.
+
+  error    change_control.direct_write_grant  entities[id=asset-placement].accessProfiles[id=asset-operator].operations
+           a controlled mutation operation cannot remain directly granted
+
+1 error, 0 findings.
+```
+
 This is an expected refusal: a grant cannot bypass the placement's `changeControl` rule.
-Remove `patch` from that grant and rerun the check; it succeeds again.
+Remove `patch` from that grant and rerun the check; it passes again.
 
 {/* Evidence: crates/registry-breg/src/change_request.rs;
     products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}

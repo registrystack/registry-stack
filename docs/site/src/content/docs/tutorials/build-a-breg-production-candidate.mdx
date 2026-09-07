@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-08"
 doc_type: tutorial
 persona:
   - data publisher
@@ -28,7 +28,7 @@ from there.
   outcome="A package built from your project, signed with a local key, and accepted by bregctl verify under a trust anchor you wrote."
   time="About 30 minutes"
   level="Production build with synthetic data and local keys"
-  prerequisites={['bregctl 0.26.1 from Create and query your first registry', 'Docker', 'OpenSSL 3']}
+  prerequisites={['The bregctl from Create and query your first registry', 'Docker', 'OpenSSL 3']}
 />
 
 ## Before you start
@@ -152,7 +152,7 @@ package, or a repository. They exist for this exercise and are deleted in the cl
 
 The runtime connects to PostgreSQL over TLS only, and the schema test uses the same connection code,
 so the container needs a server certificate. Create a small certificate authority and a certificate
-for `localhost`, then start the PostgreSQL 17 image the quickstart launcher uses, on port 5433 so it
+for `localhost`, then start a PostgreSQL 17 container on port 5433 so it
 stays clear of a PostgreSQL you may already run:
 
 ```sh

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-07"
+last_reviewed: "2026-09-08"
 doc_type: tutorial
 persona:
   - consumer or verifier
@@ -16,14 +16,12 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-This tutorial needs a registry on Registry Stack v0.26.1 or later and a client package at exactly
-that registry's version. The unified client packages start at v0.26.1: against a v0.26.0 registry
-there is no Base Registry Engine client package to install. The unified Registry Stack client gives
-an application one method for each Base Registry Engine operation, in Python and in Node. In this
-tutorial you install the published package, read the record you created in the first tutorial,
-create a record with an idempotency key, page through the collection with a continuation, and
-inspect a refused write. Every step shows both languages; follow the one your application uses, or run both against
-the same registry.
+The unified Registry Stack client gives an application one method for each Base Registry Engine
+operation, in Python and in Node. In this tutorial you install the published package at your
+registry's version, read the record you created in the first tutorial, create a record with an
+idempotency key, page through the collection with a continuation, and inspect a refused write.
+Every step shows both languages; follow the one your application uses, or run both against the
+same registry.
 
 <QuickstartMeta
   outcome="A Python program and a Node program that read, page, and write your local registry through the unified client and handle a refusal explicitly."
@@ -59,6 +57,7 @@ Success prints nothing. The file is readable only by your user; the programs rea
 
 ## Install the client
 
+The package version must equal the registry's, and the packages start at v0.26.1.
 Work in a directory of its own and read the version from the `breg` binary rather than typing it:
 
 ```sh
@@ -273,7 +272,9 @@ while True:
   }
 ```
 
-The run adds one line per record, across two pages:
+The run adds one line per record, across two pages.
+A list without `orderby` is sorted by the identifier the registry assigned, so the two lines come
+in either order:
 
 ```text
 DEMO-002
@@ -322,12 +323,9 @@ problem
 mutation.conflict
 ```
 
-Other kinds arrive the same way. The ones you are most likely to meet are `transport` when the
-connection or the exchange failed below HTTP, `configuration` and `invalid_request` when the client
-refused an input before sending anything, `metadata_selection` when a binding could not be
-selected, and `protocol` when a response violated the contract. Every kind carries a message
-(`str(error)` in Python, `error.message` in Node); a kind that comes from a response also carries
-the trace identifier to quote when you ask the registry operator about it. The
+Other kinds arrive the same way, each with a message (`str(error)` in Python, `error.message` in
+Node), and a kind that comes from a response also carries the trace identifier to quote when you
+ask the registry operator about it. The
 [Registry Stack client API reference](../../reference/client-api/#breg-error-contract) names
 every kind the bindings raise and the members each one sets.
 
@@ -354,7 +352,8 @@ inspect a refused write through one error type.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `pip` or `npm` finds no matching version | The registry is older than v0.26.1, or `version` does not match `breg --version` | Install a v0.26.1 or later release, start the registry with it, and reinstall at its exact version |
-| `KeyError: 'REGISTRY_URL'`, or a `TypeError` naming the `path` argument | `REGISTRY_URL` or `REGISTRY_TOKEN_FILE` is not set | Prefix the command with both assignments as shown in [Construct a client and probe the registry](#construct-a-client-and-probe-the-registry) |
+| `KeyError: 'REGISTRY_URL'` in Python, or `configuration` in Node | `REGISTRY_URL` is not set | Prefix the command with both assignments as shown in [Construct a client and probe the registry](#construct-a-client-and-probe-the-registry) |
+| `KeyError: 'REGISTRY_TOKEN_FILE'` in Python, or a `TypeError` naming the `path` argument in Node | `REGISTRY_TOKEN_FILE` is not set | Prefix the command with both assignments |
 | `problem` with status `401` and code `authentication.refused` | The token is older than five minutes | Renew it with the `mint token` command in [Before you start](#before-you-start) and rerun |
 | `transport` with a `connect` transport kind | The registry is not running | Start it again with the first tutorial's `bregctl dev` command and renew the token |
 | `problem` with status `400` and code `query.invalid` | A filter names a field the profile does not allow | Filter on `code` or `status` only |

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-07"
+last_reviewed: "2026-09-08"
 doc_type: tutorial
 persona:
   - data publisher
@@ -73,14 +73,12 @@ Authoring check passed.
 ```
 
 This is the project the first tutorial started as a registry, so the entity, fields, and profiles are
-the ones you used over HTTP: `registry.yaml`, one module under `modules/`, `tests/journeys.yaml`,
-`dev-clients.yaml`, `runtime.example.yaml`, and a `README.md` that lists them.
+the ones you used over HTTP, in the files [init wrote](../first-breg/#what-init-wrote).
 The `revision` line is the digest of the compiled project; it changes with every edit you make.
 
 A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a finding does not.
 The first says the `operator` profile can list every row, which is intended for a registry-wide operations team,
-and the second says the `evidence-source` profile can look up any record by its code;
-the project's `record-reader` profile shows the claim-bound row restriction that closes either one.
+and the second says the `evidence-source` profile can look up any record by its code.
 Every command in this tutorial repeats both findings, so treat them as expected and read past them to the result.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files() and check(); crates/registry-breg/src/access.rs. */}
@@ -89,26 +87,19 @@ Every command in this tutorial repeats both findings, so treat them as expected 
 
 A module is a separate file that contributes to the model, so a reusable part of a registry can be reviewed
 and versioned apart from the project that adopts it.
-Open `tutorial-work/project/modules/record-notes/module.yaml`.
-Written out as block mappings (the file keeps each field on one line), it declares one optional field on the
-entity the project owns:
+Open `tutorial-work/project/modules/record-notes/module.yaml` and find its version and the one field it
+declares on the entity the project owns:
 
 ```yaml
-id: record-notes
 version: 0.1.0
-extendEntities:
-  - entity: record
-    fields:
-      - id: internal-note
-        type: string
-        maxLength: 500
-        classification: internal
+```
+
+```yaml
+      - {id: internal-note, type: string, maxLength: 500, classification: internal}
 ```
 
 A field without `required: true` is optional, so existing records stay valid and a create may omit it.
 Its classification matches the entity's default, `internal`.
-A more sensitive value such as `restricted` adds a further finding, `access.profile.higher_classification`,
-once a grant exposes the field; it asks you to confirm the profile's scope and purpose first.
 
 Now open `tutorial-work/project/registry.yaml` and find the `modules` entry at the end of the file:
 

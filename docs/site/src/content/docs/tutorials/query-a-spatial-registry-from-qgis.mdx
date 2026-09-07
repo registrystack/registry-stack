@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-07"
+last_reviewed: "2026-09-08"
 doc_type: tutorial
 persona:
   - data publisher
@@ -34,7 +34,7 @@ normal API, and see the new Point after QGIS renews its Registry Mint credential
     'The binaries from Create and query your first registry, and git',
     'QGIS 4.2.1 with GDAL 3.12.4',
     'Running Docker, and two terminals',
-    'OpenSSL, Python 3.11 or later, and uv',
+    'OpenSSL and Python 3.11 or later',
     'A text editor',
   ]}
 />
@@ -127,11 +127,10 @@ display to **Extents** and confirm that the longitude span is less than `0.24` d
 latitude span is less than `0.19` degrees.
 
 The `installation-map-reader` profile caps a bounding box at `0.25` longitude degrees by `0.20`
-latitude degrees. The cap limits how much of the map one query may ask for. It does not decide
-which records you may see: that is the profile's row boundary, which compares each record's
-`zone` with the `service_zones` claim in the installation credential. The smaller view leaves
-room for QGIS decimal serialization and for canvas aspect-ratio changes. A world view exceeds the
-cap and Base Registry Engine refuses the query with `query.invalid`.
+latitude degrees, and a world view exceeds it, so Base Registry Engine refuses the query with
+`query.invalid`. The smaller view leaves room for QGIS decimal serialization and for canvas
+aspect-ratio changes. The cap limits how much of the map one query may ask for, not which records
+you may see; that is the profile's row boundary, which you meet in the next steps.
 
 {/* Evidence: products/breg/acceptance/spatial-service-sites/registry.yaml;
     crates/registry-breg/src/query.rs, parse_bbox();
@@ -180,15 +179,11 @@ messages. The quickstart creates the secret file with owner-only permissions.
 QGIS draws Point features near the map center. Press `F6` to open the attribute table. The
 table includes `id`, `label`, `mapLabel`, `nativeId`, `serviceKind`, `siteCode`, and `zone`.
 
-The installation credential carries a `service_zones: central` claim, so the collection returns
-only records whose `zone` is `central`. The layer is read-only, requests at most 25 records per
-page, and sends the visible extent as a bounding box. Base Registry Engine applies the same scope,
-purpose, row, and field rules to the QGIS-compatible route as it applies to native reads.
-
-The bounding box is a filter inside that row boundary, not the boundary itself. If you leave
-**Only request features overlapping the view extent** off, QGIS sends no bounding box and pages
-through every record the row boundary allows, 25 at a time; the server allows at most 100 records
-per page on this collection.
+Every `zone` value is `central`: the installation credential carries a `service_zones: central`
+claim, and the profile's row boundary returns only records whose `zone` matches it. The bounding
+box is a filter inside that boundary, not the boundary itself. Base Registry Engine applies the
+same scope, purpose, row, and field rules to the QGIS-compatible route as to native reads; the
+[API reference](../../reference/breg-api/#spatial-adapter) covers the route and its paging limits.
 
 {/* Evidence: crates/registry-breg/src/api/gis.rs, collections(), collection(), items(),
     authorize_gis_collection(), parse_items_query() and query_options();
@@ -272,8 +267,8 @@ Imported the input. 1 item committed.
 Run the block as one unit: every token the spatial quickstart mints, including the operator token
 this block requests, expires after 60 seconds. The checkpoint records each committed chunk, so an
 interrupted import resumes without sending a completed chunk again. If you run the import a
-second time with the same checkpoint, it sends nothing and reports `0 items committed` with
-`complete` at `true`. The operator token stays in an owner-only file and is never copied into QGIS.
+second time with the same checkpoint, it sends nothing and prints the same summary, because the
+counts come from the checkpoint. The operator token stays in an owner-only file and is never copied into QGIS.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs;
     products/breg/quickstart/support/quickstart.py, store_token();
