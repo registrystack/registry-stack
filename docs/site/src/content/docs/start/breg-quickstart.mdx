@@ -21,8 +21,7 @@ registry exposes. A [package](../../reference/glossary/#package) is the compiled
 of one project: `bregctl` builds it, `breg` serves it, and a production package carries detached
 signatures from keys the deployment trusts. An
 [access profile](../../reference/glossary/#access-profile) is a named grant inside the project that
-states which scopes, purposes, and claims a token must carry and which operations, fields, and rows
-the caller may reach; a request selects one with the `accessProfile` query option.
+states what a token must carry and which operations, fields, and rows the caller may reach.
 
 {/* Evidence: products/breg/README.md; crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;
     products/breg/contracts/package-layout.yaml; crates/registry-breg/src/access.rs. */}
@@ -46,17 +45,11 @@ sequenceDiagram
 ```
 
 The token issuer is your OpenID Connect provider, or [Registry Mint](../../configure/mint/) when
-you have none; Base Registry Engine verifies tokens and issues none. PostgreSQL is a database you
-provision with two roles: a migration role that owns the schema and applies packages, and a
-runtime role the serving process uses. `breg` verifies the active package at startup, serves the
-compiled routes, and appends every admitted request to a hash-chained
-[audit journal](../../reference/glossary/#audit-journal) in the same database. The process keeps no state of its own outside PostgreSQL.
-
-Three people take part, and one person may hold all three roles on a pilot. The author writes the
-project and runs `bregctl` checks and journeys. The operator provisions PostgreSQL, writes the
-runtime configuration, activates a signed package with the migration credential, and runs `breg`.
-The application developer obtains tokens from the issuer and calls the REST API directly or
-through a client library.
+you have none; Base Registry Engine verifies tokens and issues none. You provision PostgreSQL with
+a migration role that owns the schema and a runtime role the serving process uses. The process
+verifies the active package at startup, serves the compiled routes, appends every admitted request
+to a hash-chained [audit journal](../../reference/glossary/#audit-journal), and keeps no state of
+its own outside PostgreSQL.
 
 {/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator; crates/registry-breg/src/runtime_config.rs, SqlRoles;
     crates/registry-breg/src/audit.rs; release/docker/Dockerfile.breg; products/breg/README.md. */}
@@ -66,8 +59,8 @@ through a client library.
 [Create and query your first registry](../../tutorials/first-breg/) starts disposable PostgreSQL
 and Registry Mint on your machine, initializes a domain-neutral project with `bregctl init`,
 activates an unsigned local package, and creates and reads one record over HTTP with a short-lived
-token. You need Git and Bash, Docker, OpenSSL, Python 3.11 or later with uv, and curl 7.76 or
-later, on one of the platforms in [platform support](../../explanation/known-limitations/#platform-support).
+token. It lists the tools it needs and runs on the platforms in
+[platform support](../../explanation/known-limitations/#platform-support).
 
 The local path keeps authentication, access profiles, row boundaries, and audit active. It is not a
 substitute for production package signing, operated database roles, TLS to the database,
@@ -92,11 +85,9 @@ runs against a schema-test database before anything is packaged.
 Start with [What you need to run Base Registry Engine](../../operate/breg-requirements/) to plan
 the database, token issuer, and signing process a deployment needs. Then
 [Build a production candidate](../../tutorials/build-a-breg-production-candidate/) takes a project
-through `check --production`, `test`, `package`, signing, and `verify` on your machine, and
-[Deploy a registry](../../operate/breg/) covers PostgreSQL provisioning, the runtime configuration,
-what a token must carry, activation with the migration credential, and metrics. Successor packages,
-retention and erasure, the audit journal, and bulk data moves each have a page of their own under
-Operate.
+through production checks, tests, packaging, signing, and verification on your machine, and
+[Deploy a registry](../../operate/breg/) covers provisioning, the runtime configuration, activation
+with the migration credential, and metrics.
 
 ### Call a registry from an application
 

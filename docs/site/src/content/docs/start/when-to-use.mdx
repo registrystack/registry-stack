@@ -37,39 +37,18 @@ and supports writes.
 | To learn only a fact | Evidence Gateway | A signed assertion carrying the answer, not the source record |
 | To own and update registry records | Base Registry Engine | A configuration-defined PostgreSQL registry and REST API |
 
-Registry Relay, Evidence Gateway, and Base Registry Engine are separate product choices. They can be
-operated by the same institution, but each has its own source, authorization,
-configuration, and audit boundary. Evidence Gateway does not require Relay as its
-source path. Registry Mint can issue short-lived access tokens to these
-services when a deployment has no identity provider; see the
-[Registry Mint reference](../../reference/mint/).
-
-### What each product needs from the source
-
-Registry Relay reads reviewed read-only SQLite views. The institution decides in
-SQL what leaves the system of record, and Relay binds only views: a raw table is
-never a source. It reads nothing else, so a workbook, a live third-party
-API, or another database engine has to be reduced to a reviewed view first, by a
-process the institution owns and Relay does not see.
-
-Evidence Gateway calls its own fixed, reviewed sources and evaluates one bounded
-question against them. Its source may be a separately reviewed HTTP API integration.
-
-Base Registry Engine starts from an authored data model and an operator-provisioned PostgreSQL database.
-Choose it when the institution needs to create and maintain records through the registry itself;
-it is not a drop-in publisher for arbitrary pre-existing database tables.
-
-{/* Evidence: crates/registry-breg/src/generated_ddl.rs; crates/registry-breg/src/startup.rs;
-    crates/registry-evidence/src/source.rs. */}
+The three are separate products. One institution can run all of them, but each has its own
+source, authorization, configuration, and audit boundary, and Evidence Gateway does not need Relay
+as its source.
 
 ### Who does what
 
-- The assertion provider is an institution that answers requests with signed
-  facts through Evidence Gateway.
-- The data publisher is an institution that exposes records through Registry
-  Relay or maintains a configured registry through Base Registry Engine.
-- The consumer or verifier is a relying service that calls a product's API and
-  verifies the answers it receives.
+- The assertion provider is the institution that answers requests with signed facts through
+  Evidence Gateway.
+- The data publisher is the institution that exposes records through Registry Relay or
+  maintains a registry through Base Registry Engine.
+- The consumer or verifier is the relying service that calls a product's API and verifies the
+  answers it receives.
 - The operator is whoever runs the deployment.
 
 ## Registry Stack is not the right tool when
@@ -92,7 +71,7 @@ differs:
 
 | | Registry Relay | Evidence Gateway | Base Registry Engine |
 | --- | --- | --- | --- |
-| Source | Reviewed read-only SQLite views | One fixed request per question to a system you already run | An authored data model; the records live in the registry |
+| Source | Reviewed read-only SQLite views; a raw table is never a source | One fixed request per question to a system you already run | An authored data model; the records live in the registry |
 | Database | None | None | PostgreSQL 15 or newer, two roles |
 | Durable state | Audit log on disk | Audit log on disk | Everything in PostgreSQL |
 | Production signing | Sealed package, no signature | Vault or OpenBao Transit key for assertions | External signatures on every package |
@@ -101,23 +80,18 @@ differs:
 The local tutorials need none of this; they start disposable versions of everything on your machine.
 
 {/* Evidence: crates/registry-relay-v2/src/contract.rs, RelayRuntime; crates/registry-relay-v2/src/auth.rs;
-    crates/registry-relay-v2/src/audit.rs; products/evidence/OPERATOR-CONTRACT.md,
+    crates/registry-relay-v2/src/audit.rs; crates/registry-evidence/src/source.rs;
+    crates/registry-breg/src/generated_ddl.rs; products/evidence/OPERATOR-CONTRACT.md,
     "Supported deployment"; crates/registry-breg/src/postgres/schema.rs;
     crates/registry-breg/src/runtime_config.rs, SqlRoles and OidcVerifierConfig;
     crates/registry-breg/src/package.rs, validate_signature_policy; docs/site/src/content/docs/operate/index.mdx. */}
 
 ## What you need to adopt it
 
-Before moving beyond a local sample, identify:
-
-- The source owner and update process.
-- The fields and operations the integration is allowed to use.
-- The callers, purposes, and fields each service may disclose.
-- The operator responsible for endpoints, credentials, token issuers,
-  deployment, monitoring, recovery, and audit retention.
-
-Start with non-personal data. A successful local tutorial is not production
-approval.
+Before moving beyond a local sample, identify the source owner and update process, the fields and
+operations the integration may use, the callers and purposes each service may serve, and the
+operator responsible for endpoints, credentials, deployment, recovery, and audit retention. Start
+with non-personal data. A successful local tutorial is not production approval.
 
 ## Next
 

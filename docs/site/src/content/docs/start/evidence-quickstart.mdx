@@ -33,14 +33,11 @@ sequenceDiagram
     C->>C: Verify before using the answer
 ```
 
-The authoritative registry remains the source of truth. Evidence Gateway makes the fixed request defined
-by the provider, derives only the reviewed answer, and does not return the source response to the
-caller. The caller verifies the signature and retained transaction expectations before using the
-answer.
-
-The audit trail records the authorized access and the released disclosure. The audit trail does
-not repeat the source record, prove that the source fact was true, or automatically provide a
-complete citizen-facing history of registry access.
+The authoritative registry remains the source of truth. Evidence Gateway makes the fixed request the
+provider defined, derives only the reviewed answer, and never returns the source response. The
+caller verifies the signature and its retained expectations before using the answer. The audit
+trail records the authorized access and the released disclosure; it does not repeat the source
+record, prove the source fact true, or provide a citizen-facing history of registry access.
 
 ## Make your first Evidence Gateway request
 
@@ -104,10 +101,9 @@ from governance, authorization, and the authoritative institution. A valid signa
 signed the exact assertion bytes and whether the assertion matches the retained verification
 expectations.
 
-Evidence Gateway is separate from Registry Relay. Registry Relay exposes protected, selected records.
-Evidence Gateway contacts its own configured authoritative sources and retains its own authorization,
-derivation, signing, verification, and audit boundaries. Registry Mint is optional supporting
-infrastructure that supplies short-lived caller tokens when a deployment has no identity provider.
+Evidence Gateway is separate from Registry Relay, which exposes protected, selected records. It
+contacts its own configured sources and keeps its own authorization, derivation, signing,
+verification, and audit boundaries.
 
 {/* Evidence: a fixed source request reaches its source over one of two coequal transports, a fixed
      HTTP JSON request or one reviewed SQL statement against a read-only SQLite extract,
