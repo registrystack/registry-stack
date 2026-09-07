@@ -443,6 +443,7 @@ export default defineConfig({
                 { label: 'Change requests and actions', slug: 'configure/breg-change-control' },
                 { label: 'Test with journeys', slug: 'configure/breg-journeys' },
                 { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
+                { label: 'Deriving from a model', slug: 'explanation/deriving-a-registry-from-a-model' },
               ],
             },
             {
@@ -474,6 +475,7 @@ export default defineConfig({
             },
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },
             { label: 'API reference', slug: 'reference/breg-api' },
+            { label: 'PublicSchema wizard prompts', slug: 'reference/bregctl-publicschema-wizard' },
           ],
         },
         {

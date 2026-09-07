@@ -1,0 +1,176 @@
+---
+title: PublicSchema wizard prompts
+description: The nine questions bregctl init --from publicschema asks at a terminal, what each one lists, what starts ticked, and how cancellation and a missing terminal are reported.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-07"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+`bregctl init <DEST> --from publicschema`, given neither `--starter` nor `--selection`, asks for a
+selection at a terminal. The answers become the same `ModelSelection` document a starter ships or
+`--selection` reads, so nothing downstream can tell the three apart. This page records the nine
+questions in the order they are asked.
+
+## Contract status
+
+`bregctl` is pre-1.0 adopter tooling and sits outside any frozen runtime contract. These prompts can
+change before a compatibility promise covers them. The page is hand-written from
+`crates/registry-bregctl/src/init_from_model/wizard.rs`, not generated.
+
+Every prompt, every line printed beside one, and the review are written to standard error. Standard
+output carries only the final report, so a script that captures standard output still gets a clean
+result even when the command runs at a terminal. A prompt is raised only when both standard input
+and standard error are terminals.
+
+Nothing is written to disk until the last question is answered. The selection is resolved against
+the embedded model before the review, so a refusal the model forces is reported before you are asked
+to confirm.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/wizard.rs, gather() and confirm_selection();
+    crates/registry-bregctl/src/lib.rs, init_from_model::Source::Interactive. */}
+
+## Registry identifier
+
+`Registry identifier`, with the help line `lowercase letters, digits, and hyphens; it names the
+registry in its IRIs, scopes, and the catalogue`. There is no default.
+
+An answer must be 1 to 64 characters, start with a lowercase letter, and use only `a-z`, `0-9`, `-`,
+and `_`. The prompt applies the same grammar to the five names the project derives from the answer,
+the publisher (`-authority`), the data service (`-api`), the public service (`-service`), and the
+`-operator` and `-reader` principals, so a length that fits the identifier but not its derived names
+is refused at the prompt rather than by the compiler afterwards. A refusal is shown inline and the
+question is asked again.
+
+## Registry title
+
+`Registry title`, with the help line `the name a reader sees; enter to keep the default`. The default
+is the identifier read back in words, so `household-registry` offers `Household Registry`. Enter
+alone keeps it. A title that is empty or only whitespace is refused.
+
+## Which concepts become entities?
+
+A multi-select with the help line `space to toggle, type to filter, enter to confirm`. At least one
+concept must be chosen.
+
+The list holds every concept that is not abstract and carries at least one property the derivation
+could keep, ordered by the schema file that defines the concept and then by concept name. An option
+reads as the concept's label, its schema file in parentheses, and the first sentence of its
+description cut to 60 characters: `Person (publicschema-identity): The unique individual human
+being who is a subject of record…`.
+
+Nothing starts ticked.
+
+## Which concepts connect what you chose?
+
+A multi-select with the help line `space to toggle, type to filter, enter to confirm; enter alone
+adds none`.
+
+The list holds the concepts you did not choose that carry at least two single-valued properties
+pointing at concepts you did. Each option names those properties and what they point at:
+`Group Membership (publicschema-misc): group is a Household, person is a Person`. Concepts whose
+every link fits exactly one chosen concept come first, then the rest by concept name, and each
+concept's links read in property order. Nothing starts ticked, and enter alone adds none; a registry
+of unrelated collections is a legitimate answer.
+
+The prompt is skipped when the model offers no such concept. When you chose two or more concepts and
+some of them have nothing in the model to connect them, one line is printed first naming those
+concepts, or saying that nothing in the model connects any of them to one another. That line is
+printed whether or not a prompt follows.
+
+## Which properties of `<Title>` become fields?
+
+One multi-select per chosen concept, in the order the concepts were chosen, with connectors last.
+The help line is `space to toggle, type to filter, enter to confirm`, and at least one property must
+be chosen.
+
+The list holds every property the derivation can turn into a field for this selection. An option
+names the property, the shape its field takes, `sensitive` or `restricted` where the model rates it
+so, and how many of the systems the model tracks already record it:
+`date_of_birth: date (6 of 6 systems)`.
+
+An option starts ticked when any of three things holds:
+
+- The model marks the property required.
+- At least 60% of the systems the model tracks already record it.
+- It is a single-valued reference to another concept you chose, which is usually why the concept
+  carrying it was chosen at all.
+
+A property the derivation cannot carry is not offered. Those properties are named on one line
+before the prompt, opening `Not offered for <Title>:`, each with the derivation's own sentence
+saying why and what to do instead.
+
+## Which entity does `<Concept>.<property>` point at?
+
+A single select with the help line `type to filter, arrows to move, enter to select`, listing the
+entity identifiers of the chosen concepts whose kind fits the property, in the order chosen.
+
+It is asked only where more than one chosen concept fits a single-valued reference, and only after
+every concept's properties are settled, because a property may point at a concept chosen after the
+one carrying it. Where exactly one concept fits, the reference is settled without a question.
+
+## Keep the default identifiers and routes?
+
+A yes-or-no question defaulting to yes, with the help line `they name the collection routes, the
+record identifiers, and the fields a client reads`. One line per entity precedes it, showing what
+that entity would be called: `person: route persons, identifier field person-code`.
+
+Answering yes keeps every default and asks nothing more. Answering no asks three questions per
+entity, in turn, each with the help line `enter to keep the default`:
+
+| Question | Default |
+| --- | --- |
+| `Entity identifier for <Concept>` | The concept in kebab case |
+| `Collection route for <Concept>` | The plural of the entity identifier answered before it |
+| `Identifier field for <Concept>` | The entity identifier with `-code` appended |
+
+Each answer is held to the identifier grammar. An entity identifier or a route another entity of the
+same run already carries is refused inline with `` `<value>` is already taken by another entity ``,
+because the resolver refuses such a selection and the prompt refuses it while you are still there to
+answer again. An answer left at its default is left out of the written selection.
+
+## Which code lists should the project list in full?
+
+A multi-select with the help line `space to toggle, enter to confirm; an unticked list is carried as
+a bounded code instead`, listing every enumeration a chosen property draws on, by model name, with
+its size: `Marital Status (6 values)`.
+
+An enumeration of at most 300 values starts ticked, which is the size rule the derivation applies to
+a selection that says nothing. The prompt is skipped when no chosen property draws on an
+enumeration. Only an answer that differs from the size rule is written into the selection's
+`vocabularies` list.
+
+## Derive the project from this selection?
+
+The selection your answers describe is printed as YAML, followed by one line naming any entity no
+field connects to another, and then a yes-or-no question defaulting to yes, with the help line
+`the document above is written into the project beside what it derives`.
+
+Answering yes derives the project. Answering no writes nothing and reports
+`init.selection.cancelled`.
+
+## Cancelling, and running without a terminal
+
+| Situation | Report |
+| --- | --- |
+| Esc or `Ctrl+C` at any prompt, or no at the review | `init.selection.cancelled`: `cancelled at a prompt; nothing was written` |
+| A prompt cannot be raised for any other reason | `init.selection.prompt`: `a question could not be asked`, followed by the library's own message |
+| No terminal on standard input or standard error | `init.selection.missing`: `` `init --from publicschema` asks its questions at a terminal; without one, pass `--selection <FILE>` or `--starter <NAME>` `` |
+
+Nothing is written in any of the three cases, so there is nothing to undo. Pass `--starter` or
+`--selection` to derive without a terminal.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/wizard.rs, ask_registry(), ask_concepts(), ask_connectors(), ask_properties(), ask_target(), ask_naming(), ask_vocabularies(), TICKED_CONVERGENCE_SHARE, and cancelled();
+    crates/registry-bregctl/src/init_from_model/resolve.rs, registry_identifier_refusal(), identifier_refusal(), property_support(), and INLINE_VOCABULARY_THRESHOLD. */}
+
+## Next
+
+- [Derive a registry from PublicSchema](../../tutorials/derive-a-registry-from-publicschema/) to run
+  the same derivation from a shipped selection instead.
+- [How a registry is derived from a model](../../explanation/deriving-a-registry-from-a-model/) for
+  the rules the answers feed.
+- [bregctl command reference](../cli/bregctl/) for every other flag `init` accepts.

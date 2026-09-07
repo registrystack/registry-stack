@@ -399,6 +399,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'configure/breg-change-control',
     'configure/breg-journeys',
     'explanation/registry-modeling-patterns',
+    'explanation/deriving-a-registry-from-a-model',
     'operate/breg-requirements',
     'tutorials/build-a-breg-production-candidate',
     'operate/breg',
@@ -410,6 +411,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'reference/client-api',
     'reference/breg-configuration',
     'reference/breg-api',
+    'reference/bregctl-publicschema-wizard',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the BReg journey`);
