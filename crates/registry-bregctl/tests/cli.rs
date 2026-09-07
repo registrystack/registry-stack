@@ -1589,20 +1589,28 @@ fn init_prints_the_next_command_and_what_the_example_leaves_open() {
     let stdout = String::from_utf8(output.stdout).expect("init stdout is UTF-8");
     let readme = destination.join("README.md");
     let registry = destination.join("registry.yaml");
+    // The steps are numbered and folded to a fixed column, so each sentence is
+    // matched against the rendering with its line breaks and indentation
+    // collapsed back into single spaces.
+    let unwrapped = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        stdout.contains(&format!(
-            "next: read {}, then run 'bregctl check {destination_argument}'",
+        stdout.contains("Next:"),
+        "init opens the steps with a heading: {stdout}"
+    );
+    assert!(
+        unwrapped.contains(&format!(
+            "1. read {}, then run 'bregctl check {destination_argument}'",
             readme.display()
         )),
         "init names the next command: {stdout}"
     );
     assert!(
-        stdout.contains("next: leave the findings above as they are;"),
+        unwrapped.contains("2. leave the findings above as they are;"),
         "init says the reported findings belong to the example: {stdout}"
     );
     assert!(
-        stdout.contains(&format!(
-            "next: replace canonicalBaseIri in {} before you build a production package;",
+        unwrapped.contains(&format!(
+            "3. replace canonicalBaseIri in {} before you build a production package;",
             registry.display()
         )),
         "init says the example base IRI is not shippable: {stdout}"

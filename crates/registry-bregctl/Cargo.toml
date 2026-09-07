@@ -17,6 +17,8 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+anstream.workspace = true
+anstyle.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 clap.workspace = true

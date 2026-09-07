@@ -3458,6 +3458,8 @@ dependencies = [
 name = "registry-bregctl"
 version = "0.27.0"
 dependencies = [
+ "anstream",
+ "anstyle",
  "anyhow",
  "base64",
  "clap",

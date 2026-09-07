@@ -5,6 +5,7 @@
 //! parsing, validation, compilation, and artifact generation remain in
 //! `breg`.
 
+use anstream::AutoStream;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -47,6 +48,7 @@ mod package_inspection;
 mod package_lifecycle;
 mod project_migration;
 mod reconcile_lifecycle;
+mod report;
 mod request_retention;
 mod reviewed_migrations;
 mod safe_path;
@@ -1451,8 +1453,18 @@ pub fn command() -> clap::Command {
 }
 
 /// Parse the current process arguments and execute the selected operation.
+///
+/// The process streams are wrapped so the renderers can write the ANSI
+/// attributes unconditionally: `AutoStream` keeps them when the destination is
+/// a terminal and strips them when it is a pipe, a file, or a test harness,
+/// honoring `NO_COLOR` and `CLICOLOR_FORCE` on the way. A tutorial that
+/// captures a command therefore records the same plain bytes it prints.
 pub fn main_entry() -> ExitCode {
-    run_from(std::env::args_os(), &mut io::stdout(), &mut io::stderr())
+    let stdout = io::stdout();
+    let stderr = io::stderr();
+    let mut stdout = AutoStream::new(stdout, AutoStream::choice(&io::stdout()));
+    let mut stderr = AutoStream::new(stderr, AutoStream::choice(&io::stderr()));
+    run_from(std::env::args_os(), &mut stdout, &mut stderr)
 }
 
 /// Run from explicit arguments. This is public so process-level tests can use
@@ -7834,6 +7846,74 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
     }
 }
 
+/// The sentence that opens a success report: what the command did, and the
+/// counts a reader would otherwise have to total up from the lines below.
+fn success_lead(report: &SuccessReport) -> String {
+    let artifacts = report.artifacts.len();
+    match report.command {
+        "init" => format!(
+            "Initialized a registry project. {} written.",
+            report::counted(artifacts, "artifact")
+        ),
+        "check" => match report.profile {
+            ProfileArg::Authoring => "Authoring check passed.".to_owned(),
+            ProfileArg::Production => "Production check passed.".to_owned(),
+        },
+        "project lock" => format!(
+            "Locked the project modules. {} written.",
+            report::counted(artifacts, "artifact")
+        ),
+        "generate" => format!("Generated {}.", report::counted(artifacts, "artifact")),
+        "explain" => "Explained the compiled inventory.".to_owned(),
+        other => format!("{other} succeeded."),
+    }
+}
+
+fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<()> {
+    let mut lines = report::Lines::new();
+    lines.lead(&success_lead(report));
+    lines.pairs(&[("revision", report.revision.clone())]);
+
+    if !report.artifacts.is_empty() {
+        lines.blank();
+        for artifact in &report.artifacts {
+            lines.bullet(&artifact.path);
+        }
+    }
+
+    let findings: Vec<report::Finding<'_>> = report
+        .findings
+        .iter()
+        .map(|finding| report::Finding {
+            severity: match finding.severity {
+                DiagnosticSeverity::Error => report::Severity::Error,
+                DiagnosticSeverity::Finding => report::Severity::Warning,
+            },
+            code: &finding.code,
+            path: &finding.path,
+            message: &finding.message,
+        })
+        .collect();
+    lines.findings(&findings);
+    lines.steps(&report.next_steps);
+    stdout.write_all(lines.finish().as_bytes())?;
+
+    // The explanation is a document, not a report line, so it keeps its own
+    // rendering below the report rather than being folded into one.
+    if let Some(explanation) = &report.explanation {
+        writeln!(stdout)?;
+        if explanation.get("scopeMatching").is_some()
+            || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
+        {
+            write_access_explanation(explanation, stdout)?;
+        } else {
+            let rendered = serde_json::to_string_pretty(explanation).map_err(io::Error::other)?;
+            writeln!(stdout, "{rendered}")?;
+        }
+    }
+    Ok(())
+}
+
 fn write_success(
     report: &SuccessReport,
     format: OutputFormat,
@@ -7845,34 +7925,7 @@ fn write_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "{} succeeded", report.command).and_then(|()| {
-            writeln!(stdout, "revision: {}", report.revision)?;
-            for finding in &report.findings {
-                writeln!(
-                    stdout,
-                    "finding {} at {}: {}",
-                    finding.code, finding.path, finding.message
-                )?;
-            }
-            if !report.artifacts.is_empty() {
-                writeln!(stdout, "artifacts: {}", report.artifacts.len())?;
-            }
-            if let Some(explanation) = &report.explanation {
-                if explanation.get("scopeMatching").is_some()
-                    || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
-                {
-                    write_access_explanation(explanation, stdout)?;
-                } else {
-                    let rendered =
-                        serde_json::to_string_pretty(explanation).map_err(io::Error::other)?;
-                    writeln!(stdout, "{rendered}")?;
-                }
-            }
-            for step in &report.next_steps {
-                writeln!(stdout, "next: {step}")?;
-            }
-            Ok(())
-        })
+        render_success(report, stdout)
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
