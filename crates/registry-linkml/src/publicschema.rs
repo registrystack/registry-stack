@@ -109,6 +109,27 @@ pub fn pin() -> Result<Pin, serde_norway::Error> {
     serde_norway::from_str(PIN_YAML)
 }
 
+/// A ready-made selection shipped beside the snapshot, for `bregctl init
+/// --from publicschema --starter <name>`.
+///
+/// The crate ships the bytes only; the selection format belongs to `bregctl`,
+/// which is why a starter is not parsed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Starter {
+    pub name: &'static str,
+    pub contents: &'static str,
+}
+
+const STARTERS: &[Starter] = &[Starter {
+    name: "household",
+    contents: include_str!("../publicschema/starters/household.yaml"),
+}];
+
+/// The starters shipped with the snapshot, in name order.
+pub fn starters() -> &'static [Starter] {
+    STARTERS
+}
+
 /// Reads the embedded snapshot into a model. The snapshot is fixed at build
 /// time, so a failure here is a defect in the crate, not in the caller.
 pub fn model() -> Result<Model, ReadError> {
@@ -321,6 +342,28 @@ mod tests {
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
                 .collect(),
             schema: "test".into(),
+        }
+    }
+
+    #[test]
+    fn starters_are_named_uniquely_and_declare_the_selection_kind() {
+        let starters = starters();
+        assert!(!starters.is_empty());
+        let names: Vec<&str> = starters.iter().map(|starter| starter.name).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(names, sorted, "starters are unique and in name order");
+        for starter in starters {
+            let document: serde_norway::Value =
+                serde_norway::from_str(starter.contents).expect("a starter is YAML");
+            assert_eq!(
+                document["kind"].as_str(),
+                Some("ModelSelection"),
+                "{} declares the selection kind",
+                starter.name
+            );
+            assert_eq!(document["model"].as_str(), Some("publicschema"));
         }
     }
 
