@@ -42,6 +42,11 @@ const LINKML_TYPES: &[&str] = &[
     "sparqlpath",
 ];
 
+/// Schemes that identify an absolute URI even without a declared prefix,
+/// because none of them use a hierarchical `scheme://` form and none of
+/// them are ever declared as LinkML CURIE prefixes.
+const ABSOLUTE_URI_SCHEMES: &[&str] = &["urn", "did", "mailto", "tag", "data", "doi"];
+
 /// Class keys the reader refuses because ignoring them would change the
 /// class's induced shape.
 const UNSUPPORTED_CLASS_KEYS: &[&str] = &["attributes", "slot_usage", "union_of"];
@@ -150,16 +155,17 @@ pub fn read_bundle(files: &[(&str, &str)]) -> Result<Model, ReadError> {
         slots: BTreeMap::new(),
         enums: BTreeMap::new(),
     };
-    let default_range = root
-        .default_range
-        .clone()
-        .unwrap_or_else(|| "string".to_owned());
-
     // Pass one: collect every definition so references can be checked
     // against the whole bundle in pass two.
     let mut raw_slots = Vec::new();
     for (file, schema) in &schemas {
         let schema_name = schema.name.clone().expect("checked above");
+        // `default_range` applies per schema: a slot with no stated range
+        // takes the default of the file that defines it, not the root's.
+        let schema_default_range = schema
+            .default_range
+            .clone()
+            .unwrap_or_else(|| "string".to_owned());
         for (name, class) in &schema.classes {
             refuse_unsupported(file, "class", name, &class.rest, UNSUPPORTED_CLASS_KEYS)?;
             let definition = ClassDef {
@@ -184,7 +190,12 @@ pub fn read_bundle(files: &[(&str, &str)]) -> Result<Model, ReadError> {
         }
         for (name, slot) in &schema.slots {
             refuse_unsupported(file, "slot", name, &slot.rest, UNSUPPORTED_SLOT_KEYS)?;
-            raw_slots.push((file.clone(), name.clone(), slot.range.clone()));
+            raw_slots.push((
+                file.clone(),
+                name.clone(),
+                slot.range.clone(),
+                schema_default_range.clone(),
+            ));
             let definition = SlotDef {
                 name: name.clone(),
                 uri: definition_uri(
@@ -197,7 +208,11 @@ pub fn read_bundle(files: &[(&str, &str)]) -> Result<Model, ReadError> {
                 title: slot.title.clone(),
                 description: slot.description.clone(),
                 // Resolved in pass two once every enum and class is known.
-                range: Range::Type(slot.range.clone().unwrap_or_else(|| default_range.clone())),
+                range: Range::Type(
+                    slot.range
+                        .clone()
+                        .unwrap_or_else(|| schema_default_range.clone()),
+                ),
                 multivalued: slot.multivalued,
                 required: slot.required,
                 identifier: slot.identifier,
@@ -263,8 +278,8 @@ pub fn read_bundle(files: &[(&str, &str)]) -> Result<Model, ReadError> {
     }
 
     // Pass two: resolve ranges and check every class reference.
-    for (file, name, range) in raw_slots {
-        let range_name = range.unwrap_or_else(|| default_range.clone());
+    for (file, name, range, schema_default_range) in raw_slots {
+        let range_name = range.unwrap_or(schema_default_range);
         let resolved = if model.enums.contains_key(&range_name) {
             Range::Enum(range_name)
         } else if model.classes.contains_key(&range_name) {
@@ -437,23 +452,33 @@ fn definition_uri(
     }
 }
 
-/// Expands `prefix:local` through the bundle's prefixes. An absolute URI is
-/// returned unchanged.
+/// Expands `prefix:local` through the bundle's prefixes.
+///
+/// A declared prefix always wins: if `value` splits into `prefix:local` and
+/// some file declares `prefix`, the value is a CURIE and expands normally,
+/// even if it would otherwise match one of the cases below. Otherwise the
+/// value is an absolute URI, returned unchanged, when it contains `://` or
+/// its scheme (the text before the first `:`) is one of the well-known
+/// non-hierarchical schemes that never serve as CURIE prefixes: `urn`,
+/// `did`, `mailto`, `tag`, `data`, `doi`. Any other undeclared prefix is
+/// refused.
 fn expand_curie(
     prefixes: &BTreeMap<String, String>,
     file: &str,
     value: &str,
 ) -> Result<String, ReadError> {
-    if value.contains("://") {
-        return Ok(value.to_owned());
-    }
     let unknown = || ReadError::UnknownPrefix {
         file: file.to_owned(),
         curie: value.to_owned(),
     };
     let (prefix, local) = value.split_once(':').ok_or_else(unknown)?;
-    let expansion = prefixes.get(prefix).ok_or_else(unknown)?;
-    Ok(format!("{expansion}{local}"))
+    if let Some(expansion) = prefixes.get(prefix) {
+        return Ok(format!("{expansion}{local}"));
+    }
+    if value.contains("://") || ABSOLUTE_URI_SCHEMES.contains(&prefix) {
+        return Ok(value.to_owned());
+    }
+    Err(unknown())
 }
 
 fn scalar_annotations(
@@ -726,11 +751,28 @@ classes:
         );
         assert!(model.slots["identifiers"].multivalued);
         assert!(!model.slots["name"].multivalued);
-        // A slot without a range takes the root's default range.
+        // A slot without a range takes its own file's default range; parts.yaml
+        // states none, so it falls back to the reader's "string" default.
         assert_eq!(model.slots["record_id"].range, Range::Type("string".into()));
         assert!(model.slots["record_id"].identifier);
         assert!(model.slots["record_id"].required);
         assert!(!model.slots["name"].identifier);
+    }
+
+    #[test]
+    fn an_imported_files_own_default_range_applies_to_its_slots() {
+        let other = r#"
+name: other_default_range
+default_prefix: ex
+prefixes:
+  ex: https://example.org/
+default_range: integer
+slots:
+  count: {}
+"#;
+        let model = read_bundle(&[("root.yaml", ROOT), ("other.yaml", other)])
+            .expect("the fixture bundle reads");
+        assert_eq!(model.slots["count"].range, Range::Type("integer".into()));
     }
 
     #[test]
@@ -896,6 +938,58 @@ classes:
         assert_eq!(
             error.to_string(),
             "r.yaml: the schema has no `default_prefix`, so `Thing` has no URI"
+        );
+    }
+
+    #[test]
+    fn absolute_uris_without_a_hierarchical_separator_pass_through() {
+        let prefixes = BTreeMap::new();
+        assert_eq!(
+            expand_curie(
+                &prefixes,
+                "r.yaml",
+                "urn:uuid:11111111-1111-1111-1111-111111111111"
+            )
+            .unwrap(),
+            "urn:uuid:11111111-1111-1111-1111-111111111111"
+        );
+        assert_eq!(
+            expand_curie(&prefixes, "r.yaml", "did:example:123").unwrap(),
+            "did:example:123"
+        );
+        assert_eq!(
+            expand_curie(&prefixes, "r.yaml", "mailto:jane@example.org").unwrap(),
+            "mailto:jane@example.org"
+        );
+    }
+
+    #[test]
+    fn an_undeclared_prefix_without_a_known_absolute_scheme_is_refused() {
+        let prefixes = BTreeMap::new();
+        let error = expand_curie(&prefixes, "r.yaml", "foo:bar").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "r.yaml: `foo:bar` uses a prefix no file declares"
+        );
+    }
+
+    #[test]
+    fn a_declared_prefix_wins_over_a_well_known_absolute_scheme() {
+        let mut prefixes = BTreeMap::new();
+        prefixes.insert("urn".to_owned(), "https://example.org/urn/".to_owned());
+        assert_eq!(
+            expand_curie(&prefixes, "r.yaml", "urn:uuid-123").unwrap(),
+            "https://example.org/urn/uuid-123"
+        );
+    }
+
+    #[test]
+    fn a_bundle_may_use_absolute_uris_with_non_hierarchical_schemes() {
+        let schema = "name: r\ndefault_prefix: ex\nprefixes: {ex: https://example.org/}\nenums:\n  Kind:\n    permissible_values:\n      widget:\n        meaning: \"urn:uuid:11111111-1111-1111-1111-111111111111\"\n";
+        let model = read_bundle(&[("r.yaml", schema)]).expect("urn meanings read");
+        assert_eq!(
+            model.enums["Kind"].values[0].meaning.as_deref(),
+            Some("urn:uuid:11111111-1111-1111-1111-111111111111")
         );
     }
 
