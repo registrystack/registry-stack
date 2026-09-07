@@ -286,8 +286,8 @@ fn registry(plan: &Plan) -> String {
         0,
         "One entity per selected concept. The first field of each is its identifier: the model \
          has no identifying property of its own, so the derivation adds one, required and \
-         unique, that the registry assigns. Every other field is a selected property, under \
-         the model's name in kebab case.",
+         unique, that the caller supplies when a record is created. Every other field is a \
+         selected property, under the model's name in kebab case.",
     );
     yaml.line(0, "entities:");
     for entity in &plan.entities {
@@ -835,9 +835,10 @@ fn readme(plan: &Plan) -> String {
     let _ = writeln!(
         out,
         "The concepts, properties, and code lists in this project are derived from {model} \
-         {version} ({}), licensed under {}. Keep this notice with the project and with any \
-         package built from it.",
-        plan.model.repository, plan.model.license
+         {version} ({}), licensed under {} ({}). The derivation selects, renames, and \
+         retypes definitions, so this project is a modified form of the model. Keep this \
+         notice with the project and with any package built from it.",
+        plan.model.repository, plan.model.license, plan.model.license_url
     );
     let _ = writeln!(out);
     let _ = writeln!(out, "## Entities");
@@ -881,8 +882,8 @@ fn readme(plan: &Plan) -> String {
         out,
         "- Each selected concept became an entity, named by the concept in kebab case and \
          routed under its plural. The identifier field is added by the derivation, because \
-         the model has no identifying property: it is required, unique, and assigned by the \
-         registry."
+         the model has no identifying property: it is required, unique, and supplied by the \
+         caller when a record is created, as the journeys show."
     );
     let _ = writeln!(
         out,
@@ -908,9 +909,10 @@ fn readme(plan: &Plan) -> String {
     );
     let _ = writeln!(
         out,
-        "- A property {model} marks as sensitive or restricted is classified `restricted`; \
-         every other field, and every entity, is `internal`. The Registry Manifest projection's \
-         ceiling is the highest classification present."
+        "- A property {model} marks as sensitive or restricted is classified `restricted`, and \
+         so is a `structured` field whose inline value carries such a property, since the \
+         field holds the value whole; every other field, and every entity, is `internal`. The \
+         Registry Manifest projection's ceiling is the highest classification present."
     );
     let _ = writeln!(
         out,
@@ -1497,6 +1499,19 @@ mod tests {
         let readme = String::from_utf8(files["README.md"].clone()).expect("UTF-8");
         assert!(readme.contains("## Attribution"));
         assert!(readme.contains(&plan.model.repository));
+        assert!(readme.contains(&plan.model.license_url));
+        assert!(
+            !readme.contains("assigned by the registry") && !readme.contains("registry assigns"),
+            "the identifier is supplied by the caller"
+        );
+        let registry = String::from_utf8(files["registry.yaml"].clone()).expect("UTF-8");
+        let comments: String = registry
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("# "))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(!comments.contains("registry assigns"));
+        assert!(comments.contains("the caller supplies"), "{comments}");
     }
 
     #[test]

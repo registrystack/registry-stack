@@ -5,9 +5,9 @@
 //! Every prompt the command can raise lives in this module, so the rest of
 //! the derivation stays promptless: the answers become the same selection
 //! document a starter ships or `--selection` reads, and the pipeline behind
-//! it cannot tell the three apart. A prompt is only ever raised when both
-//! standard streams are terminals, which the caller checks before it comes
-//! here.
+//! it cannot tell the three apart. A prompt is only ever raised when standard
+//! input and standard error, the streams the prompts read and write, are
+//! terminals, which the caller checks before it comes here.
 //!
 //! The questions offer only what the resolver can carry, and validate
 //! identifiers with the resolver's own grammar, so an answer accepted here is
@@ -185,7 +185,7 @@ fn ask_registry() -> Result<RegistrySelection, Diagnostic> {
         .with_help_message(
             "lowercase letters, digits, and hyphens; it names the registry in its IRIs, scopes, and the catalogue",
         )
-        .with_validator(identifier_validator("the registry identifier", Vec::new()))
+        .with_validator(registry_identifier_validator())
         .prompt()
         .map_err(prompt_error)?;
     let default = default_title(&id);
@@ -368,6 +368,18 @@ fn confirm_selection(selection: &Selection) -> Result<bool, Diagnostic> {
         .with_help_message("the document above is written into the project beside what it derives")
         .prompt()
         .map_err(prompt_error)
+}
+
+/// Refuses a registry identifier the resolver would refuse, inline at the
+/// prompt and in the resolver's own words, including one whose derived
+/// names would not fit the grammar.
+fn registry_identifier_validator() -> impl Fn(&str) -> Result<Validation, CustomUserError> + Clone {
+    |input: &str| {
+        Ok(match resolve::registry_identifier_refusal(input) {
+            Some(refusal) => Validation::Invalid(refusal.into()),
+            None => Validation::Valid,
+        })
+    }
 }
 
 /// Refuses an answer the resolver would refuse, inline at the prompt and in
@@ -839,6 +851,25 @@ mod tests {
             validate("home").expect("validated"),
             Validation::Invalid("`home` is already taken by another entity".into())
         );
+    }
+
+    #[test]
+    fn a_registry_identifier_answer_is_refused_when_a_derived_name_would_not_fit() {
+        let validate = registry_identifier_validator();
+        assert_eq!(validate("demo").expect("validated"), Validation::Valid);
+        let long = "a".repeat(55);
+        assert_eq!(
+            validate(&long).expect("validated"),
+            Validation::Invalid(
+                resolve::registry_identifier_refusal(&long)
+                    .expect("refused")
+                    .into()
+            )
+        );
+        assert!(matches!(
+            validate("Demo").expect("validated"),
+            Validation::Invalid(_)
+        ));
     }
 
     #[test]

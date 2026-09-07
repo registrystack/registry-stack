@@ -27,6 +27,8 @@ pub(crate) const INLINE_VOCABULARY_THRESHOLD: usize = 300;
 
 const STRING_MAX_LENGTH: u32 = 255;
 const CODE_MAX_LENGTH: u32 = 64;
+/// The longest code a closed vocabulary accepts, which is the compiler's bound.
+const VOCABULARY_CODE_MAX_LENGTH: u32 = 128;
 const URI_MAX_LENGTH: u32 = 2048;
 const IDENTIFIER_MAX_LENGTH: u32 = 64;
 const LIST_MAX_ITEMS: u32 = 50;
@@ -87,6 +89,7 @@ pub(crate) struct ModelFacts {
     pub version: String,
     pub repository: String,
     pub license: String,
+    pub license_url: String,
 }
 
 /// Everything the renderer writes, resolved and validated.
@@ -205,11 +208,13 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
             ));
         }
     }
-    validate_identifier(
-        &selection.registry.id,
-        "selection.registry.id",
-        "the registry identifier",
-    )?;
+    if let Some(message) = registry_identifier_refusal(&selection.registry.id) {
+        return Err(diagnostic(
+            "init.selection.identifier",
+            "selection.registry.id",
+            &message,
+        ));
+    }
     if selection.registry.title.trim().is_empty() {
         return Err(diagnostic(
             "init.selection.registry_title",
@@ -417,7 +422,7 @@ fn resolve_entity(
         title: Text::from([("en".to_owned(), "Identifier".to_owned())]),
         description: Text::from([(
             "en".to_owned(),
-            "The code that identifies a record in this registry; assigned by the registry, unique within the entity.".to_owned(),
+            "The code that identifies a record in this registry; supplied by the caller when the record is created, unique within the entity.".to_owned(),
         )]),
         classification: Classification::Internal,
         required: true,
@@ -458,14 +463,16 @@ fn resolve_entity(
                     ),
                 )
             })?;
-        let kind =
-            field_kind(model, slot, property, index, vocabulary_modes).map_err(|reason| {
-                diagnostic(
-                    "init.selection.property_unsupported",
-                    &property_path,
-                    &format!("`{}` cannot become a field: {reason}", slot.name),
-                )
-            })?;
+        let ResolvedKind {
+            kind,
+            classification: floor,
+        } = field_kind(model, slot, property, index, vocabulary_modes).map_err(|reason| {
+            diagnostic(
+                "init.selection.property_unsupported",
+                &property_path,
+                &format!("`{}` cannot become a field: {reason}", slot.name),
+            )
+        })?;
         if let Range::Enum(name) = &slot.range {
             enums.drawn.insert(name.clone());
             if matches!(kind, FieldKind::VocabularyCode { .. }) {
@@ -480,12 +487,9 @@ fn resolve_entity(
                 &format!("two fields of this entity would share the identifier `{id}`"),
             ));
         }
-        let classification = match publicschema::sensitivity(slot)
+        let classification = slot_classification(slot)
             .map_err(|error| convention_error(&property_path, &error))?
-        {
-            Some(Sensitivity::Sensitive | Sensitivity::Restricted) => Classification::Restricted,
-            None => Classification::Internal,
-        };
+            .max(floor);
         fields.push(PlannedField {
             id,
             property: slot.name.clone(),
@@ -525,38 +529,37 @@ fn field_kind(
     property: &PropertySelection,
     index: &[EntityIndex],
     vocabulary_modes: &BTreeMap<String, VocabularyMode>,
-) -> Result<FieldKind, String> {
-    match &slot.range {
+) -> Result<ResolvedKind, String> {
+    let kind = match &slot.range {
         Range::Type(name) => {
             if let Some(bespoke) = publicschema::bespoke_type(slot) {
-                return bespoke_kind(bespoke, slot.multivalued);
+                return bespoke_kind(bespoke, slot.multivalued).map(ResolvedKind::internal);
             }
             let scalar = scalar_kind(name)?;
             if slot.multivalued {
-                Ok(list_of(scalar_schema(name)?))
+                list_of(scalar_schema(name)?)
             } else {
-                Ok(scalar)
+                scalar
             }
         }
         Range::Enum(name) => {
             let definition = &model.enums[name];
-            if slot.multivalued {
-                return Ok(list_of(enum_schema(definition)));
-            }
             let inline = match vocabulary_modes.get(name) {
                 Some(VocabularyMode::Inline) => true,
                 Some(VocabularyMode::Code) => false,
                 None => definition.values.len() <= INLINE_VOCABULARY_THRESHOLD,
             };
-            if inline {
-                Ok(FieldKind::VocabularyCode {
+            if slot.multivalued {
+                list_of(enum_schema(definition, inline))
+            } else if inline {
+                FieldKind::VocabularyCode {
                     vocabulary: kebab_case(name),
-                })
+                }
             } else {
-                Ok(FieldKind::String {
+                FieldKind::String {
                     min_length: 0,
-                    max_length: CODE_MAX_LENGTH,
-                })
+                    max_length: code_max_length(definition),
+                }
             }
         }
         Range::Class(name) => {
@@ -573,8 +576,10 @@ fn field_kind(
                 return candidates
                     .iter()
                     .find(|entry| &entry.id == target)
-                    .map(|entry| FieldKind::Reference {
-                        target: entry.id.clone(),
+                    .map(|entry| {
+                        ResolvedKind::internal(FieldKind::Reference {
+                            target: entry.id.clone(),
+                        })
                     })
                     .ok_or_else(|| {
                         format!(
@@ -584,26 +589,53 @@ fn field_kind(
             }
             match candidates.as_slice() {
                 [] => {
+                    // The concept is carried inline, so the field holds every
+                    // scalar property of it, including the ones the model
+                    // protects, and is classified for the most protected.
                     let class = &model.classes[name];
-                    object_schema(model, class)
-                        .map(|schema| FieldKind::Structured {
-                            max_bytes: OBJECT_MAX_BYTES,
-                            schema,
+                    return object_schema(model, class)
+                        .map(|object| ResolvedKind {
+                            kind: FieldKind::Structured {
+                                max_bytes: OBJECT_MAX_BYTES,
+                                schema: object.schema,
+                            },
+                            classification: object.classification,
                         })
                         .ok_or_else(|| {
                             format!(
                                 "it refers to `{name}`, which is not selected and has no property that can be carried inline; select `{name}` as an entity to make this a reference"
                             )
-                        })
+                        });
                 }
-                [only] => Ok(FieldKind::Reference {
+                [only] => FieldKind::Reference {
                     target: only.id.clone(),
-                }),
-                several => Err(format!(
-                    "more than one selected entity fits `{name}`; name one with `target`: {}",
-                    names(several.iter().map(|entry| entry.id.as_str()))
-                )),
+                },
+                several => {
+                    return Err(format!(
+                        "more than one selected entity fits `{name}`; name one with `target`: {}",
+                        names(several.iter().map(|entry| entry.id.as_str()))
+                    ))
+                }
             }
+        }
+    };
+    Ok(ResolvedKind::internal(kind))
+}
+
+/// A field type together with the lowest classification the field may carry
+/// on account of what it holds, which the property's own annotation may only
+/// raise.
+struct ResolvedKind {
+    kind: FieldKind,
+    classification: Classification,
+}
+
+impl ResolvedKind {
+    /// A field whose classification is left to its own annotation.
+    fn internal(kind: FieldKind) -> Self {
+        Self {
+            kind,
+            classification: Classification::Internal,
         }
     }
 }
@@ -704,8 +736,10 @@ fn scalar_schema(name: &str) -> Result<Value, String> {
     })
 }
 
-fn enum_schema(definition: &EnumDef) -> Value {
-    if definition.values.len() <= INLINE_VOCABULARY_THRESHOLD {
+/// The schema of one value of `definition`: every code listed, or a bounded
+/// code alone.
+fn enum_schema(definition: &EnumDef, inline: bool) -> Value {
+    if inline {
         let codes: Vec<&str> = definition
             .values
             .iter()
@@ -713,8 +747,21 @@ fn enum_schema(definition: &EnumDef) -> Value {
             .collect();
         json!({"type": "string", "enum": codes})
     } else {
-        json!({"type": "string", "maxLength": CODE_MAX_LENGTH})
+        json!({"type": "string", "maxLength": code_max_length(definition)})
     }
+}
+
+/// The bound of a field carrying a code of `definition` alone: at least
+/// [`CODE_MAX_LENGTH`], and long enough for the enumeration's longest code,
+/// within the bound a closed vocabulary's codes are held to.
+fn code_max_length(definition: &EnumDef) -> u32 {
+    definition
+        .values
+        .iter()
+        .map(|value| value.text.len() as u32)
+        .max()
+        .unwrap_or(0)
+        .clamp(CODE_MAX_LENGTH, VOCABULARY_CODE_MAX_LENGTH)
 }
 
 fn list_of(items: Value) -> FieldKind {
@@ -731,12 +778,19 @@ fn list_of(items: Value) -> FieldKind {
     }
 }
 
-/// The closed object schema carrying a concept inline: its scalar and
+/// A concept carried inline: the closed object schema of its scalar and
 /// enumerated properties under the model's own names, nested concepts left
-/// out. `None` when the concept has nothing scalar to carry.
-fn object_schema(model: &Model, class: &ClassDef) -> Option<Value> {
+/// out, and the classification the most protected of those properties earns.
+struct InlineObject {
+    schema: Value,
+    classification: Classification,
+}
+
+/// `None` when the concept has nothing scalar to carry.
+fn object_schema(model: &Model, class: &ClassDef) -> Option<InlineObject> {
     let slots = model.induced_slots(&class.name).ok()?;
     let mut properties = serde_json::Map::new();
+    let mut classification = Classification::Internal;
     for slot in slots {
         let item = match &slot.range {
             Range::Type(name) => {
@@ -746,9 +800,16 @@ fn object_schema(model: &Model, class: &ClassDef) -> Option<Value> {
                     scalar_schema(name).ok()?
                 }
             }
-            Range::Enum(name) => enum_schema(&model.enums[name]),
+            Range::Enum(name) => {
+                let definition = &model.enums[name];
+                enum_schema(
+                    definition,
+                    definition.values.len() <= INLINE_VOCABULARY_THRESHOLD,
+                )
+            }
             Range::Class(_) => continue,
         };
+        classification = classification.max(slot_classification(slot).ok()?);
         let schema = if slot.multivalued {
             json!({"type": "array", "maxItems": LIST_MAX_ITEMS, "items": item})
         } else {
@@ -759,11 +820,22 @@ fn object_schema(model: &Model, class: &ClassDef) -> Option<Value> {
     if properties.is_empty() {
         return None;
     }
-    Some(json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": properties
-    }))
+    Some(InlineObject {
+        schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": properties
+        }),
+        classification,
+    })
+}
+
+/// The classification a property's own sensitivity earns.
+fn slot_classification(slot: &SlotDef) -> Result<Classification, publicschema::ConventionError> {
+    Ok(match publicschema::sensitivity(slot)? {
+        Some(Sensitivity::Sensitive | Sensitivity::Restricted) => Classification::Restricted,
+        None => Classification::Internal,
+    })
 }
 
 fn geometry_schema() -> Value {
@@ -786,7 +858,7 @@ fn resolve_vocabulary(definition: &EnumDef) -> Result<PlannedVocabulary, Diagnos
     let mut values = Vec::new();
     for value in &definition.values {
         if value.text.is_empty()
-            || value.text.len() > 128
+            || value.text.len() > VOCABULARY_CODE_MAX_LENGTH as usize
             || value.text.chars().any(char::is_control)
         {
             return Err(diagnostic(
@@ -826,6 +898,7 @@ pub(crate) fn model_facts(model: &Model) -> Result<ModelFacts, Diagnostic> {
         version: model.version.clone().unwrap_or(pin.version),
         repository: pin.repository,
         license: pin.license,
+        license_url: pin.license_url,
     })
 }
 
@@ -937,6 +1010,33 @@ fn validate_identifier(value: &str, path: &str, what: &str) -> Result<(), Diagno
         None => Ok(()),
         Some(message) => Err(diagnostic("init.selection.identifier", path, &message)),
     }
+}
+
+/// The suffixes the renderer appends to the registry identifier to name the
+/// publisher, the data service, the public service, and the two principals,
+/// each of which the compiler holds to the same grammar as the identifier
+/// itself.
+const DERIVED_REGISTRY_SUFFIXES: &[(&str, &str)] = &[
+    ("-authority", "the publisher identifier"),
+    ("-api", "the data service identifier"),
+    ("-service", "the public service identifier"),
+    ("-operator", "the operator principal"),
+    ("-reader", "the reader principal"),
+];
+
+/// The sentence refusing `value` as the registry identifier, or `None` when
+/// it and every name derived from it fit the grammar. Checked before anything
+/// is written, because the derived names are only otherwise checked by the
+/// compiler, after the destination exists.
+pub(crate) fn registry_identifier_refusal(value: &str) -> Option<String> {
+    if let Some(message) = identifier_refusal(value, "the registry identifier") {
+        return Some(message);
+    }
+    DERIVED_REGISTRY_SUFFIXES.iter().find_map(|(suffix, what)| {
+        identifier_refusal(&format!("{value}{suffix}"), what).map(|message| {
+            format!("{message}; the project derives it from the registry identifier")
+        })
+    })
 }
 
 /// The sentence refusing `value` as an identifier, or `None` when the grammar
@@ -1194,6 +1294,112 @@ mod tests {
             "nested concepts are left out"
         );
         assert!(schema["properties"]["country"]["enum"].is_array());
+    }
+
+    #[test]
+    fn a_structured_field_takes_the_highest_classification_it_carries_inline() {
+        // `FunctioningProfile.respondent` refers to `Person`, whose scalar
+        // properties include ones the model marks sensitive and restricted;
+        // with `Person` unselected they are carried inline, and the field
+        // holding them must be classified for the most protected of them.
+        let plan = resolved(
+            "entities:\n  - concept: FunctioningProfile\n    properties:\n      - name: respondent\n",
+        );
+        let respondent = field(&plan, "functioning-profile", "respondent");
+        let FieldKind::Structured { schema, .. } = &respondent.kind else {
+            panic!("respondent is structured");
+        };
+        assert!(schema["properties"]["religion"].is_object());
+        assert_eq!(respondent.classification, Classification::Restricted);
+        assert_eq!(plan.classification_ceiling, Classification::Restricted);
+        // `Address` carries nothing sensitive, so `household.address` stays
+        // where its own annotation puts it.
+        let plan =
+            resolved("entities:\n  - concept: Household\n    properties:\n      - name: address\n");
+        assert_eq!(
+            field(&plan, "household", "address").classification,
+            Classification::Internal
+        );
+        assert_eq!(plan.classification_ceiling, Classification::Internal);
+    }
+
+    #[test]
+    fn a_vocabulary_override_applies_to_a_property_holding_many_values() {
+        fn items<'a>(plan: &'a Plan, entity: &str, id: &str) -> &'a Value {
+            let FieldKind::Structured { schema, .. } = &field(plan, entity, id).kind else {
+                panic!("{entity}.{id} is a list");
+            };
+            &schema["properties"]["values"]["items"]
+        }
+        let body = "entities:\n  - concept: FunctioningProfile\n    properties:\n      - name: mobility_aid_types\n";
+        let plan = resolved(body);
+        assert!(items(&plan, "functioning-profile", "mobility-aid-types")["enum"].is_array());
+        let plan = resolved(&format!(
+            "{body}vocabularies:\n  - enum: MobilityAidType\n    mode: code\n"
+        ));
+        let item = items(&plan, "functioning-profile", "mobility-aid-types");
+        assert!(item["enum"].is_null(), "{item}");
+        assert_eq!(item["maxLength"], CODE_MAX_LENGTH);
+        let body = "entities:\n  - concept: Instrument\n    properties:\n      - name: language_of_administration\n";
+        let plan = resolved(body);
+        let item = items(&plan, "instrument", "language-of-administration");
+        assert!(item["enum"].is_null(), "{item}");
+        let plan = resolved(&format!(
+            "{body}vocabularies:\n  - enum: Language\n    mode: inline\n"
+        ));
+        let item = items(&plan, "instrument", "language-of-administration");
+        assert!(
+            item["enum"]
+                .as_array()
+                .is_some_and(|codes| codes.len() > INLINE_VOCABULARY_THRESHOLD),
+            "{item}"
+        );
+    }
+
+    #[test]
+    fn a_bounded_code_is_sized_for_the_longest_code_of_its_enumeration() {
+        let plan =
+            resolved("entities:\n  - concept: Person\n    properties:\n      - name: occupation\n");
+        let longest = model().enums["Occupation"]
+            .values
+            .iter()
+            .map(|value| value.text.len())
+            .max()
+            .expect("values") as u32;
+        assert!(longest > CODE_MAX_LENGTH, "{longest}");
+        assert_eq!(
+            field(&plan, "person", "occupation").kind,
+            FieldKind::String {
+                min_length: 0,
+                max_length: longest
+            }
+        );
+        let plan = resolved(
+            "entities:\n  - concept: Instrument\n    properties:\n      - name: language_of_administration\n",
+        );
+        let FieldKind::Structured { schema, .. } =
+            &field(&plan, "instrument", "language-of-administration").kind
+        else {
+            panic!("a list");
+        };
+        assert_eq!(
+            schema["properties"]["values"]["items"]["maxLength"],
+            CODE_MAX_LENGTH
+        );
+    }
+
+    #[test]
+    fn a_registry_identifier_leaves_room_for_the_names_derived_from_it() {
+        let mut selection = selection("entities:\n  - concept: Person\n");
+        selection.registry.id = "a".repeat(55);
+        let error = resolve(&selection, model()).expect_err("refused");
+        assert_eq!(error.code, "init.selection.identifier");
+        assert_eq!(error.path, "selection.registry.id");
+        assert!(error.message.contains("-authority"), "{}", error.message);
+        selection.registry.id = "a".repeat(54);
+        assert!(resolve(&selection, model()).is_ok());
+        assert!(registry_identifier_refusal(&"a".repeat(55)).is_some());
+        assert!(registry_identifier_refusal("example").is_none());
     }
 
     #[test]

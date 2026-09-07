@@ -66,7 +66,10 @@ pub(crate) fn run(
         Source::File(path) => read_selection_file(path).map_err(selection_failure)?,
         Source::Starter(name) => starter_selection(model, name).map_err(usage_failure)?,
         Source::Interactive => {
-            if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
+            // The prompts read standard input and write standard error, so
+            // those two are the streams that must be terminals; standard
+            // output carries the report and may be a pipe.
+            if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
                 return Err(usage_failure(diagnostic(
                     "init.selection.missing",
                     "arguments",
