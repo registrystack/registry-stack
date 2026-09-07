@@ -320,7 +320,9 @@ impl PostgresSnapshotReadService {
                 transaction
                     .query_one(&count_sql, &refs)
                     .await
-                    .map_err(|error| snapshot_read_error(&error, stored_bytes::Site::HistoryRead))?
+                    .map_err(|error| {
+                        snapshot_read_error(&error, stored_bytes::Reader::HistoryRead)
+                    })?
                     .get::<_, i64>(0),
             );
         }
@@ -340,7 +342,7 @@ impl PostgresSnapshotReadService {
         let rows = transaction
             .query(&page_sql, &refs)
             .await
-            .map_err(|error| snapshot_read_error(&error, stored_bytes::Site::HistoryRead))?;
+            .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::HistoryRead))?;
         let page_size = usize::from(request.plan.page_size);
         let has_more = rows.len() > page_size;
         let rows = if has_more {
@@ -944,7 +946,7 @@ async fn ensure_required_snapshot_keys_present(
     let missing: bool = transaction
         .query_one(&sql, &[&entity_id, &position])
         .await
-        .map_err(|error| snapshot_read_error(&error, stored_bytes::Site::HistoryRead))?
+        .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::HistoryRead))?
         .get(0);
     if missing {
         return Err(ReadServiceError::Unavailable);
@@ -2016,8 +2018,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unreadable_stored_snapshots_refuse_the_historical_read_as_corruption() {
         let field = HistorySqlField {
-            field_id: "household-code".to_owned(),
-            alias: "household_code".to_owned(),
+            field_id: "probe-code".to_owned(),
+            alias: "probe_code".to_owned(),
             field_type: FieldTypeSource::String {
                 min_length: 0,
                 max_length: 32,
@@ -2025,10 +2027,10 @@ mod tests {
             package_sources: BTreeMap::from([(
                 "probe-package".to_owned(),
                 HistoryFieldCompatibility {
-                    field_id: "household-code".to_owned(),
-                    active_api_name: "householdCode".to_owned(),
+                    field_id: "probe-code".to_owned(),
+                    active_api_name: "probeCode".to_owned(),
                     source: HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey {
-                        key: "household-code".to_owned(),
+                        key: "probe-code".to_owned(),
                     }),
                     field_type: FieldTypeSource::String {
                         min_length: 0,
@@ -2043,13 +2045,13 @@ mod tests {
             field
                 .cte_json_expression()
                 .expect("the probe field names one recorded package revision"),
-            snapshot_key_present_predicate("probe-package", "household-code"),
+            snapshot_key_present_predicate("probe-package", "probe-code"),
         ];
         for expression in expressions {
             for stored in UNREADABLE {
                 let error = expression_error(&expression, stored, &[]).await;
                 assert_eq!(
-                    snapshot_read_error(&error, stored_bytes::Site::HistoryRead),
+                    snapshot_read_error(&error, stored_bytes::Reader::HistoryRead),
                     ReadServiceError::SnapshotUnreadable,
                     "unreadable stored bytes refuse the read as corruption"
                 );

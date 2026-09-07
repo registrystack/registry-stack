@@ -242,7 +242,7 @@ impl PostgresRevisionReadService {
             .transaction()
             .query(&sql, &parameter_refs)
             .await
-            .map_err(|error| snapshot_read_error(&error, stored_bytes::Site::RevisionRead))?;
+            .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::RevisionRead))?;
         let mut descriptors = BTreeMap::new();
         let mut context_visibility = BTreeMap::new();
         let rows = revision_rows_from_rows(
@@ -1281,7 +1281,7 @@ mod tests {
         for stored in UNREADABLE {
             let error = expression_error(&expression, stored, &["jurisdiction"]).await;
             assert_eq!(
-                snapshot_read_error(&error, stored_bytes::Site::RevisionRead),
+                snapshot_read_error(&error, stored_bytes::Reader::RevisionRead),
                 ReadServiceError::SnapshotUnreadable,
                 "unreadable stored bytes refuse the read as corruption"
             );
