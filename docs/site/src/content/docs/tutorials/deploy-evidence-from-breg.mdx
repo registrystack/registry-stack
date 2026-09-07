@@ -34,7 +34,8 @@ operated registry.
 The native source and target commands on this page are under development and are
 not in v0.26.1. Offline candidate validation does not establish that an
 institution's deployed endpoints, credentials or signing service work. The
-target-host steps below must pass in that environment before traffic is enabled.
+steps in [Provision and check the target host](#provision-and-check-the-target-host)
+must pass in that environment before traffic is enabled.
 :::
 
 ## Obtain the export for the operated registry
@@ -46,8 +47,9 @@ OpenAPI shapes alone do not establish matching read authorization or derived
 lookup behavior.
 
 For an already activated registry, record the activated package identity. For a
-planned successor, record its candidate identity and defer activation to the
-coordinated cutover below. BReg package signing, migration and activation remain
+planned successor, record its candidate identity and defer activation to
+[Coordinate a breaking update](#coordinate-a-breaking-update). BReg package
+signing, migration and activation remain
 separate privileged operations. Follow
 [Build a BReg production candidate](../build-a-breg-production-candidate/).
 
@@ -144,7 +146,8 @@ fresh distribution to every verifier that pinned the old one.
 :::
 
 Set `governance.assuranceProfile` to `production`. Keep ES256 signing and leave
-`publicKeys: {}` when supplying only the active public key with the flag below.
+`publicKeys: {}` when supplying only the active public key with the
+`--signing-public-key` flag on `evidencectl target new`.
 The copied settings omit `activePublicJwkFile`; the command fills that path from
 the supplied public key's thumbprint. If you edited settings that already name an
 active key, it must match the supplied key.
@@ -191,7 +194,11 @@ evidence --runtime ./candidate-operated-001/runtime.yaml check
 ```
 
 Build uses the matching Evidence runtime to validate the bundle and required
-fixtures before publishing. The check then validates and compiles the complete
+fixtures before publishing. A refused build reports which check objected
+(`Evidence rejected the generated deployment bundle` or `Evidence rejected a
+deployment fixture`) and names the exact `evidencectl fixtures run` command to
+rerun for the full diagnosis; it publishes nothing at `--output` until every
+check passes. The check then validates and compiles the complete
 immutable bundle and validates the mounted secret material exactly as startup
 does, and reports the bundle revision, the runtime revision and the number of
 requirements it compiled. Run it in a context where the runtime file's absolute
@@ -239,8 +246,14 @@ evidence --runtime /srv/evidence/candidates/operated-001/runtime.yaml check --re
 evidence --runtime /srv/evidence/candidates/operated-001/runtime.yaml serve
 ```
 
-Use your configured candidate path. The runtime checks signer custody and exact
-public-key agreement and refuses unavailable required dependencies. Wait for
+Use your configured candidate path. `evidencectl doctor` reports every artifact
+the runtime would otherwise refuse at startup for wrong permissions, ownership
+or secret exposure, all in one pass instead of one restart at a time; fix each
+named artifact and rerun it until it exits zero. If `check
+--require-runtime-dependencies` still refuses, it exits nonzero with `a
+required runtime dependency is unavailable`; inspect the named dependency
+(secrets, audit storage, the Transit proxy) before retrying `serve`. The
+runtime also checks signer custody and exact public-key agreement. Wait for
 `GET /ready` before routing an approved synthetic request through the HTTPS
 boundary. Readiness alone does not prove the intended BReg lookup grant.
 

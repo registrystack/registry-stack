@@ -106,6 +106,12 @@ requires every field of that selected profile. There is no retry using a differe
 selector when the chosen lookup fails. For a later change, export to a new
 directory with the same stable source and connection IDs.
 
+A refused export prints a JSON diagnostic naming the offending flag, for
+example an unknown `--access-profile`, a selector the profile does not grant a
+lookup for, or a fact field the profile cannot read, plus a suggested action.
+It writes no export files until every check passes; correct the named
+registry authoring input and rerun.
+
 Inspect `exports/registry-status/source-export.json` and its inventoried files.
 They contain ordinary source, selector, schema and adapter documents plus checksums.
 The manifest records the provider package and the consumed lookup's behavior
@@ -211,8 +217,10 @@ target's caller governance. Production targets are refused by this command.
 
 If Evidence's default ports `8080` and `8081` are occupied, start with
 `evidencectl dev --target ./targets/configured --detach --evidence-port 8180
---mint-port 8181` instead. Use that Evidence port in each Curl URL below. BReg's
-two ports are separate and stay as configured in the source connection.
+--mint-port 8181` instead. Use that Evidence port in each curl command in this
+section and in [Ask another question through the other
+selector](#ask-another-question-through-the-other-selector). BReg's two ports
+are separate and stay as configured in the source connection.
 
 Send the prepared request and verify its response against the expectations
 recorded before the request:
@@ -229,9 +237,17 @@ evidencectl verify by-code.jws.json \
   --context .evidence/requests/by-code/verification.json --output by-code.verified.json
 ```
 
-Open `by-code.verified.json` only after verification succeeds. It should contain
-the boolean `active` answer and an opaque subject binding. It must not disclose
-the code, registration number or private label.
+A refusal exits `curl` nonzero (from `--fail-with-body`), and `by-code.jws.json`
+holds the returned Evidence problem body instead of a signed response, for
+example an `evidence/unavailable` problem for a missing or status-less
+record. `evidencectl verify` fails closed on any signature, audience or nonce
+mismatch rather than accepting a partially valid response, and writes no
+output file when it refuses.
+
+Open `by-code.verified.json` only after verification succeeds. For this active
+synthetic record, it contains a `true` value for the `active` answer and an
+opaque subject binding. It must not disclose the code, registration number or
+private label.
 
 The authorization file contains a short-lived credential. Keep it private. If a
 token or verification context expires, prepare a request with a fresh name.
@@ -260,7 +276,7 @@ evidencectl verify by-registration.jws.json \
   --output by-registration.verified.json
 ```
 
-This retired record should produce `currently_active: false` and `retired: true`. To add
+This retired record produces `currently_active: false` and `retired: true`. To add
 another question, author its question, derivation and fixtures and reference the
 same source. Export another source only when it needs a different fixed fact
 selection, entity or access profile.
@@ -338,8 +354,16 @@ match. Authoring updates do not replace a running bundle or activate a BReg
 package. Use [Deploy Evidence with a BReg source](../deploy-evidence-from-breg/)
 for the operated export, complete production target and coordinated cutover.
 
-The local candidate above preserves the target's full authority configuration.
-Its caller issuer is a separate target dependency; `dev` has only rehearsed the
+A refused build reports which check objected, for example `Evidence rejected
+the generated deployment bundle` or `Evidence rejected a deployment fixture`,
+and names the exact `evidencectl fixtures run` command to rerun for the full
+diagnosis. It stages the candidate privately and publishes nothing at
+`--output` until every check passes; fix the named question, derivation or
+fixture and build again.
+
+The local candidate built by `evidencectl build` preserves the target's full
+authority configuration. Its caller issuer is a separate target dependency;
+`dev` has only rehearsed the
 source connection with generated local authority. Do not treat local rehearsal
 as approval of an institutional caller policy.
 
