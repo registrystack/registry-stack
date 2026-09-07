@@ -1,7 +1,0 @@
-# Path scope for the CodeQL workflow (.github/workflows/codeql.yml). The
-# query suite stays in the workflow, where the release gate inventory pins it.
-name: registry-stack
-paths-ignore:
-  # napi-rs generated binding loaders; reproduced by the crate build and
-  # release/scripts/sync-registry-client-node.py, never hand-edited.
-  - crates/*-client-node/index.js
