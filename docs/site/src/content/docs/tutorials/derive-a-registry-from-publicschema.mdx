@@ -323,21 +323,35 @@ The wizard asks, in order:
 3. "Which concepts become entities?", a multi-select listed by schema file then name (space to
    toggle, type to filter, enter to confirm). Abstract concepts, and concepts with no property the
    project could carry, are left off the list.
-4. For each chosen concept, "Which properties of `<Title>` become fields?", a multi-select. A
+4. "Which concepts connect what you chose?", a multi-select of the concepts you did not choose
+   that refer to at least two of the ones you did, each shown by what its references point at:
+   "Group Membership (publicschema-misc): group is a Household, person is a Person". Choosing one
+   adds it to the entities; enter alone adds none. PublicSchema links its concepts through such
+   concepts rather than through direct properties, so a registry of a household and a person has
+   no field between them until a membership is added. When a chosen concept has nothing in the
+   model to connect it, a line above the prompt says so, and the prompt is skipped when there is
+   nothing to offer.
+5. For each chosen concept, "Which properties of `<Title>` become fields?", a multi-select. A
    property the project cannot carry is named first, with the reason, but not offered as an option. Each
    offered option names its shape, its classification when the property is sensitive or restricted,
-   and how many of the systems the model tracks already record it; a required property, or one at
-   least 60% of those systems record, starts ticked.
-5. "Which entity does `<Concept>.<property>` point at?", a single select, asked only when more than
+   and how many of the systems the model tracks already record it; a required property, one at
+   least 60% of those systems record, or a reference to another chosen concept starts ticked.
+6. "Which entity does `<Concept>.<property>` point at?", a single select, asked only when more than
    one chosen concept fits a reference.
-6. "Keep the default identifiers and routes?", after one line per entity showing its route and its
+7. "Keep the default identifiers and routes?", after one line per entity showing its route and its
    identifier field. Answering no asks, for each entity in turn: "Entity identifier for
    `<Concept>`", "Collection route for `<Concept>`", and "Identifier field for `<Concept>`", each
    with its default shown.
-7. "Which code lists should the project list in full?", a multi-select, ticked for any list of at
+8. "Which code lists should the project list in full?", a multi-select, ticked for any list of at
    most 300 values; an unticked list is carried as a bounded code instead. This prompt is skipped
    when no chosen property draws on a code list.
-8. The selection is printed as YAML, then "Derive the project from this selection?".
+9. The selection is printed as YAML, followed by a line naming any entity no field connects to
+   another, then "Derive the project from this selection?".
+
+An entity nothing links is not an error: a registry of unrelated collections is a legitimate
+choice. The written README carries a "What is not linked" section naming those entities and the
+concepts of the model that would connect them, and the report's next steps point to it. Add the
+concept under `entities` in `model/selection.yaml` and derive again to link them.
 
 Answering no at the last prompt, or cancelling any of them with Esc or Ctrl-C, writes nothing and
 reports `init.selection.cancelled`: cancelled at a prompt; nothing was written.
