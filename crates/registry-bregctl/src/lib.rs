@@ -7862,7 +7862,7 @@ fn report_findings(diagnostics: &[ToolDiagnostic]) -> Vec<report::Finding<'_>> {
         .map(|diagnostic| report::Finding {
             severity: match diagnostic.severity {
                 DiagnosticSeverity::Error => report::Severity::Error,
-                DiagnosticSeverity::Finding => report::Severity::Warning,
+                DiagnosticSeverity::Finding => report::Severity::Finding,
             },
             code: &diagnostic.code,
             path: &diagnostic.path,

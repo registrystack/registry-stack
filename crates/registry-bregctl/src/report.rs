@@ -58,7 +58,7 @@ const ERROR: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)));
 /// A finding the reader has to weigh but that did not stop the command.
-const WARNING: Style = Style::new()
+const FINDING: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
 /// A closing count with nothing in it to act on.
@@ -189,7 +189,7 @@ impl Lines {
     /// answer that was asked for.
     pub(crate) fn verdict(&mut self, heading: &str, verdict: &str, held: bool) {
         self.blank();
-        let style = if held { CLEAN } else { WARNING };
+        let style = if held { CLEAN } else { FINDING };
         self.lines.push(format!(
             "{} {}",
             styled(HEADING, &escape_report_text(heading)),
@@ -221,7 +221,7 @@ impl Lines {
         }
     }
 
-    /// Render every finding, errors before warnings, then the closing count.
+    /// Render every diagnostic, errors before findings, then the closing count.
     ///
     /// Findings sharing a severity and a code are one group: the sentence they
     /// share prints once and every path it was reported against is listed
@@ -233,7 +233,7 @@ impl Lines {
             return;
         }
         self.blank();
-        for severity in [Severity::Error, Severity::Warning] {
+        for severity in [Severity::Error, Severity::Finding] {
             for group in group_by_code(findings, severity) {
                 self.push_group(severity, &group);
             }
@@ -253,7 +253,7 @@ impl Lines {
         } else {
             format!(
                 "{code}{GAP}{}",
-                styled(COUNT, &counted(group.len(), "finding"))
+                styled(COUNT, &counted(group.len(), "path"))
             )
         };
         self.lines.push(format!(
@@ -295,24 +295,30 @@ pub(crate) struct Finding<'a> {
     pub(crate) message: &'a str,
 }
 
+/// The two severities a bregctl diagnostic carries.
+///
+/// `finding` is the tool's own word, not a softer name for a warning: it is
+/// what the JSON `severity` reports and what the documentation defines, so
+/// the text rendering says the same thing and a reader moves between the two
+/// without translating.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Severity {
     Error,
-    Warning,
+    Finding,
 }
 
 impl Severity {
     fn label(self) -> &'static str {
         match self {
             Self::Error => "error",
-            Self::Warning => "warning",
+            Self::Finding => "finding",
         }
     }
 
     fn style(self) -> Style {
         match self {
             Self::Error => ERROR,
-            Self::Warning => WARNING,
+            Self::Finding => FINDING,
         }
     }
 }
@@ -342,16 +348,16 @@ fn finding_summary(findings: &[Finding<'_>]) -> String {
         .iter()
         .filter(|item| item.severity == Severity::Error)
         .count();
-    let warnings = findings.len() - errors;
+    let findings = findings.len() - errors;
     let summary = format!(
         "{}, {}.",
         counted(errors, "error"),
-        counted(warnings, "warning")
+        counted(findings, "finding")
     );
-    if errors == 0 && warnings == 0 {
+    if errors == 0 && findings == 0 {
         styled(CLEAN, &summary)
     } else if errors == 0 {
-        styled(WARNING, &summary)
+        styled(FINDING, &summary)
     } else {
         styled(ERROR, &summary)
     }
@@ -485,13 +491,13 @@ mod tests {
         lines.lead("Initialized a registry project. 6 artifacts written.");
         lines.findings(&[
             finding(
-                Severity::Warning,
+                Severity::Finding,
                 "access.profile.unrestricted_collection",
                 "entities[id=household].accessProfiles[id=operator].rowBoundaries",
                 "this profile can list all rows, subject only to query bounds",
             ),
             finding(
-                Severity::Warning,
+                Severity::Finding,
                 "access.profile.unrestricted_collection",
                 "entities[id=person].accessProfiles[id=operator].rowBoundaries",
                 "this profile can list all rows, subject only to query bounds",
@@ -502,12 +508,12 @@ mod tests {
             concat!(
                 "Initialized a registry project. 6 artifacts written.\n",
                 "\n",
-                "  warning  access.profile.unrestricted_collection  2 findings\n",
+                "  finding  access.profile.unrestricted_collection  2 paths\n",
                 "           this profile can list all rows, subject only to query bounds\n",
                 "             entities[id=household].accessProfiles[id=operator].rowBoundaries\n",
                 "             entities[id=person].accessProfiles[id=operator].rowBoundaries\n",
                 "\n",
-                "0 errors, 2 warnings.\n",
+                "0 errors, 2 findings.\n",
             )
         );
     }
@@ -517,7 +523,7 @@ mod tests {
         let mut lines = Lines::new();
         lines.lead("Authoring check passed.");
         lines.findings(&[finding(
-            Severity::Warning,
+            Severity::Finding,
             "access.profile.higher_classification",
             "entities[id=person].accessProfiles[id=operator]",
             "this field is more sensitive than its entity's classification",
@@ -527,20 +533,20 @@ mod tests {
             concat!(
                 "Authoring check passed.\n",
                 "\n",
-                "  warning  access.profile.higher_classification  entities[id=person].accessProfiles[id=operator]\n",
+                "  finding  access.profile.higher_classification  entities[id=person].accessProfiles[id=operator]\n",
                 "           this field is more sensitive than its entity's classification\n",
                 "\n",
-                "0 errors, 1 warning.\n",
+                "0 errors, 1 finding.\n",
             )
         );
     }
 
     #[test]
-    fn errors_group_ahead_of_warnings() {
+    fn errors_group_ahead_of_findings() {
         let mut lines = Lines::new();
         lines.lead("Production check refused.");
         lines.findings(&[
-            finding(Severity::Warning, "b.code", "b", "the warning sentence"),
+            finding(Severity::Finding, "b.code", "b", "the finding sentence"),
             finding(Severity::Error, "a.code", "a", "the error sentence"),
         ]);
         assert_eq!(
@@ -550,10 +556,10 @@ mod tests {
                 "\n",
                 "  error    a.code  a\n",
                 "           the error sentence\n",
-                "  warning  b.code  b\n",
-                "           the warning sentence\n",
+                "  finding  b.code  b\n",
+                "           the finding sentence\n",
                 "\n",
-                "1 error, 1 warning.\n",
+                "1 error, 1 finding.\n",
             )
         );
     }
@@ -563,7 +569,7 @@ mod tests {
         let mut lines = Lines::new();
         lines.lead("Authoring check passed.");
         lines.findings(&[finding(
-            Severity::Warning,
+            Severity::Finding,
             "access.profile.unrestricted_collection",
             "entities[id=person]",
             "this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access",
@@ -573,12 +579,12 @@ mod tests {
             concat!(
                 "Authoring check passed.\n",
                 "\n",
-                "  warning  access.profile.unrestricted_collection  entities[id=person]\n",
+                "  finding  access.profile.unrestricted_collection  entities[id=person]\n",
                 "           this profile can list all rows, subject only to query bounds; caller filters\n",
                 "           are not authorization. Add a claim-bound row restriction or review this\n",
                 "           registry-wide access\n",
                 "\n",
-                "0 errors, 1 warning.\n",
+                "0 errors, 1 finding.\n",
             )
         );
     }
@@ -636,7 +642,7 @@ mod tests {
         let mut lines = Lines::new();
         lines.lead("Authoring check passed.");
         lines.findings(&[finding(
-            Severity::Warning,
+            Severity::Finding,
             "a.code",
             hostile,
             "the sentence",
@@ -750,7 +756,7 @@ mod tests {
         let mut lines = Lines::new();
         lines.lead("Initialized a registry project. 2 artifacts written.");
         lines.pairs(&[("revision", "sha256:aaaa".to_owned())]);
-        lines.findings(&[finding(Severity::Warning, "a.code", "a", "the sentence")]);
+        lines.findings(&[finding(Severity::Finding, "a.code", "a", "the sentence")]);
         lines.steps(&["run 'bregctl check household'".to_owned()]);
         let rendered = plain(&lines.finish());
         assert!(rendered.is_ascii(), "rendering left ASCII: {rendered}");
