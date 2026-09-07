@@ -13,12 +13,15 @@ generated `dev-clients.yaml` binds two local clients to the `operator` and
 access profiles, journey fixtures and local clients before the first start.
 
 ```sh
-bregctl dev --project ./registry --clients-file ./registry/dev-clients.yaml
-bregctl dev stop --project ./registry
-bregctl dev start --project ./registry
+bregctl dev ./registry
+bregctl dev stop ./registry
+bregctl dev start ./registry
 ```
 
-`dev` and `dev start` both detach a resident supervisor. They return only after
+The project path defaults to the current directory, as it does for every other
+`bregctl` command. A first start reads `dev-clients.yaml` inside the project;
+`--clients-file` names another clients file instead. `dev` and `dev start` both
+detach a resident supervisor. They return only after
 PostgreSQL, Mint, schema-test rehearsal, package activation, BReg readiness and
 explicit seed creation succeed. Default loopback ports are BReg `8090`, Mint
 `8091` and PostgreSQL `55432`. Override them on the first start with
@@ -37,7 +40,10 @@ volume, records, audit history, keys, credentials and the built package. Add
 `--remove` to reclaim the storage as well; it removes the owned container and
 its `breg-dev-<owner>` data volume, discarding records, audit history and seed
 checkpoints, so the next start builds an empty database from the same authored
-project, ports, credentials and package.
+project, ports, credentials and package. It also lets the next start take edited
+inputs: once no records are retained, a changed package, clients file or port
+replaces the session with a fresh one that keeps the previous ports and clients
+file and generates new keys.
 
 Use `--format json` to consume the status, URLs, audience, package revision,
 runtime configuration and private credential file references. Keys and access
@@ -109,9 +115,11 @@ Docker container ID, ports, captured authored closure, package revision, seed
 checkpoints and, for each resolved `breg`, `mint` and `docker` prerequisite, the
 fully resolved path of the file that ran and the version it reported. It
 contains generated configurations, separate database roles, local TLS material,
-credentials and bounded private diagnostic logs. Keep it out of version control
-and preserve it with the retained database while the exercise matters. It is
-local development material, not production key provisioning.
+credentials and bounded private diagnostic logs. The first start writes a
+`.gitignore` into `.breg` that keeps the whole directory, its lock file included,
+out of version control. Preserve it with the retained database while the
+exercise matters. It is local development material, not production key
+provisioning.
 Records live in a named `breg-dev-<owner>` Docker volume, so the storage stays
 identifiable and reclaimable once the container is gone.
 
@@ -120,7 +128,7 @@ identifiable and reclaimable once the container is gone.
 | First start | Capture the authored closure, prepare private identities, create the owned database, run normal schema-test/package/apply/verify commands, then seed through authenticated HTTP. |
 | Already running | Return the existing ready session and credential references. |
 | Stop, including repeated stop | Gracefully stop owned BReg and Mint children and stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and audit history. |
-| Stop where no start ever ran | Refuse and name the absent session. Nothing is created, changed or removed, so a mistyped `--project` cannot read as a stopped session. |
+| Stop where no start ever ran | Refuse and name the absent session. Nothing is created, changed or removed, so a mistyped project path cannot read as a stopped session. |
 | Start after stop | Reuse the same container, database, credentials and package. Obtain fresh short-lived tokens. Preserve record edits. |
 | Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
 | Start after `--remove` | Create an empty container and volume under the same ownership identifier, activate the retained package again and replay the authored seeds. |
@@ -128,10 +136,12 @@ identifiable and reclaimable once the container is gone.
 | Partial start failure | Stop acquired service children and the owned container; retain private diagnostics and completed phases. Retry the same command after correcting the prerequisite. The separate schema-test database may be recreated for a failed rehearsal. |
 | Missing or mismatched owned container | Refuse. Never silently initialize an empty replacement or stop another container. |
 | Unreachable supervisor with an occupied service port | Refuse. Never signal a stored PID that could belong to another process. Inspect the process owning the port before recovery. |
-| Authored package, clients or ports changed | Refuse before activation or record mutation. Restore the original inputs to restart, or copy authored files to a new project directory for a fresh experiment. |
+| Authored package, clients or ports changed while records are retained | Refuse before activation or record mutation. Restore the original inputs to restart, run `dev stop --remove` to discard the records and start from the edited inputs, or copy authored files to a new project directory for a fresh experiment. |
+| Authored package, clients or ports changed after `--remove` | Replace the session: remove the retained private state and start fresh from the edited inputs, keeping the previous ports and clients file and generating new keys. |
 
-Reclamation is explicit: only `dev stop --remove` discards local data, and this
-command implements no automatic reset or retained-schema upgrade. An operated
+Reclamation is explicit: only `dev stop --remove` discards records, only a start
+after it replaces retained keys, and only for edited inputs; this command
+implements no automatic reset or retained-schema upgrade. An operated
 successor uses BReg's normal reviewed package, migration, activation and
 recovery procedure. Copy only authored files to start a separate local
 experiment; copying private retained state does not clone its database.
