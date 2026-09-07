@@ -41,7 +41,8 @@ the compiler reserves for its own columns, `id`, `record-id`, `revision`, `creat
 or `deleted-at`, is prefixed `declared-` instead, which keeps the concept while leaving the reserved
 name alone.
 
-{/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, resolve_entity(), field_id(), kebab_case(), pluralize(), and RESERVED_FIELD_IDS. */}
+{/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, resolve_entity(), field_id(), kebab_case(), pluralize(), and reserved_field_id();
+    crates/registry-breg/src/logical_names.rs, reserved_logical_name(). */}
 
 ## A property becomes a field by its type
 
@@ -72,7 +73,8 @@ The 300-value line is about what belongs in a project rather than what a databas
 list short enough to read is worth declaring in full, because the compiler can then refuse an
 unknown code and a catalogue reader can see the permitted values. A longer one would bury the
 project's own model in imported data, so the derivation keeps the code and drops the list. A
-selection's `vocabularies` list overrides that judgement per enumeration in either direction.
+selection's `vocabularies` list overrides that judgement per enumeration in either direction, up to
+the 1024 values a code list may hold; asking for a larger one inline is refused.
 
 An inline structured field is a compromise of the same kind. The concept it carries was not selected,
 so it has no records and no route; carrying its scalar properties whole keeps the information without
@@ -121,9 +123,10 @@ by asking.
 
 Beyond property refusals, the derivation refuses a selection naming an unknown or abstract concept,
 one giving two entities the same identifier or route, one selecting a property twice, one whose
-properties would produce two fields of the same identifier, one naming an unknown or unused
-enumeration, and one whose model version does not match the embedded snapshot. Nothing is written
-when a selection is refused.
+properties would produce two fields of the same identifier or the same API or database name, one
+naming an identifying field after a column the compiler keeps for itself, one giving a target to a
+property that does not point at a concept, one naming an unknown or unused enumeration, and one whose
+model version does not match the embedded snapshot. Nothing is written when a selection is refused.
 
 {/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, field_kind(), property_support(), and resolve(). */}
 
