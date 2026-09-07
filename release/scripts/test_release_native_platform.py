@@ -5,7 +5,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import shutil
 import stat
 import subprocess
 import tempfile
@@ -92,6 +91,7 @@ args = sys.argv[1:]
 version = os.environ["FAKE_VERSION"]
 if os.environ.get("REGISTRY_RELEASE_TAG") != f"v{version}":
     raise SystemExit(43)
+binary_version = os.environ.get("FAKE_BINARY_VERSION", version)
 log = Path(os.environ["FAKE_CARGO_LOG"])
 calls = []
 if log.exists():
@@ -117,7 +117,8 @@ for package in packages:
     name = binaries[package]
     body = f'''#!/usr/bin/env bash
 if [[ "${{1:-}}" == --version ]]; then
-  printf '%s\\n' "{name} {version}"
+  printf '%s\\n' "{name}" >>"$FAKE_BINARY_SMOKE_LOG"
+  printf '%s\\n' "{name} {binary_version}"
 fi
 '''
     path = output / name
@@ -136,6 +137,7 @@ fi
         purpose: str = "review_only",
         name: str | None = None,
         fail_call: int | None = None,
+        binary_version: str | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], Path, list[list[str]]]:
         stem = name or group
         output = self.root / stem
@@ -147,11 +149,14 @@ fi
                 "CARGO": str(self.fake_cargo),
                 "CARGO_TARGET_DIR": str(target),
                 "FAKE_CARGO_LOG": str(log),
+                "FAKE_BINARY_SMOKE_LOG": str(self.root / f"{stem}-smoke.log"),
                 "FAKE_VERSION": version,
             }
         )
         if fail_call is not None:
             environment["FAKE_CARGO_FAIL_CALL"] = str(fail_call)
+        if binary_version is not None:
+            environment["FAKE_BINARY_VERSION"] = binary_version
         result = subprocess.run(
             [
                 "bash",
@@ -272,43 +277,18 @@ fi
         self.assertEqual([BREGCTL_ARGS], calls)
         self.assertFalse(failed_output.exists())
 
-        environment_version = "0.27.1"
-        wrong, wrong_output, _ = self.build(
-            "core", version=VERSION, name="wrong-version"
+        # Cargo succeeds and writes binaries, then the real version smoke rejects them.
+        wrong, wrong_output, wrong_calls = self.build(
+            "core",
+            version=VERSION,
+            binary_version="0.27.1",
+            name="wrong-version",
         )
-        self.assertEqual(0, wrong.returncode, wrong.stderr)
-        shutil.rmtree(wrong_output)
-        # The fake build advertises a different version from the requested one.
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "CARGO": str(self.fake_cargo),
-                "CARGO_TARGET_DIR": str(self.root / "wrong-target"),
-                "FAKE_CARGO_LOG": str(self.root / "wrong-log"),
-                "FAKE_VERSION": environment_version,
-            }
+        self.assertNotEqual(0, wrong.returncode)
+        self.assertEqual([CORE_ARGS], wrong_calls)
+        self.assertEqual(
+            "relayctl\n", (self.root / "wrong-version-smoke.log").read_text()
         )
-        result = subprocess.run(
-            [
-                "bash",
-                str(BUILDER),
-                "--group",
-                "core",
-                "--purpose",
-                "review_only",
-                "--source-sha",
-                SOURCE_SHA,
-                "--version",
-                VERSION,
-                "--output",
-                str(wrong_output),
-            ],
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertNotEqual(0, result.returncode)
         self.assertFalse(wrong_output.exists())
 
     def test_merge_rejects_invalid_inputs_before_exposing_output(self) -> None:
