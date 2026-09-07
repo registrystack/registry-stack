@@ -9,8 +9,8 @@
 //! The first is grouping. A registry project applies one access rule across
 //! every entity, so one authoring mistake reports the identical sentence
 //! against six paths. Repeating the sentence six times buries the six paths
-//! that actually differ, so a run of findings sharing a severity and a code
-//! prints the sentence once and lists the paths under it.
+//! that actually differ, so a run of findings sharing a severity, a code, and
+//! a message prints the sentence once and lists the paths under it.
 //!
 //! The second is styling. Every line is written with the ANSI attributes
 //! `anstyle` names, and the caller decides whether they survive: `main_entry`
@@ -227,11 +227,11 @@ impl Lines {
 
     /// Render every diagnostic, errors before findings, then the closing count.
     ///
-    /// Findings sharing a severity and a code are one group: the sentence they
-    /// share prints once and every path it was reported against is listed
-    /// under it. A group of one keeps the ungrouped two-line shape, because
-    /// there is no repetition to collapse and the path reads better on the
-    /// line that names the code.
+    /// Findings sharing a severity, a code, and a message are one group: the
+    /// sentence they share prints once and every path it was reported against
+    /// is listed under it. A group of one keeps the ungrouped two-line shape,
+    /// because there is no repetition to collapse and the path reads better on
+    /// the line that names the code.
     pub(crate) fn findings(&mut self, findings: &[Finding<'_>]) {
         self.push_findings(findings, finding_summary);
     }
@@ -341,9 +341,17 @@ impl Severity {
     }
 }
 
-/// Collect the findings of one severity into runs that share a code, keeping
-/// the order the report listed them in so a reader can follow the rendering
-/// back to the JSON.
+/// Collect the findings of one severity into runs that share a code and a
+/// message, keeping the order the report listed them in so a reader can
+/// follow the rendering back to the JSON.
+///
+/// A code alone is not a group: `push_group` renders only `group[0].message`,
+/// so two diagnostics with the same code but different dynamic detail, such
+/// as two unknown request-lifecycle transitions naming different transitions,
+/// would collapse into one path list while silently dropping every message
+/// but the first. Keying on the pair keeps every distinct message on its own
+/// line with its own paths, while diagnostics that share both still collapse
+/// into one group.
 fn group_by_code<'report, 'a>(
     findings: &'report [Finding<'a>],
     severity: Severity,
@@ -352,7 +360,7 @@ fn group_by_code<'report, 'a>(
     for finding in findings.iter().filter(|item| item.severity == severity) {
         match groups
             .iter_mut()
-            .find(|group| group[0].code == finding.code)
+            .find(|group| group[0].code == finding.code && group[0].message == finding.message)
         {
             Some(group) => group.push(finding),
             None => groups.push(vec![finding]),
@@ -545,6 +553,39 @@ mod tests {
                 "             entities[id=person].accessProfiles[id=operator].rowBoundaries\n",
                 "\n",
                 "0 errors, 2 findings.\n",
+            )
+        );
+    }
+
+    #[test]
+    fn a_shared_code_with_different_messages_reports_each_message_and_its_path() {
+        let mut lines = Lines::new();
+        lines.lead("bregctl check refused.");
+        lines.findings(&[
+            finding(
+                Severity::Error,
+                "event.when.request_lifecycle_transition_unknown",
+                "entities[id=case].onEvents[0].when",
+                "unknown request-lifecycle transition 'submitted'",
+            ),
+            finding(
+                Severity::Error,
+                "event.when.request_lifecycle_transition_unknown",
+                "entities[id=case].onEvents[1].when",
+                "unknown request-lifecycle transition 'closed'",
+            ),
+        ]);
+        assert_eq!(
+            plain(&lines.finish()),
+            concat!(
+                "bregctl check refused.\n",
+                "\n",
+                "  error    event.when.request_lifecycle_transition_unknown  entities[id=case].onEvents[0].when\n",
+                "           unknown request-lifecycle transition 'submitted'\n",
+                "  error    event.when.request_lifecycle_transition_unknown  entities[id=case].onEvents[1].when\n",
+                "           unknown request-lifecycle transition 'closed'\n",
+                "\n",
+                "2 errors, 0 findings.\n",
             )
         );
     }
