@@ -390,6 +390,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'tutorials/first-breg',
     'explanation/configuration-defined-registry',
     'tutorials/extend-a-registry-with-a-module',
+    'tutorials/derive-a-registry-from-publicschema',
     'tutorials/review-registry-changes',
     'tutorials/send-registry-events-to-a-webhook',
     'tutorials/query-a-spatial-registry-from-qgis',

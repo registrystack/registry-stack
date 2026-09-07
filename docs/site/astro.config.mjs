@@ -428,6 +428,7 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Extend with a module', slug: 'tutorials/extend-a-registry-with-a-module' },
+                { label: 'Derive from PublicSchema', slug: 'tutorials/derive-a-registry-from-publicschema' },
                 { label: 'Review changes', slug: 'tutorials/review-registry-changes' },
                 { label: 'Send events to a webhook', slug: 'tutorials/send-registry-events-to-a-webhook' },
                 { label: 'Map a registry in QGIS', slug: 'tutorials/query-a-spatial-registry-from-qgis' },
