@@ -41,6 +41,17 @@ mkdir -p tutorial-work
 bregctl init tutorial-work/candidate-project
 ```
 
+`init` writes a project for `bregctl dev`, so its `package` block names `local`, the unsigned
+environment. A candidate is built for a named environment and must be signed. Open
+`tutorial-work/candidate-project/registry.yaml` and change the `environment` line in that block:
+
+```yaml
+package:
+  environment: development
+```
+
+The runtime configuration and the trust anchor you write later name the same environment.
+
 Confirm the tools. The signing steps need an OpenSSL that signs with Ed25519; the LibreSSL that macOS
 ships as `/usr/bin/openssl` does not, so install OpenSSL 3 and put it first on `PATH`.
 
@@ -58,8 +69,8 @@ umask 077
 ```
 
 Every other file this tutorial creates sits under `tutorial-work/candidate`. The digests shown on this
-page come from an unchanged `bregctl init` project; if you edit `candidate-project`, yours differ, and
-that is expected.
+page come from the `bregctl init` project with only that environment change; if you edit anything else
+in `candidate-project`, yours differ, and that is expected.
 
 ## Read the production findings
 
@@ -73,7 +84,7 @@ bregctl check --production tutorial-work/candidate-project
 
 ```text
 check succeeded
-revision: sha256:51370215a8cfcdecb32e91423aca4dcd599e884cb985eb66ba62d5a128d262fe
+revision: sha256:47bb7234a81ecd44fef51323c6d92f3291282b5faebb6645a9096f16b9059d5a
 finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
 finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
 ```
@@ -339,11 +350,11 @@ SSL_CERT_FILE="$PWD/tutorial-work/candidate/postgres/ca.pem" bregctl test tutori
 ```text
 test succeeded
 profile: production
-package revision: sha256:577c1f7f3d7d5b9af242dc3aa41ce0fa91071909cd71609a821cfe5c88467490
-schema fingerprint: sha256:d1a9dc914af087a4ab3118ef7bbbc8aad718520362eeeba3e80e7ce9fd93f9cf
-signing input sha256: f2a7b47e9002287fd008da91b5c1322b92ca898af250b03da21c7102865daea3
+package revision: sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
+schema fingerprint: sha256:d459608ae9792a4bc387ff3965652ead7a7a1ac2ffa11b81506b55c66ebc6c02
+signing input sha256: 248a359554982daa7e0ee627027acda85394b9c3154facbf60c821c6596952ee
 successful journeys: record-lifecycle
-receipt sha256: d0a2e9ac10cc46ddd903a6b158f8f2df4df0d379f7a74eeecf6144d4f3595032
+receipt sha256: c8e518182c09c45c620163d2fe5b71d1cbcaae7581356c15944e000aff96c9cf
 receipt bytes: 1054
 ```
 
@@ -371,12 +382,12 @@ bregctl package tutorial-work/candidate-project \
 package succeeded
 profile: production
 state: awaiting_signatures
-package revision: sha256:577c1f7f3d7d5b9af242dc3aa41ce0fa91071909cd71609a821cfe5c88467490
+package revision: sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
 signature threshold: 1
 provided signatures: 0
 package files: 18
-signing input sha256: f2a7b47e9002287fd008da91b5c1322b92ca898af250b03da21c7102865daea3
-signing input bytes: 14081
+signing input sha256: 248a359554982daa7e0ee627027acda85394b9c3154facbf60c821c6596952ee
+signing input bytes: 14921
 ```
 
 Nothing is published yet. The output directory holds `signing-input.json`, the exact bytes to sign,
@@ -440,17 +451,17 @@ bregctl verify --runtime-config "$PWD/tutorial-work/candidate/runtime.yaml"
 ```text
 verify succeeded
 assurance: runtime_bound
-package revision: sha256:577c1f7f3d7d5b9af242dc3aa41ce0fa91071909cd71609a821cfe5c88467490
+package revision: sha256:d2886ea2006498adbefd77479e4a40186eada60dbaeeee572d6edeaacee6c3dc
 registry id: generic-registry
 registry version: 0.1.0
-registry revision: sha256:51370215a8cfcdecb32e91423aca4dcd599e884cb985eb66ba62d5a128d262fe
+registry revision: sha256:47bb7234a81ecd44fef51323c6d92f3291282b5faebb6645a9096f16b9059d5a
 modules: 1
 entities: 2
-routes: 7
-access entries: 7
-queries: 3
+routes: 8
+access entries: 8
+queries: 4
 event deliveries: 0
-DDL statements: 22
+DDL statements: 23
 generated artifacts: 14
 ```
 
