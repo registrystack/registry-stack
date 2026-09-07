@@ -93,7 +93,9 @@ Open `household-registry/README.md`. It carries the attribution PublicSchema's l
 :::note[Keep the attribution notice]
 "The concepts, properties, and code lists in this project are derived from PublicSchema 0.3.0
 ([https://github.com/PublicSchema/publicschema.org](https://github.com/PublicSchema/publicschema.org)),
-licensed under CC-BY-4.0. Keep this notice with the project and with any package built from it."
+licensed under CC-BY-4.0 ([https://creativecommons.org/licenses/by/4.0/](https://creativecommons.org/licenses/by/4.0/)).
+The derivation selects, renames, and retypes definitions, so this project is a modified form of
+the model. Keep this notice with the project and with any package built from it."
 
 Carry the same notice into any package you build from this project; CC-BY-4.0 requires it.
 :::
@@ -120,8 +122,8 @@ closed vocabulary-code field, a larger one a bounded string; a property whose va
 selected concept becomes a `reference` to that entity, the way `group-membership.person` and
 `group-membership.group` do here; a property whose value is a concept the model treats as a value,
 such as `household.address`, becomes a `structured` field carrying it inline; and a property
-PublicSchema marks sensitive or restricted becomes a `restricted` field, with everything else
-`internal`.
+PublicSchema marks sensitive or restricted becomes a `restricted` field, as does a `structured`
+field whose inline value carries such a property, with everything else `internal`.
 
 One rule never shows in a README, because it refuses a property before anything is written: a
 property that could hold several records of another concept at once is not derived, and the
