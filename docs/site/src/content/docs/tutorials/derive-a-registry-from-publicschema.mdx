@@ -55,22 +55,46 @@ bregctl init household-registry --from publicschema --starter household
 ```
 
 ```text
-init succeeded
-revision: sha256:<digest>
-finding access.profile.higher_classification at entities[id=group-membership].accessProfiles[id=operator].readableFields[field=person]: this field is more sensitive than its entity's classification; verify the profile's scope and purpose before disclosing it
-finding access.profile.higher_classification at entities[id=person].accessProfiles[id=operator].readableFields[field=marital-status]: this field is more sensitive than its entity's classification; verify the profile's scope and purpose before disclosing it
-finding access.profile.unrestricted_collection at entities[id=group-membership].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_collection at entities[id=group-membership].accessProfiles[id=reader].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_collection at entities[id=household].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_collection at entities[id=household].accessProfiles[id=reader].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_collection at entities[id=person].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_collection at entities[id=person].accessProfiles[id=reader].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-artifacts: 6
-next: read household-registry/README.md, then run 'bregctl check household-registry'
-next: leave the findings above as they are; the `operator` and `reader` profiles list whole collections on purpose, and the `operator` profile reads 2 fields the model marks sensitive, and household-registry/README.md says where to narrow them
-next: run 'bregctl dev household-registry' to start the registry locally and replay household-registry/tests/journeys.yaml
-next: replace canonicalBaseIri in household-registry/registry.yaml before you build a production package; the derived value is a reserved .invalid name that never resolves
-next: keep household-registry/model/selection.yaml beside the project: edit it and pass it back with --selection to derive a fresh project
+Initialized a registry project. 6 artifacts written.
+  revision  sha256:<digest>
+
+  README.md
+  dev-clients.yaml
+  model/selection.yaml
+  registry.yaml
+  runtime.example.yaml
+  tests/journeys.yaml
+
+  finding  access.profile.higher_classification  2 paths
+           this field is more sensitive than its entity's classification; verify the
+           profile's scope and purpose before disclosing it
+             entities[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
+             entities[id=person].accessProfiles[id=operator].readableFields[field=marital-status]
+  finding  access.profile.unrestricted_collection  6 paths
+           this profile can list all rows, subject only to query bounds; caller filters
+           are not authorization. Add a claim-bound row restriction or review this
+           registry-wide access
+             entities[id=group-membership].accessProfiles[id=operator].rowBoundaries
+             entities[id=group-membership].accessProfiles[id=reader].rowBoundaries
+             entities[id=household].accessProfiles[id=operator].rowBoundaries
+             entities[id=household].accessProfiles[id=reader].rowBoundaries
+             entities[id=person].accessProfiles[id=operator].rowBoundaries
+             entities[id=person].accessProfiles[id=reader].rowBoundaries
+
+0 errors, 8 findings.
+
+Next:
+  1. read household-registry/README.md, then run 'bregctl check household-registry'
+  2. leave the findings above as they are; the `operator` and `reader` profiles list
+     whole collections on purpose, and the `operator` profile reads 2 fields the model
+     marks sensitive, and household-registry/README.md says where to narrow them
+  3. run 'bregctl dev household-registry' to start the registry locally and replay
+     household-registry/tests/journeys.yaml
+  4. replace canonicalBaseIri in household-registry/registry.yaml before you build a
+     production package; the derived value is a reserved .invalid name that never
+     resolves
+  5. keep household-registry/model/selection.yaml beside the project: edit it and pass
+     it back with --selection to derive a fresh project
 ```
 
 `init` compiled the project before printing its `revision`, the digest of the compiled model; `check`
@@ -79,8 +103,8 @@ and `dev` repeat this revision and every finding until you change something. The
 `model/selection.yaml`. Unlike the domain-neutral example, a derived project has no `modules/`
 directory: every entity lives in `registry.yaml`.
 
-Both finding codes are expected, and the `next:` lines above say so. The rest of this tutorial
-follows those lines in order.
+Both finding codes are expected, and the numbered next steps above say so. The rest of this
+tutorial follows those steps in order.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_from_model::run(), init_from_model::ModelName, and init_from_model::Source::Starter;
     crates/registry-bregctl/src/init_from_model/{mod,selection}.rs;
@@ -176,14 +200,14 @@ below.
 
 ## Check the project
 
-Run `bregctl check` the way the first `next:` line says:
+Run `bregctl check` the way the first next step says:
 
 ```sh
 bregctl check household-registry
 ```
 
-The report repeats the same revision and the same eight findings shown above, without the
-`artifacts` count or the `next:` lines that only `init` writes.
+The report repeats the same revision and the same eight findings shown above, without the artifact
+list or the next steps that only `init` writes.
 
 Two finding codes appear, one per entity-and-profile pair they apply to:
 
@@ -292,7 +316,7 @@ bregctl init household-registry-2 --from publicschema --selection household-regi
 
 The report has a new revision, the same six `access.profile.unrestricted_collection` findings, and
 only one `access.profile.higher_classification` finding left, for `group-membership.person`; removing
-`marital_status` removed the other one. The `next:` line about sensitive fields now reads in the
+`marital_status` removed the other one. The next step about sensitive fields now reads in the
 singular: the `operator` profile reads a field the model marks sensitive, not two.
 
 `household-registry-2/README.md` explains what is left the same way: it reports
@@ -360,7 +384,13 @@ Without a terminal at all, for example in a script or in CI, the wizard cannot r
 `init --from publicschema` alone refuses immediately:
 
 ```text
-error init.selection.missing at arguments: `init --from publicschema` asks its questions at a terminal; without one, pass `--selection <FILE>` or `--starter <NAME>` (one of `household`)
+bregctl init refused.
+
+  error    init.selection.missing  arguments
+           `init --from publicschema` asks its questions at a terminal; without one,
+           pass `--selection <FILE>` or `--starter <NAME>` (one of `household`)
+
+1 error, 0 findings.
 ```
 
 Pass `--starter household` or `--selection <FILE>` instead, the way the rest of this tutorial does.
