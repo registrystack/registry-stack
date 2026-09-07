@@ -336,13 +336,27 @@ for binary in "${binaries[@]}"; do
 		exit 1
 	fi
 	ln -s ".breg-current/$binary" "$link_stage_dir/$binary"
-	replace_path "$link_stage_dir/$binary" "$install_dir/$binary"
+	if [ -e "$current_link/$binary" ]; then
+		replace_path "$link_stage_dir/$binary" "$install_dir/$binary"
+	fi
 done
 
-# Every stable command link changes version through this one atomic rename.
+# Every stable command link the pointer already resolves changes version through
+# this one atomic rename.
 ln -s "${stage_dir##*/}" "$link_stage_dir/current"
 install_complete=1
 replace_path "$link_stage_dir/current" "$current_link"
+
+# A command the pointer does not resolve yet, such as one another product's
+# installer wrote directly, is linked only now that the switch has made its
+# target real. Installing that link earlier would replace a working command with
+# a link to a file that a failed switch never creates. Its staged link is still
+# in place because the loop above left it there.
+for binary in "${binaries[@]}"; do
+	if [ -L "$link_stage_dir/$binary" ]; then
+		replace_path "$link_stage_dir/$binary" "$install_dir/$binary"
+	fi
+done
 
 for binary in "${binaries[@]}"; do
 	printf '%s installed to %s\n' "$binary" "$install_dir/$binary"
