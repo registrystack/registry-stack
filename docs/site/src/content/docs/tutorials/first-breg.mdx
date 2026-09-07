@@ -18,12 +18,9 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 If you are a data publisher evaluating
 [Base Registry Engine](../../reference/glossary/#base-registry-engine) (BReg), start with a small
 business directory.
-You will generate a registry project, start it as a working registry on your machine, create a
-business record, change its label, and try requests the server refuses.
-The records use two required fields, `code` and `label`, plus an optional group and status;
-the business directory is the example you supply, not a built-in type.
-Everything you keep goes into one directory, `tutorial-work`, and the next tutorial,
-[Extend a registry with a module](../extend-a-registry-with-a-module/), edits the project inside it.
+You will generate a registry project, run it on your machine, create and update a business record,
+and try requests the server refuses.
+Everything you keep goes into one directory, `tutorial-work`.
 
 <QuickstartMeta
   outcome="A record created and updated over HTTP, with refused requests showing authentication, field permissions, version checks, and required fields at work."
@@ -47,22 +44,24 @@ bregctl --version
 mint --version
 ```
 
-The URL names `latest`, which this tutorial takes on purpose so an evaluation starts on the newest
-release; a deployment pins a version instead, so the binary that was tested is the binary that runs.
 The installer checks the three binaries against the release `SHA256SUMS` before anything reaches
 `~/.local/bin`, and installs them together or not at all.
 Keep that directory on your `PATH`.
 
-The command pipes a script from GitHub straight into `bash`; replace `| bash` with `| less` to read it first.
-Before these binaries reach a host that serves anyone else, verify the release as described in
-[OpenSSF and release trust](../../security/openssf-evidence/), then rerun the installer with
-`BREG_ASSET_DIR` pointing at the verified directory.
+:::note[Before these binaries serve anyone else]
+The URL takes the latest release, and a deployment pins a version instead.
+The command pipes a script from GitHub into `bash`; `| less` in place of `| bash` reads it first.
+Verify the release as described in [OpenSSF and release trust](../../security/openssf-evidence/),
+then rerun the installer with `BREG_ASSET_DIR` pointing at the verified directory.
+:::
 
 {/* Evidence: crates/registry-breg/install.sh, binaries. */}
 
 ## Create a project
 
-Open a terminal in a directory of your choice and generate a project:
+Open a terminal in a directory of your choice and generate a project.
+Keep this terminal in the same directory for the rest of the tutorial; every path starts with
+`tutorial-work/`.
 
 ```sh
 mkdir -p tutorial-work
@@ -102,36 +101,35 @@ Next:
      resolves
 ```
 
-A registry project is a directory of YAML files that declares one registry, and `init` compiled
-this one before printing its `revision`, the digest of the compiled model.
-The six artifacts are `registry.yaml` with the entities, fields, and access profiles; one module
-under `modules/`; `tests/journeys.yaml`, the requests a test run replays; `dev-clients.yaml`, the
-local callers described below; `runtime.example.yaml` for an operator; and a `README.md` that lists
-them.
-The `record` entity in `registry.yaml` carries the `code` and `label` fields you will write, and its
-`operator` access profile names what a caller's token must carry to reach them.
+### What init wrote
+
+A registry project declares one registry in YAML, and `init` compiled this one before printing its
+`revision`, the digest of the compiled model.
+The six files are:
+
+- `registry.yaml`: entities, fields, and access profiles
+- `modules/record-notes/module.yaml`: a reusable module, one optional field
+- `tests/journeys.yaml`: the requests a test run replays
+- `dev-clients.yaml`: the local callers and their tokens
+- `runtime.example.yaml`: an operator's runtime configuration
+- `README.md`: what each file holds and what to change
+
+`tutorial-work/project/README.md` describes each one at length; open it.
+The `record` entity in `registry.yaml` carries the required `code` and `label` fields you will write,
+plus an optional group and status: the business directory is the example you supply, not a built-in
+type.
 
 A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a
 finding does not.
-Both findings here are expected, as the second step under `Next:` says, and every command on this
-project repeats them; read past them to the result.
+Both findings here are expected, as the second step under `Next:` says, and every later command
+repeats them.
 
-Open `tutorial-work/project/dev-clients.yaml`.
-Its first client is the caller you will act as:
+### The local callers
 
-```yaml
-clients:
-  - id: operator
-    accessProfiles: [operator]
-    scopes: [registry:generic:operate]
-    claims:
-      registry_principal: generic-registry-operator
-      registry_purpose: registry-operations
-```
-
-A client is a caller the local token issuer will issue tokens to, and its scope and claims are the
-ones the `operator` profile in `registry.yaml` requires.
-The file holds no secret: keys are generated when the registry starts.
+The two callers in `dev-clients.yaml`, `operator` and `reader`, are ready to use with no edits, and
+this tutorial acts as `operator`.
+[Local clients and their tokens](../../explanation/configuration-defined-registry/#local-clients-and-their-tokens)
+explains what a client entry declares and why naming a profile there grants nothing on its own.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files() and INIT_DEV_CLIENTS. */}
 
@@ -173,11 +171,10 @@ bregctl dev succeeded.
     assertion key file  <path>/tutorial-work/project/.breg/dev/credentials/reader/assertion-key.jwk
 ```
 
-What happened: `dev` started PostgreSQL in a container, read the project's `dev-clients.yaml`,
-started Registry Mint with its two clients and a fresh private key for each, built a package from the
-project, replayed
-`tests/journeys.yaml` against a throwaway database, activated the package, and started BReg on the
-address the report shows.
+`dev` started PostgreSQL in a container, registered the two clients from `dev-clients.yaml` with
+Registry Mint under a fresh key each, built a package, replayed `tests/journeys.yaml` against a
+throwaway database, activated the package, and started BReg at the address the report shows.
+
 The services keep running after the command returns, so this one terminal is enough.
 Run the same command again at any time to print the report again.
 
@@ -186,8 +183,8 @@ Run the same command again at any time to print the report again.
 
 ## Get a token
 
-Save the registry address, then ask Mint for a token as the `operator` client and write it into an
-authorization header file:
+Save the registry address, then ask Mint for a token as the `operator` client and write it into a
+file `curl` can send as an authorization header:
 
 ```sh
 registry_url=http://127.0.0.1:8090
@@ -200,8 +197,8 @@ mint token --url http://127.0.0.1:8091/token \
 
 Success prints nothing.
 `mint token` signs a request with the client's private key and posts it to the token endpoint, the
-way an application would; the token it returns carries the scope and claims from `dev-clients.yaml`
-and lasts five minutes.
+way an application would; the token carries the `operator` scopes and claims and lasts five minutes.
+
 The header file holds that token and is readable only by your user; keep it out of version control
 and support messages.
 If a request returns `401` after a pause, [renew the token](#renew-an-expired-token) and retry.
@@ -211,7 +208,8 @@ If a request returns `401` after a pause, [renew the token](#renew-an-expired-to
 
 ## Read the registry
 
-Read the records using the `operator` access profile:
+Read the records as the `operator` profile; `accessProfile` names the permissions the request wants,
+and BReg checks the token against them:
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -233,14 +231,9 @@ curl --silent --show-error --fail-with-body \
 }
 ```
 
-The registry is empty, and the empty list is a successful read: the server verified your token,
-selected the profile, and ran the query.
-
-What happened: you read a Registry Record envelope, the shape every response on this API shares.
-`items` holds the records, `meta` names the registry, dataset, and entity type they live in, and
-`pageInfo` says whether there is another page.
-You chose an access profile, a named set of permissions a token may use, with the `accessProfile`
-query parameter.
+The registry is empty, and the empty list is a successful read.
+The response is the Registry Record envelope every route on this API returns: records in `items`,
+the registry, dataset, and entity type in `meta`, and paging in `pageInfo`.
 
 Try the same request without the header:
 
@@ -255,9 +248,8 @@ HTTP 404
 ```
 
 Open `tutorial-work/problem.json`: its code is `resource.not_found`.
-
-What happened: BReg conceals a protected route from an unauthenticated caller by answering as if the
-route did not exist, and naming a profile in the query granted nothing.
+BReg conceals a protected route from an unauthenticated caller by answering as if the route did not
+exist, and naming a profile in the query granted nothing.
 
 {/* Evidence: crates/registry-breg/src/auth.rs; crates/registry-breg/src/api/mod.rs;
     crates/registry-breg/tests/http_auth.rs; crates/registry-bregctl/src/lib.rs, init_files(). */}
@@ -310,15 +302,13 @@ The server generates the identifier, shown as `<record-id>`:
 ```
 
 A single record sits under `data`; a list carries the same fields in each item.
-`group` and `status` are optional fields of the same entity and read as `null` until a record supplies them.
-`data.snapshot` appears only on create, patch, and tombstone responses: an opaque token for a later
-`:snapshot` read, described in the [Base Registry Engine API reference](../../reference/breg-api/).
+`group` and `status` are optional and read as `null` until a record supplies them.
+`data.snapshot` is an opaque token for a later `:snapshot` read, described in the
+[Base Registry Engine API reference](../../reference/breg-api/).
 
-Run the create command again unchanged, then read the response again.
-You get `201` with the same identifier and revision, not a second record.
-
-What happened: `Idempotency-Key` identifies a single write, so a client that lost the first response
-can retry without creating a duplicate; use a different key for a different write.
+Run the create command again unchanged: you get `201` with the same identifier and revision, not a
+second record, because `Idempotency-Key` names one write.
+Use a different key for a different write.
 
 {/* Evidence: crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/mutation.rs, held_response();
     crates/registry-breg/src/record_profile.rs, record_member();
@@ -357,7 +347,8 @@ HTTP 400
 ```
 
 The problem code is `query.invalid`.
-Open `tutorial-work/project/registry.yaml` and find the `operator` grant for `record`:
+The `operator` grant for `record` in `tutorial-work/project/registry.yaml` carries three separate
+permission lists:
 
 ```yaml
 readableFields: [code, label, group, status]
@@ -365,8 +356,7 @@ writableFields: [code, label, group, status]
 filterableFields: [code, status]
 ```
 
-Repeat the request on `code`, which is filterable, and match the code you created, `DEMO-002`.
-The filter compares the field to a literal, so the value changes with the field:
+Repeat the request on `code`, which is filterable, and match the code you created, `DEMO-002`:
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -376,13 +366,10 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records" | python3 -m json.tool
 ```
 
-The request succeeds and `items` holds the one record you created, with `recordIdentifier`,
-`revisionIdentifier`, and `domainData` in each item.
-Filtering on `code eq 'North Quay Engineering'` would also succeed, with an empty `items`: no
-record carries that code, and a filter that matches nothing is a successful read, not a refusal.
-
-What happened: a grant carries three separate permission lists, and `label` is readable and writable
+The request succeeds and `items` holds the one record you created: `label` is readable and writable
 but not filterable, so `$select` may name it and `$filter` may not.
+Filtering on `code eq 'North Quay Engineering'` would also succeed, with an empty `items`, because a
+filter that matches nothing is a successful read, not a refusal.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
     crates/registry-breg/src/query.rs; crates/registry-breg/src/api/mod.rs;
@@ -407,7 +394,8 @@ Save the exact value, including its quotes:
 record_etag=$(awk 'tolower($1) == "etag:" {print $2}' tutorial-work/record.headers | tr -d '\r')
 ```
 
-Change the label with JSON Patch; `If-Match` refuses the update if the record changed since your read:
+Change the label with JSON Patch; `If-Match` makes the server compare that ETag with the record's
+own before writing:
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -441,10 +429,8 @@ curl --silent --show-error \
 HTTP 412
 ```
 
-The problem code is `precondition.failed`; the label remains `North Quay Engineering Ltd`.
-
-What happened: the `ETag` names the version you read and `If-Match` makes the server compare it before
-writing, so a stale client cannot overwrite a change it never saw, and a new idempotency key does not bypass that check.
+The problem code is `precondition.failed`, the label remains `North Quay Engineering Ltd`, and a new
+idempotency key does not bypass that check.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch();
     crates/registry-breg/src/mutation.rs;
@@ -468,11 +454,9 @@ curl --silent --show-error \
 HTTP 400
 ```
 
-The problem code is `request.invalid`; no record was created.
-In `tutorial-work/project/registry.yaml`, find `required: true` on the `code` field.
-
-What happened: the same `required: true` that validated this request also shapes the project's
-generated request schema, so the model decides what a record needs, not application code.
+The problem code is `request.invalid`, and no record was created.
+The `code` field carries `required: true` in `tutorial-work/project/registry.yaml`, and that one
+setting both validated this request and shaped the project's generated request schema.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
     crates/registry-breg/src/mutation.rs; crates/registry-breg/src/artifacts.rs. */}
@@ -495,28 +479,25 @@ bregctl dev stop tutorial-work/project --remove
 ```
 
 Either way, keep `tutorial-work/`: the next tutorial edits the project inside it.
-After a plain stop, the next start brings the same registry back and refuses an edited project
-while the records exist.
-After `--remove`, the next start builds the project as it stands, edits included, and generates
-new keys if the project changed.
+After a plain stop, the next start refuses an edited project while the records exist.
+After `--remove`, the next start builds the project as it stands, edits included, and generates new
+keys if the project changed.
 
 {/* Evidence: crates/registry-bregctl/src/dev/mod.rs, stop(); products/breg/DEV.md. */}
 
 ## What you built
 
-You generated a project, started it as a registry, created and updated a record, retried a write,
-narrowed a read, and saw authentication, query permissions, version checks, and required fields
-affect real requests.
-All of that came from the YAML in `tutorial-work/project`; the next tutorial changes it.
+You generated a project, started it as a registry, created and updated a record, and saw
+authentication, query permissions, version checks, and required fields affect real requests.
+All of that came from the YAML in `tutorial-work/project`.
 
 ## Troubleshooting
 
 ### Renew an expired token
 
 The local token lasts five minutes.
-While the registry is running, run the command from [Get a token](#get-a-token) again; it replaces
-the header file.
-If it fails, the registry is stopped; start it again with the command from
+Run the command from [Get a token](#get-a-token) again; it replaces the header file.
+If it fails, the registry is stopped: start it again with the command from
 [Start the registry](#start-the-registry), then renew.
 
 ### Other problems
