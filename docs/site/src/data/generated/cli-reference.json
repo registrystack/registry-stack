@@ -538,11 +538,10 @@
           "invocation": "bregctl dev",
           "about": "Start or stop this project's retained local development services",
           "long_about": null,
-          "usage": "bregctl dev [OPTIONS]\n       bregctl dev <COMMAND>",
-          "arguments": [],
-          "options": [
+          "usage": "bregctl dev [OPTIONS] [PROJECT]\n       bregctl dev <COMMAND>",
+          "arguments": [
             {
-              "display": "--project <PROJECT>",
+              "display": "[PROJECT]",
               "description": "Existing authored registry project. Its package environment must be local. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
@@ -551,10 +550,12 @@
               ],
               "possible_values": [],
               "environment": null
-            },
+            }
+          ],
+          "options": [
             {
-              "display": "--clients-file <CLIENTS_FILE>",
-              "description": "Explicit local clients, profile bindings, and optional seed records",
+              "display": "--clients-file <FILE>",
+              "description": "Local clients, profile bindings, and optional seed records (default on first start: dev-clients.yaml in the project; retained for restarts). A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -619,11 +620,10 @@
               "invocation": "bregctl dev start",
               "about": "Start or reuse the project's retained local database and services",
               "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL container plus its local Mint and Base Registry Engine (BReg) children. The database runs the pinned image postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .breg/dev/logs directory.",
-              "usage": "bregctl dev start [OPTIONS]",
-              "arguments": [],
-              "options": [
+              "usage": "bregctl dev start [OPTIONS] [PROJECT]",
+              "arguments": [
                 {
-                  "display": "--project <PROJECT>",
+                  "display": "[PROJECT]",
                   "description": "Existing authored registry project. Its package environment must be local. A symbolic link at any component of this path is refused.",
                   "always_required": false,
                   "repeatable": false,
@@ -632,10 +632,12 @@
                   ],
                   "possible_values": [],
                   "environment": null
-                },
+                }
+              ],
+              "options": [
                 {
-                  "display": "--clients-file <CLIENTS_FILE>",
-                  "description": "Explicit local clients, profile bindings, and optional seed records",
+                  "display": "--clients-file <FILE>",
+                  "description": "Local clients, profile bindings, and optional seed records (default on first start: dev-clients.yaml in the project; retained for restarts). A symbolic link at any component of this path is refused.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -701,11 +703,10 @@
               "invocation": "bregctl dev stop",
               "about": "Stop only this project's supervised services, preserving its database",
               "long_about": null,
-              "usage": "bregctl dev stop [OPTIONS]",
-              "arguments": [],
-              "options": [
+              "usage": "bregctl dev stop [OPTIONS] [PROJECT]",
+              "arguments": [
                 {
-                  "display": "--project <PROJECT>",
+                  "display": "[PROJECT]",
                   "description": "Registry project whose owned services should stop while preserving records. A symbolic link at any component of this path is refused.",
                   "always_required": false,
                   "repeatable": false,
@@ -714,7 +715,9 @@
                   ],
                   "possible_values": [],
                   "environment": null
-                },
+                }
+              ],
+              "options": [
                 {
                   "display": "--remove",
                   "description": "Also remove the owned container and its data volume, discarding records",
