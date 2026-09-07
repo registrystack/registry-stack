@@ -4,12 +4,21 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 
-if [[ "$#" -ne 1 || ! "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  printf 'usage: %s <release-version>\n' "$0" >&2
+group=all
+if [[ "$#" -eq 3 && "$1" == "--group" ]]; then
+  group="$2"
+  version="$3"
+elif [[ "$#" -eq 1 ]]; then
+  version="$1"
+else
+  printf 'usage: %s [--group core|breg] <release-version>\n' "$0" >&2
   exit 2
 fi
-
-version="$1"
+if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
+      ("${group}" != all && "${group}" != core && "${group}" != breg) ]]; then
+  printf 'usage: %s [--group core|breg] <release-version>\n' "$0" >&2
+  exit 2
+fi
 tag="v${version}"
 # The Discovery binary joins the release payload at 0.24.0. A candidate rebuilt
 # for an earlier version must stage exactly the assets its recorded inventory
@@ -110,44 +119,46 @@ build_payload() {
   export RUSTFLAGS="${RELEASE_RUSTFLAGS:?RELEASE_RUSTFLAGS is required}"
   prepare_zig_toolchain
 
-  cargo build --release --locked \
-    -p registry-manifest-cli
-  cp target/release/registry-manifest "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64"
-
-  # Build and stage the production Relay before relayctl enables the separate
-  # authoring-only tooling feature on the Relay library dependency.
-  cargo build --release --locked \
-    -p registry-relay-v2 \
-    --bin relay \
-    --no-default-features
-  cp target/release/relay "dist/bin/relay-${RELEASE_TAG}-linux-amd64"
-  cp target/release/relay dist/image-bin/relay
-
-  cargo build --release --locked \
-    -p registry-relayctl
-  cp target/release/relayctl "dist/bin/relayctl-${RELEASE_TAG}-linux-amd64"
-
-  cargo build --release --locked \
-    -p registry-evidence \
-    -p registry-evidencectl \
-    -p registry-mint \
-    -p registry-evidence-oid4vci
-  cp target/release/evidence "dist/bin/evidence-${RELEASE_TAG}-linux-amd64"
-  cp target/release/evidencectl "dist/bin/evidencectl-${RELEASE_TAG}-linux-amd64"
-  cp target/release/mint "dist/bin/mint-${RELEASE_TAG}-linux-amd64"
-  cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
-  cp target/release/evidence dist/image-bin/evidence
-  cp target/release/mint dist/image-bin/mint
-
-  if [[ "${include_discovery}" -eq 1 ]]; then
+  if [[ "${group}" == all || "${group}" == core ]]; then
     cargo build --release --locked \
-      -p registry-discovery \
-      --bin discovery
-    cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
-    cp target/release/discovery dist/image-bin/discovery
+      -p registry-manifest-cli
+    cp target/release/registry-manifest "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64"
+
+    # Build and stage the production Relay before relayctl enables the separate
+    # authoring-only tooling feature on the Relay library dependency.
+    cargo build --release --locked \
+      -p registry-relay-v2 \
+      --bin relay \
+      --no-default-features
+    cp target/release/relay "dist/bin/relay-${RELEASE_TAG}-linux-amd64"
+    cp target/release/relay dist/image-bin/relay
+
+    cargo build --release --locked \
+      -p registry-relayctl
+    cp target/release/relayctl "dist/bin/relayctl-${RELEASE_TAG}-linux-amd64"
+
+    cargo build --release --locked \
+      -p registry-evidence \
+      -p registry-evidencectl \
+      -p registry-mint \
+      -p registry-evidence-oid4vci
+    cp target/release/evidence "dist/bin/evidence-${RELEASE_TAG}-linux-amd64"
+    cp target/release/evidencectl "dist/bin/evidencectl-${RELEASE_TAG}-linux-amd64"
+    cp target/release/mint "dist/bin/mint-${RELEASE_TAG}-linux-amd64"
+    cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
+    cp target/release/evidence dist/image-bin/evidence
+    cp target/release/mint dist/image-bin/mint
+
+    if [[ "${include_discovery}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-discovery \
+        --bin discovery
+      cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
+      cp target/release/discovery dist/image-bin/discovery
+    fi
   fi
 
-  if [[ "${include_breg}" -eq 1 ]]; then
+  if [[ ("${group}" == all || "${group}" == breg) && "${include_breg}" -eq 1 ]]; then
     cargo build --release --locked \
       -p registry-breg \
       --bin breg \
@@ -164,7 +175,12 @@ build_payload() {
   # after this container exits. Every staged binary is checked, so a build that
   # slipped past the Zig toolchain fails here instead of at an adopter's first
   # run.
-  "${script_dir}/check-glibc-floor.sh" dist/bin/* dist/image-bin/*
+  shopt -s nullglob
+  local staged_binaries=(dist/bin/* dist/image-bin/*)
+  shopt -u nullglob
+  if [[ "${#staged_binaries[@]}" -gt 0 ]]; then
+    "${script_dir}/check-glibc-floor.sh" "${staged_binaries[@]}"
+  fi
 }
 
 # The outer invocation prepares the pinned container. The inner invocation is
@@ -210,7 +226,11 @@ if [[ "${release_target_dir}" != /* ]]; then
 fi
 
 mkdir -p "${release_cargo_home}" "${release_target_dir}"
-rm -rf -- "${repo_root}/dist/bin" "${repo_root}/dist/image-bin"
+rm -rf -- \
+  "${repo_root}/dist/bin" \
+  "${repo_root}/dist/image-bin" \
+  "${repo_root}/dist/RELEASE_BINARY_SHARD" \
+  "${repo_root}/dist/RELEASE_BUILDER_IMAGE"
 mkdir -p "${repo_root}/dist/bin" "${repo_root}/dist/image-bin"
 
 # Rust retains dependency source paths in panic and diagnostic strings even
@@ -243,34 +263,48 @@ docker run --rm \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
   --env RELEASE_BUILDER_READY=1 \
   "${release_builder_image}" \
-  /workspace/release/scripts/build-release-binaries.sh "${version}"
+  /workspace/release/scripts/build-release-binaries.sh --group "${group}" "${version}"
 
-printf '%s\n' "${default_builder_image}" >"${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
+if [[ "${group}" == all ]]; then
+  printf '%s\n' "${default_builder_image}" >"${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
+else
+  if [[ ! "${RELEASE_SOURCE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'RELEASE_SOURCE_SHA must be the exact source commit for a binary shard\n' >&2
+    exit 2
+  fi
+  printf '%s\n' "${default_builder_image}" >"${repo_root}/dist/RELEASE_BUILDER_IMAGE"
+  printf '%s\nsource_sha=%s\nversion=%s\ngroup=%s\n' \
+    registry-stack.release-binary-shard.v1 \
+    "${RELEASE_SOURCE_SHA}" "${version}" "${group}" \
+    >"${repo_root}/dist/RELEASE_BINARY_SHARD"
+fi
 # The staged asset lists follow the same gate as the build above, so a version
 # that predates an asset neither checksums nor chmods a file it never built.
 bin_assets=()
 image_bin_binaries=()
-if [[ "${include_discovery}" -eq 1 ]]; then
+if [[ ("${group}" == all || "${group}" == core) && "${include_discovery}" -eq 1 ]]; then
   bin_assets+=("discovery-${tag}-linux-amd64")
   image_bin_binaries+=(discovery)
 fi
-if [[ "${include_breg}" -eq 1 ]]; then
+if [[ ("${group}" == all || "${group}" == breg) && "${include_breg}" -eq 1 ]]; then
   bin_assets+=(
     "breg-${tag}-linux-amd64"
     "bregctl-${tag}-linux-amd64"
   )
   image_bin_binaries+=(breg)
 fi
-bin_assets+=(
-  "evidence-${tag}-linux-amd64"
-  "evidencectl-${tag}-linux-amd64"
-  "mint-${tag}-linux-amd64"
-  "evidence-oid4vci-${tag}-linux-amd64"
-  "registry-manifest-${tag}-linux-amd64"
-  "relay-${tag}-linux-amd64"
-  "relayctl-${tag}-linux-amd64"
-)
-image_bin_binaries+=(evidence mint relay)
+if [[ "${group}" == all || "${group}" == core ]]; then
+  bin_assets+=(
+    "evidence-${tag}-linux-amd64"
+    "evidencectl-${tag}-linux-amd64"
+    "mint-${tag}-linux-amd64"
+    "evidence-oid4vci-${tag}-linux-amd64"
+    "registry-manifest-${tag}-linux-amd64"
+    "relay-${tag}-linux-amd64"
+    "relayctl-${tag}-linux-amd64"
+  )
+  image_bin_binaries+=(evidence mint relay)
+fi
 
 for asset in "${bin_assets[@]}"; do
   chmod 0755 "${repo_root}/dist/bin/${asset}"
@@ -281,11 +315,18 @@ done
 
 (
   cd -- "${repo_root}/dist/bin"
-  sha256sum -- "${bin_assets[@]}" >SHA256SUMS
+  if [[ "${#bin_assets[@]}" -eq 0 ]]; then
+    : >SHA256SUMS
+  else
+    sha256sum -- "${bin_assets[@]}" >SHA256SUMS
+  fi
 )
-(
-  cd -- "${repo_root}/dist/image-bin"
-  sha256sum -- RELEASE_BUILDER_IMAGE "${image_bin_binaries[@]}" >SHA256SUMS
-)
+if [[ "${group}" == all ]]; then
+  (
+    cd -- "${repo_root}/dist/image-bin"
+    sha256sum -- RELEASE_BUILDER_IMAGE "${image_bin_binaries[@]}" >SHA256SUMS
+  )
+fi
 
-printf 'built release binaries for %s with canonical container paths\n' "${tag}"
+printf 'built %s release binaries for %s with canonical container paths\n' \
+  "${group}" "${tag}"

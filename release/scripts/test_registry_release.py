@@ -1206,6 +1206,9 @@ class RegistryReleaseTest(TestCase):
         canonical = workflow.split("\n  build-canonical:", 1)[1].split(
             "\n  build-platforms:", 1
         )[0]
+        canonical_binaries = workflow.split(
+            "\n  build-canonical-binaries:", 1
+        )[1].split("\n  build-canonical:", 1)[0]
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
         )
@@ -1233,8 +1236,12 @@ class RegistryReleaseTest(TestCase):
         ):
             self.assertNotIn(retired, workflow)
         cache_key = next(
-            line.strip() for line in canonical.splitlines() if line.strip().startswith("key:")
+            line.strip()
+            for line in canonical_binaries.splitlines()
+            if line.strip().startswith("key:")
         )
+        self.assertNotIn("key:", canonical)
+        self.assertIn("${{ matrix.group }}", cache_key)
         self.assertIn("Cargo.lock", cache_key)
         self.assertIn("--locked", workflow)
         self.assertIn(

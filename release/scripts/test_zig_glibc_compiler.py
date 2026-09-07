@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -175,6 +176,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "rust-toolchain.toml",
             "Cargo.lock",
             "release/scripts/build-release-binaries.sh",
+            "release/scripts/merge-release-binary-shards.py",
             "release/docker/Dockerfile.builder",
             "release/requirements/ziglang-0.12.1.txt",
             "release/glibc-floor.env",
@@ -227,14 +229,48 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             encoding="utf-8",
         )
         cargo.chmod(0o755)
+        docker = self.fake_bin / "docker"
+        docker.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "with open(os.environ['DOCKER_LOG'], 'a') as log:\n"
+            "    log.write(json.dumps(args) + '\\n')\n"
+            "if args[0] != 'run':\n"
+            "    sys.exit(0)\n"
+            "version = args[-1]\n"
+            "group = args[-2] if args[-3] == '--group' else 'all'\n"
+            "tag = 'v' + version\n"
+            "root = pathlib.Path(os.environ['FIXTURE_ROOT'])\n"
+            "bin_dir = root / 'dist/bin'\n"
+            "image_dir = root / 'dist/image-bin'\n"
+            "parsed = tuple(int(part) for part in version.split('.'))\n"
+            "core = ['evidence', 'evidencectl', 'mint', 'evidence-oid4vci', "
+            "'registry-manifest', 'relay', 'relayctl']\n"
+            "if parsed >= (0, 24, 0):\n"
+            "    core.insert(0, 'discovery')\n"
+            "breg = ['breg', 'bregctl'] if parsed >= (0, 26, 0) else []\n"
+            "selected = (core if group in ('all', 'core') else []) + "
+            "(breg if group in ('all', 'breg') else [])\n"
+            "for name in selected:\n"
+            "    (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
+            "for name in ('discovery', 'breg', 'evidence', 'mint', 'relay'):\n"
+            "    if name in selected:\n"
+            "        (image_dir / name).write_text(name + '\\n')\n",
+            encoding="utf-8",
+        )
+        docker.chmod(0o755)
         uname = self.fake_bin / "uname"
         uname.write_text('#!/bin/sh\nprintf "%s\\n" "$FIXTURE_MACHINE"\n')
         uname.chmod(0o755)
         self.log = self.root / "cargo.jsonl"
+        self.docker_log = self.root / "docker.jsonl"
         self.env = {
             **os.environ,
             "PATH": f"{self.fake_bin}:{os.environ.get('PATH', '')}",
             "CARGO_LOG": str(self.log),
+            "DOCKER_LOG": str(self.docker_log),
+            "FIXTURE_ROOT": str(self.root),
             "FIXTURE_MACHINE": "x86_64",
             "RELEASE_RUSTFLAGS": "--remap-path-prefix=/workspace=/source",
         }
@@ -242,7 +278,11 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             (self.root / relative).mkdir(parents=True)
 
     def run_payload(
-        self, *, version: str = "0.27.0", env: dict[str, str] | None = None
+        self,
+        *,
+        version: str = "0.27.0",
+        group: str = "all",
+        env: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], list[dict]]:
         # Load the actual functions, stopping before Docker's outer entry
         # point. This keeps the fixture unprivileged and runs every real Cargo
@@ -253,8 +293,16 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         probe = self.scripts / "probe-build.sh"
         probe.write_text(definitions + '\nRELEASE_TAG="$tag"\nbuild_payload\n')
         self.log.unlink(missing_ok=True)
+        for relative in ("dist/bin", "dist/image-bin"):
+            directory = self.root / relative
+            shutil.rmtree(directory)
+            directory.mkdir()
+        arguments = ["bash", str(probe)]
+        if group != "all":
+            arguments.extend(["--group", group])
+        arguments.append(version)
         result = subprocess.run(
-            ["bash", str(probe), version],
+            arguments,
             cwd=self.root,
             env=env or self.env,
             capture_output=True,
@@ -293,6 +341,261 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertEqual(paths["RUSTFLAGS"], self.env["RELEASE_RUSTFLAGS"])
         self.assertEqual(paths["REGISTRY_ZIG_PYTHON"], "/usr/bin/python3")
         return paths
+
+    def test_full_and_group_builds_keep_the_exact_cargo_partition(self) -> None:
+        expected = [
+            ["build", "--release", "--locked", "-p", "registry-manifest-cli"],
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-relay-v2",
+                "--bin",
+                "relay",
+                "--no-default-features",
+            ],
+            ["build", "--release", "--locked", "-p", "registry-relayctl"],
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-evidence",
+                "-p",
+                "registry-evidencectl",
+                "-p",
+                "registry-mint",
+                "-p",
+                "registry-evidence-oid4vci",
+            ],
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-discovery",
+                "--bin",
+                "discovery",
+            ],
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-breg",
+                "--bin",
+                "breg",
+                "--features",
+                "runtime",
+            ],
+            ["build", "--release", "--locked", "-p", "registry-bregctl"],
+        ]
+        for group, calls_expected in (
+            ("all", expected),
+            ("core", expected[:5]),
+            ("breg", expected[5:]),
+        ):
+            with self.subTest(group=group):
+                result, calls = self.run_payload(group=group)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(calls_expected, [call["args"] for call in calls])
+        self.assertNotIn("tooling", str(expected))
+
+    def test_group_builds_keep_the_release_version_gates(self) -> None:
+        result, core = self.run_payload(version="0.23.9", group="core")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(4, len(core))
+        self.assertFalse(any("registry-discovery" in call["args"] for call in core))
+        result, breg = self.run_payload(version="0.25.9", group="breg")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([], breg)
+
+    def test_outer_builder_dispatches_each_group_with_canonical_container_paths(
+        self,
+    ) -> None:
+        for group in ("all", "core", "breg"):
+            with self.subTest(group=group):
+                self.docker_log.unlink(missing_ok=True)
+                arguments = ["bash", str(self.scripts / BINARY_RECIPE.name)]
+                if group != "all":
+                    arguments.extend(["--group", group])
+                arguments.append("0.27.0")
+                result = subprocess.run(
+                    arguments,
+                    cwd=self.root,
+                    env={
+                        **self.env,
+                        "RELEASE_CARGO_HOME": str(self.root / ".cargo-home"),
+                        "RELEASE_TARGET_DIR": str(self.root / "target"),
+                        "RELEASE_SOURCE_SHA": "1" * 40,
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [
+                    json.loads(line) for line in self.docker_log.read_text().splitlines()
+                ]
+                self.assertEqual(["build", "run"], [call[0] for call in calls])
+                run = calls[1]
+                self.assertIn(f"{self.root}:/workspace", run)
+                self.assertIn(f"{self.root / '.cargo-home'}:/workspace/.cargo-home", run)
+                self.assertIn(f"{self.root / 'target'}:/workspace/target", run)
+                self.assertIn("CARGO_HOME=/workspace/.cargo-home", run)
+                self.assertIn("CARGO_TARGET_DIR=/workspace/target", run)
+                self.assertEqual(
+                    [
+                        "/workspace/release/scripts/build-release-binaries.sh",
+                        "--group",
+                        group,
+                        "0.27.0",
+                    ],
+                    run[-4:],
+                )
+                if group == "all":
+                    self.assertFalse((self.root / "dist/RELEASE_BINARY_SHARD").exists())
+                else:
+                    self.assertIn(
+                        f"group={group}\n",
+                        (self.root / "dist/RELEASE_BINARY_SHARD").read_text(),
+                    )
+
+    def test_pre_breg_empty_producer_merges_with_the_core_shard(self) -> None:
+        source_sha = "1" * 40
+        shard_root = self.root / "downloaded"
+        for group in ("core", "breg"):
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(self.scripts / BINARY_RECIPE.name),
+                    "--group",
+                    group,
+                    "0.25.0",
+                ],
+                cwd=self.root,
+                env={
+                    **self.env,
+                    "RELEASE_CARGO_HOME": str(self.root / f".cargo-home-{group}"),
+                    "RELEASE_TARGET_DIR": str(self.root / f"target-{group}"),
+                    "RELEASE_SOURCE_SHA": source_sha,
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            destination = shard_root / group
+            destination.mkdir(parents=True)
+            shutil.copytree(self.root / "dist/bin", destination / "bin")
+            for marker in ("RELEASE_BINARY_SHARD", "RELEASE_BUILDER_IMAGE"):
+                shutil.copy2(self.root / "dist" / marker, destination / marker)
+        self.assertEqual(
+            "", (shard_root / "breg/bin/SHA256SUMS").read_text(encoding="utf-8")
+        )
+        output = self.root / "merged"
+        result = subprocess.run(
+            [
+                str(self.scripts / "merge-release-binary-shards.py"),
+                "--version",
+                "0.25.0",
+                "--source-sha",
+                source_sha,
+                "--core",
+                str(shard_root / "core"),
+                "--breg",
+                str(shard_root / "breg"),
+                "--output",
+                str(output),
+                "--builder-image",
+                "rust:1.95-trixie@sha256:"
+                "f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(path.name.startswith("breg-") for path in (output / "bin").iterdir()))
+
+    def test_merged_groups_are_byte_mode_and_inventory_equivalent_to_all(self) -> None:
+        source_sha = "1" * 40
+
+        def build(group: str, version: str = "0.27.0") -> subprocess.CompletedProcess[str]:
+            arguments = ["bash", str(self.scripts / BINARY_RECIPE.name)]
+            if group != "all":
+                arguments.extend(["--group", group])
+            arguments.append(version)
+            return subprocess.run(
+                arguments,
+                cwd=self.root,
+                env={
+                    **self.env,
+                    "RELEASE_CARGO_HOME": str(self.root / f"cargo-{group}"),
+                    "RELEASE_TARGET_DIR": str(self.root / f"target-{group}"),
+                    "RELEASE_SOURCE_SHA": source_sha,
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        result = build("all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = self.root / "expected"
+        shutil.copytree(self.root / "dist/bin", expected / "bin")
+        shutil.copytree(self.root / "dist/image-bin", expected / "image-bin")
+
+        shards = self.root / "shards"
+        for group in ("core", "breg"):
+            result = build(group)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            destination = shards / group
+            destination.mkdir(parents=True)
+            shutil.copytree(self.root / "dist/bin", destination / "bin")
+            for marker in ("RELEASE_BINARY_SHARD", "RELEASE_BUILDER_IMAGE"):
+                shutil.copy2(self.root / "dist" / marker, destination / marker)
+
+        output = self.root / "merged-groups"
+        result = subprocess.run(
+            [
+                str(self.scripts / "merge-release-binary-shards.py"),
+                "--version",
+                "0.27.0",
+                "--source-sha",
+                source_sha,
+                "--core",
+                str(shards / "core"),
+                "--breg",
+                str(shards / "breg"),
+                "--output",
+                str(output),
+                "--builder-image",
+                "rust:1.95-trixie@sha256:"
+                "f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected_paths = sorted(
+            path.relative_to(expected) for path in expected.rglob("*") if path.is_file()
+        )
+        actual_paths = sorted(
+            path.relative_to(output) for path in output.rglob("*") if path.is_file()
+        )
+        self.assertEqual(expected_paths, actual_paths)
+        for relative in expected_paths:
+            with self.subTest(path=str(relative)):
+                expected_path = expected / relative
+                actual_path = output / relative
+                self.assertEqual(expected_path.read_bytes(), actual_path.read_bytes())
+                self.assertEqual(
+                    stat.S_IMODE(expected_path.stat().st_mode),
+                    stat.S_IMODE(actual_path.stat().st_mode),
+                )
 
     def test_identical_recipe_and_lock_update_keep_compiler_paths(self) -> None:
         first = self.successful_paths()
