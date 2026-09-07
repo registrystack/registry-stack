@@ -766,11 +766,12 @@ Publication:
    retaining the latest authenticated docs-bearing release at the canonical
    and versioned routes.
 
-The candidate attestation, the signed checksum chain, and the checksum
-provenance bundle are the Beta provenance model. Because `SHA256SUMS` closes
-over every public payload, one provenance statement for it covers the whole
-inventory; publication does not attest each payload separately. The public
-verifier requires the provenance asset from v0.27.0 and verifies it whenever it
+The candidate attestations bind the payload build, while the signed checksum
+chain and checksum provenance authenticate the public inventory and its
+publication execution. Consumers verify each payload against `SHA256SUMS`
+after authenticating that file; the checksum statement is not direct build
+provenance for each binary. The public
+verifier requires the provenance asset from v0.27.1 and verifies it whenever it
 is present. Pre-v0.19 release finalizers remain only in their immutable
 historical release tags.
 

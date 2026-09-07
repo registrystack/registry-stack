@@ -210,7 +210,7 @@ def verify_downloaded_assets(
     assets: dict[str, dict[str, Any]],
     *,
     tag: str,
-) -> tuple[dict[str, str], str]:
+) -> tuple[dict[str, str], str, str | None]:
     downloaded = {
         path.name: path
         for path in directory.iterdir()
