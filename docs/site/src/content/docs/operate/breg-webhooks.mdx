@@ -101,8 +101,9 @@ bregctl webhook sample ./my-registry --event record-created-v1
 ```
 
 ```text
-webhook sample succeeded
-event: record-created-v1
+Built the sample delivery. The canonical request follows.
+  event  record-created-v1
+
 POST <configured-webhook-request-target> HTTP/1.1
 Accept: application/json
 Content-Type: application/json

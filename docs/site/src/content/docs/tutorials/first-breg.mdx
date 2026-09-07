@@ -70,14 +70,36 @@ bregctl init tutorial-work/project
 ```
 
 ```text
-init succeeded
-revision: sha256:<digest>
-finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
-artifacts: 6
-next: read tutorial-work/project/README.md, then run 'bregctl check tutorial-work/project'
-next: leave the findings above as they are; the example operator profile lists a whole collection and the example evidence-source profile looks up any record, both on purpose, and tutorial-work/project/README.md says where to narrow them
-next: replace canonicalBaseIri in tutorial-work/project/registry.yaml before you build a production package; the example value is a reserved .invalid name that never resolves
+Initialized a registry project. 6 artifacts written.
+  revision  sha256:<digest>
+
+  README.md
+  dev-clients.yaml
+  modules/record-notes/module.yaml
+  registry.yaml
+  runtime.example.yaml
+  tests/journeys.yaml
+
+  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+           this profile can list all rows, subject only to query bounds; caller filters
+           are not authorization. Add a claim-bound row restriction or review this
+           registry-wide access
+  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+           this profile has no claim-bound row restriction for its granted operations;
+           requestVisibility owner limits request reads only, and other lifecycle rules
+           still apply. Review this registry-wide access
+
+0 errors, 2 findings.
+
+Next:
+  1. read tutorial-work/project/README.md, then run 'bregctl check
+     tutorial-work/project'
+  2. leave the findings above as they are; the example operator profile lists a whole
+     collection and the example evidence-source profile looks up any record, both on
+     purpose, and tutorial-work/project/README.md says where to narrow them
+  3. replace canonicalBaseIri in tutorial-work/project/registry.yaml before you build a
+     production package; the example value is a reserved .invalid name that never
+     resolves
 ```
 
 A registry project is a directory of YAML files that declares one registry, and `init` compiled
@@ -91,8 +113,8 @@ The `record` entity in `registry.yaml` carries the `code` and `label` fields you
 
 A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a
 finding does not.
-Both findings here are expected, as the second `next:` line says, and every command on this project
-repeats them; read past them to the result.
+Both findings here are expected, as the second step under `Next:` says, and every command on this
+project repeats them; read past them to the result.
 
 Open `tutorial-work/project/dev-clients.yaml`.
 Its first client is the caller you will act as:
@@ -132,21 +154,23 @@ The first start downloads the pinned PostgreSQL image, so it takes longer than t
 The command returns once the registry answers, with a report like this one:
 
 ```text
-dev succeeded
-status: ready
-project: <path>/tutorial-work/project
-breg url: http://127.0.0.1:8090
-token endpoint: http://127.0.0.1:8091/token
-audience: urn:breg:dev:<uuid>
-package revision: sha256:<digest>
-state file: <path>/tutorial-work/project/.breg/dev/state.json
-runtime config: <path>/tutorial-work/project/.breg/dev/runtime.yaml
-client operator
-    client id file: <path>/tutorial-work/project/.breg/dev/credentials/operator/client-id
-    assertion key file: <path>/tutorial-work/project/.breg/dev/credentials/operator/assertion-key.jwk
-client reader
-    client id file: <path>/tutorial-work/project/.breg/dev/credentials/reader/client-id
-    assertion key file: <path>/tutorial-work/project/.breg/dev/credentials/reader/assertion-key.jwk
+bregctl dev succeeded.
+  status            ready
+  project           <path>/tutorial-work/project
+  breg url          http://127.0.0.1:8090
+  token endpoint    http://127.0.0.1:8091/token
+  audience          urn:breg:dev:<uuid>
+  package revision  sha256:<digest>
+  state file        <path>/tutorial-work/project/.breg/dev/state.json
+  runtime config    <path>/tutorial-work/project/.breg/dev/runtime.yaml
+
+  client operator
+    client id file      <path>/tutorial-work/project/.breg/dev/credentials/operator/client-id
+    assertion key file  <path>/tutorial-work/project/.breg/dev/credentials/operator/assertion-key.jwk
+
+  client reader
+    client id file      <path>/tutorial-work/project/.breg/dev/credentials/reader/client-id
+    assertion key file  <path>/tutorial-work/project/.breg/dev/credentials/reader/assertion-key.jwk
 ```
 
 What happened: `dev` started PostgreSQL in a container, read the project's `dev-clients.yaml`,
@@ -461,7 +485,7 @@ Stop the services:
 bregctl dev stop tutorial-work/project
 ```
 
-The report ends with `status: stopped`.
+The report's `status` reads `stopped`.
 The container and its volume stay, with your records and audit history, and the start command from
 [Start the registry](#start-the-registry) brings the same registry back.
 To discard the records as well, stop with `--remove`:

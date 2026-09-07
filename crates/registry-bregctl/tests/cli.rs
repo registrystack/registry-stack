@@ -313,7 +313,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "allowed purposes (any)",
         "row restrictions (all)",
         "district-reader",
-        "principal claim: registry_principal",
+        "principal claim         registry_principal",
     ] {
         assert!(text.contains(expected), "{text}");
     }
@@ -1825,20 +1825,28 @@ fn init_prints_the_next_command_and_what_the_example_leaves_open() {
     let stdout = String::from_utf8(output.stdout).expect("init stdout is UTF-8");
     let readme = destination.join("README.md");
     let registry = destination.join("registry.yaml");
+    // The steps are numbered and folded to a fixed column, so each sentence is
+    // matched against the rendering with its line breaks and indentation
+    // collapsed back into single spaces.
+    let unwrapped = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        stdout.contains(&format!(
-            "next: read {}, then run 'bregctl check {destination_argument}'",
+        stdout.contains("Next:"),
+        "init opens the steps with a heading: {stdout}"
+    );
+    assert!(
+        unwrapped.contains(&format!(
+            "1. read {}, then run 'bregctl check {destination_argument}'",
             readme.display()
         )),
         "init names the next command: {stdout}"
     );
     assert!(
-        stdout.contains("next: leave the findings above as they are;"),
+        unwrapped.contains("2. leave the findings above as they are;"),
         "init says the reported findings belong to the example: {stdout}"
     );
     assert!(
-        stdout.contains(&format!(
-            "next: replace canonicalBaseIri in {} before you build a production package;",
+        unwrapped.contains(&format!(
+            "3. replace canonicalBaseIri in {} before you build a production package;",
             registry.display()
         )),
         "init says the example base IRI is not shippable: {stdout}"
@@ -4674,9 +4682,14 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
     assert!(human.status.success(), "{human:?}");
     assert!(human.stderr.is_empty());
     let human = String::from_utf8(human.stdout).expect("verify human report is UTF-8");
-    assert!(human.starts_with("verify succeeded\nassurance: runtime_bound\n"));
-    assert!(human.contains(&format!("package revision: {}\n", fixture.package_revision)));
-    assert!(human.contains("registry id: verify-registry\n"));
+    assert!(human.starts_with(
+        "Verified the package against the runtime it is bound to.\n  assurance            runtime_bound\n"
+    ));
+    assert!(human.contains(&format!(
+        "package revision     {}\n",
+        fixture.package_revision
+    )));
+    assert!(human.contains("registry id          verify-registry\n"));
     assert!(!human.contains(path(&fixture.runtime_config)));
 }
 
@@ -4751,10 +4764,12 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
     assert!(human.status.success(), "{human:?}");
     assert!(human.stderr.is_empty());
     let human = String::from_utf8(human.stdout).expect("migration report is UTF-8");
-    assert!(human.starts_with("migration explain succeeded\nassurance: runtime_bound\n"));
-    assert!(human.contains("plan kind: initial\n"));
-    assert!(human.contains("change count: 0\n"));
-    assert!(human.contains("reviewed migration count: 0\n"));
+    assert!(human.starts_with(
+        "Explained the migration plan. 0 changes, 0 reviewed migrations.\n  assurance                            runtime_bound\n"
+    ));
+    assert!(human.contains("plan kind                            initial\n"));
+    assert!(human.contains("change count                         0\n"));
+    assert!(human.contains("reviewed migration count             0\n"));
     assert!(!human.contains(path(&fixture.runtime_config)));
 }
 

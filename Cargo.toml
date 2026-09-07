@@ -108,6 +108,8 @@ registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "
 registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.27.0" }
 registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.27.0" }
 
+anstream = { version = "1" }
+anstyle = { version = "1" }
 anyhow = { version = "1" }
 assert-json-diff = { version = "2" }
 async-trait = { version = "0.1" }

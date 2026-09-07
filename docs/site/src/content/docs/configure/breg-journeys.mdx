@@ -27,14 +27,23 @@ bregctl check ./my-registry
 `check` compiles the project without a database and prints the compiled revision, a content digest of everything the compiler read:
 
 ```text
-check succeeded
-revision: sha256:<digest>
-finding access.profile.unrestricted_collection at entities[id=record].accessProfiles[id=operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-finding access.profile.unrestricted_rows at entities[id=record].accessProfiles[id=evidence-source].rowBoundaries: this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+Authoring check passed.
+  revision  sha256:<digest>
+
+  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+           this profile can list all rows, subject only to query bounds; caller filters
+           are not authorization. Add a claim-bound row restriction or review this
+           registry-wide access
+  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+           this profile has no claim-bound row restriction for its granted operations;
+           requestVisibility owner limits request reads only, and other lifecycle rules
+           still apply. Review this registry-wide access
+
+0 errors, 2 findings.
 ```
 
 Two people holding the same revision hold the same project.
-An error is a declaration the compiler cannot compile, printed as `error <code> at <path>: <message>`, and the command exits with status 1.
+An error is a declaration the compiler cannot compile, printed as an `error` row carrying its code, its document path, and its message, and the command exits with status 1.
 A finding is an advisory attached to a document path: the project compiles, but a reviewer must read it.
 The project `init` wrote reports both findings on purpose: `access.profile.unrestricted_collection`, because its `operator` profile lists every record, and `access.profile.unrestricted_rows`, because its `evidence-source` profile looks up any record by code.
 
@@ -45,7 +54,7 @@ bregctl check ./my-registry --deny-findings
 bregctl check ./my-registry --production
 ```
 
-`--deny-findings` turns every finding into an error, so the first command prints `error access.profile.unrestricted_collection at ...` and exits with status 1 until every finding is resolved or the profiles are changed.
+`--deny-findings` makes every finding fail the command, so the first one prints `bregctl check refused.` above the same two findings and exits with status 1 until they are resolved or the profiles are changed.
 `--production` applies the production closure rules: package identity, a lock entry with a pinned digest for every module, a loaded source for every lock, and a webhook for every event must all be present, and a project missing one fails with `package.identity.required`, `module.lock.missing`, `module.lock.digest_required`, `module.source.required`, or `event.delivery.required`.
 The project `init` wrote already carries all of them, so `check --production` succeeds on it.
 `explain` and `generate` accept `--production` as well; `--deny-findings` belongs to `check` alone.

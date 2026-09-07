@@ -92,10 +92,19 @@ seven `access.profile.no_required_scope` and eleven `access.profile.unrestricted
 The block shows the first of each kind and omits the rest:
 
 ```text
-check succeeded
-revision: sha256:<configuration-digest>
-finding access.profile.no_required_scope at entities[id=asset-item].accessProfiles[id=asset-operator].requiredScopes: no scope restricts who may select this profile; any authenticated principal satisfying its purpose and row claims qualifies. Add a required scope unless this is intended
-finding access.profile.unrestricted_collection at entities[id=asset-item].accessProfiles[id=asset-operator].rowBoundaries: this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+Authoring check passed.
+  revision  sha256:<configuration-digest>
+
+  finding  access.profile.no_required_scope  entities[id=asset-item].accessProfiles[id=asset-operator].requiredScopes
+           no scope restricts who may select this profile; any authenticated principal
+           satisfying its purpose and row claims qualifies. Add a required scope unless
+           this is intended
+  finding  access.profile.unrestricted_collection  entities[id=asset-item].accessProfiles[id=asset-operator].rowBoundaries
+           this profile can list all rows, subject only to query bounds; caller filters
+           are not authorization. Add a claim-bound row restriction or review this
+           registry-wide access
+
+0 errors, 18 findings.
 ```
 
 Findings are advisories, not failures.

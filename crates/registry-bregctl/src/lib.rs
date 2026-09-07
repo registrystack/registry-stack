@@ -5,6 +5,7 @@
 //! parsing, validation, compilation, and artifact generation remain in
 //! `breg`.
 
+use anstream::AutoStream;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -48,6 +49,7 @@ mod package_inspection;
 mod package_lifecycle;
 mod project_migration;
 mod reconcile_lifecycle;
+mod report;
 mod request_retention;
 mod reviewed_migrations;
 mod safe_path;
@@ -1472,8 +1474,18 @@ pub fn command() -> clap::Command {
 }
 
 /// Parse the current process arguments and execute the selected operation.
+///
+/// The process streams are wrapped so the renderers can write the ANSI
+/// attributes unconditionally: `AutoStream` keeps them when the destination is
+/// a terminal and strips them when it is a pipe, a file, or a test harness,
+/// honoring `NO_COLOR` and `CLICOLOR_FORCE` on the way. A tutorial that
+/// captures a command therefore records the same plain bytes it prints.
 pub fn main_entry() -> ExitCode {
-    run_from(std::env::args_os(), &mut io::stdout(), &mut io::stderr())
+    let stdout = io::stdout();
+    let stderr = io::stderr();
+    let mut stdout = AutoStream::new(stdout, AutoStream::choice(&io::stdout()));
+    let mut stderr = AutoStream::new(stderr, AutoStream::choice(&io::stderr()));
+    run_from(std::env::args_os(), &mut stdout, &mut stderr)
 }
 
 /// Run from explicit arguments. This is public so process-level tests can use
@@ -7865,6 +7877,101 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
     }
 }
 
+/// Render the common report shape: one lead sentence, then aligned detail.
+fn render_report(lead: &str, pairs: &[(&str, String)], stdout: &mut dyn Write) -> io::Result<()> {
+    let mut lines = report::Lines::new();
+    lines.lead(lead);
+    lines.pairs(pairs);
+    stdout.write_all(lines.finish().as_bytes())
+}
+
+/// Map the CLI's diagnostic envelope onto the report renderer's findings, so
+/// a refusal, a check, and a diff all present a diagnostic the same way.
+fn report_findings(diagnostics: &[ToolDiagnostic]) -> Vec<report::Finding<'_>> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| report::Finding {
+            severity: match diagnostic.severity {
+                DiagnosticSeverity::Error => report::Severity::Error,
+                DiagnosticSeverity::Finding => report::Severity::Finding,
+            },
+            code: &diagnostic.code,
+            path: &diagnostic.path,
+            message: &diagnostic.message,
+        })
+        .collect()
+}
+
+/// Render a list of values as one detail value, naming an empty list rather
+/// than leaving the reader an empty column to interpret.
+fn list_or_none(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".to_owned()
+    } else {
+        values.join(", ")
+    }
+}
+
+/// The sentence that opens a success report: what the command did, and the
+/// counts a reader would otherwise have to total up from the lines below.
+fn success_lead(report: &SuccessReport) -> String {
+    let artifacts = report.artifacts.len();
+    match report.command {
+        "init" => format!(
+            "Initialized a registry project. {} written.",
+            report::counted(artifacts, "artifact")
+        ),
+        "check" => match report.profile {
+            ProfileArg::Authoring => "Authoring check passed.".to_owned(),
+            ProfileArg::Production => "Production check passed.".to_owned(),
+        },
+        "project lock" => format!(
+            "Locked the project modules. {} written.",
+            report::counted(artifacts, "artifact")
+        ),
+        "generate" => format!("Generated {}.", report::counted(artifacts, "artifact")),
+        "explain" => "Explained the compiled inventory.".to_owned(),
+        other => format!("{other} succeeded."),
+    }
+}
+
+fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<()> {
+    let mut lines = report::Lines::new();
+    lines.lead(&success_lead(report));
+    lines.pairs(&[("revision", report.revision.clone())]);
+
+    if !report.artifacts.is_empty() {
+        lines.blank();
+        for artifact in &report.artifacts {
+            lines.bullet(&artifact.path);
+        }
+    }
+
+    lines.findings(&report_findings(&report.findings));
+
+    // An access explanation is part of this report and is folded into it. Any
+    // other explanation is a document this renderer has no shape for, so it
+    // keeps its own JSON rendering below the report.
+    let mut document = None;
+    if let Some(explanation) = &report.explanation {
+        if explanation.get("scopeMatching").is_some()
+            || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
+        {
+            push_access_explanation(explanation, &mut lines);
+        } else {
+            document = Some(serde_json::to_string_pretty(explanation).map_err(io::Error::other)?);
+        }
+    }
+
+    lines.steps(&report.next_steps);
+    stdout.write_all(lines.finish().as_bytes())?;
+    if let Some(document) = document {
+        writeln!(stdout)?;
+        writeln!(stdout, "{document}")?;
+    }
+    Ok(())
+}
+
 fn write_success(
     report: &SuccessReport,
     format: OutputFormat,
@@ -7876,34 +7983,7 @@ fn write_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "{} succeeded", report.command).and_then(|()| {
-            writeln!(stdout, "revision: {}", report.revision)?;
-            for finding in &report.findings {
-                writeln!(
-                    stdout,
-                    "finding {} at {}: {}",
-                    finding.code, finding.path, finding.message
-                )?;
-            }
-            if !report.artifacts.is_empty() {
-                writeln!(stdout, "artifacts: {}", report.artifacts.len())?;
-            }
-            if let Some(explanation) = &report.explanation {
-                if explanation.get("scopeMatching").is_some()
-                    || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
-                {
-                    write_access_explanation(explanation, stdout)?;
-                } else {
-                    let rendered =
-                        serde_json::to_string_pretty(explanation).map_err(io::Error::other)?;
-                    writeln!(stdout, "{rendered}")?;
-                }
-            }
-            for step in &report.next_steps {
-                writeln!(stdout, "next: {step}")?;
-            }
-            Ok(())
-        })
+        render_success(report, stdout)
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -7925,21 +8005,24 @@ fn write_project_migrate_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else if !report.changed {
-        writeln!(
+        render_report(
+            "The project already uses the plural authoring model. Nothing to migrate.",
+            &[],
             stdout,
-            "project migrate: already uses the plural authoring model"
         )
     } else {
-        writeln!(
-            stdout,
-            "project migrate: {}",
-            if report.written {
-                "wrote the reviewed migration"
-            } else {
-                "dry run; pass --write to apply this diff"
-            }
-        )
-        .and_then(|()| writeln!(stdout, "{}", report.diff.trim_end()))
+        let mut lines = report::Lines::new();
+        lines.lead(if report.written {
+            "Migrated the project to the plural authoring model. The reviewed migration is written."
+        } else {
+            "Reviewed the migration to the plural authoring model. Pass --write to apply this diff."
+        });
+        stdout
+            .write_all(lines.finish().as_bytes())
+            // The diff is a verbatim document, not a report line: it is quoted
+            // as the tool produced it so a reader can apply it unchanged.
+            .and_then(|()| writeln!(stdout))
+            .and_then(|()| writeln!(stdout, "{}", report.diff.trim_end()))
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -7963,46 +8046,50 @@ fn write_planner_test_success(
             .and_then(|bytes| stdout.write_all(&bytes))
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "project planner-test succeeded")
-            .and_then(|()| writeln!(stdout, "compiled revision: {}", report.compiled_revision))
-            .and_then(|()| writeln!(stdout, "request entity: {}", report.request_entity))
-            .and_then(|()| writeln!(stdout, "planner kind: {}", report.planner.kind))
-            .and_then(|()| writeln!(stdout, "planner ABI: {}", report.planner.abi))
-            .and_then(|()| {
-                writeln!(
-                    stdout,
-                    "planner script SHA-256: {}",
-                    report.planner.script_sha256
-                )
-            })
-            .and_then(|()| writeln!(stdout, "disposition: {}", report.disposition))
-            .and_then(|()| {
-                if let Some(reason) = &report.queue_reason {
-                    writeln!(stdout, "queue reason: {} ({})", reason.code, reason.label)
-                } else {
-                    Ok(())
-                }
-            })
-            .and_then(|()| {
-                for effect in &report.effects {
-                    writeln!(
-                        stdout,
-                        "effect {}: target={}, operation={}, fields={}, dependencies={}",
-                        effect.id,
-                        effect.target_kind,
-                        effect.operation,
-                        effect.fields.join(","),
-                        effect.depends_on.join(",")
-                    )?;
-                }
-                writeln!(
-                    stdout,
-                    "counts: effects={}, field mutations={}, dependencies={}",
-                    report.counts.effects,
-                    report.counts.field_mutations,
-                    report.counts.dependencies
-                )
-            })
+        let mut lines = report::Lines::new();
+        lines.lead(&format!(
+            "Ran the planner. Disposition {}, {}.",
+            report.disposition,
+            report::counted(report.effects.len(), "effect")
+        ));
+        let mut pairs = vec![
+            ("compiled revision", report.compiled_revision.clone()),
+            ("request entity", report.request_entity.clone()),
+            ("planner kind", report.planner.kind.to_owned()),
+            ("planner ABI", report.planner.abi.clone()),
+            (
+                "planner script SHA-256",
+                report.planner.script_sha256.clone(),
+            ),
+            ("disposition", report.disposition.to_owned()),
+        ];
+        if let Some(reason) = &report.queue_reason {
+            pairs.push((
+                "queue reason",
+                format!("{} ({})", reason.code, reason.label),
+            ));
+        }
+        pairs.push(("effects", report.counts.effects.to_string()));
+        pairs.push(("field mutations", report.counts.field_mutations.to_string()));
+        pairs.push(("dependencies", report.counts.dependencies.to_string()));
+        lines.pairs(&pairs);
+
+        // One block per effect, so the fields and dependencies an effect
+        // carries are named once instead of on every effect line.
+        for effect in &report.effects {
+            lines.blank();
+            lines.item(&format!("effect {}", effect.id));
+            lines.pairs_at(
+                2,
+                &[
+                    ("target", effect.target_kind.to_owned()),
+                    ("operation", effect.operation.to_owned()),
+                    ("fields", list_or_none(&effect.fields)),
+                    ("dependencies", list_or_none(&effect.depends_on)),
+                ],
+            );
+        }
+        stdout.write_all(lines.finish().as_bytes())
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -8013,70 +8100,80 @@ fn write_planner_test_success(
     }
 }
 
-fn write_access_explanation(explanation: &Value, stdout: &mut dyn Write) -> io::Result<()> {
+fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
     if explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic") {
         let admitted = explanation["admitted"].as_bool() == Some(true);
-        writeln!(
-            stdout,
-            "synthetic profile admission: {} ({})",
+        lines.verdict(
+            "Synthetic profile admission:",
             if admitted { "allowed" } else { "refused" },
-            explanation["reason"].as_str().unwrap_or("unknown")
-        )?;
-        writeln!(
-            stdout,
-            "No credentials verified, records checked, or authority issued. Claim values are not printed."
-        )?;
+            admitted,
+        );
+        lines.pairs(&[(
+            "reason",
+            explanation["reason"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_owned(),
+        )]);
+        lines.blank();
+        lines.prose(
+            1,
+            "No credentials verified, records checked, or authority issued. Claim values are not printed.",
+        );
         if explanation["effectiveProfile"].is_object() {
-            write_access_profile(&explanation["effectiveProfile"], stdout)?;
+            lines.blank();
+            push_access_profile(&explanation["effectiveProfile"], 1, lines);
         }
-        return Ok(());
+        return;
     }
+    lines.heading("Access:");
     for key in [
         "scopeMatching",
         "purposeMatching",
         "rowMatching",
         "profileSelection",
     ] {
-        writeln!(stdout, "{}", explanation[key].as_str().unwrap_or(""))?;
+        let sentence = explanation[key].as_str().unwrap_or("");
+        if !sentence.is_empty() {
+            lines.listed(1, sentence);
+        }
     }
     if let Some(entities) = explanation["entities"].as_array() {
         for entity in entities {
-            writeln!(
-                stdout,
-                "\nentity: {} ({})",
-                entity["entity"].as_str().unwrap_or(""),
-                entity["classification"].as_str().unwrap_or("")
-            )?;
+            lines.blank();
+            lines.item_at(
+                1,
+                &format!(
+                    "{} ({})",
+                    entity["entity"].as_str().unwrap_or(""),
+                    entity["classification"].as_str().unwrap_or("")
+                ),
+            );
             if !entity["requirements"].is_null() {
-                writeln!(
-                    stdout,
-                    "  mandatory requirements: {}",
-                    entity["requirements"]
-                )?;
+                lines.pairs_at(
+                    2,
+                    &[("mandatory requirements", entity["requirements"].to_string())],
+                );
             }
             if let Some(profiles) = entity["profiles"].as_array() {
                 for profile in profiles {
-                    write_access_profile(profile, stdout)?;
+                    lines.blank();
+                    push_access_profile(profile, 2, lines);
                 }
             }
         }
     }
-    Ok(())
 }
 
-fn write_access_profile(profile: &Value, stdout: &mut dyn Write) -> io::Result<()> {
-    writeln!(
-        stdout,
-        "  profile: {}",
-        profile["id"].as_str().unwrap_or("")
-    )?;
-    writeln!(
-        stdout,
-        "    principal claim: {}",
+fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines) {
+    lines.item_at(depth, profile["id"].as_str().unwrap_or(""));
+    let mut fields = vec![(
+        "principal claim",
         profile["principalClaim"]
             .as_str()
             .unwrap_or("none (anonymous)")
-    )?;
+            .to_owned(),
+    )];
     for (field, label, empty) in [
         ("operations", "operations", "none"),
         ("requiredScopes", "required scopes (all)", "none required"),
@@ -8090,11 +8187,12 @@ fn write_access_profile(profile: &Value, stdout: &mut dyn Write) -> io::Result<(
         ("readPaths", "related records", "none"),
     ] {
         let value = &profile[field];
-        if value.is_null() || value.as_array().is_some_and(Vec::is_empty) {
-            writeln!(stdout, "    {label}: {empty}")?;
+        let rendered = if value.is_null() || value.as_array().is_some_and(Vec::is_empty) {
+            empty.to_owned()
         } else {
-            writeln!(stdout, "    {label}: {value}")?;
-        }
+            value.to_string()
+        };
+        fields.push((label, rendered));
     }
     for field in [
         "anonymous",
@@ -8102,13 +8200,9 @@ fn write_access_profile(profile: &Value, stdout: &mut dyn Write) -> io::Result<(
         "revisionAccess",
         "allowDataExport",
     ] {
-        writeln!(
-            stdout,
-            "    {field}: {}",
-            profile[field].as_bool().unwrap_or(false)
-        )?;
+        fields.push((field, profile[field].as_bool().unwrap_or(false).to_string()));
     }
-    Ok(())
+    lines.pairs_at(depth + 1, &fields);
 }
 
 fn write_dev_success(
@@ -8122,13 +8216,13 @@ fn write_dev_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(
-            stdout,
-            "{} succeeded",
-            report["command"].as_str().unwrap_or("dev")
-        )
-        .and_then(|()| {
-            for (label, field) in [
+        {
+            let mut lines = report::Lines::new();
+            lines.lead(&format!(
+                "bregctl {} succeeded.",
+                report["command"].as_str().unwrap_or("dev")
+            ));
+            let pairs: Vec<(&str, String)> = [
                 ("status", "status"),
                 ("project", "project"),
                 ("breg url", "bregUrl"),
@@ -8137,29 +8231,36 @@ fn write_dev_success(
                 ("package revision", "packageRevision"),
                 ("state file", "stateFile"),
                 ("runtime config", "runtimeConfig"),
-            ] {
-                if let Some(value) = report[field].as_str() {
-                    writeln!(stdout, "{label}: {value}")?;
-                }
-            }
+            ]
+            .into_iter()
+            .filter_map(|(label, field)| {
+                report[field]
+                    .as_str()
+                    .map(|value| (label, value.to_owned()))
+            })
+            .collect();
+            lines.pairs(&pairs);
             // Credential file references, never credential bytes.
-            for client in report["clients"].as_array().into_iter().flatten() {
-                writeln!(
-                    stdout,
+            let clients = report["clients"].as_array().into_iter().flatten();
+            for client in clients {
+                lines.blank();
+                lines.item(&format!(
                     "client {}",
                     client["id"].as_str().unwrap_or_default()
-                )?;
-                for (label, field) in [
+                ));
+                let files: Vec<(&str, String)> = [
                     ("client id file", "clientIdFile"),
                     ("assertion key file", "assertionKeyFile"),
-                ] {
-                    if let Some(path) = client[field].as_str() {
-                        writeln!(stdout, "    {label}: {path}")?;
-                    }
-                }
+                ]
+                .into_iter()
+                .filter_map(|(label, field)| {
+                    client[field].as_str().map(|path| (label, path.to_owned()))
+                })
+                .collect();
+                lines.pairs_at(2, &files);
             }
-            Ok(())
-        })
+            stdout.write_all(lines.finish().as_bytes())
+        }
     };
     write_result(result, stderr)
 }
@@ -8179,12 +8280,20 @@ fn write_doctor_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "doctor succeeded").and_then(|()| {
-            for dependency in report.checked {
-                writeln!(stdout, "checked {dependency}: pass")?;
-            }
-            Ok(())
-        })
+        {
+            let mut lines = report::Lines::new();
+            lines.lead(&format!(
+                "{} passed.",
+                report::counted(report.checked.len(), "dependency check")
+            ));
+            let pairs: Vec<(&str, String)> = report
+                .checked
+                .iter()
+                .map(|dependency| (*dependency, "pass".to_owned()))
+                .collect();
+            lines.pairs(&pairs);
+            stdout.write_all(lines.finish().as_bytes())
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -8206,37 +8315,37 @@ fn write_verify_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "{} succeeded", report.command).and_then(|()| {
-            writeln!(stdout, "assurance: runtime_bound")?;
-            writeln!(stdout, "package revision: {}", report.package_revision)?;
-            writeln!(stdout, "registry id: {}", report.registry.id)?;
-            writeln!(stdout, "registry version: {}", report.registry.version)?;
-            writeln!(stdout, "registry revision: {}", report.registry.revision)?;
-            writeln!(stdout, "modules: {}", report.inventory.modules)?;
-            writeln!(stdout, "entities: {}", report.inventory.entities)?;
-            writeln!(stdout, "routes: {}", report.inventory.routes)?;
-            writeln!(
-                stdout,
-                "access entries: {}",
-                report.inventory.access_entries
-            )?;
-            writeln!(stdout, "queries: {}", report.inventory.queries)?;
-            writeln!(
-                stdout,
-                "event deliveries: {}",
-                report.inventory.event_deliveries
-            )?;
-            writeln!(
-                stdout,
-                "DDL statements: {}",
-                report.inventory.ddl_statements
-            )?;
-            writeln!(
-                stdout,
-                "generated artifacts: {}",
-                report.inventory.generated_artifacts
-            )
-        })
+        render_report(
+            "Verified the package against the runtime it is bound to.",
+            &[
+                ("assurance", "runtime_bound".to_owned()),
+                ("package revision", report.package_revision.clone()),
+                ("registry id", report.registry.id.clone()),
+                ("registry version", report.registry.version.clone()),
+                ("registry revision", report.registry.revision.clone()),
+                ("modules", report.inventory.modules.to_string()),
+                ("entities", report.inventory.entities.to_string()),
+                ("routes", report.inventory.routes.to_string()),
+                (
+                    "access entries",
+                    report.inventory.access_entries.to_string(),
+                ),
+                ("queries", report.inventory.queries.to_string()),
+                (
+                    "event deliveries",
+                    report.inventory.event_deliveries.to_string(),
+                ),
+                (
+                    "DDL statements",
+                    report.inventory.ddl_statements.to_string(),
+                ),
+                (
+                    "generated artifacts",
+                    report.inventory.generated_artifacts.to_string(),
+                ),
+            ],
+            stdout,
+        )
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -8258,39 +8367,41 @@ fn write_package_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "package succeeded").and_then(|()| {
-            writeln!(stdout, "profile: production")?;
-            writeln!(
-                stdout,
-                "state: {}",
-                match report.state {
-                    PackageReportState::AwaitingSignatures => "awaiting_signatures",
-                    PackageReportState::Published => "published",
+        render_report(
+            match report.state {
+                PackageReportState::AwaitingSignatures => {
+                    "Sealed a deployment package. It is awaiting signatures."
                 }
-            )?;
-            writeln!(stdout, "package revision: {}", report.package_revision)?;
-            writeln!(
-                stdout,
-                "signature threshold: {}",
-                report.signature_threshold
-            )?;
-            writeln!(
-                stdout,
-                "provided signatures: {}",
-                report.provided_signatures
-            )?;
-            writeln!(stdout, "package files: {}", report.package_files)?;
-            writeln!(
-                stdout,
-                "signing input sha256: {}",
-                report.signing_input.sha256
-            )?;
-            writeln!(
-                stdout,
-                "signing input bytes: {}",
-                report.signing_input.byte_length
-            )
-        })
+                PackageReportState::Published => "Sealed and published a deployment package.",
+            },
+            &[
+                ("profile", "production".to_owned()),
+                (
+                    "state",
+                    match report.state {
+                        PackageReportState::AwaitingSignatures => "awaiting_signatures",
+                        PackageReportState::Published => "published",
+                    }
+                    .to_owned(),
+                ),
+                ("package revision", report.package_revision.clone()),
+                (
+                    "signature threshold",
+                    report.signature_threshold.to_string(),
+                ),
+                (
+                    "provided signatures",
+                    report.provided_signatures.to_string(),
+                ),
+                ("package files", report.package_files.to_string()),
+                ("signing input sha256", report.signing_input.sha256.clone()),
+                (
+                    "signing input bytes",
+                    report.signing_input.byte_length.to_string(),
+                ),
+            ],
+            stdout,
+        )
     };
     write_result(result, stderr)
 }
@@ -8306,23 +8417,25 @@ fn write_schema_test_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "test succeeded").and_then(|()| {
-            writeln!(stdout, "profile: production")?;
-            writeln!(stdout, "package revision: {}", report.package_revision)?;
-            writeln!(stdout, "schema fingerprint: {}", report.schema_fingerprint)?;
-            writeln!(
-                stdout,
-                "signing input sha256: {}",
-                report.signing_input_sha256
-            )?;
-            writeln!(
-                stdout,
-                "successful journeys: {}",
-                report.successful_journey_ids.join(",")
-            )?;
-            writeln!(stdout, "receipt sha256: {}", report.receipt.sha256)?;
-            writeln!(stdout, "receipt bytes: {}", report.receipt.byte_length)
-        })
+        render_report(
+            &format!(
+                "Fixture run passed. {}.",
+                report::counted(report.successful_journey_ids.len(), "journey")
+            ),
+            &[
+                ("profile", "production".to_owned()),
+                ("package revision", report.package_revision.clone()),
+                ("schema fingerprint", report.schema_fingerprint.clone()),
+                ("signing input sha256", report.signing_input_sha256.clone()),
+                (
+                    "successful journeys",
+                    report.successful_journey_ids.join(","),
+                ),
+                ("receipt sha256", report.receipt.sha256.clone()),
+                ("receipt bytes", report.receipt.byte_length.to_string()),
+            ],
+            stdout,
+        )
     };
     write_result(result, stderr)
 }
@@ -8338,19 +8451,26 @@ fn write_apply_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "apply succeeded").and_then(|()| {
-            writeln!(
-                stdout,
-                "activation: {}",
-                match report.activation {
-                    ApplyActivation::Initial => "initial",
-                    ApplyActivation::Successor => "successor",
-                }
-            )?;
-            writeln!(stdout, "package revision: {}", report.package_revision)?;
-            writeln!(stdout, "schema fingerprint: {}", report.schema_fingerprint)?;
-            writeln!(stdout, "package sequence: {}", report.package_sequence)
-        })
+        render_report(
+            match report.activation {
+                ApplyActivation::Initial => "Activated the first package on this registry.",
+                ApplyActivation::Successor => "Activated the package over its predecessor.",
+            },
+            &[
+                (
+                    "activation",
+                    match report.activation {
+                        ApplyActivation::Initial => "initial",
+                        ApplyActivation::Successor => "successor",
+                    }
+                    .to_owned(),
+                ),
+                ("package revision", report.package_revision.clone()),
+                ("schema fingerprint", report.schema_fingerprint.clone()),
+                ("package sequence", report.package_sequence.to_string()),
+            ],
+            stdout,
+        )
     };
     write_result(result, stderr)
 }
@@ -8408,55 +8528,55 @@ fn write_migration_reconcile_human(
     stdout: &mut dyn Write,
 ) -> io::Result<()> {
     let outcome = &report.outcome;
-    writeln!(stdout, "migration reconcile succeeded")?;
-    writeln!(stdout, "outcome: {}", outcome.outcome)?;
-    writeln!(stdout, "executed: {}", outcome.executed)?;
-    writeln!(
+    render_report(
+        &format!(
+            "Reconciled the migration. Outcome {}, {}.",
+            outcome.outcome,
+            report::counted(outcome.migration_step_count, "step")
+        ),
+        &[
+            ("outcome", outcome.outcome.to_string()),
+            ("executed", outcome.executed.to_string()),
+            (
+                "maintenance status",
+                optional(outcome.maintenance_status.as_deref()).to_owned(),
+            ),
+            (
+                "pinned target revision",
+                optional(outcome.maintenance_target_revision.as_deref()).to_owned(),
+            ),
+            (
+                "active package revision",
+                optional(outcome.active_package_revision.as_deref()).to_owned(),
+            ),
+            (
+                "presented target revision",
+                outcome.target_package_revision.to_string(),
+            ),
+            (
+                "target catalog finding",
+                optional(outcome.target_catalog_finding).to_owned(),
+            ),
+            (
+                "active catalog finding",
+                optional(outcome.active_catalog_finding).to_owned(),
+            ),
+            (
+                "unresolvable reason",
+                optional(outcome.unresolvable_reason).to_owned(),
+            ),
+            ("plan kind", outcome.plan_kind.to_string()),
+            ("migration steps", outcome.migration_step_count.to_string()),
+            (
+                "reviewed plan closed",
+                optional_flag(outcome.reviewed_plan_closed).to_owned(),
+            ),
+            (
+                "durable step progress",
+                optional_flag(outcome.durable_step_progress).to_owned(),
+            ),
+        ],
         stdout,
-        "maintenance status: {}",
-        optional(outcome.maintenance_status.as_deref())
-    )?;
-    writeln!(
-        stdout,
-        "pinned target revision: {}",
-        optional(outcome.maintenance_target_revision.as_deref())
-    )?;
-    writeln!(
-        stdout,
-        "active package revision: {}",
-        optional(outcome.active_package_revision.as_deref())
-    )?;
-    writeln!(
-        stdout,
-        "presented target revision: {}",
-        outcome.target_package_revision
-    )?;
-    writeln!(
-        stdout,
-        "target catalog finding: {}",
-        optional(outcome.target_catalog_finding)
-    )?;
-    writeln!(
-        stdout,
-        "active catalog finding: {}",
-        optional(outcome.active_catalog_finding)
-    )?;
-    writeln!(
-        stdout,
-        "unresolvable reason: {}",
-        optional(outcome.unresolvable_reason)
-    )?;
-    writeln!(stdout, "plan kind: {}", outcome.plan_kind)?;
-    writeln!(stdout, "migration steps: {}", outcome.migration_step_count)?;
-    writeln!(
-        stdout,
-        "reviewed plan closed: {}",
-        optional_flag(outcome.reviewed_plan_closed)
-    )?;
-    writeln!(
-        stdout,
-        "durable step progress: {}",
-        optional_flag(outcome.durable_step_progress)
     )
 }
 
@@ -8483,53 +8603,52 @@ fn write_history_erase_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "history erase succeeded").and_then(|()| {
-            writeln!(
-                stdout,
-                "package revision: {}",
-                report.outcome.package_revision
-            )?;
-            writeln!(stdout, "coverage ready: {}", report.outcome.coverage_ready)?;
-            match report.outcome.unavailable_after_position {
-                Some(position) => writeln!(stdout, "unavailable after position: {position}")?,
-                None => writeln!(stdout, "unavailable after position: none")?,
-            }
-            writeln!(
-                stdout,
-                "affected commits: {}",
-                report.outcome.affected_commit_count
-            )?;
-            writeln!(
-                stdout,
-                "erased revisions: {}",
-                report.outcome.erased_revision_count
-            )?;
-            writeln!(
-                stdout,
-                "erased commit members: {}",
-                report.outcome.erased_commit_member_count
-            )?;
-            writeln!(
-                stdout,
-                "scrubbed change contexts: {}",
-                report.outcome.scrubbed_change_context_count
-            )?;
-            writeln!(
-                stdout,
-                "scrubbed outbox payloads: {}",
-                report.outcome.scrubbed_outbox_payload_count
-            )?;
-            writeln!(
-                stdout,
-                "scrubbed cached responses: {}",
-                report.outcome.scrubbed_cached_response_count
-            )?;
-            writeln!(
-                stdout,
-                "removed descriptors: {}",
-                report.outcome.removed_descriptor_count
-            )
-        })
+        render_report(
+            &format!(
+                "Erased the requested history. {} affected.",
+                report::counted_total(report.outcome.affected_commit_count, "commit")
+            ),
+            &[
+                ("package revision", report.outcome.package_revision.clone()),
+                ("coverage ready", report.outcome.coverage_ready.to_string()),
+                (
+                    "unavailable after position",
+                    match report.outcome.unavailable_after_position {
+                        Some(position) => position.to_string(),
+                        None => "none".to_owned(),
+                    },
+                ),
+                (
+                    "affected commits",
+                    report.outcome.affected_commit_count.to_string(),
+                ),
+                (
+                    "erased revisions",
+                    report.outcome.erased_revision_count.to_string(),
+                ),
+                (
+                    "erased commit members",
+                    report.outcome.erased_commit_member_count.to_string(),
+                ),
+                (
+                    "scrubbed change contexts",
+                    report.outcome.scrubbed_change_context_count.to_string(),
+                ),
+                (
+                    "scrubbed outbox payloads",
+                    report.outcome.scrubbed_outbox_payload_count.to_string(),
+                ),
+                (
+                    "scrubbed cached responses",
+                    report.outcome.scrubbed_cached_response_count.to_string(),
+                ),
+                (
+                    "removed descriptors",
+                    report.outcome.removed_descriptor_count.to_string(),
+                ),
+            ],
+            stdout,
+        )
     };
     write_result(result, stderr)
 }
@@ -8545,43 +8664,46 @@ fn write_history_rebaseline_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "history rebaseline succeeded").and_then(|()| {
-            writeln!(
-                stdout,
-                "package revision: {}",
-                report.outcome.package_revision
-            )?;
-            writeln!(
-                stdout,
-                "coverage baseline position: {}",
-                report.outcome.baseline_position
-            )?;
-            writeln!(
-                stdout,
-                "verified entities: {}",
-                report.outcome.verified_entity_count
-            )?;
-            writeln!(
-                stdout,
-                "verified records: {}",
-                report.outcome.verified_record_count
-            )?;
-            writeln!(
-                stdout,
-                "previous coverage baseline position: {}",
-                report.outcome.previous_coverage_baseline_position
-            )?;
-            match report.outcome.previous_unavailable_after_position {
-                Some(position) => {
-                    writeln!(stdout, "previous unavailable after position: {position}")?
-                }
-                None => writeln!(stdout, "previous unavailable after position: none")?,
-            }
-            writeln!(
-                stdout,
-                "snapshot references before the new baseline remain unavailable"
-            )
-        })
+        {
+            let mut lines = report::Lines::new();
+            lines.lead(&format!(
+                "Rebaselined the history. {} verified.",
+                report::counted_total(report.outcome.verified_record_count, "record")
+            ));
+            lines.pairs(&[
+                ("package revision", report.outcome.package_revision.clone()),
+                (
+                    "coverage baseline position",
+                    report.outcome.baseline_position.to_string(),
+                ),
+                (
+                    "verified entities",
+                    report.outcome.verified_entity_count.to_string(),
+                ),
+                (
+                    "verified records",
+                    report.outcome.verified_record_count.to_string(),
+                ),
+                (
+                    "previous coverage baseline position",
+                    report
+                        .outcome
+                        .previous_coverage_baseline_position
+                        .to_string(),
+                ),
+                (
+                    "previous unavailable after position",
+                    match report.outcome.previous_unavailable_after_position {
+                        Some(position) => position.to_string(),
+                        None => "none".to_owned(),
+                    },
+                ),
+            ]);
+            lines.steps(&[
+                "snapshot references before the new baseline remain unavailable".to_owned(),
+            ]);
+            stdout.write_all(lines.finish().as_bytes())
+        }
     };
     write_result(result, stderr)
 }
@@ -8597,22 +8719,29 @@ fn write_data_validate_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "data validate succeeded").and_then(|()| {
-            writeln!(stdout, "package revision: {}", report.package_revision)?;
-            writeln!(stdout, "schema fingerprint: {}", report.schema_fingerprint)?;
-            writeln!(stdout, "entity: {}", report.entity_id)?;
-            writeln!(stdout, "profile: {}", report.profile_id)?;
-            writeln!(
-                stdout,
-                "operation: {}",
-                data_operation_name(report.operation)
-            )?;
-            writeln!(stdout, "input bytes: {}", report.input_length)?;
-            writeln!(stdout, "items: {}", report.item_count)?;
-            writeln!(stdout, "chunks: {}", report.chunk_count)?;
-            writeln!(stdout, "maximum items: {}", report.maximum_items)?;
-            writeln!(stdout, "maximum bytes: {}", report.maximum_bytes)
-        })
+        render_report(
+            &format!(
+                "Validated the input. {} in {}.",
+                report::counted_total(report.item_count, "item"),
+                report::counted(report.chunk_count, "chunk")
+            ),
+            &[
+                ("package revision", report.package_revision.clone()),
+                ("schema fingerprint", report.schema_fingerprint.clone()),
+                ("entity", report.entity_id.clone()),
+                ("profile", report.profile_id.clone()),
+                (
+                    "operation",
+                    data_operation_name(report.operation).to_owned(),
+                ),
+                ("input bytes", report.input_length.to_string()),
+                ("items", report.item_count.to_string()),
+                ("chunks", report.chunk_count.to_string()),
+                ("maximum items", report.maximum_items.to_string()),
+                ("maximum bytes", report.maximum_bytes.to_string()),
+            ],
+            stdout,
+        )
     };
     write_result(result, stderr)
 }
@@ -8628,22 +8757,33 @@ fn write_data_import_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "data import succeeded").and_then(|()| {
-            writeln!(stdout, "package revision: {}", report.package_revision)?;
-            writeln!(stdout, "schema fingerprint: {}", report.schema_fingerprint)?;
-            writeln!(stdout, "entity: {}", report.entity_id)?;
-            writeln!(stdout, "profile: {}", report.profile_id)?;
-            writeln!(
-                stdout,
-                "operation: {}",
-                data_operation_name(report.operation)
-            )?;
-            writeln!(stdout, "input bytes: {}", report.input_length)?;
-            writeln!(stdout, "items: {}", report.item_count)?;
-            writeln!(stdout, "completed chunks: {}", report.completed_chunk_count)?;
-            writeln!(stdout, "committed items: {}", report.committed_items)?;
-            writeln!(stdout, "complete: {}", report.complete)
-        })
+        render_report(
+            &format!(
+                "Imported the input. {} committed{}.",
+                report::counted_total(report.committed_items, "item"),
+                if report.complete {
+                    ""
+                } else {
+                    ", and the import is not complete"
+                }
+            ),
+            &[
+                ("package revision", report.package_revision.clone()),
+                ("schema fingerprint", report.schema_fingerprint.clone()),
+                ("entity", report.entity_id.clone()),
+                ("profile", report.profile_id.clone()),
+                (
+                    "operation",
+                    data_operation_name(report.operation).to_owned(),
+                ),
+                ("input bytes", report.input_length.to_string()),
+                ("items", report.item_count.to_string()),
+                ("completed chunks", report.completed_chunk_count.to_string()),
+                ("committed items", report.committed_items.to_string()),
+                ("complete", report.complete.to_string()),
+            ],
+            stdout,
+        )
     };
     write_result(result, stderr)
 }
@@ -8659,17 +8799,29 @@ fn write_data_export_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "data export succeeded").and_then(|()| {
-            writeln!(stdout, "package revision: {}", report.package_revision)?;
-            writeln!(stdout, "schema fingerprint: {}", report.schema_fingerprint)?;
-            writeln!(stdout, "entity: {}", report.entity_id)?;
-            writeln!(stdout, "profile: {}", report.profile_id)?;
-            writeln!(stdout, "fields: {}", report.requested_fields.join(","))?;
-            writeln!(stdout, "completed pages: {}", report.completed_page_count)?;
-            writeln!(stdout, "records: {}", report.record_count)?;
-            writeln!(stdout, "output bytes: {}", report.output_length)?;
-            writeln!(stdout, "complete: {}", report.complete)
-        })
+        render_report(
+            &format!(
+                "Exported the records. {}{}.",
+                report::counted_total(report.record_count, "record"),
+                if report.complete {
+                    ""
+                } else {
+                    ", and the export is not complete"
+                }
+            ),
+            &[
+                ("package revision", report.package_revision.clone()),
+                ("schema fingerprint", report.schema_fingerprint.clone()),
+                ("entity", report.entity_id.clone()),
+                ("profile", report.profile_id.clone()),
+                ("fields", list_or_none(&report.requested_fields)),
+                ("completed pages", report.completed_page_count.to_string()),
+                ("records", report.record_count.to_string()),
+                ("output bytes", report.output_length.to_string()),
+                ("complete", report.complete.to_string()),
+            ],
+            stdout,
+        )
     };
     write_result(result, stderr)
 }
@@ -8685,8 +8837,15 @@ fn write_webhook_sample_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "webhook sample succeeded").and_then(|()| {
-            writeln!(stdout, "event: {}", report.outcome.event_id)?;
+        render_report(
+            "Built the sample delivery. The canonical request follows.",
+            &[("event", report.outcome.event_id.clone())],
+            stdout,
+        )
+        // The request is the artifact the reader signs and compares, so it is
+        // quoted byte for byte rather than folded into the report above it.
+        .and_then(|()| writeln!(stdout))
+        .and_then(|()| {
             writeln!(
                 stdout,
                 "{} {} HTTP/1.1",
@@ -8713,13 +8872,27 @@ fn write_webhook_list_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "webhook list succeeded").and_then(|()| {
-            for delivery in &report.outcome.deliveries {
-                let rendered = serde_json::to_string(delivery).map_err(io::Error::other)?;
-                writeln!(stdout, "delivery: {rendered}")?;
-            }
-            Ok(())
-        })
+        report
+            .outcome
+            .deliveries
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(io::Error::other)
+            .and_then(|deliveries| {
+                let mut lines = report::Lines::new();
+                lines.lead(&format!(
+                    "Listed the webhook deliveries. {}.",
+                    report::counted(deliveries.len(), "delivery")
+                ));
+                if !deliveries.is_empty() {
+                    lines.blank();
+                    for delivery in &deliveries {
+                        lines.bullet(delivery);
+                    }
+                }
+                stdout.write_all(lines.finish().as_bytes())
+            })
     };
     write_result(result, stderr)
 }
@@ -8735,11 +8908,15 @@ fn write_webhook_replay_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "webhook replay succeeded").and_then(|()| {
-            writeln!(stdout, "event id: {}", report.outcome.event_id)?;
-            writeln!(stdout, "delivery id: {}", report.outcome.delivery_id)?;
-            writeln!(stdout, "generation: {}", report.outcome.generation)
-        })
+        render_report(
+            "Queued the delivery for replay.",
+            &[
+                ("event id", report.outcome.event_id.clone()),
+                ("delivery id", report.outcome.delivery_id.clone()),
+                ("generation", report.outcome.generation.to_string()),
+            ],
+            stdout,
+        )
     };
     write_result(result, stderr)
 }
@@ -8755,16 +8932,31 @@ fn write_request_retention_list_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "request-retention list succeeded").and_then(|()| {
-            for item in &report.outcome.page.requests {
-                let rendered = serde_json::to_string(item).map_err(io::Error::other)?;
-                writeln!(stdout, "request: {rendered}")?;
-            }
-            if let Some(cursor) = &report.outcome.page.next_cursor {
-                writeln!(stdout, "next cursor: {cursor}")?;
-            }
-            Ok(())
-        })
+        report
+            .outcome
+            .page
+            .requests
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(io::Error::other)
+            .and_then(|requests| {
+                let mut lines = report::Lines::new();
+                lines.lead(&format!(
+                    "Listed the retained requests. {}.",
+                    report::counted(requests.len(), "request")
+                ));
+                if let Some(cursor) = &report.outcome.page.next_cursor {
+                    lines.pairs(&[("next cursor", cursor.clone())]);
+                }
+                if !requests.is_empty() {
+                    lines.blank();
+                    for request in &requests {
+                        lines.bullet(request);
+                    }
+                }
+                stdout.write_all(lines.finish().as_bytes())
+            })
     };
     write_result(result, stderr)
 }
@@ -8780,33 +8972,36 @@ fn write_request_retention_dry_run_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "request-retention dry-run succeeded").and_then(|()| {
-            let rendered =
-                serde_json::to_string(&report.outcome.dry_run.erasure).map_err(io::Error::other)?;
-            writeln!(
-                stdout,
-                "request entity: {}",
-                report.outcome.dry_run.request_entity_id
-            )?;
-            writeln!(stdout, "request id: {}", report.outcome.dry_run.request_id)?;
-            writeln!(
-                stdout,
-                "proposal version: {}",
-                report.outcome.dry_run.proposal_version
-            )?;
-            writeln!(
-                stdout,
-                "retention mode: {}",
-                report.outcome.dry_run.retention_mode
-            )?;
-            writeln!(stdout, "pinned: {}", report.outcome.dry_run.pinned)?;
-            writeln!(
-                stdout,
-                "eligible for erasure: {}",
-                report.outcome.dry_run.eligible_for_erasure
-            )?;
-            writeln!(stdout, "erasure: {rendered}")
-        })
+        {
+            let dry_run = &report.outcome.dry_run;
+            serde_json::to_string(&dry_run.erasure)
+                .map_err(io::Error::other)
+                .and_then(|erasure| {
+                    render_report(
+                        &format!(
+                    "Previewed the erasure. The request is {} for erasure. Nothing was erased.",
+                    if dry_run.eligible_for_erasure {
+                        "eligible"
+                    } else {
+                        "not eligible"
+                    }
+                ),
+                        &[
+                            ("request entity", dry_run.request_entity_id.clone()),
+                            ("request id", dry_run.request_id.clone()),
+                            ("proposal version", dry_run.proposal_version.to_string()),
+                            ("retention mode", dry_run.retention_mode.to_owned()),
+                            ("pinned", dry_run.pinned.to_string()),
+                            (
+                                "eligible for erasure",
+                                dry_run.eligible_for_erasure.to_string(),
+                            ),
+                            ("erasure", erasure),
+                        ],
+                        stdout,
+                    )
+                })
+        }
     };
     write_result(result, stderr)
 }
@@ -8822,27 +9017,24 @@ fn write_request_retention_erase_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "request-retention erase succeeded").and_then(|()| {
-            let rendered =
-                serde_json::to_string(&report.outcome.erase.erasure).map_err(io::Error::other)?;
-            writeln!(
-                stdout,
-                "request entity: {}",
-                report.outcome.erase.request_entity_id
-            )?;
-            writeln!(stdout, "request id: {}", report.outcome.erase.request_id)?;
-            writeln!(
-                stdout,
-                "proposal version: {}",
-                report.outcome.erase.proposal_version
-            )?;
-            writeln!(
-                stdout,
-                "retention mode: {}",
-                report.outcome.erase.retention_mode
-            )?;
-            writeln!(stdout, "erased: {rendered}")
-        })
+        {
+            let erase = &report.outcome.erase;
+            serde_json::to_string(&erase.erasure)
+                .map_err(io::Error::other)
+                .and_then(|erasure| {
+                    render_report(
+                        "Erased the retained request.",
+                        &[
+                            ("request entity", erase.request_entity_id.clone()),
+                            ("request id", erase.request_id.clone()),
+                            ("proposal version", erase.proposal_version.to_string()),
+                            ("retention mode", erase.retention_mode.to_owned()),
+                            ("erased", erasure),
+                        ],
+                        stdout,
+                    )
+                })
+        }
     };
     write_result(result, stderr)
 }
@@ -8858,20 +9050,27 @@ fn write_audit_verify_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "audit verify succeeded").and_then(|()| {
+        {
             let verification = &report.outcome.verification;
-            writeln!(stdout, "records: {}", verification.records)?;
-            if let Some(hash) = &verification.start_prev_hash {
-                writeln!(stdout, "start prev hash: {hash}")?;
+            let mut pairs = vec![("records", verification.records.to_string())];
+            for (label, hash) in [
+                ("start prev hash", &verification.start_prev_hash),
+                ("last hash", &verification.last_hash),
+                ("head hash", &verification.head_hash),
+            ] {
+                if let Some(hash) = hash {
+                    pairs.push((label, hash.clone()));
+                }
             }
-            if let Some(hash) = &verification.last_hash {
-                writeln!(stdout, "last hash: {hash}")?;
-            }
-            if let Some(hash) = &verification.head_hash {
-                writeln!(stdout, "head hash: {hash}")?;
-            }
-            Ok(())
-        })
+            render_report(
+                &format!(
+                    "Verified the audit chain. {} checked.",
+                    report::counted_total(verification.records, "record")
+                ),
+                &pairs,
+                stdout,
+            )
+        }
     };
     write_result(result, stderr)
 }
@@ -8887,13 +9086,21 @@ fn write_audit_export_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "audit export succeeded").and_then(|()| {
-            writeln!(stdout, "records: {}", report.outcome.export.records)?;
-            if let Some(hash) = &report.outcome.export.last_hash {
-                writeln!(stdout, "last hash: {hash}")?;
+        {
+            let export = &report.outcome.export;
+            let mut pairs = vec![("records", export.records.to_string())];
+            if let Some(hash) = &export.last_hash {
+                pairs.push(("last hash", hash.clone()));
             }
-            Ok(())
-        })
+            render_report(
+                &format!(
+                    "Exported the audit chain. {} written.",
+                    report::counted_total(export.records, "record")
+                ),
+                &pairs,
+                stdout,
+            )
+        }
     };
     write_result(result, stderr)
 }
@@ -8909,19 +9116,34 @@ fn write_audit_prune_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "audit prune succeeded").and_then(|()| {
+        {
             let prune = &report.outcome.prune;
-            writeln!(stdout, "dry run: {}", prune.dry_run)?;
-            writeln!(stdout, "removed records: {}", prune.removed_records)?;
-            writeln!(stdout, "retained records: {}", prune.retained_records)?;
+            let mut pairs = vec![
+                ("dry run", prune.dry_run.to_string()),
+                ("removed records", prune.removed_records.to_string()),
+                ("retained records", prune.retained_records.to_string()),
+            ];
             if let Some(hash) = &prune.boundary_hash {
-                writeln!(stdout, "boundary hash: {hash}")?;
+                pairs.push(("boundary hash", hash.clone()));
             }
             if let Some(envelope_id) = &prune.first_retained_envelope_id {
-                writeln!(stdout, "first retained envelope: {envelope_id}")?;
+                pairs.push(("first retained envelope", envelope_id.clone()));
             }
-            Ok(())
-        })
+            render_report(
+                &format!(
+                    "{} {} of the audit chain, {} retained.",
+                    if prune.dry_run {
+                        "Previewed pruning"
+                    } else {
+                        "Pruned"
+                    },
+                    report::counted_total(prune.removed_records, "record"),
+                    report::counted_total(prune.retained_records, "record")
+                ),
+                &pairs,
+                stdout,
+            )
+        }
     };
     write_result(result, stderr)
 }
@@ -8939,110 +9161,88 @@ fn write_migration_explain_human(
 ) -> io::Result<()> {
     let plan = &report.plan;
     let counts = plan.change_counts();
-    writeln!(stdout, "migration explain succeeded")?;
-    writeln!(stdout, "assurance: runtime_bound")?;
-    writeln!(stdout, "package revision: {}", report.package_revision)?;
-    writeln!(stdout, "plan kind: {}", plan_kind_name(plan.plan_kind()))?;
-    writeln!(stdout, "has prior revision: {}", plan.has_prior_revision())?;
-    writeln!(stdout, "has prior baseline: {}", plan.has_prior_baseline())?;
-    writeln!(stdout, "change count: {}", plan.change_count())?;
-    writeln!(
-        stdout,
-        "compatible additive changes: {}",
-        counts.compatible_additive()
-    )?;
-    writeln!(
-        stdout,
-        "data backfill required changes: {}",
-        counts.data_backfill_required()
-    )?;
-    writeln!(
-        stdout,
-        "access or disclosure changes: {}",
-        counts.access_or_disclosure_change()
-    )?;
-    writeln!(
-        stdout,
-        "destructive or irreversible changes: {}",
-        counts.destructive_or_irreversible()
-    )?;
-    writeln!(stdout, "unsupported changes: {}", counts.unsupported())?;
-    writeln!(
-        stdout,
-        "generated statement count: {}",
-        plan.generated_statement_count()
-    )?;
-    writeln!(
-        stdout,
-        "reviewed migration count: {}",
-        plan.reviewed_migrations().len()
-    )?;
+    let mut lines = report::Lines::new();
+    lines.lead(&format!(
+        "Explained the migration plan. {}, {}.",
+        report::counted(plan.change_count(), "change"),
+        report::counted(plan.reviewed_migrations().len(), "reviewed migration")
+    ));
+    lines.pairs(&[
+        ("assurance", "runtime_bound".to_owned()),
+        ("package revision", report.package_revision.clone()),
+        ("plan kind", plan_kind_name(plan.plan_kind()).to_owned()),
+        ("has prior revision", plan.has_prior_revision().to_string()),
+        ("has prior baseline", plan.has_prior_baseline().to_string()),
+        ("change count", plan.change_count().to_string()),
+        (
+            "compatible additive changes",
+            counts.compatible_additive().to_string(),
+        ),
+        (
+            "data backfill required changes",
+            counts.data_backfill_required().to_string(),
+        ),
+        (
+            "access or disclosure changes",
+            counts.access_or_disclosure_change().to_string(),
+        ),
+        (
+            "destructive or irreversible changes",
+            counts.destructive_or_irreversible().to_string(),
+        ),
+        ("unsupported changes", counts.unsupported().to_string()),
+        (
+            "generated statement count",
+            plan.generated_statement_count().to_string(),
+        ),
+        (
+            "reviewed migration count",
+            plan.reviewed_migrations().len().to_string(),
+        ),
+    ]);
+
+    // Each reviewed migration is a group of its own, so its fields are named
+    // once at the head instead of on every line beneath it.
     for (index, migration) in plan.reviewed_migrations().iter().enumerate() {
-        let number = index + 1;
-        writeln!(
-            stdout,
-            "reviewed migration {number} change class: {}",
-            change_class_name(migration.change_class())
-        )?;
-        writeln!(
-            stdout,
-            "reviewed migration {number} recovery: {}",
-            recovery_name(migration.recovery())
-        )?;
-        writeln!(
-            stdout,
-            "reviewed migration {number} lock timeout ms: {}",
-            migration.lock_timeout_ms()
-        )?;
-        writeln!(
-            stdout,
-            "reviewed migration {number} statement timeout ms: {}",
-            migration.statement_timeout_ms()
-        )?;
-        writeln!(
-            stdout,
-            "reviewed migration {number} transactional step count: {}",
-            migration.transactional_step_count()
-        )?;
-        writeln!(
-            stdout,
-            "reviewed migration {number} chunked step count: {}",
-            migration.chunked_step_count()
-        )?;
-        writeln!(
-            stdout,
-            "reviewed migration {number} pre-assertion count: {}",
-            migration.pre_assertion_count()
-        )?;
-        writeln!(
-            stdout,
-            "reviewed migration {number} post-assertion count: {}",
-            migration.post_assertion_count()
-        )?;
-        writeln!(
-            stdout,
-            "reviewed migration {number} backup required: {}",
-            migration.backup_required()
-        )?;
+        lines.blank();
+        lines.item(&format!("reviewed migration {}", index + 1));
+        let mut fields = vec![
+            (
+                "change class",
+                change_class_name(migration.change_class()).to_owned(),
+            ),
+            ("recovery", recovery_name(migration.recovery()).to_owned()),
+            (
+                "chunked step count",
+                migration.chunked_step_count().to_string(),
+            ),
+            (
+                "pre-assertion count",
+                migration.pre_assertion_count().to_string(),
+            ),
+            (
+                "post-assertion count",
+                migration.post_assertion_count().to_string(),
+            ),
+            ("backup required", migration.backup_required().to_string()),
+        ];
         if let Some(bounds) = migration.chunked_step_bounds() {
-            writeln!(
-                stdout,
-                "reviewed migration {number} minimum chunk size: {}",
-                bounds.minimum_chunk_size()
-            )?;
-            writeln!(
-                stdout,
-                "reviewed migration {number} maximum chunk size: {}",
-                bounds.maximum_chunk_size()
-            )?;
-            writeln!(
-                stdout,
-                "reviewed migration {number} maximum total rows: {}",
-                bounds.maximum_total_rows()
-            )?;
+            fields.push((
+                "minimum chunk size",
+                bounds.minimum_chunk_size().to_string(),
+            ));
+            fields.push((
+                "maximum chunk size",
+                bounds.maximum_chunk_size().to_string(),
+            ));
+            fields.push((
+                "maximum total rows",
+                bounds.maximum_total_rows().to_string(),
+            ));
         }
+        lines.pairs_at(2, &fields);
     }
-    Ok(())
+    stdout.write_all(lines.finish().as_bytes())
 }
 
 fn plan_kind_name(kind: MigrationInspectionPlanKind) -> &'static str {
@@ -9080,45 +9280,52 @@ fn write_diff_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        writeln!(stdout, "diff succeeded").and_then(|()| {
-            writeln!(stdout, "profile: authoring")?;
-            writeln!(
-                stdout,
-                "baseline assurance: {}",
-                match report.baseline_assurance {
-                    BaselineAssurance::RuntimeBound => "runtime_bound",
-                    BaselineAssurance::IntegrityOnly => "integrity_only",
+        report
+            .diff
+            .changes
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(io::Error::other)
+            .and_then(|changes| {
+                let mut lines = report::Lines::new();
+                lines.lead(&format!(
+                    "Classified the candidate against the baseline. {}.",
+                    report::counted(changes.len(), "change")
+                ));
+                lines.pairs(&[
+                    ("profile", "authoring".to_owned()),
+                    (
+                        "baseline assurance",
+                        match report.baseline_assurance {
+                            BaselineAssurance::RuntimeBound => "runtime_bound",
+                            BaselineAssurance::IntegrityOnly => "integrity_only",
+                        }
+                        .to_owned(),
+                    ),
+                    (
+                        "baseline package revision",
+                        report.diff.baseline_package_revision.clone(),
+                    ),
+                    (
+                        "baseline registry revision",
+                        report.diff.baseline_registry_revision.clone(),
+                    ),
+                    (
+                        "candidate registry revision",
+                        report.diff.candidate_registry_revision.clone(),
+                    ),
+                    ("changes", changes.len().to_string()),
+                ]);
+                if !changes.is_empty() {
+                    lines.blank();
+                    for change in &changes {
+                        lines.bullet(change);
+                    }
                 }
-            )?;
-            writeln!(
-                stdout,
-                "baseline package revision: {}",
-                report.diff.baseline_package_revision
-            )?;
-            writeln!(
-                stdout,
-                "baseline registry revision: {}",
-                report.diff.baseline_registry_revision
-            )?;
-            writeln!(
-                stdout,
-                "candidate registry revision: {}",
-                report.diff.candidate_registry_revision
-            )?;
-            writeln!(stdout, "changes: {}", report.diff.changes.len())?;
-            for change in &report.diff.changes {
-                let rendered = serde_json::to_string(change).map_err(io::Error::other)?;
-                writeln!(stdout, "change: {rendered}")?;
-            }
-            for finding in &report.findings {
-                writeln!(
-                    stdout,
-                    "finding {} at {}: {}",
-                    finding.code, finding.path, finding.message
-                )?;
-            }
-            Ok(())
-        })
+                lines.findings(&report_findings(&report.findings));
+                stdout.write_all(lines.finish().as_bytes())
+            })
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -9140,13 +9347,15 @@ fn write_failure(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        report.diagnostics.iter().try_for_each(|diagnostic| {
-            writeln!(
-                stderr,
-                "error {} at {}: {}",
-                diagnostic.code, diagnostic.path, diagnostic.message
-            )
-        })
+        {
+            // A refusal is reported on stderr, and it is the whole report:
+            // the lead sentence names the command that refused, and the
+            // diagnostics below it carry their own severity and closing count.
+            let mut lines = report::Lines::new();
+            lines.lead(&format!("bregctl {} refused.", report.command));
+            lines.findings(&report_findings(&report.diagnostics));
+            stderr.write_all(lines.finish().as_bytes())
+        }
     };
     if result.is_err() {
         let _ = writeln!(stderr, "bregctl: output could not be written");
@@ -9183,6 +9392,17 @@ mod tests {
                 fs::remove_dir_all(&self.path).expect("test directory is removed");
             }
         }
+    }
+
+    /// The rendering a pipe, a file, or a test harness receives.
+    ///
+    /// The renderer always writes the ANSI attributes and `main_entry` wraps
+    /// the process streams in an `AutoStream` that strips them for anything
+    /// that is not a terminal. A test writes to a `Vec`, so it strips them
+    /// here and pins the bytes a reader of a captured transcript would see.
+    fn plain(rendered: &[u8]) -> String {
+        let rendered = String::from_utf8(rendered.to_vec()).expect("output is UTF-8");
+        anstream::adapter::strip_str(&rendered).to_string()
     }
 
     fn nested_artifact_path(levels: u32, leaf: &str) -> String {
@@ -9927,20 +10147,21 @@ mod tests {
             ExitCode::SUCCESS
         );
         assert_eq!(
-            String::from_utf8(stdout).expect("output is UTF-8"),
-            "dev succeeded\n\
-             status: ready\n\
-             project: /local/registry\n\
-             breg url: http://127.0.0.1:8090\n\
-             token endpoint: http://127.0.0.1:8091/token\n\
-             audience: urn:breg:dev:local\n\
-             package revision: revision-1\n\
-             state file: /local/registry/.breg/dev/state.json\n\
-             runtime config: /local/registry/.breg/dev/runtime.yaml\n\
-             client operator\n\
-             \x20   client id file: \
+            plain(&stdout),
+            "bregctl dev succeeded.\n\
+             \x20 status            ready\n\
+             \x20 project           /local/registry\n\
+             \x20 breg url          http://127.0.0.1:8090\n\
+             \x20 token endpoint    http://127.0.0.1:8091/token\n\
+             \x20 audience          urn:breg:dev:local\n\
+             \x20 package revision  revision-1\n\
+             \x20 state file        /local/registry/.breg/dev/state.json\n\
+             \x20 runtime config    /local/registry/.breg/dev/runtime.yaml\n\
+             \n\
+             \x20 client operator\n\
+             \x20   client id file      \
              /local/registry/.breg/dev/credentials/operator/client-id\n\
-             \x20   assertion key file: \
+             \x20   assertion key file  \
              /local/registry/.breg/dev/credentials/operator/assertion-key.jwk\n"
         );
         assert!(stderr.is_empty());
@@ -9971,8 +10192,8 @@ mod tests {
             ExitCode::SUCCESS
         );
         assert_eq!(
-            String::from_utf8(stdout).expect("output is UTF-8"),
-            "dev stop succeeded\nstatus: stopped\n"
+            plain(&stdout),
+            "bregctl dev stop succeeded.\n\x20 status  stopped\n"
         );
         assert!(stderr.is_empty());
     }
@@ -10154,15 +10375,15 @@ mod tests {
         for (format, expected) in [
             (
                 OutputFormat::Human,
-                "doctor succeeded\n\
-                 checked runtimeConfig: pass\n\
-                 checked package: pass\n\
-                 checked database: pass\n\
-                 checked audit: pass\n\
-                 checked cursor: pass\n\
-                 checked authentication.oidc: pass\n\
-                 checked eventDestinations: pass\n\
-                 checked authentication: pass\n",
+                "8 dependency checks passed.\n\
+                 \u{20}\u{20}runtimeConfig        pass\n\
+                 \u{20}\u{20}package              pass\n\
+                 \u{20}\u{20}database             pass\n\
+                 \u{20}\u{20}audit                pass\n\
+                 \u{20}\u{20}cursor               pass\n\
+                 \u{20}\u{20}authentication.oidc  pass\n\
+                 \u{20}\u{20}eventDestinations    pass\n\
+                 \u{20}\u{20}authentication       pass\n",
             ),
             (
                 OutputFormat::Json,
@@ -10176,10 +10397,7 @@ mod tests {
                 write_doctor_success(format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
-            assert_eq!(
-                String::from_utf8(stdout).expect("output is UTF-8"),
-                expected
-            );
+            assert_eq!(plain(&stdout), expected);
             assert!(stderr.is_empty());
         }
     }

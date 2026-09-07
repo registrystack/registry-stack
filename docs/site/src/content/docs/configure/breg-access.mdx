@@ -25,10 +25,14 @@ Before the server looks at any record, it admits the request against the selecte
 `explain access` states the same rules at the top of its report:
 
 ```text
-all required scopes must be present
-one allowed purpose must match; empty means unrestricted
-all claim-bound row predicates must hold; empty means no row restriction
-one profile per request; selecting its name never grants authority and profiles are not merged
+Access:
+  all required scopes must be present
+  one allowed purpose must match; empty means unrestricted
+  all claim-bound row predicates must hold; explicit empty boundaries mean no
+    claim-bound row restriction; requestVisibility owner additionally limits request
+    reads
+  one profile per request; selecting its name never grants authority and profiles are
+    not merged
 ```
 
 Treat profiles as tasks, such as reading assigned records or editing records you own.
@@ -184,23 +188,24 @@ The plain-text report lists entity profiles with each grant's row restrictions; 
 For the `record-reader` profile of the project `init` wrote, the block reads:
 
 ```text
-entity: record (internal)
-  profile: record-reader
-    principal claim: registry_principal
-    operations: ["get","list"]
-    required scopes (all): ["registry:generic:read"]
-    allowed purposes (any): ["registry-reporting"]
-    readable fields: ["code","group","label","status"]
-    writable fields: none
-    filterable fields: ["code"]
-    sortable fields: none
-    row restrictions (all): [{"claim":"registry_record_status","field":"status","operator":"equals"}]
-    lookups: none
-    related records: none
-    anonymous: false
-    allowCount: false
-    revisionAccess: false
-    allowDataExport: false
+  record (internal)
+
+    record-reader
+      principal claim         registry_principal
+      operations              ["get","list"]
+      required scopes (all)   ["registry:generic:read"]
+      allowed purposes (any)  ["registry-reporting"]
+      readable fields         ["code","group","label","status"]
+      writable fields         none
+      filterable fields       ["code"]
+      sortable fields         none
+      row restrictions (all)  [{"claim":"registry_record_status","field":"status","operator":"equals"}]
+      lookups                 none
+      related records         none
+      anonymous               false
+      allowCount              false
+      revisionAccess          false
+      allowDataExport         false
 ```
 
 The other profiles and the findings are omitted.
@@ -235,11 +240,14 @@ bregctl explain access ./my-registry --scenario ./access-scenario.json
 The preview runs the same admission function as the HTTP layer and reports the verdict and the rule that produced it:
 
 ```text
-synthetic profile admission: allowed (profile_requirements_satisfied)
-No credentials verified, records checked, or authority issued. Claim values are not printed.
+Synthetic profile admission: allowed
+  reason  profile_requirements_satisfied
+
+  No credentials verified, records checked, or authority issued. Claim values are not
+  printed.
 ```
 
-Remove `registry:generic:read` from `scopes` and the first line becomes `synthetic profile admission: refused (required_scope_missing)`.
+Remove `registry:generic:read` from `scopes` and the heading becomes `Synthetic profile admission: refused` over the reason `required_scope_missing`.
 The other reasons are `principal_missing_or_mismatched`, `purpose_missing_or_not_allowed`, `row_claim_missing_or_wrong_cardinality`, `operation_not_granted`, and `entity_or_profile_not_found`.
 Both admitted and refused previews exit successfully, because a refusal is the answer you asked for; `bregctl --format json explain access ./my-registry --scenario ./access-scenario.json` reports the same verdict as `explanation.admitted` and `explanation.reason`.
 A scenario may add `readPath` with `operation: list` to preview a read path.
