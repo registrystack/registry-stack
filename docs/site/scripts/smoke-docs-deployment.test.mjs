@@ -25,7 +25,7 @@ function fixture(overrides = {}) {
         '<strong>Released docs.</strong><a href="/v/1.2.3/">Version</a>',
       ),
     ],
-    ['/start/when-to-use/', html(`${origin}/start/when-to-use/`)],
+    ['/start/evidence-quickstart/', html(`${origin}/start/evidence-quickstart/`)],
     ['/dev/', html(`${origin}/dev/`)],
     ['/v/1.2.3/', html(`${origin}/v/1.2.3/`)],
     ['/pagefind/pagefind.js', Buffer.from('search')],
@@ -48,7 +48,7 @@ test('smokes root, deep, development, version, search, and discovery routes', as
   assert.deepEqual(
     await smokeDocsDeployment({ read: fixture(), releasedTag }),
     {
-      deepRoute: '/start/when-to-use/',
+      deepRoute: '/start/evidence-quickstart/',
       releasedTag,
       versionPath: '/v/1.2.3/',
     },

@@ -132,10 +132,11 @@ export default defineConfig({
     ...buildNotaryRetirementRedirects(currentDocsetRedirect),
     ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
     '/start/': internalRedirect('/'),
-    '/start/see-it-live/': internalRedirect('/start/when-to-use/'),
-    // Retired: a second product chooser beside /start/when-to-use/, which
-    // absorbed its job.
-    '/start/quickstart/': internalRedirect('/start/when-to-use/'),
+    '/start/see-it-live/': internalRedirect('/'),
+    // Retired product choosers. The homepage chooses between the products, so
+    // both the second chooser and the one that outlived it land there.
+    '/start/quickstart/': internalRedirect('/'),
+    '/start/when-to-use/': internalRedirect('/'),
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
     '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
@@ -163,11 +164,11 @@ export default defineConfig({
     '/journeys/product-input-lifecycle/': internalRedirect('/generated-artifacts/'),
     // Retired first-call and source-review routes enter the supported local path.
     '/start/your-first-call/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
-    '/start/test-current-source-revision/': internalRedirect('/start/when-to-use/'),
-    // Retired lab tutorials land on the current chooser or Evidence Gateway
+    '/start/test-current-source-revision/': internalRedirect('/'),
+    // Retired lab tutorials land on the homepage or the Evidence Gateway
     // overview. The historical Solmara workflow used an obsolete Relay source
     // path and is no longer published as current guidance.
-    '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/when-to-use/'),
+    '/tutorials/first-run-with-registry-lab/': internalRedirect('/'),
     '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/evidence-quickstart/'),
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
@@ -210,7 +211,7 @@ export default defineConfig({
     '/projects/registry-relay/reference/': internalRedirect('/configure/relay/'),
     // Retired project routes redirect only when a current replacement exists.
     // Solmara Lab is an external adopter, not a Registry Stack product.
-    '/projects/registry-lab/demo-flow/': internalRedirect('/start/when-to-use/'),
+    '/projects/registry-lab/demo-flow/': internalRedirect('/'),
   },
   integrations: [
     // Mermaid must come BEFORE starlight: its rehype plugin rewrites
@@ -306,7 +307,6 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'Choose a product', slug: 'start/when-to-use' },
             { label: 'Glossary', slug: 'reference/glossary' },
           ],
         },

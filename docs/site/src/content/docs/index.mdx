@@ -77,20 +77,33 @@ runs independently of Relay against its own configured authoritative sources.
 The caller receives only the output authorized for that service.
 
 The products have separate adopter tooling and deployment contracts, while reusing shared
-Registry Platform primitives. A Relay deployment is
-one sealed package per process, authored with `relayctl` and served by `relay`.
-Evidence Gateway has its own toolset and deployment project shape, covered by the
-[Evidence Gateway overview](start/evidence-quickstart/). Relay responses are not
-signed: portable signed minimum disclosure is what Evidence Gateway is for.
-BReg owns its PostgreSQL records; it does not automatically publish them through Relay or
-configure Evidence Gateway on your behalf.
+Registry Platform primitives. Relay responses are not signed: portable signed minimum disclosure
+is what Evidence Gateway is for. BReg owns its PostgreSQL records; it does not publish them
+through Relay or configure Evidence Gateway on your behalf.
+
+Registry Stack is not a workflow, eligibility, ranking, or case-management engine. It does not
+decide legal authority, data ownership, or institutional approval, and it is not a publisher of
+unrestricted open data. It makes those boundaries visible; the responsible institutions still make
+the decisions.
 
 {/* Evidence: crates/registry-breg/Cargo.toml; crates/registry-bregctl/src/lib.rs;
     crates/registry-relayctl/src/lib.rs; crates/registry-evidencectl/src/lib.rs. */}
 
+## Who does what
+
+- The assertion provider is the institution that answers requests with signed facts through
+  Evidence Gateway.
+- The data publisher is the institution that exposes records through Registry Relay or
+  maintains a registry through Base Registry Engine.
+- The consumer or verifier is the relying service that calls a product's API and verifies the
+  answers it receives.
+- The operator is whoever runs the deployment.
+
+One institution can hold several of these roles, and each tutorial names the role it is written
+for.
+
 ## Move beyond the first run
 
-- [Decide whether Registry Stack fits](start/when-to-use/)
 - [Connect an existing registry](configure/)
 - [Prepare an operator handoff](operate/)
 - [Review the architecture](explanation/architecture/)

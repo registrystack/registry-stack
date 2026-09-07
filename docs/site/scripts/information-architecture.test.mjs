@@ -91,7 +91,7 @@ function hasDocForSlug(slug) {
 }
 
 // Every slug the built site publishes from the hand-authored content
-// collection, in the form the sidebar uses to address it: `start/when-to-use`
+// collection, in the form the sidebar uses to address it: `start/breg-quickstart`
 // for a leaf file, `configure` for a directory index, and the empty string for
 // the homepage. Starlight's `draft: true` is what removes a page from the built
 // site, so a draft page is not published and is not expected to be navigable.
@@ -459,7 +459,7 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
   assert.ok(start, 'could not isolate Start');
   assert.deepEqual(
     [...start.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]),
-    ['start/when-to-use', 'reference/glossary'],
+    ['reference/glossary'],
   );
 
   const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
@@ -599,22 +599,20 @@ test('does not publish the retired pre-1.0 cutover page', () => {
   assert.doesNotMatch(homepageSource, /pre-1\.0-cutover/);
 });
 
-// `start/quickstart` was a second chooser beside `start/when-to-use`: both told
-// a reader which of the two products answered their problem, and only one of
-// them had a seat. It is retired rather than repurposed, so the four redirects
-// that pointed at it now land on the chooser that stayed, and so does its own
-// route, which was published and so has readers holding links to it.
-test('does not publish the retired second stack chooser', () => {
-  assert.equal(
-    existsSync(resolve(siteRoot, 'src/content/docs/start/quickstart.mdx')),
-    false,
-  );
-  assert.doesNotMatch(sidebarSource, /start\/quickstart/);
-  assert.doesNotMatch(homepageSource, /start\/quickstart/);
-  assert.match(
-    configSource,
-    /'\/start\/quickstart\/': internalRedirect\('\/start\/when-to-use\/'\)/,
-  );
+// `start/quickstart` and `start/when-to-use` were product choosers: each told
+// a reader which product answered their problem, which the homepage does too.
+// Both are retired rather than repurposed, so their routes, which were
+// published and so have readers holding links to them, land on the homepage,
+// and so do the redirects that used to point at the chooser.
+test('does not publish a product chooser beside the homepage', () => {
+  for (const page of ['start/quickstart.mdx', 'start/when-to-use.mdx']) {
+    assert.equal(existsSync(resolve(siteRoot, 'src/content/docs', page)), false, page);
+  }
+  assert.doesNotMatch(sidebarSource, /start\/(quickstart|when-to-use)/);
+  assert.doesNotMatch(homepageSource, /start\/(quickstart|when-to-use)/);
+  assert.match(configSource, /'\/start\/quickstart\/': internalRedirect\('\/'\)/);
+  assert.match(configSource, /'\/start\/when-to-use\/': internalRedirect\('\/'\)/);
+  assert.doesNotMatch(configSource, /internalRedirect\('\/start\/when-to-use\/'\)/);
 });
 
 test('every hand-authored sidebar slug resolves to a published documentation page', () => {
@@ -665,7 +663,7 @@ test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   assert.match(configSource, /'\/start\/': internalRedirect\('\/'\)/);
   assert.match(
     configSource,
-    /'\/start\/see-it-live\/': internalRedirect\('\/start\/when-to-use\/'\)/,
+    /'\/start\/see-it-live\/': internalRedirect\('\/'\)/,
   );
   assert.match(
     configSource,
@@ -673,7 +671,7 @@ test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   );
   assert.match(
     configSource,
-    /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/start\/when-to-use\/'\)/,
+    /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/'\)/,
   );
   // The retired V1 source tutorials still resolve: their redirects moved into
   // the Relay V2 retirement module, so assert that map rather than the config

@@ -10,7 +10,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const checker = resolve(here, 'check-built-accessibility.mjs');
 const criticalPaths = [
   'index.html',
-  'start/when-to-use/index.html',
+  'start/evidence-quickstart/index.html',
   'tutorials/publish-governed-sqlite-registry/index.html',
   'verify/index.html',
   'generated-artifacts/index.html',

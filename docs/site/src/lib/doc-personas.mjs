@@ -1,5 +1,5 @@
-// The deployment roles a tutorial can be written for, defined for readers in
-// start/when-to-use.mdx under "Who does what". A tutorial declares one or more
+// The deployment roles a tutorial can be written for, defined for readers on
+// the homepage (src/content/docs/index.mdx) under "Who does what". A tutorial declares one or more
 // of these in its `persona` frontmatter key so a reader can tell at a glance
 // whether the page is theirs.
 //
