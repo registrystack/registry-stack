@@ -27,13 +27,17 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:2e242cbc17151e40876b6a41b1f8b640095c9720cca0607334a2c2d62fd50098",
+      "sha256:1ad2dc4833ec1e552c4ca20a2e64b267f2a35b6eaf24bb6242e0dd615d501887",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
       "user": "65532",
-      "entrypoint": ["/usr/local/bin/evidence"],
-      "command": ["serve"],
+      "entrypoint": [
+        "/usr/local/bin/evidence"
+      ],
+      "command": [
+        "serve"
+      ],
       "working_dir": "/var/lib/registry-evidence",
       "environment": [
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -42,10 +46,12 @@
       ],
       "healthcheck": null,
       "args_escaped": true,
-      "exposed_ports": ["8080/tcp"],
+      "exposed_ports": [
+        "8080/tcp"
+      ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:fcfa4afaf77d079d8164194283708c986a2f7cd0862362a8e540f734f129ea9e"
+    "definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552"
   },
   "policies": [
     {
@@ -68,8 +74,8 @@
       "severity": "Critical",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and Grype reports no fix. The official v0.26.1 Linux AMD64 Evidence candidate from run 33873930773 attempt 1 imports __isoc23_sscanf at exactly two call sites, whose immutable format strings are %lu and %lx, and has no effective vulnerable allocating-character scanf path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
-      "reviewed_at": "2026-09-04",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.27.0 Linux AMD64 Evidence local reproduction from rehearsal run 34065151079 has one __isoc99_sscanf call whose two branches select only the immutable %lu and %lx formats. Neither uses an allocating-character conversion or field width, and no other scanf-family call or affected dynamically resolved name was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
+      "reviewed_at": "2026-09-07",
       "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -86,14 +92,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:fcfa4afaf77d079d8164194283708c986a2f7cd0862362a8e540f734f129ea9e",
+      "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:3b2acf91f2095d565d06529175fc231414c0dd508844c2d09ad4522d7be03908",
-        "reference_source_revision": "3e655214558e4479a72a2049ebf72bf5721a303e",
-        "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:fcfa4afaf77d079d8164194283708c986a2f7cd0862362a8e540f734f129ea9e",
+        "reference_image_digest": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
+        "reference_source_revision": "bee7708e4f6ac5712a05245963fbce7bd5f732e8",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -104,19 +110,19 @@
             "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
           },
           {
-            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
-            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
-          },
-          {
             "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
             "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
           },
           {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:c5e67539d25006e49670f6f0b720a255d0aae5ad624bf8095c37855c67ee9f49"
+            "sha256": "sha256:524df3e7de28032045a5fcace079697c8f1d597093b755195c14d4b420614096"
           }
         ],
-        "definition_digest": "sha256:0c394155178d62b0829878e34c090815a938fadfe0495442c8d0de1f297fe8a9"
+        "definition_digest": "sha256:69784f49ef9a2773322a93a8e4da49731f4d0fd65f52707d33f959392d75d1c8"
       }
     },
     {
@@ -126,8 +132,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and Grype reports no fix. The official v0.26.1 Linux AMD64 Evidence candidate from run 33873930773 attempt 1 imports no ungetwc, wide-character input, or wide-character scanning function in the reviewed dynamic symbol table. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
-      "reviewed_at": "2026-09-04",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.27.0 Linux AMD64 Evidence local reproduction from rehearsal run 34065151079 imports no wide-input or ungetwc function and embeds no affected dynamic-resolution name, so no vulnerable wide-character pushback path was identified in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
+      "reviewed_at": "2026-09-07",
       "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -144,14 +150,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:fcfa4afaf77d079d8164194283708c986a2f7cd0862362a8e540f734f129ea9e",
+      "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:3b2acf91f2095d565d06529175fc231414c0dd508844c2d09ad4522d7be03908",
-        "reference_source_revision": "3e655214558e4479a72a2049ebf72bf5721a303e",
-        "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:fcfa4afaf77d079d8164194283708c986a2f7cd0862362a8e540f734f129ea9e",
+        "reference_image_digest": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
+        "reference_source_revision": "bee7708e4f6ac5712a05245963fbce7bd5f732e8",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -162,19 +168,19 @@
             "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
           },
           {
-            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
-            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
-          },
-          {
             "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
             "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
           },
           {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:c5e67539d25006e49670f6f0b720a255d0aae5ad624bf8095c37855c67ee9f49"
+            "sha256": "sha256:524df3e7de28032045a5fcace079697c8f1d597093b755195c14d4b420614096"
           }
         ],
-        "definition_digest": "sha256:0c394155178d62b0829878e34c090815a938fadfe0495442c8d0de1f297fe8a9"
+        "definition_digest": "sha256:69784f49ef9a2773322a93a8e4da49731f4d0fd65f52707d33f959392d75d1c8"
       }
     },
     {
@@ -184,8 +190,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and Grype reports no fix. The official v0.26.1 Linux AMD64 Evidence candidate from run 33873930773 attempt 1 imports __res_init and none of the deprecated resolver-printing helpers in the reviewed dynamic symbol table. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
-      "reviewed_at": "2026-09-04",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.27.0 Linux AMD64 Evidence local reproduction from rehearsal run 34065151079 imports or dynamically resolves none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
+      "reviewed_at": "2026-09-07",
       "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -202,14 +208,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:fcfa4afaf77d079d8164194283708c986a2f7cd0862362a8e540f734f129ea9e",
+      "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:3b2acf91f2095d565d06529175fc231414c0dd508844c2d09ad4522d7be03908",
-        "reference_source_revision": "3e655214558e4479a72a2049ebf72bf5721a303e",
-        "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:fcfa4afaf77d079d8164194283708c986a2f7cd0862362a8e540f734f129ea9e",
+        "reference_image_digest": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
+        "reference_source_revision": "bee7708e4f6ac5712a05245963fbce7bd5f732e8",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -220,19 +226,19 @@
             "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
           },
           {
-            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
-            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
-          },
-          {
             "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
             "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
           },
           {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:c5e67539d25006e49670f6f0b720a255d0aae5ad624bf8095c37855c67ee9f49"
+            "sha256": "sha256:524df3e7de28032045a5fcace079697c8f1d597093b755195c14d4b420614096"
           }
         ],
-        "definition_digest": "sha256:0c394155178d62b0829878e34c090815a938fadfe0495442c8d0de1f297fe8a9"
+        "definition_digest": "sha256:69784f49ef9a2773322a93a8e4da49731f4d0fd65f52707d33f959392d75d1c8"
       }
     },
     {
@@ -242,8 +248,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The official v0.26.1 Linux AMD64 Evidence candidate from run 33873930773 attempt 1 neither links libz nor contains libz.so, gz_vacate, gzwrite, gzprintf, or gzvprintf in the reviewed executable bytes, so the vulnerable stalled non-blocking gzwrite followed by gzprintf/gzvprintf path is absent. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed file digests.",
-      "reviewed_at": "2026-09-04",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.27.0 Linux AMD64 Evidence local reproduction from rehearsal run 34065151079 does not link libz or embed libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf in its executable. Its reviewed dynamic lookups do not select those functions, so no vulnerable stalled gzip-write followed by formatted-output path was identified. SQLite extension-loading wrappers are compiled in, but loading remains disabled and governed SQL explicitly denies load_extension. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
+      "reviewed_at": "2026-09-07",
       "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -260,14 +266,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:fcfa4afaf77d079d8164194283708c986a2f7cd0862362a8e540f734f129ea9e",
+      "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:3b2acf91f2095d565d06529175fc231414c0dd508844c2d09ad4522d7be03908",
-        "reference_source_revision": "3e655214558e4479a72a2049ebf72bf5721a303e",
-        "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:fcfa4afaf77d079d8164194283708c986a2f7cd0862362a8e540f734f129ea9e",
+        "reference_image_digest": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
+        "reference_source_revision": "bee7708e4f6ac5712a05245963fbce7bd5f732e8",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -278,19 +284,19 @@
             "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
           },
           {
-            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
-            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
-          },
-          {
             "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
             "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
           },
           {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:c5e67539d25006e49670f6f0b720a255d0aae5ad624bf8095c37855c67ee9f49"
+            "sha256": "sha256:524df3e7de28032045a5fcace079697c8f1d597093b755195c14d4b420614096"
           }
         ],
-        "definition_digest": "sha256:0c394155178d62b0829878e34c090815a938fadfe0495442c8d0de1f297fe8a9"
+        "definition_digest": "sha256:69784f49ef9a2773322a93a8e4da49731f4d0fd65f52707d33f959392d75d1c8"
       }
     }
   ]
