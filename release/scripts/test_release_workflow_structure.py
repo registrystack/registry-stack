@@ -1370,6 +1370,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         current_retryable_names = (
             "SHA256SUMS",
             '"registry-stack-${tag}-SHA256SUMS.sigstore.json"',
+            '"registry-stack-${tag}-SHA256SUMS.intoto.jsonl"',
         )
         retryable_roster = stage[
             stage.index("printf '%s\\n'") : stage.index(
@@ -1471,6 +1472,66 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("slsa-framework/slsa-github-generator", text)
         self.assertNotIn("Generate signed 1.x lock", text)
         self.assertNotIn("registry-release-lock.v1.json", text)
+
+    def test_attests_the_checksum_closure_and_publishes_its_provenance(self) -> None:
+        _, document = workflow("release.yml")
+        finalize = document["jobs"]["finalize-assets"]
+        self.assertEqual(finalize["permissions"]["attestations"], "write")
+        self.assertEqual(finalize["permissions"]["id-token"], "write")
+        steps = finalize["steps"]
+        names = [step.get("name") for step in steps]
+        sign = names.index("Sign the checksum closure")
+        attest = names.index("Attest the signed checksum closure")
+        upload = names.index("Upload the checksum closure and its provenance")
+        self.assertLess(sign, attest)
+        self.assertLess(attest, upload)
+        self.assertTrue(
+            steps[attest]["uses"].startswith("actions/attest-build-provenance@")
+        )
+        self.assertEqual(steps[attest]["id"], "provenance")
+        self.assertEqual(
+            steps[attest]["with"]["subject-path"].strip(),
+            "release-assets/SHA256SUMS",
+        )
+        self.assertIn("cosign sign-blob --yes", steps[sign]["run"])
+        self.assertNotIn("gh release upload", steps[sign]["run"])
+        provenance_asset = (
+            'release-assets/registry-stack-${tag}-SHA256SUMS.intoto.jsonl'
+        )
+        self.assertEqual(
+            steps[upload]["env"]["PROVENANCE_BUNDLE"],
+            "${{ steps.provenance.outputs.bundle-path }}",
+        )
+        self.assertIn('cp "${PROVENANCE_BUNDLE}"', steps[upload]["run"])
+        self.assertIn(provenance_asset, steps[upload]["run"])
+        self.assertLess(
+            steps[upload]["run"].index(provenance_asset),
+            steps[upload]["run"].index("gh release upload"),
+        )
+        publish = document["jobs"]["publish"]
+        self.assertEqual(publish["permissions"]["attestations"], "read")
+        recheck = step_run(
+            document,
+            "publish",
+            "Recheck complete signed release and exact public images",
+        )
+        self.assertIn(
+            'gh attestation verify draft/SHA256SUMS',
+            recheck,
+        )
+        self.assertIn(
+            '"draft/registry-stack-${tag}-SHA256SUMS.intoto.jsonl"',
+            recheck,
+        )
+        self.assertIn(
+            '"${GITHUB_REPOSITORY}/.github/workflows/release.yml"',
+            recheck,
+        )
+        self.assertIn("--source-ref refs/heads/main", recheck)
+        self.assertIn("--deny-self-hosted-runners", recheck)
+        required = recheck[recheck.index("required=(") : recheck.index(")", recheck.index("required=("))]
+        self.assertIn("SHA256SUMS.sigstore.json", required)
+        self.assertIn("SHA256SUMS.intoto.jsonl", required)
 
     def test_dispatches_docs_for_current_release_candidates(self) -> None:
         text, document = workflow("release.yml")

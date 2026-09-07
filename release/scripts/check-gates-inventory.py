@@ -556,8 +556,11 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         (
             "finalize-assets:\n    name: Finalize the signed Beta asset closure",
             "name: Clean retryable final additions and reverify exact staged assets",
-            "name: Sign and upload the checksum closure",
+            "name: Sign the checksum closure",
             "cosign sign-blob --yes",
+            "name: Attest the signed checksum closure",
+            "uses: actions/attest-build-provenance@",
+            "name: Upload the checksum closure and its provenance",
             "contract/final-upload-release.json",
             "name: Upload final reconciliation contract",
         ),
@@ -816,7 +819,7 @@ ORDERED_RELEASE_SECURITY_GATES = (
         "Exact image promotion before checksum signing",
         ".github/workflows/release.yml",
         "name: Reconcile exact image digests",
-        "name: Sign and upload the checksum closure",
+        "name: Sign the checksum closure",
     ),
     (
         "Exact image promotion before release publication",
@@ -1397,7 +1400,7 @@ def release_draft_mutation_barrier_violations(
     )
     final_upload = step_with(
         finalize,
-        "name: Sign and upload the checksum closure",
+        "name: Upload the checksum closure and its provenance",
     )
     classification = step_with(
         publish,
