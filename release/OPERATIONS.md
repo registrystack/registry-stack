@@ -356,6 +356,31 @@ again with a new `rehearsal_request_id`. Do not rerun only the failed jobs: a
 fresh correlated dispatch keeps both shard artifacts and their consumer on one
 source and workflow attempt.
 
+The optional `release-native-benchmark.yml` workflow measures cold macOS
+release builds after changing their build topology. It is review-only: it has
+no publication permission, does not exercise the future-tag or prepared-plan
+checks above, and never substitutes for the full release rehearsal. Dispatch
+it from the protected branch with an exact commit whose workspace version
+matches the requested version:
+
+```sh
+native_source="$(git rev-parse origin/main)"
+gh workflow run release-native-benchmark.yml \
+  --repo registrystack/registry-stack \
+  --ref main \
+  -f source_sha="${native_source}" \
+  -f version=<published-version>
+```
+
+The three group artifacts and merged artifact are bound to the version, source,
+run, and attempt and expire after two days. Verify the merged seven-file roster
+and bytes against the retained signed release assets before using the
+measurement to change the release budget. The merge job verifies `0755` modes
+before upload. Artifact downloads do not preserve those modes, so reproduce a
+local mode check by downloading all three shards and running
+`merge-release-native-platform-shards.py` again with the same source, version,
+purpose, and group inputs.
+
 When an image advisory baseline needs review for the prepared version, add
 `-f advisory_evidence=true` to the rehearsal dispatch. The canonical Linux job
 then builds every image in that version's owned roster from the same local
