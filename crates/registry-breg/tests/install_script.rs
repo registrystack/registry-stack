@@ -9,7 +9,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const TEST_VERSION: &str = "v9.8.7";
-const BINARIES: [&str; 2] = ["breg", "bregctl"];
+const BINARIES: [&str; 3] = ["breg", "bregctl", "mint"];
 
 // Distinguishes fixture roots built within the same process. The wall clock alone is not
 // enough: macOS reports CLOCK_REALTIME at 1 microsecond resolution, so two fixtures built in

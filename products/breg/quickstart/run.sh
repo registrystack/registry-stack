@@ -73,7 +73,7 @@ done
 if [[ "$installed" == true ]]; then
   breg=$(resolve_installed_command breg 'breg-install.sh provides breg and bregctl')
   bregctl=$(resolve_installed_command bregctl 'breg-install.sh provides breg and bregctl')
-  mint=$(resolve_installed_command mint 'evidencectl-install.sh provides mint')
+  mint=$(resolve_installed_command mint 'breg-install.sh and evidencectl-install.sh both provide mint')
   printf '%s\n' '== Using installed breg, bregctl, and mint from PATH'
   printf '%s\n' "$breg"
   printf '%s\n' "$bregctl"

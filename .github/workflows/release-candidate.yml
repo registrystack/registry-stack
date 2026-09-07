@@ -1487,13 +1487,14 @@ jobs:
               sha256sum -- \
                 "breg-${{ needs.validate.outputs.tag }}-linux-amd64" \
                 "bregctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                "mint-${{ needs.validate.outputs.tag }}-linux-amd64" \
                 > SHA256SUMS
             )
             breg_install_dir="${RUNNER_TEMP}/candidate-breg-install"
             BREG_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
             BREG_INSTALL_DIR="${breg_install_dir}" \
               bash "candidate/bundle-root/${breg_installer}"
-            for breg_binary in breg bregctl; do
+            for breg_binary in breg bregctl mint; do
               observed="$("${breg_install_dir}/${breg_binary}" --version)"
               test "${observed}" = \
                 "${breg_binary} ${{ needs.validate.outputs.version }}"

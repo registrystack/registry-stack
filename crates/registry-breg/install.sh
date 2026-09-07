@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="registrystack/registry-stack"
-binaries=(breg bregctl)
+binaries=(breg bregctl mint)
 # Publication packaging replaces this empty value with the asset's canonical tag.
 default_version=""
 script_name="${BASH_SOURCE[0]:-}"
@@ -30,14 +30,17 @@ asset_dir="${BREG_ASSET_DIR:-}"
 
 usage() {
 	cat <<EOF
-Install the Base Registry Engine runtime and bregctl adopter tooling.
+Install the Base Registry Engine runtime, the bregctl adopter tooling, and the
+mint token issuer that a local registry uses when no identity provider is at
+hand. The mint binary is the one the Evidence toolset installer ships; the two
+installers install the same release asset.
 
 Quick install:
   curl -fsSL https://github.com/${repo}/releases/latest/download/breg-install.sh | bash
 
-The installer verifies both downloaded release assets against the release's
-SHA256SUMS before anything reaches the install directory, and installs both
-binaries together or not at all. It does not verify release authenticity. For
+The installer verifies every downloaded release asset against the release's
+SHA256SUMS before anything reaches the install directory, and installs the
+three binaries together or not at all. It does not verify release authenticity. For
 a higher-assurance installation, follow the release verification guide for the
 pinned tag, then rerun with BREG_ASSET_DIR set to the verified
 directory:
@@ -307,8 +310,8 @@ if [ -e "$current_link" ] && [ ! -L "$current_link" ]; then
 fi
 
 # A one-time migration keeps existing direct binaries behind the same pointer
-# before their stable command links are installed. At every point both commands
-# therefore resolve to the prior toolset, the new toolset, or neither.
+# before their stable command links are installed. At every point every command
+# therefore resolves to the prior toolset, the new toolset, or neither.
 if [ ! -L "$current_link" ]; then
 	previous_dir="$(mktemp -d "$install_dir/.breg-previous.XXXXXX")"
 	chmod 0755 "$previous_dir"
@@ -336,7 +339,7 @@ for binary in "${binaries[@]}"; do
 	replace_path "$link_stage_dir/$binary" "$install_dir/$binary"
 done
 
-# Both stable command links change version through this one atomic rename.
+# Every stable command link changes version through this one atomic rename.
 ln -s "${stage_dir##*/}" "$link_stage_dir/current"
 install_complete=1
 replace_path "$link_stage_dir/current" "$current_link"
@@ -350,6 +353,7 @@ Try it:
   bregctl init --help
   bregctl check --help
   breg --help
+  mint --help
 
 EOF
 
