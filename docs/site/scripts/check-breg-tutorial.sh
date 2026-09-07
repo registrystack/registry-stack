@@ -255,7 +255,7 @@ stop_dev_sessions() {
 	[[ -d "$READER_DIR" && -x "$SHIM_DIR/bregctl" ]] || return 0
 	while IFS= read -r state; do
 		project="$(dirname "$(dirname "$(dirname "$state")")")"
-		"$SHIM_DIR/bregctl" dev stop --project "$project" --remove >/dev/null 2>&1 ||
+		"$SHIM_DIR/bregctl" dev stop "$project" --remove >/dev/null 2>&1 ||
 			printf 'could not stop the local development session in %s\n' "$project" >&2
 	done < <(find "$READER_DIR" -path '*/.breg/dev/state.json' 2>/dev/null)
 }

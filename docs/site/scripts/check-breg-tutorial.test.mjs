@@ -149,8 +149,8 @@ test('the cleanup stops every local development session the replay started', asy
   assert.deepEqual(
     calls.sort(),
     [
-      `dev stop --project ${join(readerDir, 'another/registry')} --remove`,
-      `dev stop --project ${join(readerDir, 'first-breg/tutorial-work/project')} --remove`,
+      `dev stop ${join(readerDir, 'another/registry')} --remove`,
+      `dev stop ${join(readerDir, 'first-breg/tutorial-work/project')} --remove`,
     ],
   );
 });

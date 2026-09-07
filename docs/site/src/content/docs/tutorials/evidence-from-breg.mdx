@@ -185,7 +185,7 @@ Existing credential output files are refused. Keep the operator client without
 these output fields so its credential stays in BReg's private development state.
 
 ```sh
-bregctl dev --project ./registry --clients-file ./registry/clients.yaml
+bregctl dev ./registry --clients-file ./registry/clients.yaml
 ```
 
 The command returns when its owned PostgreSQL, Mint and BReg services are ready,
@@ -293,8 +293,8 @@ From `evidence/`:
 
 ```sh
 evidencectl dev stop
-bregctl dev stop --project ../registry
-bregctl dev start --project ../registry
+bregctl dev stop ../registry
+bregctl dev start ../registry
 evidencectl dev --target ./targets/configured --detach
 ```
 
@@ -373,7 +373,7 @@ Before leaving the exercise, stop both owned service groups:
 cd evidence
 evidencectl dev stop
 cd ..
-bregctl dev stop --project ./registry
+bregctl dev stop ./registry
 ```
 
 {/* Evidence: products/evidence/reference/authoring-projects/SOURCE-EXPORT.md; crates/registry-evidencectl/src/source_cli.rs; crates/registry-evidencectl/src/build.rs; products/breg/EVIDENCE.md. */}

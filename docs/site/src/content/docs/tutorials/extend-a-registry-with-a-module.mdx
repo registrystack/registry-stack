@@ -282,7 +282,7 @@ Testing a project against a database and packaging it come next.
 | `check` cannot parse `registry.yaml` after your edit | Compare the indentation of the lines you changed with their neighbours; the grant lists sit eight spaces in. |
 | `bregctl` is not found | Put the installers' directory, `~/.local/bin` unless you changed it, back on `PATH` in this terminal. |
 | The running registry does not show `internalNote` | Expected: it serves the package `bregctl dev` built when it first started. Activating a changed package is covered in [Deploy a registry](../../operate/breg/). |
-| `bregctl dev` refuses to start the edited project | Expected: `dev` keeps the package it started with, and refuses inputs that differ from it. To run the edited project, copy `tutorial-work/project` without its `.breg/` directory to a new path and start that copy with its own `dev-clients.yaml`. |
+| `bregctl dev` refuses to start the edited project | Expected while the registry holds records: `dev` keeps the package it started with. Run `bregctl dev stop tutorial-work/project --remove` to discard the records, then `bregctl dev tutorial-work/project` builds the edited project into a fresh registry. To keep the records, copy `tutorial-work/project` without its `.breg/` directory to a new path and start that copy instead. |
 
 ## Next
 

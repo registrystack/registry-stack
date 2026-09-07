@@ -125,8 +125,7 @@ Nothing here is configured for anyone else's data.
 Start the project as a registry:
 
 ```sh
-bregctl dev --project tutorial-work/project \
-  --clients-file tutorial-work/project/dev-clients.yaml
+bregctl dev tutorial-work/project
 ```
 
 The first start downloads the pinned PostgreSQL image, so it takes longer than the later ones.
@@ -150,8 +149,9 @@ client reader
     assertion key file: <path>/tutorial-work/project/.breg/dev/credentials/reader/assertion-key.jwk
 ```
 
-What happened: `dev` started PostgreSQL in a container, started Registry Mint with the two clients
-from `dev-clients.yaml` and a fresh private key for each, built a package from the project, replayed
+What happened: `dev` started PostgreSQL in a container, read the project's `dev-clients.yaml`,
+started Registry Mint with its two clients and a fresh private key for each, built a package from the
+project, replayed
 `tests/journeys.yaml` against a throwaway database, activated the package, and started BReg on the
 address the report shows.
 The services keep running after the command returns, so this one terminal is enough.
@@ -458,7 +458,7 @@ generated request schema, so the model decides what a record needs, not applicat
 Stop the services:
 
 ```sh
-bregctl dev stop --project tutorial-work/project
+bregctl dev stop tutorial-work/project
 ```
 
 The report ends with `status: stopped`.
@@ -467,11 +467,14 @@ The container and its volume stay, with your records and audit history, and the 
 To discard the records as well, stop with `--remove`:
 
 ```sh
-bregctl dev stop --project tutorial-work/project --remove
+bregctl dev stop tutorial-work/project --remove
 ```
 
-Either way, keep `tutorial-work/`: the next tutorial edits the project inside it, and the keys,
-credentials, and package under `.breg/dev/` serve the next start.
+Either way, keep `tutorial-work/`: the next tutorial edits the project inside it.
+After a plain stop, the next start brings the same registry back and refuses an edited project
+while the records exist.
+After `--remove`, the next start builds the project as it stands, edits included, and generates
+new keys if the project changed.
 
 {/* Evidence: crates/registry-bregctl/src/dev/mod.rs, stop(); products/breg/DEV.md. */}
 
