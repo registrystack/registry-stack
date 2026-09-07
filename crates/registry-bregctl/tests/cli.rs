@@ -1578,6 +1578,242 @@ modules:
 }
 
 #[test]
+fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediately() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("derived");
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+        "--starter",
+        "household",
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("init reports JSON");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["command"], "init");
+    let artifacts: Vec<&str> = report["artifacts"]
+        .as_array()
+        .expect("artifacts")
+        .iter()
+        .map(|artifact| artifact["path"].as_str().expect("path"))
+        .collect();
+    assert_eq!(
+        artifacts,
+        [
+            "README.md",
+            "dev-clients.yaml",
+            "model/selection.yaml",
+            "registry.yaml",
+            "runtime.example.yaml",
+            "tests/journeys.yaml",
+        ]
+    );
+    for relative in &artifacts {
+        assert!(
+            destination.join(relative).is_file(),
+            "init writes {relative}"
+        );
+    }
+    assert!(
+        !destination.join("modules").exists(),
+        "a derived project locks no module"
+    );
+    let codes: Vec<&str> = report["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .map(|finding| finding["code"].as_str().expect("code"))
+        .collect();
+    assert!(
+        codes.contains(&"access.profile.unrestricted_collection"),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains(&"access.profile.higher_classification"),
+        "{codes:?}"
+    );
+    let next_steps = report["nextSteps"].as_array().expect("next steps");
+    assert!(next_steps.iter().any(|step| step
+        .as_str()
+        .is_some_and(|step| step.contains("model/selection.yaml"))));
+
+    let registry =
+        fs::read_to_string(destination.join("registry.yaml")).expect("derived project reads");
+    assert!(registry.contains("id: household-registry"));
+    assert!(registry.contains("conceptUri: https://publicschema.org/Person"));
+    assert!(registry.contains("route: group-memberships"));
+    assert!(registry
+        .contains("{id: person, type: reference, target: person, classification: restricted}"));
+    assert!(!registry.contains("generic-registry"));
+    let initialized_project =
+        parse_project_yaml(registry.as_bytes()).expect("derived project parses");
+    for profile in [CompileProfile::Authoring, CompileProfile::Production] {
+        compile_project(&initialized_project, &[], profile).expect("derived project compiles");
+    }
+
+    let check = bregctl(&["--format", "json", "check", path(&destination)]);
+    assert!(check.status.success(), "{check:?}");
+    let journeys =
+        fs::read_to_string(destination.join("tests/journeys.yaml")).expect("derived journeys read");
+    assert!(journeys.contains("scopes: [registry:household-registry:operate]"));
+    assert!(journeys.contains("person: {recordRef: example-person}"));
+    assert!(!journeys.contains("token"));
+    let selection =
+        fs::read_to_string(destination.join("model/selection.yaml")).expect("selection echo reads");
+    assert!(selection.contains("kind: ModelSelection"));
+    assert!(selection.contains("concept: GroupMembership"));
+}
+
+#[test]
+fn init_from_publicschema_reads_a_selection_file_and_refuses_a_bad_one() {
+    let project = TestProject::asset_fixture();
+    let selection = project.path().join("selection.yaml");
+    fs::write(
+        &selection,
+        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+kind: ModelSelection
+model: publicschema
+registry:
+  id: places
+  title: Places
+entities:
+  - concept: Location
+    properties:
+      - name: location_name
+      - name: latitude
+      - name: longitude
+",
+    )
+    .expect("selection writes");
+    let destination = project.path().join("places");
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+        "--selection",
+        path(&selection),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let registry = fs::read_to_string(destination.join("registry.yaml")).expect("project reads");
+    assert!(registry.contains("route: locations"));
+    assert!(registry.contains(
+        "{id: latitude, type: decimal, precision: 18, scale: 6, classification: internal}"
+    ));
+    assert!(!registry.contains("vocabulary-code"));
+
+    fs::write(
+        &selection,
+        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+kind: ModelSelection
+model: publicschema
+registry:
+  id: places
+  title: Places
+entities:
+  - concept: Location
+    properties:
+      - name: altitude
+",
+    )
+    .expect("selection rewrites");
+    let refused_destination = project.path().join("places-again");
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&refused_destination),
+        "--from",
+        "publicschema",
+        "--selection",
+        path(&selection),
+    ]);
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        !refused_destination.exists(),
+        "a refused selection writes nothing"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("failure reports JSON");
+    assert_eq!(report["ok"], false);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "init.selection.property_unknown");
+    assert_eq!(diagnostic["artifact"], "model_selection");
+    assert_eq!(diagnostic["suggestedAction"], "correct_model_selection");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message")
+        .contains("location_name"));
+}
+
+#[test]
+fn init_from_publicschema_without_a_terminal_names_the_two_other_ways_in() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("derived");
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+    ]);
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(!destination.exists());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("failure reports JSON");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "init.selection.missing");
+    assert_eq!(diagnostic["suggestedAction"], "correct_command_usage");
+    let message = diagnostic["message"].as_str().expect("message");
+    assert!(message.contains("--selection"), "{message}");
+    assert!(message.contains("--starter"), "{message}");
+    assert!(message.contains("`household`"), "{message}");
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+        "--starter",
+        "missing",
+    ]);
+    assert!(!output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("failure reports JSON");
+    assert_eq!(report["diagnostics"][0]["code"], "init.starter.unknown");
+    assert!(report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("`household`"));
+}
+
+#[test]
+fn init_selection_flags_require_from() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("derived");
+
+    let output = bregctl(&["init", path(&destination), "--starter", "household"]);
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(!destination.exists());
+    let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
+    assert!(stderr.contains("--from"), "{stderr}");
+}
+
+#[test]
 fn init_prints_the_next_command_and_what_the_example_leaves_open() {
     let project = TestProject::asset_fixture();
     let destination = project.path().join("initialized");

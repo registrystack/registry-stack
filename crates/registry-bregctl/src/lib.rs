@@ -43,6 +43,7 @@ mod dev;
 mod doctor;
 mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
+mod init_from_model;
 mod package_inspection;
 mod package_lifecycle;
 mod project_migration;
@@ -114,7 +115,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create a domain-neutral example authoring project in a new directory.
+    /// Create an authoring project in a new directory: a domain-neutral example,
+    /// or one derived from an embedded reference model with `--from`.
     Init(InitArgs),
     /// Validate a Base Registry Engine authoring project without opening a database.
     Check(CheckArgs),
@@ -156,9 +158,26 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct InitArgs {
-    /// New directory that will receive the example project closure.
+    /// New directory that will receive the project closure.
     #[arg(value_name = "DESTINATION")]
     destination: PathBuf,
+    /// Derive the project from an embedded reference model instead of writing
+    /// the example. Without `--selection` or `--starter`, the command asks
+    /// which concepts and properties to select at the terminal.
+    #[arg(long, value_enum, value_name = "MODEL")]
+    from: Option<init_from_model::ModelName>,
+    /// A selection document naming the concepts and properties to derive;
+    /// the written project echoes one under `model/selection.yaml`.
+    #[arg(
+        long,
+        value_name = "FILE",
+        requires = "from",
+        conflicts_with = "starter"
+    )]
+    selection: Option<PathBuf>,
+    /// A selection shipped with the model, by name.
+    #[arg(long, value_name = "NAME", requires = "from")]
+    starter: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -961,6 +980,7 @@ enum DiagnosticArtifact {
     CommandArguments,
     RegistryProject,
     ProjectInitialization,
+    ModelSelection,
     GeneratedArtifacts,
     CompiledInventory,
     RuntimeConfiguration,
@@ -999,6 +1019,7 @@ enum SuggestedAction {
     CorrectAuthoringSource,
     ReviewAuthoringFinding,
     ChooseSafeOutputDirectory,
+    CorrectModelSelection,
     SelectAvailableArtifact,
     RetryArtifactGeneration,
     RetryInventoryExplanation,
@@ -1521,7 +1542,17 @@ where
                 }
             };
         }
-        Command::Init(args) => init(&args.destination),
+        Command::Init(args) => match args.from {
+            None => init(&args.destination),
+            Some(model) => {
+                let source = match (&args.selection, &args.starter) {
+                    (Some(path), _) => init_from_model::Source::File(path),
+                    (None, Some(name)) => init_from_model::Source::Starter(name),
+                    (None, None) => init_from_model::Source::Interactive,
+                };
+                init_from_model::run(&args.destination, model, source)
+            }
+        },
         Command::Check(args) => check(&args.project, profile(args.production)).and_then(|report| {
             if args.deny_findings && !report.findings.is_empty() {
                 Err(FailureReport {
