@@ -350,6 +350,12 @@ gh run watch "${rehearsal_run}" \
   --exit-status
 ```
 
+If either canonical binary shard or its consumer fails, keep that run as
+evidence, resolve the failure, and dispatch the complete rehearsal
+again with a new `rehearsal_request_id`. Do not rerun only the failed jobs: a
+fresh correlated dispatch keeps both shard artifacts and their consumer on one
+source and workflow attempt.
+
 When an image advisory baseline needs review for the prepared version, add
 `-f advisory_evidence=true` to the rehearsal dispatch. The canonical Linux job
 then builds every image in that version's owned roster from the same local
@@ -526,11 +532,13 @@ workflow then:
   exported rootfs. The full `crane config` document independently confirms that
   Grype and Syft reported the authoritative ordered uncompressed DiffIDs.
   Ordered DiffIDs cover every filesystem input, including
-  libraries, interpreters, loader inputs, and symlinks. The Relay reference is an
-  official v0.20.1 candidate. Evidence and Mint use explicitly identified local
-  v0.20.1 reproductions because official v0.20.x image reports were retained only
-  for Relay. Ordered rootfs DiffIDs, rather than the manifest digest, are stored
-  in-tree so renewal does not self-reference the revision-bearing config.
+  libraries, interpreters, loader inputs, and symlinks. Each baseline records its
+  exact reviewed reference image, source revision and provenance, including a
+  local reproduction when reviewed through the read-only rehearsal. The candidate
+  independently verifies its own image identity and protected source. Runtime
+  equality uses ordered rootfs DiffIDs rather than requiring the candidate
+  manifest digest to equal the recorded reference, avoiding revision-label
+  self-reference.
 - Runs the release payload checks.
 - Seals a candidate manifest and bundle that remain promotable for seven days.
 - Attests the manifest and bundle after re-verifying their bytes.

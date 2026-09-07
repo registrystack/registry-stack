@@ -352,8 +352,9 @@ class SharedFloorTests(unittest.TestCase):
         )
         self.assertIn("prepare_zig_toolchain", recipe)
         self.assertIn('REGISTRY_ZIG_TARGET="${zig_arch}-linux-gnu.${floor}"', recipe)
+        self.assertIn("local staged_binaries=(dist/bin/* dist/image-bin/*)", recipe)
         self.assertIn(
-            '"${script_dir}/check-glibc-floor.sh" dist/bin/* dist/image-bin/*', recipe
+            '"${script_dir}/check-glibc-floor.sh" "${staged_binaries[@]}"', recipe
         )
         self.assertTrue(os.access(GATE, os.X_OK), "the gate must be executable")
 

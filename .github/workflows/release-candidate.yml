@@ -229,9 +229,67 @@ jobs:
             release/scripts/check-release-source-model.sh
           release/scripts/check-debian13-images.py
 
+  build-canonical-binaries:
+    name: Build canonical Linux ${{ matrix.group }} binary shard
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, breg]
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Restore reusable Cargo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cargo-home/registry
+            .cargo-home/git
+            target
+          key: registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            registry-stack-release-${{ runner.os }}-${{ matrix.group }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-
+
+      - name: Build canonical Linux binary shard
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          release/scripts/build-release-binaries.sh \
+            --group "${{ matrix.group }}" \
+            "${{ needs.validate.outputs.version }}"
+
+      - name: Stage canonical Linux binary shard
+        run: |
+          set -euo pipefail
+          mkdir binary-shard
+          cp -R dist/bin binary-shard/bin
+          cp dist/RELEASE_BINARY_SHARD dist/RELEASE_BUILDER_IMAGE binary-shard/
+
+      - name: Upload canonical Linux binary shard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canonical-linux-binaries-${{ matrix.group }}-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: binary-shard
+          if-no-files-found: error
+          retention-days: 2
+
   build-canonical:
     name: Build Linux payload and private images once
-    needs: validate
+    needs:
+      - validate
+      - build-canonical-binaries
     runs-on: ubuntu-24.04
     # Covers an uncached canonical compile plus image work.
     timeout-minutes: 90
@@ -249,22 +307,28 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Restore reusable Cargo cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Download canonical Linux core binary shard
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: |
-            .cargo-home/registry
-            .cargo-home/git
-            target
-          key: registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'release/scripts/build-release-binaries.sh', 'release/docker/Dockerfile.builder', 'release/requirements/ziglang-0.12.1.txt', 'release/glibc-floor.env', 'release/scripts/zig-glibc-compiler') }}-
+          name: canonical-linux-binaries-core-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: binary-shards/core
 
-      - name: Build canonical Linux payload once
+      - name: Download canonical Linux breg binary shard
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: canonical-linux-binaries-breg-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: binary-shards/breg
+
+      - name: Merge and smoke the canonical Linux payload
         run: |
           set -euo pipefail
-          release/scripts/build-release-binaries.sh \
-            "${{ needs.validate.outputs.version }}"
+          release/scripts/merge-release-binary-shards.py \
+            --version "${{ needs.validate.outputs.version }}" \
+            --source-sha "${{ needs.validate.outputs.source_sha }}" \
+            --core binary-shards/core \
+            --breg binary-shards/breg \
+            --output dist \
+            --builder-image "${RELEASE_BUILDER_IMAGE}"
           test "$("dist/bin/relay-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
             "relay ${{ needs.validate.outputs.version }}"
           test "$("dist/bin/relayctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \

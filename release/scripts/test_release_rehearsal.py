@@ -38,7 +38,13 @@ class ReleaseRehearsalTest(unittest.TestCase):
         )
         self.assertEqual({"contents": "read"}, document["permissions"])
         self.assertEqual(
-            ["validate", "rehearse", "canonical-linux", "node-clients"],
+            [
+                "validate",
+                "rehearse",
+                "canonical-linux-binaries",
+                "canonical-linux",
+                "node-clients",
+            ],
             list(document["jobs"]),
         )
         validate = document["jobs"]["validate"]
@@ -59,8 +65,12 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertNotIn("--allow-missing-baseline", onboarding["run"])
         self.assertNotIn("${{ inputs.", onboarding["run"])
         self.assertEqual(text.count("Require a branch rehearsal"), 1)
-        for job_name in ("rehearse", "canonical-linux", "node-clients"):
+        for job_name in ("rehearse", "canonical-linux-binaries", "node-clients"):
             self.assertEqual("validate", document["jobs"][job_name]["needs"])
+        self.assertEqual(
+            ["validate", "canonical-linux-binaries"],
+            document["jobs"]["canonical-linux"]["needs"],
+        )
         job = document["jobs"]["rehearse"]
         self.assertEqual("ubuntu-24.04", job["runs-on"])
         self.assertLessEqual(job["timeout-minutes"], 15)
@@ -76,7 +86,9 @@ class ReleaseRehearsalTest(unittest.TestCase):
         canonical = document["jobs"]["canonical-linux"]
         self.assertEqual("ubuntu-24.04", canonical["runs-on"])
         self.assertLessEqual(canonical["timeout-minutes"], 90)
-        self.assertEqual({"contents": "read"}, canonical["permissions"])
+        self.assertEqual(
+            {"actions": "read", "contents": "read"}, canonical["permissions"]
+        )
         advisory_steps = [
             step
             for step in canonical["steps"]
@@ -120,9 +132,17 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("${{ github.sha }}", collection["env"]["REHEARSAL_REVISION"])
         self.assertNotIn("github.token", str(canonical))
         self.assertNotIn("ghcr.io", str(canonical))
+        binary_job = document["jobs"]["canonical-linux-binaries"]
+        self.assertFalse(binary_job["strategy"]["fail-fast"])
+        self.assertEqual(
+            ["core", "breg"], binary_job["strategy"]["matrix"]["group"]
+        )
+        self.assertEqual(
+            "${{ github.sha }}", binary_job["steps"][0]["with"]["ref"]
+        )
         canonical_cache = next(
             step
-            for step in canonical["steps"]
+            for step in binary_job["steps"]
             if step.get("name") == "Restore reusable Cargo cache"
         )
         prefix = canonical_cache["with"]["restore-keys"].strip()
@@ -130,6 +150,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             canonical_cache["with"]["key"], prefix + "${{ hashFiles('Cargo.lock') }}"
         )
         self.assertNotIn("Cargo.lock", prefix)
+        self.assertIn("${{ matrix.group }}", prefix)
         for recipe_input in (
             "'release/docker/Dockerfile.builder'",
             "'release/requirements/ziglang-0.12.1.txt'",
@@ -139,16 +160,22 @@ class ReleaseRehearsalTest(unittest.TestCase):
             self.assertIn(recipe_input, prefix)
         canonical_build = next(
             step["run"]
+            for step in binary_job["steps"]
+            if step.get("name") == "Build canonical Linux binary shard"
+        )
+        self.assertIn("release/scripts/build-release-binaries.sh", canonical_build)
+        self.assertIn('--group "${{ matrix.group }}"', canonical_build)
+        merge = next(
+            step["run"]
             for step in canonical["steps"]
-            if step.get("name") == "Build and smoke the canonical Linux payload"
+            if step.get("name") == "Merge and smoke the canonical Linux payload"
         )
-        self.assertIn(
-            'release/scripts/build-release-binaries.sh "${REHEARSAL_VERSION}"',
-            canonical_build,
-        )
-        self.assertIn("breg-v${REHEARSAL_VERSION}-linux-amd64", canonical_build)
-        self.assertIn("bregctl-v${REHEARSAL_VERSION}-linux-amd64", canonical_build)
-        self.assertNotIn("${{ inputs.", canonical_build)
+        self.assertIn('--source-sha "${{ github.sha }}"', merge)
+        self.assertIn("--core binary-shards/core", merge)
+        self.assertIn("--breg binary-shards/breg", merge)
+        self.assertIn("breg-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        self.assertIn("bregctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        self.assertNotIn("${{ inputs.", merge)
         for forbidden in (
             "npm publish",
             "gh release",

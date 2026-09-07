@@ -285,6 +285,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_zig_glibc_compiler.py",
     ),
     (
+        "Canonical release binary shard merge tests",
+        "run: python3 -m unittest release/scripts/test_merge_release_binary_shards.py",
+    ),
+    (
         "Release workflow structure tests",
         "run: python3 -m unittest release/scripts/test_release_workflow_structure.py",
     ),
@@ -670,13 +674,16 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
-        "Single canonical candidate build",
+        "Canonical candidate binary shards and complete consumer",
         ".github/workflows/release-candidate.yml",
         (
+            "build-canonical-binaries:\n    name: Build canonical Linux ${{ matrix.group }} binary shard",
+            "fail-fast: false",
+            "group: [core, breg]",
             "build-canonical:\n    name: Build Linux payload and private images once",
             "name: Restore reusable Cargo cache",
             "restore-keys:",
-            "name: Build canonical Linux payload once",
+            "name: Merge and smoke the canonical Linux payload",
             "name: Build private candidate image layouts once",
         ),
     ),
@@ -1199,16 +1206,26 @@ def platform_coverage_oidc_isolation_violations(workflow: str | None) -> list[st
 def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
     if workflow is None:
         return ["Candidate build job isolation"]
+    shards = yaml_job_block(workflow, "build-canonical-binaries")
     build_a = yaml_job_block(workflow, "build-canonical")
     build_b = yaml_job_block(workflow, "build-b")
-    if build_a is None or build_b is not None:
+    if shards is None or build_a is None or build_b is not None:
         return ["Candidate build job isolation"]
     if (
-        "needs: validate" not in build_a
-        or "actions/cache@" not in build_a
-        or build_a.count("name: Build canonical Linux payload once") != 1
+        "needs: validate" not in shards
+        or "actions/cache@" not in shards
+        or "group: [core, breg]" not in shards
+        or "fail-fast: false" not in shards
+        or shards.count("name: Build canonical Linux binary shard") != 1
+        or shards.count("actions/upload-artifact@") != 1
+        or "actions/download-artifact@" in shards
+        or "name: Build private candidate image layouts once" in shards
+        or "      - build-canonical-binaries" not in build_a
+        or "actions/cache@" in build_a
+        or "release/scripts/build-release-binaries.sh" in build_a
+        or build_a.count("actions/download-artifact@") != 2
+        or build_a.count("name: Merge and smoke the canonical Linux payload") != 1
         or build_a.count("name: Build private candidate image layouts once") != 1
-        or "actions/download-artifact@" in build_a
     ):
         return ["Candidate build job isolation"]
     return []
