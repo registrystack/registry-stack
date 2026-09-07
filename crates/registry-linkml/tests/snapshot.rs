@@ -15,6 +15,14 @@ fn the_pin_matches_the_embedded_root_schema() {
     assert_eq!(model.version.as_deref(), Some(pin.version.as_str()));
     assert_eq!(model.license.as_deref(), Some(pin.license.as_str()));
     assert_eq!(
+        pin.license_url,
+        "https://creativecommons.org/licenses/by/4.0/"
+    );
+    assert!(
+        publicschema::LICENSE_NOTICE.contains(&pin.license_url),
+        "the notice links the licence the pin names"
+    );
+    assert_eq!(
         pin.repository,
         "https://github.com/PublicSchema/publicschema.org"
     );

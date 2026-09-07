@@ -101,6 +101,8 @@ pub struct Pin {
     pub commit_date: String,
     pub version: String,
     pub license: String,
+    /// Where the licence is published, for the link attribution must carry.
+    pub license_url: String,
     pub files: Vec<String>,
 }
 

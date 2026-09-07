@@ -40,6 +40,14 @@ if [[ ! -f "${checkout}/schema/publicschema.yaml" ]]; then
   exit 1
 fi
 
+# The pin names a commit, so the bytes copied must be that commit's bytes: a
+# checkout with edits or untracked files under the copied paths is refused.
+dirty="$(git -C "${checkout}" status --porcelain --untracked-files=all -- schema LICENSE-VOCABULARY)"
+if [[ -n "${dirty}" ]]; then
+  printf 'the checkout has changes under schema/ or LICENSE-VOCABULARY that HEAD does not carry; commit or discard them first:\n%s\n' "${dirty}" >&2
+  exit 1
+fi
+
 commit="$(git -C "${checkout}" rev-parse HEAD)"
 commit_date="$(git -C "${checkout}" show -s --format=%cs HEAD)"
 version="$(sed -n 's/^version: *//p' "${checkout}/schema/publicschema.yaml" | head -n 1)"
@@ -60,6 +68,7 @@ cp "${checkout}/LICENSE-VOCABULARY" "${here}/LICENSE-VOCABULARY"
   printf 'commitDate: %s\n' "${commit_date}"
   printf 'version: "%s"\n' "${version}"
   printf 'license: CC-BY-4.0\n'
+  printf 'licenseUrl: https://creativecommons.org/licenses/by/4.0/\n'
   printf 'files:\n'
   for file in "${files[@]}"; do
     printf '  - schema/%s\n' "${file}"
