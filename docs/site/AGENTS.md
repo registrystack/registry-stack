@@ -22,6 +22,10 @@ Show command output only when it was run and observed. Procedures need observabl
 success, failure recovery, and warnings at actions that lose data, expose secrets,
 or cannot be undone. Use synthetic examples without real records, tokens, or
 production hostnames. Follow the repository's `SECURITY.md` for suspected vulnerabilities.
+A tutorial keeps a command or a line to check on every screen; an inventory of
+prompts, flags, or rules is a reference page, a model is an explanation page, and
+the tutorial links to both. The style guide's "Page-type patterns" holds the
+measure.
 
 ## Generated content and assets
 
