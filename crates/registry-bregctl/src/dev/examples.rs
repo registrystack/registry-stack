@@ -115,6 +115,17 @@ enum Operation {
     History,
 }
 impl Operation {
+    fn metadata_kind(self) -> BRegOperationKind {
+        match self {
+            Self::Create => BRegOperationKind::Create,
+            Self::Get => BRegOperationKind::Get,
+            Self::Submit => BRegOperationKind::SubmitRequest,
+            Self::Approve => BRegOperationKind::ApproveRequest,
+            Self::Reject => BRegOperationKind::RejectRequest,
+            Self::Apply => BRegOperationKind::ApplyRequest,
+            Self::History => BRegOperationKind::Revisions,
+        }
+    }
     fn lifecycle(self) -> Option<BRegLifecycleOperation> {
         match self {
             Self::Submit => Some(BRegLifecycleOperation::SubmitRequest),
@@ -309,6 +320,12 @@ fn validate_reference_fields(
             if captures.get(alias).is_none_or(|c| c.entity != target) {
                 bail!("reference alias is missing or belongs to the wrong target entity");
             }
+        } else {
+            // Only direct reference fields advertise a target entity. Keep
+            // ordinary structured values inert rather than resolving untyped
+            // nested aliases through the shared fixture grammar.
+            registry_breg::example_references::resolve_record_references(value, |_| None)
+                .context("nested logical references require a direct advertised reference field")?;
         }
     }
     Ok(())
@@ -729,6 +746,19 @@ async fn execute(
     for step in &scenario.steps {
         let client = &native[&step.client];
         let contract = &metadata[&(step.client.clone(), step.access_profile.clone())];
+        let kind = step.operation.metadata_kind();
+        if !contract.operations().iter().any(|operation| {
+            operation.source_entity() == step.entity
+                && operation.access_profile() == step.access_profile
+                && *operation.kind() == kind
+        }) {
+            bail!(
+                "example {} step {} requires advertised {} permission for its entity and profile",
+                scenario.id,
+                step.id,
+                kind.as_str()
+            );
+        }
         if step.operation == Operation::Create {
             let binding = create_binding(contract, step)?;
             validate_reference_fields(step, contract, input, &declared).with_context(|| {
@@ -1359,7 +1389,8 @@ mod tests {
     /// This permission exists only in the disposable test copy. The shipped
     /// starter intentionally denies deletion, but the retained examples runner
     /// must also preserve deletions made under a project's later chosen policy.
-    fn permit_fixture_sample_deletion(project: &Path) {
+    /// An optional structured field exercises untyped nested reference refusal.
+    fn prepare_native_fixture(project: &Path) {
         let path = project.join("registry.yaml");
         let mut source: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let entity = source["entities"]
@@ -1385,7 +1416,117 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(json!("tombstone"));
+        let entity = source["entities"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|entity| entity["id"] == "public-organization")
+            .unwrap();
+        entity["fields"].as_array_mut().unwrap().push(json!({
+            "id":"notes", "type":"structured", "required":false,
+            "classification":"restricted", "maxBytes":2048,
+            "schema":{"type":"object", "additionalProperties":false, "properties":{
+                "related":{"type":"string", "maxLength":64},
+                "items":{"type":"array", "maxItems":4, "items":{"type":"string", "maxLength":64}}
+            }}
+        }));
+        let editor = source["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|profile| profile["id"] == "editor")
+            .unwrap();
+        let grant = editor["grants"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|grant| grant["entity"] == "public-organization")
+            .unwrap();
+        for fields in ["readableFields", "writableFields"] {
+            grant[fields].as_array_mut().unwrap().push(json!("notes"));
+        }
         fs::write(path, serde_json::to_vec_pretty(&source).unwrap()).unwrap();
+    }
+
+    fn preflight_refuses_before_writes(project: &Path, first: &Value) {
+        let canonical = project.canonicalize().unwrap();
+        let project = canonical.as_path();
+        let state = super::super::read_state(&canonical.join(".breg/dev")).unwrap();
+        let clients = config::clients(&fs::read(&state.clients_file).unwrap()).unwrap();
+        let (catalogue, _) = catalogue(project).unwrap();
+        let directory = state.root().join("examples");
+        let retained_before = fs::read_dir(&directory).unwrap().count();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut cases = Vec::new();
+        let review = catalogue
+            .scenarios
+            .iter()
+            .find(|s| s.id == "reviewed-change")
+            .unwrap();
+        for (id, profile, missing) in [
+            ("history", "reader", "revisions"),
+            ("reject", "editor", "reject_request"),
+        ] {
+            let mut scenario = review.clone();
+            let step = scenario.steps.iter_mut().find(|s| s.id == id).unwrap();
+            step.client = profile.into();
+            step.access_profile = profile.into();
+            let input =
+                serde_json::from_slice(&read_source(&project.join(&scenario.input)).unwrap())
+                    .unwrap();
+            cases.push((
+                scenario,
+                input,
+                format!("requires advertised {missing} permission"),
+            ));
+        }
+        let samples = catalogue
+            .scenarios
+            .iter()
+            .find(|s| s.id == "starter-data")
+            .unwrap();
+        for notes in [
+            json!({"related":{"recordRef":"department"}}),
+            json!({"items":[{"recordRef":"department"}]}),
+        ] {
+            let mut input: Value =
+                serde_json::from_slice(&read_source(&project.join(&samples.input)).unwrap())
+                    .unwrap();
+            input["river"]["notes"] = notes;
+            cases.push((samples.clone(), input, "nested logical references".into()));
+        }
+        for (scenario, input, message) in cases {
+            let mut attempt = attempt();
+            attempt.scenario = scenario.id.clone();
+            if scenario.id == "reviewed-change" {
+                attempt.captures = serde_json::from_value(first["captures"].clone()).unwrap();
+            }
+            let original_captures = attempt.captures.clone();
+            let error = runtime
+                .block_on(execute(
+                    &state,
+                    &clients,
+                    &scenario,
+                    &input,
+                    &directory,
+                    &mut attempt,
+                    &test_args(project, &scenario.id),
+                ))
+                .unwrap_err();
+            assert!(format!("{error:#}").contains(&message), "{error:#}");
+            assert_eq!(
+                serde_json::to_value(&attempt.captures).unwrap(),
+                serde_json::to_value(&original_captures).unwrap()
+            );
+            assert!(attempt.pending.is_none());
+            assert!(attempt.completed.is_empty());
+            assert!(!directory.join(format!("{}.json", attempt.id)).exists());
+            assert_eq!(fs::read_dir(&directory).unwrap().count(), retained_before);
+            assert_eq!(observed_count_and_apply_action(project).0, 1);
+        }
     }
 
     /// Exercise deletion through the runtime's ordinary authenticated HTTP
@@ -1481,7 +1622,7 @@ mod tests {
             .keep();
         let project = temp.join("project with ' spaces");
         copy_tree(&assets(), &project);
-        permit_fixture_sample_deletion(&project);
+        prepare_native_fixture(&project);
         let binaries = std::env::current_exe()
             .unwrap()
             .parent()
@@ -1541,6 +1682,7 @@ mod tests {
         owned.succeed(&["stop"]);
         owned.succeed(&[]);
         let first = child(&owned.project, "first-record", None, None).unwrap();
+        preflight_refuses_before_writes(&owned.project, &first);
         let repeated = child(&owned.project, "first-record", None, None).unwrap();
         assert_eq!(first["captures"], repeated["captures"]);
         assert_eq!(
@@ -1613,6 +1755,10 @@ mod tests {
             "application must produce one revision despite uncertain reply and replay"
         );
         let sample_path = owned.project.join("examples/inputs/starter-data.json");
+        let mut sample_input: Value =
+            serde_json::from_slice(&fs::read(&sample_path).unwrap()).unwrap();
+        sample_input["river"]["notes"] = json!({"related":"literal", "items":["literal"]});
+        fs::write(&sample_path, serde_json::to_vec(&sample_input).unwrap()).unwrap();
         let sample_bytes = fs::read(&sample_path).unwrap();
         let mut invalid: Value = serde_json::from_slice(&sample_bytes).unwrap();
         invalid["hill-link"]["institutionFrom"] = json!({"recordRef":"river-link"});
