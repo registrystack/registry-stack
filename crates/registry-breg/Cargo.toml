@@ -50,11 +50,6 @@ path = "tests/postgres_registry_extensibility.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
-name = "postgres_immediate_action_requirements"
-path = "tests/postgres_immediate_action_requirements.rs"
-required-features = ["postgres-test"]
-
-[[test]]
 name = "postgres_membership_access"
 path = "tests/postgres_membership_access.rs"
 required-features = ["postgres-test"]
@@ -228,6 +223,9 @@ schema = ["dep:schemars"]
 tooling = ["dep:tempfile", "dep:tower"]
 
 [dependencies]
+chrono.workspace = true
+registry-evidence-client.workspace = true
+registry-evidence-verifier.workspace = true
 axum = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 chacha20poly1305 = { workspace = true, optional = true }
@@ -250,7 +248,7 @@ registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-oidc = { workspace = true, optional = true }
 jsonschema.workspace = true
 pg_query.workspace = true
-rhai.workspace = true
+rhai = { workspace = true, features = ["internals"] }
 rustls = { workspace = true, optional = true }
 rustix = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
@@ -278,3 +276,18 @@ registry-platform-testing = { workspace = true, features = ["test-utils"] }
 registry-breg-client.workspace = true
 tokio-rustls.workspace = true
 tower.workspace = true
+
+[[test]]
+name = "postgres_immediate_action_requirements"
+path = "tests/postgres_immediate_action_requirements.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_action_handlers"
+path = "tests/postgres_action_handlers.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_action_evidence"
+path = "tests/postgres_action_evidence.rs"
+required-features = ["postgres-test", "tooling"]

@@ -1,0 +1,36 @@
+{
+  "evidenceCalls": [
+    {
+      "capability": "farmer-status",
+      "selectors": {
+        "farmer": {
+          "farmer-number": "TH-00042"
+        }
+      },
+      "response": {
+        "active": true
+      }
+    },
+    {
+      "capability": "farmer-category",
+      "selectors": {
+        "farmer": {
+          "farmer-number": "TH-00042"
+        }
+      },
+      "response": {
+        "category": "smallholder"
+      }
+    }
+  ],
+  "effects": [
+    {
+      "id": "landholding",
+      "set": {
+        "farmer-number": "TH-00042",
+        "parcel-code": "P-001",
+        "farmer-category": "smallholder"
+      }
+    }
+  ]
+}

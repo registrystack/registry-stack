@@ -1,0 +1,240 @@
+version: 1
+assuranceProfile: local
+service:
+  providerId: urn:example:farmer-registry
+  publicOrigin: http://127.0.0.1:9
+  trustDomain: urn:example:farmer:trial
+issuer:
+  id: urn:example:farmer-authority
+authentication:
+  kind: oidc-access-token
+  issuer: http://127.0.0.1:9
+  audiences:
+  - farmer-evidence-trial
+  tokenTypes:
+  - at+jwt
+  algorithms:
+  - ES256
+  jwksUri: http://127.0.0.1:9/.well-known/jwks.json
+  principalClaim: sub
+  requesterTagsClaim: evidence_tags
+  evidenceAudienceClaim: evidence_audience
+  grantIdClaim: evidence_grant_id
+  grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
+audit:
+  format: keyed-jsonl
+  hashSecretRef: secret:file/audit-hash-key
+  hashKeyVersion: 1
+  failClosed: true
+subjectBinding:
+  secretRef: secret:file/subject-binding-key
+  keyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 10
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+signing:
+  format: flattened-jws-json
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 300
+  verifierClockSkewSeconds: 0
+responseFormats:
+- signed-jws
+selectorProfiles:
+  farmer-number-v1:
+    maximumAggregateBytes: 128
+    fields:
+      farmer-number:
+        type: string
+        minimumBytes: 3
+        maximumBytes: 77
+sources:
+  source-status:
+    transport: http-json
+    baseUrl: http://127.0.0.1:9
+    posture: field-projected
+    authentication:
+      kind: static-authorization
+      tokenRef: secret:file/source-a-token
+    request:
+      method: POST
+      path: /v1/facts
+      fixedHeaders:
+      - name: Accept
+        value: application/json
+      selectorInputs:
+      - role: farmer
+        alternatives:
+        - profile: farmer-number-v1
+          fields:
+          - farmer-number
+      prepareScript: adapters/source-a-prepare.rhai
+      adapterParameters:
+        requestedFields:
+        - reference
+        - active
+        resultLimit: 2
+        fact: active
+      adapterParametersSchema: schemas/status-parameters.schema.yaml
+      preparationLimits:
+        query: forbidden
+        jsonBody: required
+        maximumJsonDepth: 8
+        maximumCollectionItems: 16
+        maximumStringBytes: 256
+        maximumNormalizedBytes: 4096
+      projection:
+      - /total
+      - /reference
+      - /active
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/status-response.schema.yaml
+    extractScript: adapters/source-a.rhai
+    factSchema: schemas/status-facts.schema.yaml
+  source-category:
+    transport: http-json
+    baseUrl: http://127.0.0.1:9
+    posture: field-projected
+    authentication:
+      kind: static-authorization
+      tokenRef: secret:file/source-a-token
+    request:
+      method: POST
+      path: /v1/facts
+      fixedHeaders:
+      - name: Accept
+        value: application/json
+      selectorInputs:
+      - role: farmer
+        alternatives:
+        - profile: farmer-number-v1
+          fields:
+          - farmer-number
+      prepareScript: adapters/source-a-prepare.rhai
+      adapterParameters:
+        requestedFields:
+        - reference
+        - category
+        resultLimit: 2
+        fact: category
+      adapterParametersSchema: schemas/category-parameters.schema.yaml
+      preparationLimits:
+        query: forbidden
+        jsonBody: required
+        maximumJsonDepth: 8
+        maximumCollectionItems: 16
+        maximumStringBytes: 256
+        maximumNormalizedBytes: 4096
+      projection:
+      - /total
+      - /reference
+      - /category
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/category-response.schema.yaml
+    extractScript: adapters/source-a.rhai
+    factSchema: schemas/category-facts.schema.yaml
+authorityProfiles:
+  registered-breg-procedure:
+    kind: statutory
+    requesterTags:
+    - breg-farmer-procedure
+    grants:
+    - requirement: urn:example:farmer:status-v1
+      purpose: land-registration
+      audienceFrom: authenticated-requester
+      responseFormats:
+      - signed-jws
+      subjects:
+      - role: farmer
+        selectorProfile: farmer-number-v1
+        valueOrigin: request
+    - requirement: urn:example:farmer:category-v1
+      purpose: land-registration
+      audienceFrom: authenticated-requester
+      responseFormats:
+      - signed-jws
+      subjects:
+      - role: farmer
+        selectorProfile: farmer-number-v1
+        valueOrigin: request
+requirements:
+- handle: farmer-status
+  id: urn:example:farmer:status-v1
+  kind: information-requirement
+  acquisition:
+    kind: single
+    source: source-status
+  purposes:
+  - land-registration
+  subjectRoles:
+  - role: farmer
+    cardinality: one
+    selectorProfiles:
+    - farmer-number-v1
+  referenceFrameworks:
+  - urn:example:farmer:framework
+  evidenceType: urn:example:farmer:status-evidence
+  observationTimezone: Asia/Bangkok
+  validitySeconds: 300
+  derivation:
+    script: derivations/status.rhai
+    parameters: {}
+  concepts:
+  - handle: active
+    id: urn:example:farmer:active
+    form: boolean
+    required: true
+    constraints: {}
+  fixtures: fixtures/status.yaml
+  disclosureGuard:
+    families:
+    - urn:example:farmer:status
+  existenceDisclosure: collapse-unresolved
+- handle: farmer-category
+  id: urn:example:farmer:category-v1
+  kind: information-requirement
+  acquisition:
+    kind: single
+    source: source-category
+  purposes:
+  - land-registration
+  subjectRoles:
+  - role: farmer
+    cardinality: one
+    selectorProfiles:
+    - farmer-number-v1
+  referenceFrameworks:
+  - urn:example:farmer:framework
+  evidenceType: urn:example:farmer:category-evidence
+  observationTimezone: Asia/Bangkok
+  validitySeconds: 300
+  derivation:
+    script: derivations/category.rhai
+    parameters: {}
+  concepts:
+  - handle: category
+    id: urn:example:farmer:category
+    form: controlled-category
+    required: true
+    constraints:
+      categoryScheme: urn:example:farmer:categories
+      schemeVersion: '1'
+      maximumBytes: 32
+      codelist: codelists/categories.yaml
+  fixtures: fixtures/category.yaml
+  disclosureGuard:
+    families:
+    - urn:example:farmer:category
+  existenceDisclosure: collapse-unresolved

@@ -135,6 +135,22 @@ pub(crate) fn problem_response_with_field_path(
     response
 }
 
+/// Dependency locations come only from a matched compiled capability. Unknown
+/// aliases never enter this field, and JSON Pointer escaping preserves one segment.
+pub(crate) fn action_evidence_failure_response(capability: Option<String>) -> Response {
+    let status = StatusCode::SERVICE_UNAVAILABLE;
+    let code = "action.evidence_failed";
+    let detail = "The declared Evidence dependency could not be accepted.";
+    let path = capability
+        .map(|id| format!("/evidence/{}", id.replace('~', "~0").replace('/', "~1")))
+        .filter(|path| path.len() <= 256);
+    if let Some(path) = path {
+        problem_response_with_field_path(status, "Service Unavailable", detail, code, path)
+    } else {
+        problem_response(status, "Service Unavailable", detail, code)
+    }
+}
+
 /// Render only a verified, package-declared refusal. Script-supplied strings
 /// never reach this boundary; the evaluator resolves labels from the catalogue.
 pub(crate) fn action_refusal_response(

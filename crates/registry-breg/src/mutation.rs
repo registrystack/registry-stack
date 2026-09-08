@@ -3,6 +3,7 @@
 //! One product-owned PostgreSQL transaction for a complete record mutation.
 
 mod action;
+pub(crate) use action::erase_expired_action_evidence;
 mod request;
 pub(crate) use request::request_action_etag;
 
@@ -343,6 +344,18 @@ pub async fn install_mutation_schema(
                  result_count smallint NOT NULL CHECK (result_count >= 0 AND result_count <= {MAX_IMMEDIATE_ACTION_RESULTS}),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_action_evidence_uses (
+                 application_id uuid NOT NULL REFERENCES
+                     registry_internal.registry_immediate_action_applications(application_id)
+                     ON DELETE CASCADE,
+                 ordinal smallint NOT NULL CHECK (ordinal >= 0 AND ordinal < 2),
+                 retained jsonb NOT NULL CHECK (octet_length(retained::text) <= 1048576),
+                 expires_at timestamptz NOT NULL,
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (application_id, ordinal),
+                 CHECK (expires_at > created_at)
+             );
+             REVOKE ALL ON registry_internal.registry_action_evidence_uses FROM PUBLIC;
              REVOKE ALL ON registry_internal.registry_revisions,
                  registry_internal.registry_outbox,
                  registry_internal.registry_webhook_deliveries,
@@ -672,6 +685,8 @@ pub async fn install_mutation_schema(
                  registry_internal.registry_idempotency,
                  registry_internal.registry_immediate_action_results,
                  registry_internal.registry_immediate_action_applications TO \"{role}\";
+             REVOKE ALL ON registry_internal.registry_action_evidence_uses FROM \"{role}\";
+             GRANT INSERT ON registry_internal.registry_action_evidence_uses TO \"{role}\";
              GRANT UPDATE (payload) ON registry_internal.registry_outbox TO \"{role}\";
              GRANT SELECT, INSERT, UPDATE
                  ON registry_internal.registry_webhook_delivery_state TO \"{role}\";
@@ -1954,6 +1969,8 @@ pub enum MutationError {
     PlannerFailure(crate::rhai_planner::ChangeRequestPlannerError),
     #[error("action handler produced no effects")]
     ActionHandlerFailure(crate::action_handler::ActionHandlerError),
+    #[error("the declared Evidence dependency could not be accepted")]
+    ActionEvidenceFailure { capability: Option<String> },
     #[error("action was refused by its declared handler")]
     ActionRefusal(crate::action_handler::ActionHandlerRefusal),
     #[error("field does not conform to its declared storage pattern")]

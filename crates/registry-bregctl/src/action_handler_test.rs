@@ -2,7 +2,8 @@
 //! Synthetic action handler evaluation and value-free exact assertions.
 use super::*;
 use registry_breg::action_handler::{
-    evaluate_action_detailed, ActionHandlerError, ActionHandlerOutcome,
+    evaluate_action_detailed, evaluate_action_with_evidence, ActionHandlerError,
+    ActionHandlerOutcome,
 };
 use registry_breg::model::{
     CompiledActionEffect, CompiledActionMutation, CompiledActionTargetBinding, CompiledActionValue,
@@ -39,8 +40,56 @@ pub(super) fn run(
                 "the synthetic input must be one JSON object keyed by declared action input IDs, without an HTTP input envelope",
             )
         })?;
-    let outcome = evaluate_action_detailed(action, input, Instant::now() + PLANNER_TEST_DEADLINE)
-        .map_err(|error| {
+    let mut expected = args
+        .expect
+        .as_ref()
+        .map(|path| read_json(path, "expect"))
+        .transpose()?;
+    let calls = take_evidence_calls(expected.as_mut())?;
+    let transcript = std::sync::Arc::new(std::sync::Mutex::new(SyntheticTranscript {
+        calls,
+        next: 0,
+        mismatch: None,
+    }));
+    let evaluation = if handler.abi == "registry.action-handler/v2" {
+        let state = transcript.clone();
+        evaluate_action_with_evidence(
+            action,
+            input,
+            Instant::now() + PLANNER_TEST_DEADLINE,
+            move |capability, selectors| {
+                state
+                    .lock()
+                    .map_err(|_| ActionHandlerError::Execution)?
+                    .resolve(capability, selectors)
+            },
+        )
+    } else {
+        evaluate_action_detailed(action, input, Instant::now() + PLANNER_TEST_DEADLINE)
+    };
+    {
+        let state = transcript.lock().map_err(|_| {
+            failure(
+                "expect/evidenceCalls",
+                "the synthetic transcript is unavailable",
+            )
+        })?;
+        if let Some((index, field)) = state.mismatch {
+            return Err(planner_test_failure(
+                "planner_test.evidence.mismatch",
+                &format!("expect/evidenceCalls/{index}/{field}"),
+                "the helper call differs from the ordered synthetic transcript",
+            ));
+        }
+        if evaluation.is_ok() && state.next != state.calls.len() {
+            return Err(planner_test_failure(
+                "planner_test.evidence.missing",
+                "expect/evidenceCalls",
+                "the handler omitted an expected helper call",
+            ));
+        }
+    }
+    let outcome = evaluation.map_err(|error| {
         let input_error = error.kind == ActionHandlerError::Input;
         let mut path = format!("actions[{}]", action.id);
         if input_error {
@@ -98,8 +147,7 @@ pub(super) fn run(
             (Vec::new(), Some(report), actual)
         }
     };
-    let assertions_passed = if let Some(path) = &args.expect {
-        let mut expected = read_json(path, "expect")?;
+    let assertions_passed = if let Some(mut expected) = expected {
         normalize(&mut expected);
         if let Some(path) = mismatch_path(&actual, &expected, "expect") {
             return Err(planner_test_failure(
@@ -160,6 +208,68 @@ pub(super) fn run(
         },
         effects: reports,
     })
+}
+
+/// This transcript proves authored control flow only. Responses are synthetic,
+/// while the evaluator still checks declared selector and output types.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SyntheticCall {
+    capability: String,
+    selectors: Value,
+    response: Value,
+}
+struct SyntheticTranscript {
+    calls: Vec<SyntheticCall>,
+    next: usize,
+    mismatch: Option<(usize, &'static str)>,
+}
+impl SyntheticTranscript {
+    fn resolve(&mut self, capability: &str, selectors: Value) -> Result<Value, ActionHandlerError> {
+        let index = self.next;
+        let Some(call) = self.calls.get(index) else {
+            self.mismatch = Some((index, "capability"));
+            return Err(ActionHandlerError::Execution);
+        };
+        let field = if call.capability != capability {
+            Some("capability")
+        } else if call.selectors != selectors {
+            Some("selectors")
+        } else {
+            None
+        };
+        if let Some(field) = field {
+            self.mismatch = Some((index, field));
+            return Err(ActionHandlerError::Execution);
+        }
+        self.next += 1;
+        Ok(call.response.clone())
+    }
+}
+fn take_evidence_calls(expected: Option<&mut Value>) -> Result<Vec<SyntheticCall>, FailureReport> {
+    let value = expected
+        .and_then(Value::as_object_mut)
+        .and_then(|value| value.remove("evidenceCalls"));
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let calls: Vec<SyntheticCall> = serde_json::from_value(value).map_err(|_| {
+        failure(
+            "expect/evidenceCalls",
+            "provide ordered capability, selectors and response entries",
+        )
+    })?;
+    if calls.len() > 2
+        || calls
+            .iter()
+            .any(|call| !call.selectors.is_object() || !call.response.is_object())
+    {
+        return Err(failure(
+            "expect/evidenceCalls",
+            "provide at most two calls with selector and response maps",
+        ));
+    }
+    Ok(calls)
 }
 
 fn read_json(path: &Path, location: &str) -> Result<Value, FailureReport> {
@@ -288,6 +398,170 @@ mod tests {
             .join("../../products/breg/acceptance/person-registration-rhai")
             .canonicalize()
             .unwrap()
+    }
+
+    #[test]
+    fn evidence_transcript_checks_order_selectors_and_unknown_fields_without_values() {
+        let call = || SyntheticCall {
+            capability: "status".into(),
+            selectors: json!({"farmer":{"id":"secret"}}),
+            response: json!({"active":true}),
+        };
+        let mut state = SyntheticTranscript {
+            calls: vec![call()],
+            next: 0,
+            mismatch: None,
+        };
+        assert_eq!(
+            state
+                .resolve("status", json!({"farmer":{"id":"secret"}}))
+                .unwrap(),
+            json!({"active":true})
+        );
+        assert!(state
+            .resolve("status", json!({"farmer":{"id":"secret"}}))
+            .is_err());
+        assert_eq!(state.mismatch, Some((1, "capability")));
+        let mut state = SyntheticTranscript {
+            calls: vec![call()],
+            next: 0,
+            mismatch: None,
+        };
+        assert!(state
+            .resolve("status", json!({"farmer":{"id":"other-secret"}}))
+            .is_err());
+        assert_eq!(state.mismatch, Some((0, "selectors")));
+        let mut value = json!({"evidenceCalls":[{"capability":"status","selectors":{},"response":{},"secret-key":true}]});
+        let report = take_evidence_calls(Some(&mut value)).err().unwrap();
+        assert!(!serde_json::to_string(&report)
+            .unwrap()
+            .contains("secret-key"));
+    }
+
+    #[test]
+    fn farmer_evidence_fixtures_assert_exact_control_flow() {
+        let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/farmer-landholding-evidence")
+            .canonicalize()
+            .unwrap();
+        let compiled = compile(&project, ProfileArg::Authoring, "project planner-test")
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        for name in [
+            "status-only",
+            "with-category",
+            "inactive",
+            "blank",
+            "zero-call",
+        ] {
+            let args = ProjectPlannerTestArgs {
+                project: project.clone(),
+                action: Some(
+                    if name == "zero-call" {
+                        "check-procedure"
+                    } else {
+                        "register-landholding"
+                    }
+                    .into(),
+                ),
+                input: Some(project.join(format!("examples/{name}.input.json"))),
+                expect: Some(project.join(format!("examples/{name}.expect.json"))),
+                entity: None,
+                request: None,
+            };
+            let report = run(&args, &compiled).unwrap_or_else(|failure| {
+                panic!("{name}: {}", serde_json::to_string(&failure).unwrap())
+            });
+            assert_eq!(report.assertions_passed, Some(true));
+        }
+    }
+
+    #[test]
+    fn farmer_evidence_transcript_refuses_missing_unexpected_and_mismatched_calls() {
+        let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/farmer-landholding-evidence")
+            .canonicalize()
+            .unwrap();
+        let compiled = compile(&project, ProfileArg::Authoring, "project planner-test")
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        let directory = tempfile::tempdir().unwrap();
+        let expect = directory.path().canonicalize().unwrap().join("expect.json");
+        let base: Value = serde_json::from_slice(
+            &fs::read(project.join("examples/status-only.expect.json")).unwrap(),
+        )
+        .unwrap();
+        for (kind, code) in [
+            ("unexpected", "planner_test.evidence.mismatch"),
+            ("selectors", "planner_test.evidence.mismatch"),
+            ("missing", "planner_test.evidence.missing"),
+        ] {
+            let mut fixture = base.clone();
+            match kind {
+                "unexpected" => fixture["evidenceCalls"] = json!([]),
+                "selectors" => fixture["evidenceCalls"][0]["selectors"]["farmer"]["farmer-number"] = json!("private-mismatch-canary"),
+                _ => fixture["evidenceCalls"].as_array_mut().unwrap().push(json!({"capability":"farmer-category","selectors":{"farmer":{"farmer-number":"TH-00042"}},"response":{"category":"private-category-canary"}})),
+            }
+            fs::write(&expect, serde_json::to_vec(&fixture).unwrap()).unwrap();
+            let args = ProjectPlannerTestArgs {
+                project: project.clone(),
+                action: Some("register-landholding".into()),
+                input: Some(project.join("examples/status-only.input.json")),
+                expect: Some(expect.clone()),
+                entity: None,
+                request: None,
+            };
+            let failure = run(&args, &compiled).expect_err("transcript mismatch must fail");
+            assert_eq!(failure.diagnostics[0].code, code);
+            let rendered = serde_json::to_string(&failure).unwrap();
+            for canary in [
+                "private-mismatch-canary",
+                "private-category-canary",
+                "TH-00042",
+            ] {
+                assert!(!rendered.contains(canary));
+            }
+        }
+    }
+
+    #[test]
+    fn farmer_evidence_mocks_obey_declared_output_types() {
+        let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/farmer-landholding-evidence")
+            .canonicalize()
+            .unwrap();
+        let compiled = compile(&project, ProfileArg::Authoring, "project planner-test")
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        let directory = tempfile::tempdir().unwrap();
+        let expect = directory.path().canonicalize().unwrap().join("expect.json");
+        let base: Value = serde_json::from_slice(
+            &fs::read(project.join("examples/status-only.expect.json")).unwrap(),
+        )
+        .unwrap();
+        for response in [
+            json!({"active":"private-type-canary"}),
+            json!({"active":true,"private-key-canary":true}),
+            json!({}),
+        ] {
+            let mut fixture = base.clone();
+            fixture["evidenceCalls"][0]["response"] = response;
+            fs::write(&expect, serde_json::to_vec(&fixture).unwrap()).unwrap();
+            let args = ProjectPlannerTestArgs {
+                project: project.clone(),
+                action: Some("register-landholding".into()),
+                input: Some(project.join("examples/status-only.input.json")),
+                expect: Some(expect.clone()),
+                entity: None,
+                request: None,
+            };
+            let failure = run(&args, &compiled).expect_err("typed mock contract must fail");
+            assert_eq!(
+                failure.diagnostics[0].code,
+                ActionHandlerError::Evidence.code()
+            );
+            let rendered = serde_json::to_string(&failure).unwrap();
+            for canary in ["private-type-canary", "private-key-canary", "TH-00042"] {
+                assert!(!rendered.contains(canary));
+            }
+        }
     }
 
     #[test]

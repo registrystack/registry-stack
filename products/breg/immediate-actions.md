@@ -624,3 +624,93 @@ The compiler bounds an action to 16 target roles, 128 field mutations and a
 2 MiB maximum snapshot. Multiple non-overlapping effects that resolve to the
 same record share one committed revision and configured event. Each granted
 effect still has its own result reference in the receipt.
+
+## Trial: conditional Evidence in Rhai
+
+The `registry.action-handler/v2` trial lets a project-level action call
+`evidence::resolve(capability_id, subjects)` within `handle(ctx)`. The
+[farmer landholding acceptance project](acceptance/farmer-landholding-evidence/README.md)
+is the complete offline example, including exact synthetic call expectations.
+This ABI remains a trial. Version 1 input-only actions keep their current path.
+
+Declare `evidenceProviders` in the project with an `id`, a reviewed client
+`contracts` JSON file and `subjectResolution: trusted-provider-exact-selector`.
+Each action's `evidence` entries select a local `id`, provider, exact requirement
+URI, subject role/profile, output handles and `maximumObservationAgeSeconds`.
+Provider IDs and capability aliases use the action ID grammar: 1–64 ASCII
+characters, starting with a lowercase letter and continuing with lowercase
+letters, digits, hyphens or underscores.
+The imported contract becomes part of the signed package closure. Compilation
+and explanation require no network. Runtime discovery and live contract
+substitution cannot change reviewed authority.
+
+The helper supports request-origin selectors and selected scalar outputs from
+an audience-scoped signed JWS contract. Computed identifiers remain request
+values and cannot become authenticated claims or grants. Rhai may trim and
+concatenate values, refuse before a call, and conditionally call another declared
+capability. Use `value.trim();` because Rhai trims strings in place. Declared
+capabilities are optional; declared local targets still require admission even
+if the handler omits their write slots. The action grant covers all declared
+processing, so a caller input selecting optional disclosure adds no authority.
+
+Each capability permits one call, with at most two per action. Effective defaults
+are eight concurrent evaluations, 256 KiB per response, 1 MiB retained Evidence
+per action, 24-hour retention, a 300-second assertion lifetime, zero clock skew,
+and one 10-second action deadline. Observation age is declared per capability,
+with a 300-second ceiling. Offline action explanation reports these limits.
+
+Runtime configuration binds the same provider ID separately from the signed
+logical contract:
+
+```yaml
+evidenceProviders:
+  farmer-registry:
+    baseUrl: https://evidence.example.gov
+    trustBindingId: farmer-provider-reviewed-2026
+    tokenRef: secret:env/FARMER_EVIDENCE_TOKEN
+    trustedJwksRef: secret:env/FARMER_EVIDENCE_JWKS
+    revokedKeyIds: []
+```
+
+`caBundleRef` optionally supplies a private CA bundle through the same secret
+reference mechanism. The token, trusted JWKS and endpoint are operator bindings;
+the script cannot replace them. Review exact selector resolution and first-use
+subject binding with the provider. Two calls describe separate observations.
+Neither signed assertions nor continuity bindings independently prove that a
+provider resolved the correct source record.
+
+The host admits the action and existing targets before external work, then
+releases the PostgreSQL connection and evaluates Rhai once. A failed helper
+poisons the invocation even if Rhai catches its error. Successful effects and
+acquisitions are frozen before finalization. Finalization rechecks authority,
+conditions, constraints and evidence acceptance, then commits writes, audit,
+receipt and protected evidence-use material atomically. SQL retries reuse the
+frozen result; successful receipt replay calls no helper. Concurrent admitted
+attempts can each call the provider but only one application commits.
+
+A failed Evidence dependency returns the existing static HTTP 503 problem code
+and detail. When the failure identifies a known compiled capability, optional
+`fieldPath` names `/evidence/{alias}`. Unknown aliases omit that location. The
+location never contains selector values or provider response details.
+
+The operator command `bregctl evidence-retention erase-expired --runtime-config
+/absolute/runtime.yaml --before 2026-01-01T00:00:00Z` erases expired protected
+assertions and verification context using the configured migration role. The
+cutoff cannot be in the future. It reports only a count and keeps receipts
+replayable; runtime database credentials cannot delete retained evidence.
+The operator configuration must match the active package. On the configured
+migration database, the command verifies the expected Registry identity, catalog
+and readiness while holding the Registry transaction lock through deletion.
+Ordinary history erasure does not cover this separate retention scope.
+
+Eligibility remains an operation-level rule. Configure grants so CRUD, other
+actions and reviewed changes cannot bypass the intended registration procedure.
+Native database constraints still protect local stored invariants. Synthetic
+`evidenceCalls` mocks verify control flow, selectors, typed results and exact
+effects/refusals; real Evidence verification and PostgreSQL behavior require the
+separate integration checks.
+
+Invoke trial actions over `POST /v1/actions/{action}` with the existing `input`
+envelope and `Idempotency-Key`. The current Rust, Node and Python clients do not
+yet expose immediate-action invocation or typed governed-refusal handling; this
+trial does not add that SDK convenience surface.

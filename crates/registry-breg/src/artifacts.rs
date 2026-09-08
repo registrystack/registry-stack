@@ -1204,7 +1204,7 @@ fn reference_input_metadata(input: &CompiledActionInput) -> Option<Value> {
 fn action_input_properties_schema<'a>(
     inputs: impl IntoIterator<Item = &'a CompiledActionInput>,
     condition_inputs: &[&CompiledActionInput],
-    allow_optional_null: bool,
+    handler_inputs: bool,
 ) -> Value {
     let inputs = inputs.into_iter().collect::<Vec<_>>();
     let is_required = |input: &CompiledActionInput| {
@@ -1215,10 +1215,7 @@ fn action_input_properties_schema<'a>(
         .map(|input| {
             (
                 input.api_name.clone(),
-                field_value_schema(
-                    &input.field_type,
-                    allow_optional_null && !is_required(input),
-                ),
+                field_value_schema(&input.field_type, handler_inputs && !is_required(input)),
             )
         })
         .collect::<Map<_, _>>();
@@ -1469,6 +1466,12 @@ fn action_problem_responses(
     ]);
     if kind == ActionRouteKind::Invoke {
         if let Some(handler) = &action.handler {
+            if handler.abi == crate::contract::ACTION_HANDLER_ABI_V2 {
+                responses.entry("503").or_default().push(ProblemExample {
+                    code: "action.evidence_failed",
+                    detail: "The declared Evidence dependency could not be accepted.",
+                });
+            }
             responses.insert(
                 "500",
                 vec![ProblemExample {
@@ -3772,6 +3775,14 @@ fn problem_schema() -> Value {
                 "else": {"not": {"required": ["refusalCode"]}}
             },
             {
+                "if": {"properties": {"code": {"const": "action.evidence_failed"}}},
+                "then": {"properties": {
+                    "status": {"const": 503},
+                    "detail": {"const": "The declared Evidence dependency could not be accepted."},
+                    "fieldPath": {"type": "string", "pattern": "^/evidence/[a-z][a-z0-9_-]{0,63}$"}
+                }}
+            },
+            {
                 "if": {"properties": {"code": {"const": "action.handler_failed"}}},
                 "then": {"properties": {"status": {"const": 500}}}
             },
@@ -4198,6 +4209,31 @@ mod problem_contract_tests {
             !validator.is_valid(&fault),
             "a package fault is not a caller error"
         );
+    }
+
+    #[test]
+    fn evidence_dependency_problem_is_static_and_has_service_unavailable_status() {
+        let schema = problem_schema();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        let mut problem = problem_example(
+            "503",
+            "action.evidence_failed",
+            "The declared Evidence dependency could not be accepted.",
+        );
+        assert!(validator.is_valid(&problem));
+        problem["fieldPath"] = json!("/evidence/status");
+        assert!(validator.is_valid(&problem));
+        problem["fieldPath"] = json!("/evidence/status/raw-selector");
+        assert!(!validator.is_valid(&problem));
+        problem["fieldPath"] = json!("/evidence/status");
+        problem["detail"] = json!("provider response or selector canary");
+        assert!(!validator.is_valid(&problem));
+        problem["detail"] = json!("The declared Evidence dependency could not be accepted.");
+        problem["status"] = json!(422);
+        assert!(!validator.is_valid(&problem));
     }
 
     #[test]

@@ -442,7 +442,7 @@
                 },
                 {
                   "display": "--expect <JSON_FILE>",
-                  "description": "With --action and --input, assert exact synthetic effects or a declared refusal without printing values. A symbolic link at any component of this path is refused.",
+                  "description": "With --action and --input, assert exact effects or refusal and optional ordered evidenceCalls mocks without printing values. A symbolic link at any component of this path is refused.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -2589,6 +2589,95 @@
                 {
                   "display": "--proposal-version <VERSION>",
                   "description": "Exact proposal version to inspect or erase",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "evidence-retention",
+          "invocation": "bregctl evidence-retention",
+          "about": "Erase expired protected action Evidence using configured migration authority",
+          "long_about": null,
+          "usage": "bregctl evidence-retention [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "erase-expired",
+              "invocation": "bregctl evidence-retention erase-expired",
+              "about": "Delete expired assertion bytes and verification context; receipts remain replayable",
+              "long_about": null,
+              "usage": "bregctl evidence-retention erase-expired [OPTIONS] --runtime-config <RUNTIME_CONFIG> --before <BEFORE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <RUNTIME_CONFIG>",
+                  "description": "Absolute runtime configuration path containing the migration connection binding",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--before <BEFORE>",
+                  "description": "RFC 3339 expiry cutoff, no later than the current time",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],

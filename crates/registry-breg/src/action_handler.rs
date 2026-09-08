@@ -2,7 +2,7 @@
 //! Input-only immediate action evaluation inside the shared bounded Rhai kernel.
 
 use crate::{
-    contract::{FieldTypeSource, Operation, ACTION_HANDLER_ABI_V1},
+    contract::{FieldTypeSource, Operation, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2},
     data::{validate_field_value, FieldValue},
     model::*,
     rhai_planner::{
@@ -27,10 +27,12 @@ pub enum ActionHandlerError {
     Ceiling,
     Resource,
     Deadline,
+    Evidence,
 }
 impl ActionHandlerError {
     pub const fn code(self) -> &'static str {
         match self {
+            Self::Evidence => "action.evidence.failed",
             Self::Input => "action.input.invalid",
             Self::Source => "action.handler.source",
             Self::Entrypoint => "action.handler.entrypoint",
@@ -43,6 +45,7 @@ impl ActionHandlerError {
     }
     pub const fn problem_detail(self) -> &'static str {
         match self {
+            Self::Evidence => "The declared Evidence dependency could not be accepted.",
             Self::Input => "The action inputs do not match the declared input contract.",
             Self::Source => "The action handler failed: action.handler.source.",
             Self::Entrypoint => "The action handler failed: action.handler.entrypoint.",
@@ -75,10 +78,13 @@ impl From<ChangeRequestPlannerError> for ActionHandlerError {
 }
 
 /// Local authoring diagnostics contain only compiled locations and static repair
-/// messages. Runtime callers retain the closed `ActionHandlerError` vocabulary.
+/// messages. Runtime callers retain the closed error vocabulary and, for a
+/// failed dependency, only its matched compiled capability location.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActionHandlerDiagnostic {
     pub kind: ActionHandlerError,
+    /// A matched compiled capability only, never an unknown script argument.
+    pub evidence_capability: Option<String>,
     pub slot: Option<String>,
     pub field: Option<String>,
     pub message: &'static str,
@@ -88,6 +94,7 @@ impl ActionHandlerDiagnostic {
     fn new(kind: ActionHandlerError, message: &'static str) -> Self {
         Self {
             kind,
+            evidence_capability: None,
             slot: None,
             field: None,
             message,
@@ -104,6 +111,7 @@ impl From<ActionHandlerError> for ActionHandlerDiagnostic {
     fn from(kind: ActionHandlerError) -> Self {
         Self {
             kind,
+            evidence_capability: None,
             slot: None,
             field: None,
             message: kind.problem_detail(),
@@ -130,7 +138,41 @@ pub struct ActionHandlerRefusal {
 }
 
 pub fn compile_source(source: &str) -> Result<AST, ActionHandlerError> {
-    rhai_planner::compile_entrypoint(source, "handle").map_err(Into::into)
+    compile_source_for_abi(source, ACTION_HANDLER_ABI_V2)
+}
+
+pub(crate) fn compile_source_for_abi(source: &str, abi: &str) -> Result<AST, ActionHandlerError> {
+    let ast =
+        rhai_planner::compile_entrypoint(source, "handle").map_err(ActionHandlerError::from)?;
+    // An invalid helper arity would otherwise be a catchable language dispatch
+    // error before the host can poison the evaluation. Reject it at compilation,
+    // along with every Evidence call in an ABI that does not expose the module.
+    let mut valid = true;
+    ast.walk(&mut |nodes| {
+        let call = match nodes.last() {
+            Some(rhai::ASTNode::Expr(rhai::Expr::FnCall(call, _)))
+            | Some(rhai::ASTNode::Stmt(rhai::Stmt::FnCall(call, _))) => Some(call),
+            _ => None,
+        };
+        if call.is_some_and(|call| {
+            call.namespace
+                .path
+                .first()
+                .is_some_and(|part| part.as_str() == "evidence")
+                && (abi != ACTION_HANDLER_ABI_V2
+                    || call.namespace.path.len() != 1
+                    || call.name != "resolve"
+                    || call.args.len() != 2)
+        }) {
+            valid = false;
+            return false;
+        }
+        true
+    });
+    if !valid {
+        return Err(ActionHandlerError::Source);
+    }
+    Ok(ast)
 }
 
 #[cfg(feature = "postgres-test")]
@@ -209,6 +251,14 @@ pub fn evaluate_action_detailed(
     if Instant::now() >= deadline {
         return Err(ActionHandlerError::Deadline.into());
     }
+    validate_inputs(action, inputs)?;
+    evaluate_admitted_action_detailed(action, inputs, deadline)
+}
+
+fn validate_inputs(
+    action: &CompiledAction,
+    inputs: &JsonMap<String, Value>,
+) -> Result<(), ActionHandlerDiagnostic> {
     if inputs
         .keys()
         .any(|id| !action.inputs.iter().any(|input| &input.id == id))
@@ -223,6 +273,7 @@ pub fn evaluate_action_detailed(
             None | Some(Value::Null) if input.required => {
                 return Err(ActionHandlerDiagnostic {
                     kind: ActionHandlerError::Input,
+                    evidence_capability: None,
                     slot: None,
                     field: Some(input.id.clone()),
                     message: "Supply a non-null value for this required input.",
@@ -232,6 +283,7 @@ pub fn evaluate_action_detailed(
                 if let Err(message) = validate_input_value(value, &input.field_type) {
                     return Err(ActionHandlerDiagnostic {
                         kind: ActionHandlerError::Input,
+                        evidence_capability: None,
                         slot: None,
                         field: Some(input.id.clone()),
                         message,
@@ -241,7 +293,7 @@ pub fn evaluate_action_detailed(
             _ => {}
         }
     }
-    evaluate_admitted_action_detailed(action, inputs, deadline)
+    Ok(())
 }
 
 /// Runtime admission already validates and projects action inputs. Keep the
@@ -250,6 +302,37 @@ pub(crate) fn evaluate_admitted_action_detailed(
     action: &CompiledAction,
     inputs: &JsonMap<String, Value>,
     deadline: Instant,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    evaluate_with_engine(action, inputs, deadline, None, None)
+}
+
+type EvidenceResolver =
+    std::sync::Arc<dyn Fn(&str, Value) -> Result<Value, ActionHandlerError> + Send + Sync>;
+
+/// Execute the same bounded handler and result verifier with declared Evidence
+/// capabilities. Local fixtures supply synthetic assertions through this seam.
+pub fn evaluate_action_with_evidence(
+    action: &CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    deadline: Instant,
+    resolver: impl Fn(&str, Value) -> Result<Value, ActionHandlerError> + Send + Sync + 'static,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    validate_inputs(action, inputs)?;
+    evaluate_with_engine(
+        action,
+        inputs,
+        deadline,
+        Some(std::sync::Arc::new(resolver)),
+        None,
+    )
+}
+
+pub(crate) fn evaluate_with_engine(
+    action: &CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    deadline: Instant,
+    resolver: Option<EvidenceResolver>,
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     if Instant::now() >= deadline {
         return Err(ActionHandlerError::Deadline.into());
@@ -267,12 +350,14 @@ pub(crate) fn evaluate_admitted_action_detailed(
             "Evaluate a declared handler; fixed actions use their compiled effects directly.",
         ));
     };
-    if handler.abi != ACTION_HANDLER_ABI_V1 {
+    if handler.abi != ACTION_HANDLER_ABI_V1
+        && !(handler.abi == ACTION_HANDLER_ABI_V2 && resolver.is_some())
+    {
         return Err(ActionHandlerError::Source.into());
     }
     let source =
         std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
-    let ast = compile_source(source)?;
+    let ast = compile_source_for_abi(source, &handler.abi)?;
     let mut ctx = Map::new();
     ctx.insert(
         "inputs".into(),
@@ -288,9 +373,97 @@ pub(crate) fn evaluate_admitted_action_detailed(
         }
         std::mem::take(&mut entry.2)
     };
-    let engine = rhai_planner::engine(Some(deadline));
-    #[cfg(feature = "postgres-test")]
-    let mut engine = engine;
+    let mut engine = rhai_planner::engine(Some(deadline));
+    let poisoned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let failed_capability = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let dependency_diagnostic = || {
+        let mut diagnostic = ActionHandlerDiagnostic::from(ActionHandlerError::Evidence);
+        diagnostic.evidence_capability = failed_capability.lock().ok().and_then(|id| id.clone());
+        diagnostic
+    };
+    if let Some(resolver) = resolver {
+        let failure = poisoned.clone();
+        let failed_location = failed_capability.clone();
+        let cancelled = cancellation.clone();
+        let capabilities = action.evidence.clone();
+        let calls = std::sync::Mutex::new(BTreeSet::<String>::new());
+        let mut module = rhai::Module::new();
+        module.set_native_fn("resolve", move |alias: Dynamic, subjects: Dynamic| {
+            let refused = || {
+                Box::new(rhai::EvalAltResult::ErrorRuntime(
+                    "Evidence dependency failed".into(),
+                    rhai::Position::NONE,
+                ))
+            };
+            let mut known_alias = None;
+            let result = (|| {
+                if failure.load(std::sync::atomic::Ordering::Acquire)
+                    || Instant::now() >= deadline
+                    || cancelled
+                        .as_ref()
+                        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+                {
+                    return Err(ActionHandlerError::Evidence);
+                }
+                let alias = alias
+                    .clone()
+                    .try_cast::<rhai::ImmutableString>()
+                    .ok_or(ActionHandlerError::Evidence)?;
+                let capability = capabilities
+                    .iter()
+                    .find(|capability| capability.id == alias.as_str())
+                    .ok_or(ActionHandlerError::Evidence)?;
+                known_alias = Some(capability.id.clone());
+                let subjects = subjects
+                    .clone()
+                    .try_cast::<Map>()
+                    .ok_or(ActionHandlerError::Evidence)?;
+                {
+                    let mut calls = calls.lock().map_err(|_| ActionHandlerError::Evidence)?;
+                    if calls.len() >= 2 || !calls.insert(alias.to_string()) {
+                        return Err(ActionHandlerError::Evidence);
+                    }
+                }
+                let subjects = rhai::serde::from_dynamic::<Value>(&Dynamic::from(subjects))
+                    .map_err(|_| ActionHandlerError::Evidence)?;
+
+                let typed_subjects = serde_json::from_value(subjects.clone())
+                    .map_err(|_| ActionHandlerError::Evidence)?;
+                crate::action_evidence_validation::validate_call_arguments(
+                    capability,
+                    &typed_subjects,
+                )
+                .map_err(|_| ActionHandlerError::Evidence)?;
+                let output = resolver(alias.as_str(), subjects)?;
+                let typed_outputs = serde_json::from_value(output.clone())
+                    .map_err(|_| ActionHandlerError::Evidence)?;
+                crate::action_evidence_validation::validate_selected_outputs(
+                    capability,
+                    &typed_outputs,
+                )
+                .map_err(|_| ActionHandlerError::Evidence)?;
+                rhai_planner::json_to_dynamic(&output, 0).map_err(ActionHandlerError::from)
+            })();
+            match result {
+                Ok(value) => Ok(value),
+                Err(_) => {
+                    if !failure.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                        if let Ok(mut location) = failed_location.lock() {
+                            *location = known_alias;
+                        }
+                    }
+                    Err(refused())
+                }
+            }
+        });
+        engine.register_static_module("evidence", module.into());
+    }
+    if let Some(cancelled) = cancellation.clone() {
+        engine.on_progress(move |_| {
+            (Instant::now() >= deadline || cancelled.load(std::sync::atomic::Ordering::Acquire))
+                .then_some(Dynamic::UNIT)
+        });
+    }
     #[cfg(feature = "postgres-test")]
     if expire_during_execution {
         engine.on_progress(move |_| {
@@ -307,8 +480,14 @@ pub(crate) fn evaluate_admitted_action_detailed(
             (Dynamic::from(ctx),),
         )
         .map_err(|error| {
-            if Instant::now() >= deadline {
+            let kind = if Instant::now() >= deadline
+                || cancellation
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+            {
                 ActionHandlerError::Deadline
+            } else if poisoned.load(std::sync::atomic::Ordering::Acquire) {
+                ActionHandlerError::Evidence
             } else if matches!(
                 *error,
                 rhai::EvalAltResult::ErrorTooManyOperations(..)
@@ -318,9 +497,23 @@ pub(crate) fn evaluate_admitted_action_detailed(
                 ActionHandlerError::Resource
             } else {
                 ActionHandlerError::Execution
+            };
+            if kind == ActionHandlerError::Evidence {
+                dependency_diagnostic()
+            } else {
+                kind.into()
             }
         })?;
     if Instant::now() >= deadline {
+        return Err(ActionHandlerError::Deadline.into());
+    }
+    if poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(dependency_diagnostic());
+    }
+    if cancellation
+        .as_ref()
+        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+    {
         return Err(ActionHandlerError::Deadline.into());
     }
     let mut remaining = action.maximum_snapshot_bytes as usize;
@@ -497,6 +690,7 @@ fn decode_result(
                 .find(|slot| slot.id == id)
                 .ok_or(ActionHandlerDiagnostic {
                     kind: ActionHandlerError::Ceiling,
+                    evidence_capability: None,
                     slot: None,
                     field: None,
                     message: "Use an id from the handler's declared write slots.",
@@ -518,6 +712,7 @@ fn decode_result(
         let mutations = rhai_planner::decode_write_mutations_detailed(&slot.ceiling, &effect)
             .map_err(|diagnostic| ActionHandlerDiagnostic {
                 kind: diagnostic.kind.into(),
+                evidence_capability: None,
                 slot: Some(slot.id.clone()),
                 field: diagnostic.field,
                 message: diagnostic.message,
@@ -575,6 +770,7 @@ fn decode_result(
             {
                 let diagnostic = |kind, message| ActionHandlerDiagnostic {
                     kind,
+                    evidence_capability: None,
                     slot: Some(effect.id.clone()),
                     field: Some(field.clone()),
                     message,

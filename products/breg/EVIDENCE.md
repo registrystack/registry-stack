@@ -122,3 +122,14 @@ provider candidate before a coordinated deployment. The export is an offline
 contract, not a request-time attestation of the currently running provider.
 Independently evolving providers require a paused, coordinated cutover when
 their consumed meaning changes.
+
+## Consuming Evidence during an action
+
+The separate [conditional Evidence action trial](immediate-actions.md#trial-conditional-evidence-in-rhai)
+lets a governed Rhai action acquire verified assertions before finalizing its
+writes. The [farmer landholding example](acceptance/farmer-landholding-evidence/README.md)
+shows preprocessing, early refusal, conditional disclosure and exact offline
+mocks. Imported client contracts define the signed processing ceiling; operator
+configuration supplies fixed endpoints, credentials and trust. This is distinct
+from the lookup export described above, and does not grant BREG authority over
+Evidence source access or signing.

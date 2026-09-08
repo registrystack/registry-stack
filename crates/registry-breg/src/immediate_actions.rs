@@ -158,6 +158,7 @@ fn compile_action(
         .any(|use_| use_.condition_required)
         .then(|| format!("/v1/actions/{}/target-conditions", action.id));
     Some(CompiledAction {
+        evidence: Vec::new(),
         id: action.id.clone(),
         source_module: collected.source_module.clone(),
         route: format!("/v1/actions/{}", action.id),
@@ -197,7 +198,9 @@ fn compile_handler(
     };
     let source = collected.source.handler.as_ref()?;
     let path = format!("actions[{}].handler", collected.source.id);
-    if source.abi != crate::contract::ACTION_HANDLER_ABI_V1 {
+    if source.abi != crate::contract::ACTION_HANDLER_ABI_V1
+        && source.abi != crate::contract::ACTION_HANDLER_ABI_V2
+    {
         errors.push(Diagnostic::error(
             "action.handler.abi_invalid",
             format!("{path}.abi"),
@@ -237,7 +240,8 @@ fn compile_handler(
                     "action.handler.input.string_bound",
                     format!("{input_path}.maxLength"),
                     &format!(
-                        "registry.action-handler/v1 input strings support at most {} UTF-8 bytes; set maxLength to {} or less so every Unicode value fits",
+                        "{} input strings support at most {} UTF-8 bytes; set maxLength to {} or less so every Unicode value fits",
+                        source.abi,
                         crate::rhai_planner::MAXIMUM_STRING_BYTES,
                         crate::rhai_planner::MAXIMUM_STRING_BYTES / 4,
                     ),
@@ -247,7 +251,7 @@ fn compile_handler(
                 errors.push(Diagnostic::error(
                     "action.handler.input.type_unsupported",
                     format!("{input_path}.type"),
-                    "registry.action-handler/v1 accepts scalar inputs; use scalar fields or fixed effects for crs84-point and structured values",
+                    &format!("{} accepts scalar inputs; use scalar fields or fixed effects for crs84-point and structured values", source.abi),
                 ));
             }
             _ => {}
@@ -519,6 +523,14 @@ fn compile_handler(
             ),
         };
         errors.push(Diagnostic::error(code, format!("{path}.script"), &message));
+        return None;
+    }
+    if crate::action_handler::compile_source_for_abi(script, &source.abi).is_err() {
+        errors.push(Diagnostic::error(
+            "action.handler.helper_contract",
+            format!("{path}.script"),
+            "Evidence helpers require registry.action-handler/v2 and evidence::resolve with exactly two arguments",
+        ));
         return None;
     }
     writes.sort_by(|left, right| left.id.cmp(&right.id));

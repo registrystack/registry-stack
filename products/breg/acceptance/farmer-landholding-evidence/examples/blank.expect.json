@@ -1,0 +1,7 @@
+{
+  "evidenceCalls": [],
+  "refusal": {
+    "code": "invalid-farmer-number",
+    "field": "farmer-number"
+  }
+}

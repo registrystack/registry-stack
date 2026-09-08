@@ -2879,9 +2879,9 @@ fn explain_actions_reports_compiled_effects_conditions_results_and_grants() {
 fn explain_actions_reports_reference_acceptance_conditions() {
     let project = fs::canonicalize(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/fixtures/facility-registry-actions"),
+            .join("../../products/breg/acceptance/person-registration-rhai"),
     )
-    .expect("authored facility fixture resolves");
+    .expect("authored person-registration fixture resolves");
     let output = bregctl(&[
         "--format",
         "json",
@@ -2895,13 +2895,13 @@ fn explain_actions_reports_reference_acceptance_conditions() {
         .as_array()
         .expect("actions are listed")
         .iter()
-        .find(|action| action["id"] == "register-facility")
+        .find(|action| action["id"] == "register-person-with-registration")
         .expect("registration action is explained");
     let requirement = &action["requires"][0];
-    assert_eq!(requirement["input"]["apiName"], "operatorId");
-    assert_eq!(requirement["entity"], "operator");
-    assert_eq!(requirement["field"]["field"], "status");
-    assert_eq!(requirement["equals"], "active");
+    assert_eq!(requirement["input"]["apiName"], "registerId");
+    assert_eq!(requirement["entity"], "register");
+    assert_eq!(requirement["field"]["field"], "active");
+    assert_eq!(requirement["equals"], true);
     assert_eq!(requirement["evaluated"], "before_effects_under_target_lock");
     assert!(!String::from_utf8(output.stdout)
         .expect("explanation is UTF-8")

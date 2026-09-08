@@ -2,6 +2,7 @@
 
 use super::*;
 
+use crate::action_evidence::FrozenEvidenceEvaluation;
 use crate::action_handler::{evaluate_admitted_action_detailed, ActionHandlerOutcome};
 use crate::api::{ActionTargetConditionsInput, HeldReadResponse, ImmediateActionInput};
 
@@ -87,6 +88,7 @@ impl MutationCoordinator {
                     fault,
                     deadline,
                     &mut candidate,
+                    None,
                 )
                 .await;
             if matches!(attempt, Err(MutationError::RetryableConflict))
@@ -166,7 +168,7 @@ impl MutationCoordinator {
         result
     }
 
-    async fn record_action_boundary_audit(
+    pub(crate) async fn record_action_boundary_audit(
         &self,
         client: &mut Client,
         claims: &ActionClaimContext,
@@ -212,6 +214,7 @@ impl MutationCoordinator {
         fault: FaultControl,
         deadline: tokio::time::Instant,
         candidate: &mut Option<Vec<CompiledActionEffect>>,
+        frozen: Option<&FrozenEvidenceEvaluation>,
     ) -> Result<MutationOutcome, MutationError> {
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
@@ -226,55 +229,46 @@ impl MutationCoordinator {
         .await
         .map_err(|_| MutationError::Unavailable)?;
 
-        if let Some(stored) = lock_and_load(transaction.transaction(), binding).await? {
-            let StoredResultMetadata::ImmediateAction { result_count } = stored.metadata else {
-                return Err(MutationError::Unavailable);
-            };
-            self.authorize_stored_action_results(
+        transaction
+            .set_statement_budget(deadline.saturating_duration_since(tokio::time::Instant::now()))
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        if let Some(outcome) = self
+            .recover_action_receipt(
                 transaction.transaction(),
                 registry,
                 action,
                 claims,
                 target_authority,
-                &binding.key_reference,
+                binding,
+                route_id,
+                correlation,
             )
-            .await?;
-            let application_reference = stored_action_application_reference(
-                transaction.transaction(),
-                &self.audit_profile,
-                &binding.key_reference,
-            )
-            .await?;
-            append_action_terminal_audit(
-                transaction.transaction(),
-                &self.audit_profile,
-                TerminalAudit {
-                    outcome: TerminalAuditOutcome::Replayed,
-                    method: HttpMethod::Post,
-                    operation_id: route_id.to_owned(),
-                    entity_id: None,
-                    action_id: Some(action.id.clone()),
-                    package_revision: self.expected.package_revision.clone(),
-                    selected_access_profile: claims.access_profile().to_owned(),
-                    purpose_present: claims.purpose().is_some(),
-                    principal_reference: Some(binding.principal_reference.clone()),
-                    record_reference: None,
-                    record_revision: None,
-                    result_count: Some(usize::from(result_count)),
-                    field_set_reference: None,
-                    correlation: correlation.clone(),
-                },
-                &application_reference,
-            )
-            .await?;
+            .await?
+        {
             transaction
                 .commit()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            return Ok(MutationOutcome {
-                response: stored.response,
-                replayed: true,
-            });
+            return Ok(outcome);
+        }
+        if let Some(frozen) = frozen {
+            validate_frozen_evidence(frozen)?;
+            match &frozen.outcome {
+                Ok(ActionHandlerOutcome::Effects(effects)) => *candidate = Some(effects.clone()),
+                Ok(ActionHandlerOutcome::Refusal(refusal)) => {
+                    let mut refusal = refusal.clone();
+                    refusal.field = refusal.field.and_then(|id| {
+                        action
+                            .inputs
+                            .iter()
+                            .find(|input| input.id == id)
+                            .map(|input| input.api_name.clone())
+                    });
+                    return Err(MutationError::ActionRefusal(refusal));
+                }
+                Err(error) => return Err(error.clone()),
+            }
         }
 
         // Receipt recovery precedes computation. Once verified, retain this
@@ -513,7 +507,17 @@ impl MutationCoordinator {
         )
         .await?;
         insert_action_result_links(transaction.transaction(), binding, action, &results).await?;
+        if let Some(frozen) = frozen {
+            insert_action_evidence(transaction.transaction(), application_id, frozen).await?;
+        }
         fault.fail_at(MutationFaultPoint::BeforeCommit)?;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(MutationError::Unavailable);
+        }
+        if let Some(frozen) = frozen {
+            validate_frozen_evidence(frozen)?;
+        }
+
         transaction
             .commit()
             .await
@@ -523,6 +527,68 @@ impl MutationCoordinator {
             response: held,
             replayed: false,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn recover_action_receipt(
+        &self,
+        transaction: &Transaction<'_>,
+        registry: &CompiledRegistry,
+        action: &CompiledAction,
+        claims: &ActionClaimContext,
+        target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
+        binding: &crate::idempotency::ResolvedIdempotencyBinding,
+        route_id: &str,
+        correlation: &RequestCorrelation,
+    ) -> Result<Option<MutationOutcome>, MutationError> {
+        if let Some(stored) = lock_and_load(transaction, binding).await? {
+            let StoredResultMetadata::ImmediateAction { result_count } = stored.metadata else {
+                return Err(MutationError::Unavailable);
+            };
+            self.authorize_stored_action_results(
+                transaction,
+                registry,
+                action,
+                claims,
+                target_authority,
+                &binding.key_reference,
+            )
+            .await?;
+            let application_reference = stored_action_application_reference(
+                transaction,
+                &self.audit_profile,
+                &binding.key_reference,
+            )
+            .await?;
+            append_action_terminal_audit(
+                transaction,
+                &self.audit_profile,
+                TerminalAudit {
+                    outcome: TerminalAuditOutcome::Replayed,
+                    method: HttpMethod::Post,
+                    operation_id: route_id.to_owned(),
+                    entity_id: None,
+                    action_id: Some(action.id.clone()),
+                    package_revision: self.expected.package_revision.clone(),
+                    selected_access_profile: claims.access_profile().to_owned(),
+                    purpose_present: claims.purpose().is_some(),
+                    principal_reference: Some(binding.principal_reference.clone()),
+                    record_reference: None,
+                    record_revision: None,
+                    result_count: Some(usize::from(result_count)),
+                    field_set_reference: None,
+                    correlation: correlation.clone(),
+                },
+                &application_reference,
+            )
+            .await?;
+            return Ok(Some(MutationOutcome {
+                response: stored.response,
+                replayed: true,
+            }));
+        }
+
+        Ok(None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1806,6 +1872,278 @@ fn canonical_action_request_digest(
     Ok(Sha256::digest(canonical).into())
 }
 
+// Admission state is created once, before protected external processing. It
+// retains all identity and request bindings across confirmed SQL aborts.
+pub(crate) struct PreparedEvidenceAction {
+    pub(crate) action: CompiledAction,
+    pub(crate) inputs: ActionInputs,
+    preconditions: BTreeMap<String, String>,
+    binding: crate::idempotency::ResolvedIdempotencyBinding,
+    reserved_creates: BTreeMap<String, Uuid>,
+    application_id: Uuid,
+}
+
+impl MutationCoordinator {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn preflight_evidence_action(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        input: ImmediateActionInput<'_>,
+        claims: &ActionClaimContext,
+        target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
+        deadline: tokio::time::Instant,
+    ) -> Result<Result<PreparedEvidenceAction, MutationOutcome>, MutationError> {
+        if !profile_is_keyed(&self.audit_profile) {
+            return Err(MutationError::Unavailable);
+        }
+        let action = action_for_route(
+            registry,
+            input.action_id,
+            input.route_id,
+            ActionRouteKind::Invoke,
+        )?;
+        validate_action_claims(action, claims, Operation::Invoke)?;
+        let normalized = validate_action_input(action, input.input)?;
+        validate_precondition_set(action, &input.preconditions)?;
+        self.record_action_boundary_audit(
+            client,
+            claims,
+            input.route_id,
+            input.correlation,
+            PreIoAuditKind::Attempt,
+        )
+        .await?;
+        let binding = resolve_action_binding(
+            &self.audit_profile,
+            &ActionIdempotencyBinding {
+                key: input.idempotency_key,
+                context: claims,
+                method: HttpMethod::Post,
+                route: &action.route,
+                package_revision: &self.expected.package_revision,
+                action_contract_fingerprint: &action.contract_fingerprint,
+                target_authority,
+                result_effects: claims.result_effects(),
+                canonical_request_digest: canonical_action_request_digest(
+                    action,
+                    &normalized,
+                    &input.preconditions,
+                )?,
+            },
+        )?;
+        let application_id = Uuid::new_v4();
+        let transaction = begin_action_transaction(
+            client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            claims,
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+        transaction
+            .set_statement_budget(deadline.saturating_duration_since(tokio::time::Instant::now()))
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        if let Some(outcome) = self
+            .recover_action_receipt(
+                transaction.transaction(),
+                registry,
+                action,
+                claims,
+                target_authority,
+                &binding,
+                input.route_id,
+                input.correlation,
+            )
+            .await?
+        {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return Ok(Err(outcome));
+        }
+        // This transaction proves current admission only. Its locks and entire
+        // pooled connection are released before any Evidence request.
+        self.lock_existing_action_targets(
+            transaction.transaction(),
+            registry,
+            action,
+            claims,
+            target_authority,
+            &normalized,
+            application_id,
+        )
+        .await?;
+        self.verify_action_link_references(
+            transaction.transaction(),
+            registry,
+            action,
+            claims,
+            target_authority,
+            &normalized,
+        )
+        .await?;
+        self.lock_action_patch_targets(
+            transaction.transaction(),
+            registry,
+            action,
+            claims,
+            target_authority,
+            &normalized,
+            &input.preconditions,
+            application_id,
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        Ok(Ok(PreparedEvidenceAction {
+            action: action.clone(),
+            inputs: normalized,
+            preconditions: input.preconditions,
+            binding,
+            reserved_creates: reserve_action_create_ids(action)?,
+            application_id,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn finalize_evidence_action(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        prepared: &PreparedEvidenceAction,
+        frozen: &FrozenEvidenceEvaluation,
+        claims: &ActionClaimContext,
+        target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
+        route_id: &str,
+        correlation: &RequestCorrelation,
+        fault: FaultControl,
+        deadline: tokio::time::Instant,
+    ) -> Result<MutationOutcome, MutationError> {
+        validate_action_claims(&prepared.action, claims, Operation::Invoke)?;
+        let mut candidate = None;
+        let mut retries = 0;
+        let result = loop {
+            let result = self
+                .execute_immediate_action_after_attempt(
+                    client,
+                    registry,
+                    &prepared.action,
+                    claims,
+                    target_authority,
+                    &prepared.inputs,
+                    &prepared.preconditions,
+                    &prepared.binding,
+                    &prepared.reserved_creates,
+                    prepared.application_id,
+                    route_id,
+                    correlation,
+                    fault,
+                    deadline,
+                    &mut candidate,
+                    Some(frozen),
+                )
+                .await;
+            if matches!(result, Err(MutationError::RetryableConflict))
+                && retries < 2
+                && !fault.is_enabled()
+            {
+                retries += 1;
+                continue;
+            }
+            break result;
+        };
+        if result.is_err() && !fault.is_enabled() && tokio::time::Instant::now() < deadline {
+            self.record_action_boundary_audit(
+                client,
+                claims,
+                route_id,
+                correlation,
+                PreIoAuditKind::Refusal,
+            )
+            .await?;
+        }
+        result.map_err(|error| match error {
+            MutationError::RetryableConflict => MutationError::Unavailable,
+            other => other,
+        })
+    }
+}
+
+fn validate_frozen_evidence(frozen: &FrozenEvidenceEvaluation) -> Result<(), MutationError> {
+    let now = chrono::Utc::now();
+    for acquisition in &frozen.acquisitions {
+        acquisition
+            .validate_acceptance(now)
+            .map_err(|_| MutationError::ActionEvidenceFailure {
+                capability: Some(acquisition.capability_id().to_owned()),
+            })?;
+    }
+    Ok(())
+}
+
+async fn insert_action_evidence(
+    transaction: &Transaction<'_>,
+    application_id: Uuid,
+    frozen: &FrozenEvidenceEvaluation,
+) -> Result<(), MutationError> {
+    let mut bytes = 0usize;
+    if frozen.acquisitions.len() > 2 {
+        return Err(MutationError::Unavailable);
+    }
+    for (ordinal, acquisition) in frozen.acquisitions.iter().enumerate() {
+        let retained = acquisition
+            .retained_serialization()
+            .map_err(MutationError::from)?;
+        bytes = bytes
+            .checked_add(
+                serde_json::to_vec(&retained)
+                    .map_err(|_| MutationError::Unavailable)?
+                    .len(),
+            )
+            .ok_or(MutationError::Unavailable)?;
+        if bytes > crate::action_evidence::MAXIMUM_RETAINED_EVIDENCE_BYTES {
+            return Err(MutationError::Unavailable);
+        }
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_action_evidence_uses
+            (application_id, ordinal, retained, expires_at) VALUES ($1, $2, $3, $4)",
+                &[
+                    &application_id,
+                    &(ordinal as i16),
+                    &retained,
+                    &acquisition.retention_expires_at(),
+                ],
+            )
+            .await
+            .map_err(map_database_error)?;
+    }
+    Ok(())
+}
+
+/// Erase only expired protected Evidence material with the migration role.
+/// Runtime roles have INSERT only; history erasure has a separate scope.
+/// A future cutoff cannot erase material whose retention has not expired.
+pub(crate) async fn erase_expired_action_evidence(
+    client: &tokio_postgres::Transaction<'_>,
+    before: chrono::DateTime<chrono::Utc>,
+) -> Result<u64, MutationError> {
+    client
+        .execute(
+            "DELETE FROM registry_internal.registry_action_evidence_uses
+        WHERE expires_at <= LEAST($1, CURRENT_TIMESTAMP)",
+            &[&before],
+        )
+        .await
+        .map_err(map_database_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1840,6 +2178,50 @@ mod tests {
         ));
         assert!(matches!(
             validate_action_input(action, null),
+            Err(MutationError::InvalidRequest)
+        ));
+    }
+
+    #[test]
+    fn internal_action_admission_keeps_null_specific_to_handlers() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/person-registration-rhai");
+        let project = crate::contract::parse_project_yaml(
+            &std::fs::read(root.join("registry.yaml")).unwrap(),
+        )
+        .unwrap();
+        let assets = project
+            .actions
+            .iter()
+            .filter_map(|action| action.handler.as_ref())
+            .map(|handler| crate::contract::ModuleAssetSource {
+                module: None,
+                path: handler.script.clone(),
+                bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let registry = crate::compiler::compile_project_with_assets(
+            &project,
+            &[],
+            &assets,
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let mut action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == "register-person")
+            .unwrap()
+            .clone();
+        let input = Map::from_iter([
+            ("identifier".to_owned(), json!("0123456789012")),
+            ("family-name".to_owned(), Value::Null),
+        ]);
+        assert!(validate_action_input(&action, input.clone()).is_ok());
+        action.handler = None;
+        assert!(matches!(
+            validate_action_input(&action, input),
             Err(MutationError::InvalidRequest)
         ));
     }

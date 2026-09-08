@@ -22,6 +22,7 @@ pub fn type_uri(code: &str) -> String {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 #[non_exhaustive]
 pub enum ProblemCode {
+    ActionEvidenceFailed,
     ActionHandlerFailed,
     ActionRefused,
     AuthenticationRefused,
@@ -45,6 +46,7 @@ pub enum ProblemCode {
 impl ProblemCode {
     /// Every registered code, ordered by its code string.
     pub const ALL: &'static [Self] = &[
+        Self::ActionEvidenceFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
@@ -69,6 +71,7 @@ impl ProblemCode {
     /// probe is an operational route with no documented operation, so its code
     /// is registered and published but never listed in a generated document.
     pub const DOCUMENTED: &'static [Self] = &[
+        Self::ActionEvidenceFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
@@ -91,6 +94,7 @@ impl ProblemCode {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
+            Self::ActionEvidenceFailed => "action.evidence_failed",
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
@@ -128,7 +132,10 @@ impl ProblemCode {
             Self::ActionRefused => 422,
             Self::PreconditionRequired => 428,
             Self::ActionHandlerFailed => 500,
-            Self::RuntimeNotReady | Self::ServiceUnavailable | Self::SourceUnavailable => 503,
+            Self::ActionEvidenceFailed
+            | Self::RuntimeNotReady
+            | Self::ServiceUnavailable
+            | Self::SourceUnavailable => 503,
             Self::RequestTimeout => 504,
         }
     }
@@ -159,6 +166,7 @@ impl ProblemCode {
     #[must_use]
     pub const fn description(self) -> &'static str {
         match self {
+            Self::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
             Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",

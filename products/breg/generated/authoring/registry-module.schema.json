@@ -70,6 +70,46 @@
       ],
       "type": "object"
     },
+    "ActionEvidenceSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "maximumObservationAgeSeconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outputs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "requirement": {
+          "type": "string"
+        },
+        "subjects": {
+          "additionalProperties": {
+            "$ref": "#/$defs/EvidenceSubjectSource"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "requirement",
+        "subjects",
+        "outputs",
+        "maximumObservationAgeSeconds"
+      ],
+      "type": "object"
+    },
     "ActionHandlerRefusalSource": {
       "additionalProperties": false,
       "properties": {
@@ -91,7 +131,8 @@
       "properties": {
         "abi": {
           "enum": [
-            "registry.action-handler/v1"
+            "registry.action-handler/v1",
+            "registry.action-handler/v2"
           ],
           "type": "string"
         },
@@ -435,6 +476,12 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/ActionEffectSource"
+          },
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/ActionEvidenceSource"
           },
           "type": "array"
         },
@@ -2000,6 +2047,18 @@
         "request_lifecycle"
       ],
       "type": "string"
+    },
+    "EvidenceSubjectSource": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "type": "object"
     },
     "FieldSource": {
       "anyOf": [

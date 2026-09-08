@@ -752,7 +752,10 @@ async fn finish_prepared_server(
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
     let webhook_worker = Some(WebhookWorker::new(webhook_delivery));
-    let mutations = Arc::new(PostgresRecordMutationService::new_with_event_destinations(
+    let evidence = config
+        .activate_evidence(&registry)
+        .map_err(StartupError::RuntimeConfig)?;
+    let mutations = PostgresRecordMutationService::new_with_event_destinations(
         pool,
         Arc::clone(&registry),
         expected,
@@ -760,7 +763,13 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit_profile,
         Some(event_destinations),
-    ));
+    );
+    let mutations = Arc::new(match evidence {
+        Some(evaluator) => mutations
+            .with_evidence_evaluator(evaluator)
+            .with_evidence_timeout(config.operational_timeouts().http_request),
+        None => mutations,
+    });
     let mut service = HttpService::new(registry, read_identity, records, readiness, cursor_codec)
         .with_postgres_revisions(revisions)
         .with_snapshots(snapshots)

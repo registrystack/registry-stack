@@ -159,6 +159,7 @@ pub struct PackageFile {
 pub enum PackageFileRole {
     SourceProject,
     SourceProjectPlannerScript,
+    SourceProjectEvidenceContract,
     SourceModule,
     SourceModuleAsset,
     SourceModulePlannerScript,
@@ -2513,7 +2514,11 @@ pub fn prepare_package_with_project_assets(
         let path = package_project_asset_path(&asset.path)?;
         entries.push(file_entry(
             &path,
-            PackageFileRole::SourceProjectPlannerScript,
+            if asset.path.ends_with(".json") {
+                PackageFileRole::SourceProjectEvidenceContract
+            } else {
+                PackageFileRole::SourceProjectPlannerScript
+            },
             &asset.bytes,
         )?);
     }
@@ -2663,7 +2668,7 @@ fn package_compiler_assets(
     let mut assets = Vec::new();
     let mut paths = BTreeSet::new();
     for asset in project_assets {
-        validate_planner_asset(&asset.path, &asset.bytes)?;
+        validate_project_asset(&asset.path, &asset.bytes)?;
         if !paths.insert((None, asset.path.as_str())) {
             return Err(PackageError::Derivation);
         }
@@ -2713,6 +2718,12 @@ fn validate_declared_package_assets(
                 .as_ref()
                 .map(|handler| handler.script.as_str())
         }))
+        .chain(
+            project
+                .evidence_providers
+                .iter()
+                .map(|provider| provider.contracts.as_str()),
+        )
         .collect::<BTreeSet<_>>();
     let supplied_project = project_assets
         .iter()
@@ -2777,6 +2788,19 @@ fn validate_declared_package_assets(
     Ok(())
 }
 
+fn validate_project_asset(path: &str, bytes: &[u8]) -> Result<()> {
+    if crate::action_evidence_contracts::valid_contract_path(path) {
+        validate_relative(path)?;
+        if !bytes.is_empty()
+            && bytes.len() <= crate::action_evidence_contracts::MAX_EVIDENCE_CONTRACT_BYTES
+        {
+            return Ok(());
+        }
+        return Err(PackageError::Derivation);
+    }
+    validate_planner_asset(path, bytes)
+}
+
 fn validate_planner_asset(path: &str, bytes: &[u8]) -> Result<()> {
     validate_relative(path)?;
     if path.len() > MAX_RHAI_PLANNER_PATH_BYTES
@@ -2814,7 +2838,10 @@ fn validate_module_asset(path: &str, bytes: &[u8]) -> Result<()> {
 
 fn package_project_asset_path(asset_path: &str) -> Result<String> {
     validate_relative(asset_path)?;
-    if !asset_path.ends_with(".rhai") || asset_path == "registry.yaml" {
+    if (!asset_path.ends_with(".rhai")
+        && !crate::action_evidence_contracts::valid_contract_path(asset_path))
+        || asset_path == "registry.yaml"
+    {
         return Err(PackageError::Derivation);
     }
     let path = format!("source/project/{asset_path}");
@@ -3001,6 +3028,9 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
     }
     Ok(match path {
         FIXTURE_JOURNEYS_PATH => PackageFileRole::FixtureJourneys,
+        path if path.starts_with("source/project/") && path.ends_with(".json") => {
+            PackageFileRole::SourceProjectEvidenceContract
+        }
         path if path.starts_with("source/project/") && path.ends_with(".rhai") => {
             PackageFileRole::SourceProjectPlannerScript
         }
@@ -4283,6 +4313,7 @@ fn rederive(
                 entry.role,
                 PackageFileRole::SourceProject
                     | PackageFileRole::SourceProjectPlannerScript
+                    | PackageFileRole::SourceProjectEvidenceContract
                     | PackageFileRole::SourceModule
                     | PackageFileRole::SourceModuleAsset
                     | PackageFileRole::SourceModulePlannerScript
@@ -4320,7 +4351,7 @@ fn captured_compiler_assets(
             .get(package_path)
             .ok_or(PackageError::Derivation)?
             .clone();
-        validate_planner_asset(asset_path, &bytes)?;
+        validate_project_asset(asset_path, &bytes)?;
         assets.push(ModuleAssetSource {
             module: None,
             path: asset_path.to_owned(),
@@ -4453,7 +4484,13 @@ fn validate_source_inventory(manifest: &PackageManifest) -> Result<()> {
     let file_project_asset_paths = manifest
         .files
         .iter()
-        .filter(|entry| entry.role == PackageFileRole::SourceProjectPlannerScript)
+        .filter(|entry| {
+            matches!(
+                entry.role,
+                PackageFileRole::SourceProjectPlannerScript
+                    | PackageFileRole::SourceProjectEvidenceContract
+            )
+        })
         .map(|entry| entry.path.clone())
         .collect::<BTreeSet<_>>();
     if project_asset_paths != file_project_asset_paths {
@@ -4544,6 +4581,7 @@ fn validate_source_inventory(manifest: &PackageManifest) -> Result<()> {
             entry.role,
             PackageFileRole::SourceProject
                 | PackageFileRole::SourceProjectPlannerScript
+                | PackageFileRole::SourceProjectEvidenceContract
                 | PackageFileRole::SourceModule
                 | PackageFileRole::SourceModuleAsset
                 | PackageFileRole::SourceModulePlannerScript

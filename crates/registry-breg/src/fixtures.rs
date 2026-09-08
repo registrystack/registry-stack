@@ -1294,12 +1294,12 @@ fn validate_action_input_map(
     accepted_names: Option<&BTreeSet<String>>,
     expects_invalid_request: bool,
 ) -> Result<(), FixtureError> {
-    let condition_inputs = condition_input_api_names(action);
     let inputs_by_api_name = action
         .inputs
         .iter()
         .map(|input| (input.api_name.as_str(), input))
         .collect::<BTreeMap<_, _>>();
+    let condition_inputs = condition_input_api_names(action);
     for (name, value) in input {
         if name.len() > MAX_IDENTIFIER_BYTES {
             return Err(FixtureError::LogicalReferenceRefused);
@@ -2439,7 +2439,7 @@ fn compile_problem_bindings(
     }
     if matches!(
         expectation.problem_code.as_deref(),
-        Some("action.refused" | "action.handler_failed")
+        Some("action.refused" | "action.handler_failed" | "action.evidence_failed")
     ) {
         let action = action.ok_or(FixtureError::LogicalReferenceRefused)?;
         let handler = action
@@ -3139,7 +3139,10 @@ impl SchemaTestRuntime {
             config.operational_timeouts().record_lock,
             audit_profile.clone(),
         ));
-        let mutations = Arc::new(PostgresRecordMutationService::new_with_event_destinations(
+        let evidence = config
+            .activate_evidence(&registry)
+            .map_err(|_| FixtureError::ExecutionRefused)?;
+        let mutations = PostgresRecordMutationService::new_with_event_destinations(
             pool.clone(),
             Arc::clone(&registry),
             expected,
@@ -3147,7 +3150,13 @@ impl SchemaTestRuntime {
             config.operational_timeouts().record_lock,
             audit_profile,
             Some(event_destinations),
-        ));
+        );
+        let mutations = Arc::new(match evidence {
+            Some(evaluator) => mutations
+                .with_evidence_evaluator(evaluator)
+                .with_evidence_timeout(config.operational_timeouts().http_request),
+            None => mutations,
+        });
         let service = Arc::new(
             HttpService::new(
                 registry,
@@ -4745,6 +4754,10 @@ fn problem_contract(
         (400, "query.invalid") => Some(("Bad Request", &["The query request is invalid."])),
         (400, "request.invalid") => Some(("Bad Request", &["The request is invalid."])),
         (400, "request.plan_refused") => Some(("Bad Request", &PLAN_REFUSED_DETAILS)),
+        (503, "action.evidence_failed") => Some((
+            "Service Unavailable",
+            &["The declared Evidence dependency could not be accepted."],
+        )),
         (500, "action.handler_failed") => Some(("Internal Server Error", &HANDLER_FAILED_DETAILS)),
         (422, "action.refused") => Some(("Unprocessable Entity", &[])),
         (404, "resource.not_found") => {
@@ -4794,7 +4807,7 @@ pub struct FixtureSourceFile<'a> {
     pub bytes: &'a [u8],
 }
 
-/// One exact project-owned planner asset in declaring-origin-relative order.
+/// One exact project-owned planner or Evidence contract asset in declaring-origin-relative order.
 #[cfg(any(test, feature = "postgres-test"))]
 pub struct FixtureProjectAssetSource<'a> {
     pub path: &'a str,
@@ -5373,11 +5386,30 @@ fn validate_manifest_source_asset_inventory(
     let file_project_paths = manifest
         .files
         .iter()
-        .filter(|file| file.role == PackageFileRole::SourceProjectPlannerScript)
+        .filter(|file| {
+            matches!(
+                file.role,
+                PackageFileRole::SourceProjectPlannerScript
+                    | PackageFileRole::SourceProjectEvidenceContract
+            )
+        })
         .map(|file| file.path.clone())
         .collect::<BTreeSet<_>>();
     if project_paths != file_project_paths {
         return Err(FixtureError::CandidateBindingRefused);
+    }
+    for package_path in &manifest.sources.project_assets {
+        let source_path = source_project_asset_path(package_path)?;
+        let (role, _) = source_project_asset_policy(source_path)?;
+        if manifest
+            .files
+            .iter()
+            .filter(|file| &file.path == package_path && file.role == role)
+            .count()
+            != 1
+        {
+            return Err(FixtureError::CandidateBindingRefused);
+        }
     }
 
     let mut declared_paths = BTreeSet::new();
@@ -5440,15 +5472,11 @@ fn validate_source_project_assets(
         .zip(sources)
         .map(|(expected_package_path, source)| {
             let expected_source_path = source_project_asset_path(expected_package_path)?;
+            let (role, maximum_bytes) = source_project_asset_policy(expected_source_path)?;
             if source.path != expected_source_path
                 || source.bytes.is_empty()
-                || source.bytes.len() as u64 > MAX_RHAI_PLANNER_SOURCE_BYTES
-                || !manifest_file_matches(
-                    manifest,
-                    PackageFileRole::SourceProjectPlannerScript,
-                    expected_package_path,
-                    source.bytes,
-                )
+                || source.bytes.len() > maximum_bytes
+                || !manifest_file_matches(manifest, role, expected_package_path, source.bytes)
             {
                 return Err(FixtureError::CandidateBindingRefused);
             }
@@ -5502,17 +5530,13 @@ fn prepared_project_assets(
         .iter()
         .map(|package_path| {
             let source_path = source_project_asset_path(package_path)?;
+            let (role, maximum_bytes) = source_project_asset_policy(source_path)?;
             let bytes = files
                 .get(package_path)
                 .ok_or(FixtureError::CandidateBindingRefused)?;
             if bytes.is_empty()
-                || bytes.len() as u64 > MAX_RHAI_PLANNER_SOURCE_BYTES
-                || !manifest_file_matches(
-                    manifest,
-                    PackageFileRole::SourceProjectPlannerScript,
-                    package_path,
-                    bytes,
-                )
+                || bytes.len() > maximum_bytes
+                || !manifest_file_matches(manifest, role, package_path, bytes)
             {
                 return Err(FixtureError::CandidateBindingRefused);
             }
@@ -5593,6 +5617,24 @@ fn source_module_asset_policy(asset_path: &str) -> Result<(PackageFileRole, usiz
     }
 }
 
+fn source_project_asset_policy(
+    source_path: &str,
+) -> Result<(PackageFileRole, usize), FixtureError> {
+    if crate::action_evidence_contracts::valid_contract_path(source_path) {
+        Ok((
+            PackageFileRole::SourceProjectEvidenceContract,
+            crate::action_evidence_contracts::MAX_EVIDENCE_CONTRACT_BYTES,
+        ))
+    } else if source_path.ends_with(".rhai") {
+        Ok((
+            PackageFileRole::SourceProjectPlannerScript,
+            MAX_RHAI_PLANNER_SOURCE_BYTES as usize,
+        ))
+    } else {
+        Err(FixtureError::CandidateBindingRefused)
+    }
+}
+
 fn source_project_asset_path(package_path: &str) -> Result<&str, FixtureError> {
     let source_path = package_path
         .strip_prefix("source/project/")
@@ -5602,7 +5644,8 @@ fn source_project_asset_path(package_path: &str) -> Result<&str, FixtureError> {
         || source_path.contains('\\')
         || source_path.starts_with('/')
         || source_path.ends_with('/')
-        || !source_path.ends_with(".rhai")
+        || (!source_path.ends_with(".rhai")
+            && !crate::action_evidence_contracts::valid_contract_path(source_path))
     {
         return Err(FixtureError::CandidateBindingRefused);
     }
@@ -5808,6 +5851,26 @@ mod tests {
         PackageIntent, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
         PackageSourceFile, SignaturePolicy,
     };
+
+    #[test]
+    fn fixture_direct_claims_preserve_bounded_verified_claim_shapes() {
+        for value in [json!("owner-a"), json!(["owner-a", "owner-b"])] {
+            let source: DirectClaimSource = serde_json::from_value(value).unwrap();
+            assert!(source.verified_value().is_ok());
+        }
+        for value in [
+            json!(""),
+            json!([]),
+            json!([""]),
+            json!(["x".repeat(MAX_BINDING_BYTES + 1)]),
+        ] {
+            let source: DirectClaimSource = serde_json::from_value(value).unwrap();
+            assert!(source.verified_value().is_err());
+        }
+        for value in [json!(["owner-a", 1]), json!({"owner":"owner-a"})] {
+            assert!(serde_json::from_value::<DirectClaimSource>(value).is_err());
+        }
+    }
 
     #[test]
     fn fixed_optional_from_input_preflight_refuses_null_except_for_expected_invalid_requests() {
@@ -6198,6 +6261,135 @@ journeys:
         };
         assert!(matches!(
             validate_schema_test_candidate(&package, &changed_sources, &execution, &suite),
+            Err(FixtureError::CandidateBindingRefused)
+        ));
+    }
+
+    #[test]
+    fn evidence_contract_assets_survive_prepared_and_verified_schema_test_rederivation() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/farmer-landholding-evidence");
+        let mut source = crate::contract::parse_project_yaml(
+            &std::fs::read(root.join("registry.yaml")).unwrap(),
+        )
+        .unwrap();
+        let identity = source.package.as_mut().unwrap();
+        identity.environment = "local".into();
+        identity.instance_id = "fixture-instance".into();
+        identity.source_revision = "fixture-project-source".into();
+        let project = serde_json::to_vec(&source).unwrap();
+        let assets = source
+            .evidence_providers
+            .iter()
+            .map(|provider| provider.contracts.clone())
+            .chain(source.actions.iter().filter_map(|action| {
+                action
+                    .handler
+                    .as_ref()
+                    .map(|handler| handler.script.clone())
+            }))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|path| PackageSourceFile {
+                bytes: std::fs::read(root.join(&path)).unwrap(),
+                path,
+            })
+            .collect::<Vec<_>>();
+        let journeys = std::fs::read(root.join("tests/journeys.yaml")).unwrap();
+        let prepared = prepare_package_with_project_assets(
+            PackageBuildRequest {
+                environment: "local".into(),
+                instance_id: "fixture-instance".into(),
+                database_id: DATABASE_ID.into(),
+                sequence: 1,
+                prior_revision: None,
+                compiler_source_revision: COMPILER_SOURCE_REVISION.into(),
+                schema_fingerprint: DIGEST_A.into(),
+                signature_policy: SignaturePolicy {
+                    threshold: 0,
+                    key_ids: Vec::new(),
+                },
+                project: PackageSourceFile {
+                    path: "source/registry.yaml".into(),
+                    bytes: project.clone(),
+                },
+                modules: Vec::new(),
+                fixture_journeys: PackageSourceFile {
+                    path: FIXTURE_JOURNEYS_PATH.into(),
+                    bytes: journeys.clone(),
+                },
+                migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+            },
+            assets.clone(),
+        )
+        .unwrap();
+        let suite = validate_fixture_journeys(&journeys, prepared.registry()).unwrap();
+        let (candidate, registry) =
+            derive_prepared_schema_test_candidate(&prepared, &suite, 16).unwrap();
+        assert_eq!(registry, *prepared.registry());
+        let migration_plan = prepared.file_bytes()["database/migration-plan.json"].clone();
+        let temp = tempfile::tempdir().unwrap();
+        let package_root = temp.path().canonicalize().unwrap().join("package");
+        prepared
+            .publish_to_directory(&package_root, Vec::new())
+            .unwrap();
+        let package = load_package(
+            &package_root,
+            &PackageLoadContext {
+                environment: "local",
+                instance_id: "fixture-instance",
+                database_id: DATABASE_ID,
+                database_initialization_environment: "local",
+                compiler_source_revision: COMPILER_SOURCE_REVISION,
+                trust_anchor: None,
+                intent: PackageIntent::InitialActivation,
+            },
+        )
+        .unwrap();
+        let captured = assets
+            .iter()
+            .map(|asset| FixtureProjectAssetSource {
+                path: &asset.path,
+                bytes: &asset.bytes,
+            })
+            .collect::<Vec<_>>();
+        let sources = SchemaTestSources {
+            project: FixtureSourceFile {
+                path: "source/registry.yaml",
+                bytes: &project,
+            },
+            project_assets: &captured,
+            modules: &[],
+            migration_plan: FixtureSourceFile {
+                path: "database/migration-plan.json",
+                bytes: &migration_plan,
+            },
+        };
+        let execution = execution_facts(&package, DIGEST_A, 16);
+        let verified =
+            validate_schema_test_candidate(&package, &sources, &execution, &suite).unwrap();
+        assert_eq!(
+            verified.source_closure_sha256,
+            candidate.source_closure_sha256
+        );
+        let mut changed = assets
+            .iter()
+            .map(|asset| FixtureProjectAssetSource {
+                path: &asset.path,
+                bytes: &asset.bytes,
+            })
+            .collect::<Vec<_>>();
+        let contract = changed
+            .iter_mut()
+            .find(|asset| asset.path.ends_with(".json"))
+            .unwrap();
+        contract.bytes = b"{}";
+        let substituted = SchemaTestSources {
+            project_assets: &changed,
+            ..sources
+        };
+        assert!(matches!(
+            validate_schema_test_candidate(&package, &substituted, &execution, &suite),
             Err(FixtureError::CandidateBindingRefused)
         ));
     }

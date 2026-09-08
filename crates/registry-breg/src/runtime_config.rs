@@ -348,13 +348,12 @@ fn contains_governed_member(value: &serde_norway::Value) -> bool {
     match value {
         serde_norway::Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
             key.as_str().is_some_and(|key| GOVERNED.contains(&key))
-                // Destination-map keys are compiler-issued logical ids. Do not
+                // Binding-map keys are compiler-issued logical ids. Do not
                 // reinterpret an id such as `events` as a governed field; the
-                // strict destination value type rejects every undeployed key.
-                || (key
-                    .as_str()
-                    .is_none_or(|key| key != "eventDestinations")
-                    && contains_governed_member(value))
+                // strict binding value types still reject undeployed members.
+                || (key.as_str().is_none_or(|key| {
+                    !matches!(key, "eventDestinations" | "evidenceProviders")
+                }) && contains_governed_member(value))
         }),
         serde_norway::Value::Sequence(values) => values.iter().any(contains_governed_member),
         _ => false,
@@ -372,6 +371,8 @@ pub struct RuntimeConfig {
     audit: AuditConfig,
     cursor: CursorConfig,
     event_destinations: EventDestinationConfigs,
+    evidence_providers:
+        std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     event_delivery: EventDeliveryConfig,
     operational_timeouts: OperationalTimeouts,
     metrics_listener: Option<MetricsListenerConfig>,
@@ -414,10 +415,22 @@ impl RuntimeConfig {
             audit,
             cursor,
             event_destinations,
+            evidence_providers: raw.evidence_providers,
             event_delivery,
             operational_timeouts,
             metrics_listener,
         })
+    }
+
+    pub fn activate_evidence(
+        &self,
+        compiled: &CompiledRegistry,
+    ) -> Result<Option<Arc<crate::action_evidence::ActionEvidenceEvaluator>>> {
+        crate::action_evidence_config::activate(
+            compiled,
+            &self.evidence_providers,
+            &self.secret_resolver()?,
+        )
     }
 
     pub fn listener(&self) -> &ListenerConfig {
@@ -1736,6 +1749,9 @@ struct RawRuntimeConfig {
     cursor: RawCursorConfig,
     #[serde(default)]
     event_destinations: RawEventDestinationConfigs,
+    #[serde(default)]
+    evidence_providers:
+        std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     /// Optional event-delivery tuning. Defaults to the server's bounded retention policy.
     #[serde(default)]
     event_delivery: RawEventDeliveryConfig,

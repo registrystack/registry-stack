@@ -621,3 +621,71 @@ fn action_without_default_requires_explicit_profile_even_when_token_has_authorit
         "registrar"
     );
 }
+
+#[test]
+fn fixed_action_optional_values_reject_explicit_null_in_schema_and_admission() {
+    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+    project.actions[0].inputs[1].required = false;
+    project.entities[0].fields[0].required = false;
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let action = &registry.actions().actions[0];
+    let schema = crate::artifacts::openapi_action_input_schema(action);
+    let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+    let mut body = json!({
+        "input": {"caseId": "00000000-0000-4000-8000-000000000001"},
+        "preconditions": {"caseId": {"ifMatch": "\"opaque\""}}
+    });
+    assert!(validator.is_valid(&body));
+    assert!(parse_body(
+        action,
+        ActionRouteKind::Invoke,
+        &serde_json::to_vec(&body).unwrap()
+    )
+    .is_ok());
+    body["input"]["newLabel"] = json!("Changed");
+    assert!(validator.is_valid(&body));
+    assert!(parse_body(
+        action,
+        ActionRouteKind::Invoke,
+        &serde_json::to_vec(&body).unwrap()
+    )
+    .is_ok());
+    body["input"]["newLabel"] = Value::Null;
+    assert!(!validator.is_valid(&body));
+    assert_eq!(
+        parse_error_path(
+            action,
+            ActionRouteKind::Invoke,
+            &serde_json::to_vec(&body).unwrap()
+        ),
+        "/input/newLabel"
+    );
+}
+
+#[tokio::test]
+async fn correlated_evidence_problem_exposes_only_a_safe_declared_capability_path() {
+    for capability in [Some("declared-status".to_owned()), None] {
+        let response = mutation_problem(MutationError::ActionEvidenceFailure {
+            capability: capability.clone(),
+        });
+        let correlation = crate::correlation::RequestCorrelation::breg_created();
+        let response =
+            crate::correlation::finish_response(response, &correlation, "POST", Instant::now());
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body = parse_json_strict(&bytes).unwrap();
+        assert_eq!(body["code"], "action.evidence_failed");
+        assert_eq!(
+            body["detail"],
+            "The declared Evidence dependency could not be accepted."
+        );
+        assert_eq!(body["traceId"], correlation.trace_id().as_str());
+        if capability.is_some() {
+            assert_eq!(body["fieldPath"], "/evidence/declared-status");
+        } else {
+            assert!(body.get("fieldPath").is_none());
+        }
+        assert!(body.get("selectors").is_none());
+        assert!(body.get("provider").is_none());
+    }
+}

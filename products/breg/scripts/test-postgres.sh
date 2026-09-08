@@ -89,6 +89,23 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_spatial_migration \
     --test postgres_fixture_journeys \
     --test schema_fingerprint_rehearsal
+
+  # Use Cargo's reported executable so configured target directories work too.
+  # This proof must start the real Evidence service, never silently skip it.
+  evidence_binary=$(cargo build --locked -p registry-evidence --bin evidence --message-format=json | python3 -c '
+import json, sys
+artifacts = [json.loads(line) for line in sys.stdin]
+binaries = [item["executable"] for item in artifacts if item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == "evidence" and item.get("executable")]
+if len(binaries) != 1:
+    raise SystemExit("expected exactly one built Evidence executable")
+print(binaries[0])
+')
+  [[ -x "$evidence_binary" ]] || { printf '%s\n' 'Built Evidence executable is unavailable.' >&2; exit 2; }
+  export BREG_TEST_EVIDENCE_BINARY="$evidence_binary"
+  uv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg --features postgres-test,tooling \
+    --test postgres_action_evidence \
+    --test postgres_action_evidence_targets \
+    --test postgres_action_evidence_retention
 fi
 
 if [[ "$lane" == all || "$lane" == immediate-actions ]]; then

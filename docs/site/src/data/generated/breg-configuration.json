@@ -8,7 +8,7 @@
       "file": "products/breg/generated/authoring/registry-project.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/breg.mdx",
-      "field_count": 479,
+      "field_count": 495,
       "fields": [
         {
           "key_path": "accessProfiles",
@@ -1667,6 +1667,154 @@
           "runtime_validation": null
         },
         {
+          "key_path": "actions[].evidence",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].id",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].maximumObservationAgeSeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint64",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].outputs",
+          "kind": "property",
+          "type": "array",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].outputs[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].provider",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].requirement",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].subjects",
+          "kind": "property",
+          "type": "object",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].subjects.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].subjects.*.profile",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "actions[].handler",
           "kind": "property",
           "type": "null | object",
@@ -1685,7 +1833,8 @@
           "type": "string",
           "required": "conditional",
           "values": [
-            "registry.action-handler/v1"
+            "registry.action-handler/v1",
+            "registry.action-handler/v2"
           ],
           "values_conditional": false,
           "constraints": [],
@@ -5196,6 +5345,73 @@
           "runtime_validation": null
         },
         {
+          "key_path": "evidenceProviders",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders[].contracts",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders[].id",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders[].subjectResolution",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "trusted-provider-exact-selector"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "kind",
           "kind": "property",
           "type": "string",
@@ -6918,7 +7134,7 @@
       "file": "products/breg/generated/authoring/registry-module.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/breg.mdx",
-      "field_count": 432,
+      "field_count": 443,
       "fields": [
         {
           "key_path": "actions",
@@ -7144,6 +7360,154 @@
           "runtime_validation": null
         },
         {
+          "key_path": "actions[].evidence",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].id",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].maximumObservationAgeSeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint64",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].outputs",
+          "kind": "property",
+          "type": "array",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].outputs[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].provider",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].requirement",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].subjects",
+          "kind": "property",
+          "type": "object",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].subjects.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "actions[].evidence[].subjects.*.profile",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
           "key_path": "actions[].handler",
           "kind": "property",
           "type": "null | object",
@@ -7162,7 +7526,8 @@
           "type": "string",
           "required": "conditional",
           "values": [
-            "registry.action-handler/v1"
+            "registry.action-handler/v1",
+            "registry.action-handler/v2"
           ],
           "values_conditional": false,
           "constraints": [],
@@ -13364,7 +13729,7 @@
       "file": "products/breg/generated/runtime/runtime.schema.json",
       "status": "beta",
       "reference": "docs/site/src/content/docs/configure/breg.mdx",
-      "field_count": 89,
+      "field_count": 98,
       "fields": [
         {
           "key_path": "apiVersion",
@@ -14462,6 +14827,127 @@
           ],
           "conditional_constraints": [],
           "description": "PEM client identity secret reference for mutual TLS.",
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders",
+          "kind": "property",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "{}"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders.*.baseUrl",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders.*.caBundleRef",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders.*.revokedKeyIds",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [
+            "[]"
+          ],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders.*.revokedKeyIds[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders.*.tokenRef",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders.*.trustBindingId",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "defaults": [],
+          "runtime_validation": null
+        },
+        {
+          "key_path": "evidenceProviders.*.trustedJwksRef",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
           "defaults": [],
           "runtime_validation": null
         },

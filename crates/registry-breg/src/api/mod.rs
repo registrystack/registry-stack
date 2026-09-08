@@ -5074,8 +5074,16 @@ fn mutation_problem(error: MutationError) -> Response {
         MutationError::ActionRefusal(refusal) => {
             crate::correlation::action_refusal_response(refusal)
         }
+        MutationError::ActionEvidenceFailure { capability } => {
+            crate::correlation::action_evidence_failure_response(capability)
+        }
         MutationError::ActionHandlerFailure(error) => match error {
             crate::action_handler::ActionHandlerError::Input => invalid_request(),
+            crate::action_handler::ActionHandlerError::Evidence => fixed_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "action.evidence_failed",
+                "The declared Evidence dependency could not be accepted.",
+            ),
             crate::action_handler::ActionHandlerError::Deadline => fixed_problem(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "service.unavailable",

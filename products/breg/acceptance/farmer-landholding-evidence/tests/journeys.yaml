@@ -1,0 +1,88 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+- id: farmer-evidence-registration
+  steps:
+  - id: register-category
+    action: register-landholding
+    accessProfile: landholding-registrar
+    claims: &id001
+      principal: synthetic-landholding-registrar
+      scopes:
+      - registry:landholding:register
+      purpose: land-registration
+    request:
+      operation: invoke
+      idempotencyKey: schema-landholding-001
+      input: &id002
+        farmerPrefix: ' TH '
+        farmerNumber: ' 00042 '
+        parcelCode: SCHEMA-P-001
+        includeCategory: true
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      landholding: registered-landholding
+  - id: read-canonical-fields
+    entity: landholding
+    accessProfile: landholding-reader
+    claims:
+      principal: synthetic-landholding-reader
+      scopes:
+      - registry:landholding:read
+      purpose: land-registration-audit
+    request:
+      operation: get
+      recordRef: registered-landholding
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        farmerNumber: TH-00042
+        parcelCode: SCHEMA-P-001
+        farmerCategory: smallholder
+  - id: replay
+    action: register-landholding
+    accessProfile: landholding-registrar
+    claims: *id001
+    request:
+      operation: invoke
+      idempotencyKey: schema-landholding-001
+      input: *id002
+    expect:
+      outcome: success
+      status: 200
+  - id: blank
+    action: register-landholding
+    accessProfile: landholding-registrar
+    claims: *id001
+    request:
+      operation: invoke
+      idempotencyKey: schema-blank
+      input:
+        farmerPrefix: ' TH '
+        farmerNumber: ' '
+        parcelCode: SCHEMA-P-001
+        includeCategory: true
+    expect:
+      outcome: refusal
+      status: 422
+      problemCode: action.refused
+      refusalCode: invalid-farmer-number
+  - id: inactive
+    action: register-landholding
+    accessProfile: landholding-registrar
+    claims: *id001
+    request:
+      operation: invoke
+      idempotencyKey: schema-inactive
+      input:
+        farmerPrefix: ' TH '
+        farmerNumber: '00043'
+        parcelCode: SCHEMA-INACTIVE
+        includeCategory: true
+    expect:
+      outcome: refusal
+      status: 422
+      problemCode: action.refused
+      refusalCode: farmer-inactive

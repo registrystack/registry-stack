@@ -16,6 +16,8 @@ use crate::diagnostics::{CompileFailure, Diagnostic};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RegistryProject {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_providers: Vec<crate::action_evidence_contracts::EvidenceProviderSource>,
     pub api_version: String,
     pub kind: String,
     pub registry: RegistryIdentitySource,
@@ -594,6 +596,8 @@ pub struct ChangeRequestValueSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionSource {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<crate::action_evidence_contracts::ActionEvidenceSource>,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handler: Option<ActionHandlerSource>,
@@ -605,6 +609,8 @@ pub struct ActionSource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<ActionRequirementSource>,
 }
+
+pub const ACTION_HANDLER_ABI_V2: &str = "registry.action-handler/v2";
 
 pub const ACTION_HANDLER_ABI_V1: &str = "registry.action-handler/v1";
 
@@ -626,7 +632,7 @@ pub struct ActionHandlerSource {
 
 #[cfg(feature = "schema")]
 fn action_handler_abi_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({"type": "string", "enum": [ACTION_HANDLER_ABI_V1]})
+    schemars::json_schema!({"type": "string", "enum": [ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2]})
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

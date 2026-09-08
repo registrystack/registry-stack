@@ -40,3 +40,12 @@ traceability:
   - {id: BREG-SEC-37, state: enforced, negativeId: BREG-NEG-37, negativeTest: {path: crates/registry-breg/tests/postgres_action_handlers.rs, name: action_handlers_compute_refuse_retry_recover_and_preserve_compiled_authority}}
   - {id: BREG-SEC-38, state: enforced, negativeId: BREG-NEG-38, negativeTest: {path: crates/registry-breg/tests/immediate_action_handler.rs, name: handler_business_refusal_is_exclusive_bounded_and_governed}}
   - {id: BREG-SEC-39, state: enforced, negativeId: BREG-NEG-39, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: native_patterns_validate_empty_tables_existing_rows_and_exact_target_recovery}}
+  - {id: BREG-SEC-40, state: enforced, negativeId: BREG-NEG-40, negativeTest: {path: crates/registry-breg/tests/action_evidence_compiler.rs, name: refuses_origin_profile_output_ambiguity_and_budget_widening}}
+  - {id: BREG-SEC-41, state: enforced, negativeId: BREG-NEG-41, negativeTest: {path: crates/registry-breg/tests/action_evidence_compiler.rs, name: imported_contract_is_sealed_and_rederived}}
+  - {id: BREG-SEC-42, state: enforced, negativeId: BREG-NEG-42, negativeTest: {path: crates/registry-breg/src/action_evidence_client.rs, name: real_signed_wrong_expectations_fail_without_a_verified_acquisition}}
+  - {id: BREG-SEC-43, state: enforced, negativeId: BREG-NEG-43, negativeTest: {path: crates/registry-breg/src/action_evidence_client.rs, name: wrong_selector_origins_roles_and_shapes_make_zero_requests}}
+  - {id: BREG-SEC-44, state: enforced, negativeId: BREG-NEG-44, negativeTest: {path: crates/registry-breg/tests/support/action_evidence_runtime.rs, name: queued_worker_retains_capacity_after_request_cancellation}}
+  - {id: BREG-SEC-45, state: enforced, negativeId: BREG-NEG-45, negativeTest: {path: crates/registry-breg/tests/postgres_action_evidence.rs, name: signed_evidence_actions_release_postgres_and_commit_atomic_transcripts}}
+  - {id: BREG-SEC-46, state: enforced, negativeId: BREG-NEG-46, negativeTest: {path: crates/registry-breg/tests/postgres_action_evidence.rs, name: caught_failed_helper_cannot_commit_or_make_another_disclosure}}
+  - {id: BREG-SEC-47, state: enforced, negativeId: BREG-NEG-47, negativeTest: {path: crates/registry-breg/src/artifacts.rs, name: evidence_dependency_problem_is_static_and_has_service_unavailable_status}}
+  - {id: BREG-SEC-48, state: enforced, negativeId: BREG-NEG-48, negativeTest: {path: crates/registry-breg/tests/postgres_action_evidence_retention.rs, name: retention_refuses_misbound_database_with_identical_roles_and_catalog_drift}}

@@ -22,6 +22,43 @@
       ],
       "type": "string"
     },
+    "EvidenceProviderConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "type": "string"
+        },
+        "caBundleRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revokedKeyIds": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenRef": {
+          "type": "string"
+        },
+        "trustBindingId": {
+          "type": "string"
+        },
+        "trustedJwksRef": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "trustBindingId",
+        "tokenRef",
+        "trustedJwksRef"
+      ],
+      "type": "object"
+    },
     "OidcAlgorithm": {
       "enum": [
         "EdDSA",
@@ -826,6 +863,13 @@
         "pattern": "^[a-z][a-z0-9_-]{0,63}$",
         "type": "string"
       },
+      "type": "object"
+    },
+    "evidenceProviders": {
+      "additionalProperties": {
+        "$ref": "#/$defs/EvidenceProviderConfig"
+      },
+      "default": {},
       "type": "object"
     },
     "identity": {

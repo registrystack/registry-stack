@@ -370,6 +370,8 @@ impl CompiledActionInventory {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledAction {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<crate::action_evidence_contracts::CompiledEvidenceCapability>,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handler: Option<CompiledActionHandler>,

@@ -155,8 +155,32 @@ enum Command {
     Webhook(WebhookArgs),
     /// Inspect and erase eligible change-request retention detail.
     RequestRetention(RequestRetentionArgs),
+    /// Erase expired protected action Evidence using configured migration authority.
+    EvidenceRetention(EvidenceRetentionArgs),
     /// Verify, export, and prune the chained audit journal.
     Audit(AuditArgs),
+}
+
+#[derive(Debug, Args)]
+struct EvidenceRetentionArgs {
+    #[command(subcommand)]
+    command: EvidenceRetentionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum EvidenceRetentionCommand {
+    /// Delete expired assertion bytes and verification context; receipts remain replayable.
+    EraseExpired(EvidenceRetentionEraseArgs),
+}
+
+#[derive(Debug, Args)]
+struct EvidenceRetentionEraseArgs {
+    /// Absolute runtime configuration path containing the migration connection binding.
+    #[arg(long)]
+    runtime_config: PathBuf,
+    /// RFC 3339 expiry cutoff, no later than the current time.
+    #[arg(long)]
+    before: String,
 }
 
 #[derive(Debug, Args)]
@@ -263,7 +287,7 @@ struct ProjectPlannerTestArgs {
     #[arg(long, value_name = "JSON_FILE", requires = "action", conflicts_with_all = ["entity", "request"])]
     input: Option<PathBuf>,
 
-    /// With --action and --input, assert exact synthetic effects or a declared refusal without printing values.
+    /// With --action and --input, assert exact effects or refusal and optional ordered evidenceCalls mocks without printing values.
     #[arg(long, value_name = "JSON_FILE", requires = "action", conflicts_with_all = ["entity", "request"])]
     expect: Option<PathBuf>,
 }
@@ -1038,6 +1062,7 @@ enum DiagnosticArtifact {
     WebhookSample,
     WebhookOperations,
     RequestRetentionOperation,
+    EvidenceRetentionOperation,
     AuditJournal,
     HistoryErasure,
     HistoryRebaseline,
@@ -1085,6 +1110,7 @@ enum SuggestedAction {
     SelectWebhookEvent,
     VerifyWebhookOperation,
     VerifyRequestRetentionOperation,
+    VerifyEvidenceRetentionOperation,
     VerifyAuditJournal,
     PrepareHistoryErasureRequest,
     PrepareHistoryRebaselineRequest,
@@ -1753,6 +1779,35 @@ where
                     Ok(report) => write_webhook_replay_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
+            };
+        }
+        Command::EvidenceRetention(args) => {
+            let EvidenceRetentionCommand::EraseExpired(args) = args.command;
+            let outcome = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| ())
+                .and_then(|runtime| {
+                    runtime
+                        .block_on(registry_breg::action_evidence_maintenance::erase_expired(
+                            &args.runtime_config,
+                            &args.before,
+                        ))
+                        .map_err(|_| ())
+                });
+            return match outcome {
+                Ok(erased) => {
+                    let result = if format == OutputFormat::Json {
+                        serde_json::to_writer_pretty(&mut *stdout, &json!({"ok":true,"command":"evidence-retention erase-expired","erased":erased}))
+                            .map_err(io::Error::other).and_then(|()| writeln!(stdout))
+                    } else {
+                        render_report("Erased expired action Evidence.", &[("erased", erased.to_string())], stdout)
+                    };
+                    write_result(result, stderr)
+                }
+                Err(()) => write_failure(&source_failure("evidence-retention erase-expired",
+                    diagnostic("evidence_retention.unavailable", "evidenceRetention", "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff."),
+                    DiagnosticArtifact::EvidenceRetentionOperation, SuggestedAction::VerifyEvidenceRetentionOperation), format, stdout, stderr),
             };
         }
         Command::RequestRetention(args) => {
@@ -5052,7 +5107,51 @@ fn load_project_planner_asset_files(
             })
         }))
         .collect::<BTreeMap<_, _>>();
-    load_planner_asset_files(project_directory, paths)
+    let mut assets = load_planner_asset_files(project_directory, paths)?;
+    for provider in &project.evidence_providers {
+        let location = format!("evidenceProviders[{}].contracts", provider.id);
+        if !registry_breg::action_evidence_contracts::valid_contract_path(&provider.contracts) {
+            return Err(diagnostic(
+                "source.evidence_contract.path_unsafe",
+                &location,
+                "Evidence contracts require normalized project-relative JSON paths",
+            ));
+        }
+        let entry = open_asset_entry(
+            project_directory,
+            &provider.contracts,
+            || {
+                diagnostic(
+                    "source.evidence_contract.path_unsafe",
+                    &location,
+                    "Evidence contracts require normalized project-relative JSON paths",
+                )
+            },
+            |error| {
+                path_diagnostic(
+                    error,
+                    "source.evidence_contract.missing",
+                    &location,
+                    "the required Evidence contract is unavailable",
+                    "Evidence contracts must be regular files without symbolic links",
+                )
+            },
+        )?;
+        let bytes = read_bounded_source_entry(
+            &entry,
+            "source.evidence_contract.missing",
+            &location,
+            registry_breg::action_evidence_contracts::MAX_EVIDENCE_CONTRACT_BYTES as u64,
+        )?;
+        if !assets.iter().any(|asset| asset.path == provider.contracts) {
+            assets.push(CapturedModuleAssetSource {
+                path: provider.contracts.clone(),
+                bytes,
+            });
+        }
+    }
+    assets.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(assets)
 }
 
 /// Read a module's declared assets through the module directory descriptor the
@@ -5198,7 +5297,13 @@ fn load_planner_asset_files(
                     ));
                     diagnostic
                 },
-            )?;
+            )
+            .map_err(|mut error| {
+                error.message.push_str(&format!(
+                    "; referenced Rhai script: {path:?}, relative to its declaring project or module"
+                ));
+                error
+            })?;
             let bytes = read_bounded_source_entry(
                 &entry,
                 "source.planner_asset.missing",
@@ -7022,6 +7127,26 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "reads": "supplied_inputs_only",
                     "replay": "recover_committed_result_without_handler_evaluation",
                 });
+            }
+            if action.handler.as_ref().is_some_and(|handler| handler.abi == registry_breg::contract::ACTION_HANDLER_ABI_V2) {
+                summary["evidence"] = json!({
+                    "capabilities": action.evidence,
+                    "maximumCalls": action.evidence.len(),
+                    "maximumCallsPerCapability": 1,
+                    "maximumConcurrentEvaluations": 8,
+                    "maximumRetainedBytes": 1_048_576,
+                    "maximumResponseBytes": 262_144,
+                    "retentionSeconds": 86_400,
+                    "maximumAssertionLifetimeSeconds": 300,
+                    "clockSkewSeconds": 0,
+                    "maximumObservationAgeSeconds": 300,
+                    "defaultActionDeadlineMilliseconds": 10_000,
+                    "deadline": "bounded_by_operator_http_request_timeout_and_action_timeout",
+                    "invocation": "optional_explicit_helper_calls; omission_makes_no_remote_request",
+                    "disclosure": "remote_requirement_disclosure_is_not_reduced_by_output_selection",
+                    "lifecycle": "outside_postgres; frozen_transcript_reused_for_sql_retries; receipt_replay_has_zero_calls"
+                });
+                summary["handler"]["evaluation"] = json!("outside_postgres_after_admission_and_receipt_preflight");
             }
             if !action.requires.is_empty() {
                 summary["requires"] = json!(action.requires.iter().map(|requirement| {
@@ -9846,6 +9971,45 @@ mod tests {
     }
 
     #[test]
+    fn v2_without_capabilities_explains_external_lifecycle_and_zero_call_ceiling() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/person-registration-rhai");
+        let mut project = registry_breg::contract::parse_project_yaml(
+            &fs::read(root.join("registry.yaml")).unwrap(),
+        )
+        .unwrap();
+        let assets = project
+            .actions
+            .iter_mut()
+            .map(|action| {
+                let handler = action.handler.as_mut().unwrap();
+                handler.abi = registry_breg::contract::ACTION_HANDLER_ABI_V2.to_owned();
+                registry_breg::contract::ModuleAssetSource {
+                    module: None,
+                    path: handler.script.clone(),
+                    bytes: fs::read(root.join(&handler.script)).unwrap(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let compiled = registry_breg::compiler::compile_project_with_assets(
+            &project,
+            &[],
+            &assets,
+            registry_breg::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let explanation = explain_actions(&compiled).unwrap();
+        for action in explanation["actions"].as_array().unwrap() {
+            assert_eq!(action["evidence"]["maximumCalls"], 0);
+            assert_eq!(action["evidence"]["maximumConcurrentEvaluations"], 8);
+            assert_eq!(
+                action["handler"]["evaluation"],
+                "outside_postgres_after_admission_and_receipt_preflight"
+            );
+        }
+    }
+
+    #[test]
     fn change_request_explain_reports_source_free_rhai_contract_and_authority() {
         let compiled = match compile(&planner_acceptance_root(), ProfileArg::Authoring, "explain") {
             Ok(compiled) => compiled,
@@ -10393,6 +10557,7 @@ mod tests {
                 "data",
                 "webhook",
                 "request-retention",
+                "evidence-retention",
                 "audit"
             ]
         );

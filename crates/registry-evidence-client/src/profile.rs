@@ -345,6 +345,16 @@ pub struct ReviewedContracts {
 }
 
 impl ReviewedContracts {
+    /// Validate a reviewed offline contract using the same rules as live publication.
+    pub fn validate(&self) -> Result<(), crate::EvidenceClientError> {
+        if self.schema != crate::EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1 {
+            return Err(profile_error());
+        }
+        self.clone()
+            .into_definitions()
+            .validate_for_progressive_request()
+    }
+
     fn into_definitions(self) -> crate::EvidenceDefinitionsDocument {
         crate::EvidenceDefinitionsDocument {
             schema: crate::EVIDENCE_DEFINITIONS_SCHEMA_V1.to_owned(),

@@ -1031,6 +1031,253 @@ async fn every_registered_problem_is_accepted_exactly_for_a_direct_write() {
     );
 }
 
+#[tokio::test]
+async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata() {
+    let generic = problem_response(BRegProblemCode::MutationConflict);
+    let mut pattern: Value = serde_json::from_slice(&generic.body).unwrap();
+    pattern["detail"] = json!("The field does not conform to its declared storage pattern.");
+    let without_location = pattern.clone();
+    pattern["entityId"] = json!("company");
+    pattern["fieldId"] = json!("registration_number");
+    let response_for = |value: Value| {
+        let mut response = generic.clone();
+        response.body = serde_json::to_vec(&value).unwrap();
+        response
+    };
+    let mut bad = Vec::new();
+    for member in ["entityId", "fieldId"] {
+        let mut absent = pattern.clone();
+        absent.as_object_mut().unwrap().remove(member);
+        bad.push(response_for(absent));
+        for value in [
+            Value::Null,
+            json!(17),
+            json!(""),
+            json!("x".repeat(129)),
+            json!("id\ncanary"),
+        ] {
+            let mut malformed = pattern.clone();
+            malformed[member] = value;
+            bad.push(response_for(malformed));
+        }
+    }
+    for (member, value) in [
+        ("extra", json!("response-canary")),
+        ("detail", json!("response-canary")),
+        ("status", json!(400)),
+        ("fieldPath", json!("/evidence/status")),
+        ("refusalCode", json!("response-canary")),
+        ("traceId", json!("0123456789abcdef0123456789abcdef")),
+    ] {
+        let mut malformed = pattern.clone();
+        malformed[member] = value;
+        bad.push(response_for(malformed));
+    }
+    let evidence = problem_response(BRegProblemCode::ActionEvidenceFailed);
+    let mut misplaced: Value = serde_json::from_slice(&evidence.body).unwrap();
+    misplaced["entityId"] = json!("company");
+    misplaced["fieldId"] = json!("registration_number");
+    bad.push(MockResponse {
+        body: serde_json::to_vec(&misplaced).unwrap(),
+        ..evidence
+    });
+    for member in ["entityId", "fieldId", "detail"] {
+        let mut duplicate = generic.clone();
+        duplicate.body = format!(
+            "{{\"{member}\":\"duplicate-canary\",{}",
+            &pattern.to_string()[1..]
+        )
+        .into_bytes();
+        bad.push(duplicate);
+    }
+    let failures = bad.len();
+    let responses = std::iter::once(metadata_response())
+        .chain([
+            generic.clone(),
+            response_for(without_location),
+            response_for(pattern),
+        ])
+        .chain(bad)
+        .collect();
+    let fixture = test_client(responses).await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    for index in 0..3 + failures {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("pattern-conflict"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("conflict or protocol refusal");
+        if index < 3 {
+            assert_eq!(
+                error.problem_code(),
+                Some(BRegProblemCode::MutationConflict)
+            );
+            assert_eq!(error.status(), Some(409));
+        } else {
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Problem,
+                    ..
+                }
+            ));
+        }
+        assert!(!format!("{error:?}: {error}").contains("canary"));
+    }
+    assert_eq!(
+        fixture.requests.lock().unwrap().len(),
+        1 + 3 + failures,
+        "no retry after a conflict or malformed problem"
+    );
+}
+
+#[tokio::test]
+async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
+    let base = problem_response(BRegProblemCode::ActionEvidenceFailed);
+    let document: Value = serde_json::from_slice(&base.body).unwrap();
+    let response_for = |value: Value| {
+        let mut response = base.clone();
+        response.body = serde_json::to_vec(&value).unwrap();
+        response
+    };
+    let mut accepted = vec![base.clone()];
+    for path in [
+        "/evidence/farmer-status".to_owned(),
+        "/evidence/a".to_owned(),
+        format!("/evidence/{}", "a".repeat(64)),
+        "/evidence/evidence_canary-12".to_owned(),
+    ] {
+        let mut value = document.clone();
+        value["fieldPath"] = json!(path);
+        accepted.push(response_for(value));
+    }
+    let mut refused = Vec::new();
+    for path in [
+        Value::Null,
+        json!(12),
+        json!({}),
+        json!(""),
+        json!("/evidence/"),
+        json!("/input/farmer-status"),
+        json!("evidence/farmer-status"),
+        json!("/evidence/Upper"),
+        json!("/evidence/0status"),
+        json!("/evidence/farmer.status"),
+        json!("/evidence/farmer/status"),
+        json!("/evidence/farmer~1status"),
+        json!("/evidence/farmer%2fstatus"),
+        json!("/evidence/farmer\ncanary"),
+        json!("/evidence/é"),
+        json!(format!("/evidence/{}", "a".repeat(65))),
+    ] {
+        let mut value = document.clone();
+        value["fieldPath"] = path;
+        refused.push(response_for(value));
+    }
+    let mut located = document.clone();
+    located["fieldPath"] = json!("/evidence/evidence-canary");
+    for (member, value) in [
+        ("extra", json!("private-canary")),
+        ("refusalCode", json!("private-canary")),
+        ("entityId", json!("private-canary")),
+        ("detail", json!("private-canary")),
+        ("status", json!(409)),
+        ("traceId", json!("0123456789abcdef0123456789abcdef")),
+    ] {
+        let mut invalid = located.clone();
+        invalid[member] = value;
+        refused.push(response_for(invalid));
+    }
+    let mut paired = located.clone();
+    paired["entityId"] = json!("company");
+    paired["fieldId"] = json!("registration_number");
+    refused.push(response_for(paired));
+    for code in [
+        BRegProblemCode::MutationConflict,
+        BRegProblemCode::ActionHandlerFailed,
+        BRegProblemCode::RequestInvalid,
+    ] {
+        let mut misplaced = problem_response(code);
+        let mut value: Value = serde_json::from_slice(&misplaced.body).unwrap();
+        value["fieldPath"] = json!("/evidence/evidence-canary");
+        misplaced.body = serde_json::to_vec(&value).unwrap();
+        refused.push(misplaced);
+    }
+    let mut duplicate = base.clone();
+    duplicate.body = format!(
+        "{{\"fieldPath\":\"/evidence/duplicate-canary\",{}",
+        &located.to_string()[1..]
+    )
+    .into_bytes();
+    refused.push(duplicate);
+    let accepted_count = accepted.len();
+    let total = accepted_count + refused.len();
+    let fixture = test_client(
+        std::iter::once(metadata_response())
+            .chain(accepted)
+            .chain(refused)
+            .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    for index in 0..total {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("evidence-failure"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("dependency or protocol refusal");
+        if index < accepted_count {
+            assert_eq!(
+                error.problem_code(),
+                Some(BRegProblemCode::ActionEvidenceFailed)
+            );
+            assert_eq!(error.status(), Some(503));
+            assert_eq!(error.trace_id().unwrap().as_str(), TRACE_ID);
+        } else {
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Problem,
+                    ..
+                }
+            ));
+        }
+        let rendered = format!("{error:?}: {error}");
+        assert!(
+            !rendered.contains("canary")
+                && !rendered.contains("/evidence/")
+                && !rendered.contains("farmer-status")
+        );
+    }
+    assert_eq!(
+        fixture.requests.lock().unwrap().len(),
+        1 + total,
+        "dependency and malformed responses are never retried"
+    );
+}
+
 fn problem_response(code: BRegProblemCode) -> MockResponse {
     MockResponse::json(
         StatusCode::from_u16(code.status()).expect("registered status"),
@@ -1060,6 +1307,7 @@ fn problem_title(status: u16) -> &'static str {
         412 => "Precondition Failed",
         415 => "Unsupported Media Type",
         428 => "Precondition Required",
+        500 => "Internal Server Error",
         503 => "Service Unavailable",
         504 => "Gateway Timeout",
         _ => panic!("unregistered problem status"),
@@ -1070,6 +1318,8 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
     use BRegProblemCode as Code;
 
     match code {
+        Code::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
+        Code::ActionHandlerFailed => "The action handler could not produce an accepted result.",
         Code::AuthenticationRefused => "The bearer credential is missing or refused.",
         Code::IdempotencyConflict => "The idempotency key is bound to another request.",
         Code::LookupUnresolved => "The lookup did not resolve exactly one record.",

@@ -1,0 +1,17 @@
+type: object
+additionalProperties: false
+required:
+- total
+properties:
+  total:
+    type: integer
+    minimum: 0
+    maximum: 1000
+  reference:
+    type: string
+    minLength: 1
+    maxLength: 77
+  category:
+    type: string
+    minLength: 1
+    maxLength: 32

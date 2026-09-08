@@ -1,0 +1,6 @@
+id: urn:example:farmer:categories
+version: '1'
+entries:
+  smallholder: smallholder
+allowed_outputs:
+- smallholder

@@ -441,6 +441,8 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let output = writer.text();
+    assert!(!output.contains("pattern-private-entity"));
+    assert!(!output.contains("pattern-private-field"));
     assert_forbidden_values_absent(&output);
     assert!(!output.contains("operational-log-token-canary"));
     assert!(!output.contains("/health"));

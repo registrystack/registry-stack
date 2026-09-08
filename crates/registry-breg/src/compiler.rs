@@ -67,8 +67,8 @@ pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
 /// Maximum canonical event body accepted by the governed webhook transport.
 ///
 /// This intentionally matches the platform event-destination body ceiling.
-/// Keeping it in the pure compiler avoids pulling an HTTP client into the
-/// default no-I/O authoring graph; the runtime integration pins the equality.
+/// The compiler uses this bound without constructing a transport; the runtime
+/// integration pins the equality.
 pub const MAX_WEBHOOK_PAYLOAD_BYTES: u32 = 1_048_576;
 pub const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
 
@@ -104,6 +104,18 @@ pub fn compile_project_with_assets(
 ) -> Result<CompiledRegistry, CompileFailure> {
     let mut diagnostics = Vec::new();
     let mut findings = Vec::new();
+    if modules
+        .iter()
+        .flat_map(|module| &module.actions)
+        .any(|action| !action.evidence.is_empty())
+    {
+        diagnostics.push(Diagnostic::error(
+            "action.evidence.module.unsupported",
+            "modules[].actions[].evidence",
+            "the trial declares Evidence capabilities in project actions",
+        ));
+    }
+
     validate_project_header(project, profile, &mut diagnostics, &mut findings);
     let module_closure = validate_module_locks(
         project,
@@ -156,9 +168,11 @@ pub fn compile_project_with_assets(
         &mut entities,
     )
     .map_err(CompileFailure::from_errors)?;
-    let action_inventory =
+    let mut action_inventory =
         compile_immediate_actions(&action_sources, &entities, &project.access_profiles, assets)
             .map_err(CompileFailure::from_errors)?;
+    crate::action_evidence_contracts::compile_evidence(project, assets, &mut action_inventory)
+        .map_err(CompileFailure::from_errors)?;
     findings.extend(crate::access::compiled_access_findings(
         &entities,
         &action_inventory,
@@ -4086,14 +4100,16 @@ fn asset_map<'a>(
     let mut map = BTreeMap::new();
     for asset in assets {
         if asset.module.as_deref().is_some_and(str::is_empty)
-            || !valid_relative_asset_path(&asset.path)
+            || !(valid_relative_asset_path(&asset.path)
+                || (asset.module.is_none()
+                    && crate::action_evidence_contracts::valid_contract_path(&asset.path)))
             || asset.bytes.is_empty()
             || asset.bytes.len() > usize::try_from(MAX_STRUCTURED_VALUE_BYTES).unwrap_or(usize::MAX)
         {
             errors.push(Diagnostic::error(
                 "module.asset.invalid",
                 "modules[].assets[]",
-                "module assets must be bounded relative SQL or Rhai files",
+                "assets must be bounded relative SQL, Rhai, or project Evidence contract files",
             ));
             continue;
         }

@@ -18,7 +18,7 @@ Test a Rhai request planner or action handler with bounded synthetic JSON.
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.27.0` and catalog SHA-256 `13485183c185048921d435869a50854f9a3cff2aeeee82dfb0bfd7c8bfad2207`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.27.0` and catalog SHA-256 `f63b20e786a454125b7b2a6f00594de0a76e811e76bf1931b85fcaa1f4acf535`. Hidden implementation commands are omitted.
 
 ## Usage
 
@@ -57,7 +57,7 @@ bregctl project planner-test [OPTIONS] <--entity <ENTITY>|--action <ACTION>> <PR
 | `--request <JSON_FILE>` | No | n/a | n/a | n/a | Bounded strict JSON object containing synthetic request fields; requires --entity. A symbolic link at any component of this path is refused. |
 | `--action <ACTION>` | No | n/a | n/a | n/a | Compiled immediate action whose Rhai handler will run; pair with --input |
 | `--input <JSON_FILE>` | No | n/a | n/a | n/a | Bounded strict JSON object using authored action input IDs, without an HTTP envelope; requires --action. A symbolic link at any component of this path is refused. |
-| `--expect <JSON_FILE>` | No | n/a | n/a | n/a | With --action and --input, assert exact synthetic effects or a declared refusal without printing values. A symbolic link at any component of this path is refused. |
+| `--expect <JSON_FILE>` | No | n/a | n/a | n/a | With --action and --input, assert exact effects or refusal and optional ordered evidenceCalls mocks without printing values. A symbolic link at any component of this path is refused. |
 | `--format <FORMAT>` | No | `human` | `human`, `json` | n/a | Emit the selected command's report in this format |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 

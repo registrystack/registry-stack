@@ -1,0 +1,11 @@
+{
+  "evidenceCalls": [],
+  "effects": [
+    {
+      "id": "procedure-check",
+      "set": {
+        "checked": true
+      }
+    }
+  ]
+}

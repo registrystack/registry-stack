@@ -1,0 +1,15 @@
+type: object
+additionalProperties: false
+required:
+- requestedFields
+- resultLimit
+- fact
+properties:
+  requestedFields:
+    const:
+    - reference
+    - category
+  resultLimit:
+    const: 2
+  fact:
+    const: category

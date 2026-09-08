@@ -2987,6 +2987,7 @@ mod tests {
         let mut operations = BTreeSet::new();
         operations.insert(Operation::Get);
         let project = RegistryProject {
+            evidence_providers: Vec::new(),
             api_version: crate::compiler::AUTHORING_API_VERSION.to_owned(),
             kind: "RegistryProject".to_owned(),
             registry: crate::contract::RegistryIdentitySource {
