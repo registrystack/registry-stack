@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
 
-fn fixture() -> (tempfile::TempDir, State, Clients, BTreeMap<String, Vec<u8>>) {
+pub(super) fn fixture() -> (tempfile::TempDir, State, Clients, BTreeMap<String, Vec<u8>>) {
     let temporary = tempfile::tempdir().expect("temporary");
     let project = fs::canonicalize(temporary.path()).expect("canonical");
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
@@ -36,6 +36,8 @@ seed: []
         database_port: 55448,
         clients_file: project.join("clients.yaml"),
         source_digest: "a".repeat(64),
+        sequence: 1,
+        baseline_runtime: None,
         instance_id: "generic-local".into(),
         source_revision: "local".into(),
         container_id: None,
@@ -653,6 +655,8 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         database_port: 55448,
         clients_file: project.join("dev-clients.yaml"),
         source_digest: captured.digest,
+        sequence: 1,
+        baseline_runtime: None,
         instance_id: captured.instance_id,
         source_revision: captured.source_revision,
         container_id,
@@ -793,4 +797,272 @@ fn the_private_directory_is_ignored_by_version_control() {
     fs::write(&ignore, "dev/\n").unwrap();
     parent_directory(&project).unwrap();
     assert_eq!(fs::read(&ignore).unwrap(), b"dev/\n");
+}
+
+fn export_args(state: &State) -> export_client::ExportClientArgs {
+    export_client::ExportClientArgs {
+        project: state.project.clone(),
+        client: "source".into(),
+        client_id_file: state.project.join("export-id"),
+        assertion_key_file: state.project.join("export-key"),
+    }
+}
+
+#[test]
+fn export_client_copies_a_stopped_retained_pair_and_retries_without_state_changes() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let before = fs::read(state.root().join("state.json")).unwrap();
+    let registrations = fs::read(state.root().join("mint/clients/source.yaml")).unwrap();
+    let retained_clients = fs::read(state.root().join("clients.json")).unwrap();
+    // Authored input is deliberately absent: only the retained session is used.
+    let report = export_client::run(export_args(&state)).unwrap();
+    assert_eq!(report["client"], "source");
+    assert_eq!(report["accessProfiles"], json!(["evidence-source"]));
+    let id = fs::read(state.root().join("credentials/source/client-id")).unwrap();
+    let key = fs::read(state.root().join("credentials/source/assertion-key.jwk")).unwrap();
+    assert_eq!(fs::read(&export_args(&state).client_id_file).unwrap(), id);
+    assert_eq!(
+        fs::read(&export_args(&state).assertion_key_file).unwrap(),
+        key
+    );
+    assert!(!report.to_string().contains("\"d\""));
+    export_client::run(export_args(&state)).expect("identical re-export");
+    fs::remove_file(export_args(&state).assertion_key_file).unwrap();
+    export_client::run(export_args(&state)).expect("retry a partially published pair");
+    assert_eq!(fs::read(state.root().join("state.json")).unwrap(), before);
+    assert_eq!(
+        fs::read(state.root().join("clients.json")).unwrap(),
+        retained_clients
+    );
+    assert_eq!(
+        fs::read(state.root().join("mint/clients/source.yaml")).unwrap(),
+        registrations
+    );
+    assert_eq!(
+        fs::read(&export_args(&state).assertion_key_file).unwrap(),
+        key
+    );
+    private::check(&export_args(&state).client_id_file, false).unwrap();
+    private::check(&export_args(&state).assertion_key_file, false).unwrap();
+}
+
+#[test]
+fn export_client_refuses_missing_session_client_and_incomplete_credentials_before_output() {
+    let (_temp, state, clients, files) = fixture();
+    assert!(export_client::run(export_args(&state))
+        .unwrap_err()
+        .to_string()
+        .contains("no retained"));
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let mut args = export_args(&state);
+    args.client = "absent".into();
+    assert!(export_client::run(args)
+        .unwrap_err()
+        .to_string()
+        .contains("absent"));
+    private::replace(
+        &state.root().join("credentials/source/assertion-key.jwk"),
+        b"SECRET-CANARY",
+    )
+    .unwrap();
+    let error = export_client::run(export_args(&state)).unwrap_err();
+    assert!(!format!("{error:#}").contains("SECRET-CANARY"));
+    assert!(!export_args(&state).client_id_file.exists());
+    fs::remove_file(state.root().join("credentials/source/assertion-key.jwk")).unwrap();
+    assert!(export_client::run(export_args(&state)).is_err());
+    assert!(!export_args(&state).client_id_file.exists());
+}
+
+#[test]
+fn export_client_preflights_both_outputs_and_preserves_conflicts() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    private::create(&export_args(&state).assertion_key_file, b"SECRET-CANARY").unwrap();
+    let error = export_client::run(export_args(&state)).unwrap_err();
+    assert!(error.to_string().contains("fresh output paths"));
+    assert!(!format!("{error:#}").contains("SECRET-CANARY"));
+    assert!(!export_args(&state).client_id_file.exists());
+    assert_eq!(
+        fs::read(export_args(&state).assertion_key_file).unwrap(),
+        b"SECRET-CANARY"
+    );
+    let mut args = export_args(&state);
+    args.assertion_key_file = args.client_id_file.clone();
+    assert!(export_client::run(args)
+        .unwrap_err()
+        .to_string()
+        .contains("distinct"));
+}
+
+#[test]
+fn export_client_refuses_unsafe_destinations_and_source_links() {
+    use std::os::unix::fs::symlink;
+    for kind in [
+        "symlink",
+        "hardlink",
+        "public-file",
+        "directory",
+        "public-parent",
+        "source-link",
+    ] {
+        let (_temp, state, clients, files) = fixture();
+        initialize(&state.root(), &state, &clients, &files).unwrap();
+        let args = export_args(&state);
+        let source = state.root().join("credentials/source/assertion-key.jwk");
+        match kind {
+            "symlink" => symlink(&source, &args.assertion_key_file).unwrap(),
+            "hardlink" => fs::hard_link(&source, &args.assertion_key_file).unwrap(),
+            "public-file" => {
+                fs::write(&args.assertion_key_file, fs::read(&source).unwrap()).unwrap();
+                fs::set_permissions(&args.assertion_key_file, fs::Permissions::from_mode(0o644))
+                    .unwrap();
+            }
+            "directory" => fs::create_dir(&args.assertion_key_file).unwrap(),
+            "public-parent" => {
+                fs::set_permissions(&state.project, fs::Permissions::from_mode(0o755)).unwrap()
+            }
+            "source-link" => {
+                fs::remove_file(&source).unwrap();
+                symlink("public.jwk", &source).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(export_client::run(args).is_err(), "{kind}");
+        assert!(!export_args(&state).client_id_file.exists(), "{kind}");
+    }
+}
+
+#[test]
+fn plain_init_source_client_has_only_the_explicit_lookup_profile_and_a_distinct_key() {
+    let (_temp, mut state, _, files) = fixture();
+    let clients = config::clients(crate::INIT_DEV_CLIENTS).unwrap();
+    let source = clients
+        .clients
+        .iter()
+        .find(|client| client.id == "source")
+        .unwrap();
+    assert_eq!(source.access_profiles, ["evidence-source"]);
+    assert_eq!(source.scopes, ["registry:evidence:lookup"]);
+    assert_eq!(source.claims["registry_purpose"], "evidence-source-read");
+    assert_eq!(
+        source.claims["registry_principal"],
+        "generic-registry-source"
+    );
+    assert!(source.client_id_file.is_none() && source.assertion_key_file.is_none());
+    state.status = Status::Stopped;
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let key = fs::read(state.root().join("credentials/source/assertion-key.jwk")).unwrap();
+    for other in ["operator", "reader", "issuer"] {
+        assert_ne!(
+            key,
+            fs::read(
+                state
+                    .root()
+                    .join(format!("credentials/{other}/assertion-key.jwk"))
+            )
+            .unwrap()
+        );
+    }
+}
+
+#[test]
+fn export_client_reuses_readable_nonexecutable_credentials_only() {
+    for mode in [0o400, 0o600, 0o700] {
+        let (_temp, state, clients, files) = fixture();
+        initialize(&state.root(), &state, &clients, &files).unwrap();
+        let args = export_args(&state);
+        let key = fs::read(state.root().join("credentials/source/assertion-key.jwk")).unwrap();
+        private::create(&args.assertion_key_file, &key).unwrap();
+        fs::set_permissions(&args.assertion_key_file, fs::Permissions::from_mode(mode)).unwrap();
+        let result = export_client::run(args);
+        if mode == 0o700 {
+            assert!(
+                result.is_err(),
+                "executable credential output must be refused"
+            );
+            assert!(!export_args(&state).client_id_file.exists());
+        } else {
+            result.expect("identical readable credential is reusable");
+            assert!(export_args(&state).client_id_file.exists());
+        }
+        assert_eq!(
+            fs::read(export_args(&state).assertion_key_file).unwrap(),
+            key
+        );
+        assert_eq!(
+            fs::metadata(export_args(&state).assertion_key_file)
+                .unwrap()
+                .mode()
+                & 0o7777,
+            mode
+        );
+    }
+}
+
+#[test]
+fn removed_successor_database_is_refused_before_any_prerequisite_or_recreation() {
+    let (_temporary, project) = write_init_project();
+    let mut state = retained_session(&project, Some("a".repeat(64)));
+    state.sequence = 2;
+    state.baseline_runtime = Some(state.root().join("baseline-1/runtime.yaml"));
+    reclaimed(&mut state);
+    state.save().unwrap();
+    let before = private::read(&state.root().join("state.json"), MAX_BYTES).unwrap();
+    let error = start_without_binaries(&project).unwrap_err().to_string();
+    assert!(
+        error.contains("successor database was explicitly removed"),
+        "{error}"
+    );
+    assert_eq!(
+        private::read(&state.root().join("state.json"), MAX_BYTES).unwrap(),
+        before
+    );
+    assert!(read_state(&state.root()).unwrap().container_id.is_none());
+}
+
+#[test]
+fn package_rebuild_accepts_public_native_receipts_and_preserves_the_baseline() {
+    let (_temporary, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let root = state.root();
+    let receipt = root.join("schema-test-receipt.json");
+    fs::write(&receipt, b"{}\n").unwrap();
+    fs::set_permissions(&receipt, fs::Permissions::from_mode(0o644)).unwrap();
+    private::create(&root.join("runtime.yaml"), b"private deployment binding").unwrap();
+    private::directory(&root.join("build")).unwrap();
+    private::directory(&root.join("baseline-1")).unwrap();
+    private::directory(&root.join("baseline-1/build")).unwrap();
+    private::create(&root.join("baseline-1/build/retained"), b"predecessor").unwrap();
+    clear_package_outputs(&root).unwrap();
+    assert!(!receipt.exists());
+    assert!(!root.join("runtime.yaml").exists());
+    assert!(!root.join("build").exists());
+    assert_eq!(
+        fs::read(root.join("baseline-1/build/retained")).unwrap(),
+        b"predecessor"
+    );
+    clear_package_outputs(&root).unwrap();
+}
+
+#[test]
+fn package_rebuild_refuses_linked_receipts_and_public_runtime_bindings() {
+    let (_temporary, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let root = state.root();
+    let other = root.join("unrelated");
+    private::create(&other, b"preserve").unwrap();
+    let receipt = root.join("schema-test-receipt.json");
+    std::os::unix::fs::symlink(&other, &receipt).unwrap();
+    assert!(clear_package_outputs(&root).is_err());
+    assert_eq!(fs::read(&other).unwrap(), b"preserve");
+    fs::remove_file(&receipt).unwrap();
+    fs::hard_link(&other, &receipt).unwrap();
+    assert!(clear_package_outputs(&root).is_err());
+    fs::remove_file(&receipt).unwrap();
+    let runtime = root.join("runtime.yaml");
+    fs::write(&runtime, b"private deployment binding").unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(clear_package_outputs(&root).is_err());
+    assert!(runtime.exists());
 }

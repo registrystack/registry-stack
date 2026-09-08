@@ -1,0 +1,28 @@
+id: record-named
+question: Does the registered organization have a name?
+purpose: record-verification
+subject:
+  role: subject
+  profiles:
+  - breg-8-registry-6-record-7-by-code
+source:
+  ref: registry-name
+answers:
+- concept: named
+  id: urn:example:concept:record-named:named
+  type: boolean
+derivation: derivations/record-named.rhai
+disclosure:
+  allow:
+  - named
+governance:
+  requirement: urn:example:requirement:record-named:v1
+  kind: criterion
+  referenceFrameworks:
+  - urn:example:framework:record-state:v1
+  evidenceType: urn:example:evidence:record-named
+  validitySeconds: 300
+  observationTimezone: UTC
+  fixtures: fixtures/record-named.yaml
+  disclosureFamilies:
+  - urn:example:disclosure-family:record-named

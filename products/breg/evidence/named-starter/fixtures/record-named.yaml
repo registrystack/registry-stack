@@ -1,0 +1,140 @@
+fixture: registry.evidence.reference.breg-record-named/v1
+synthetic_only: true
+common:
+  observed_at: '2026-09-06T00:00:00Z'
+  selectors:
+    subject:
+      profile: breg-8-registry-6-record-7-by-code
+      values:
+        code: SYNTHETIC-ORG-001
+  expectedRequestParts:
+    query:
+    - name: accessProfile
+      value: registry-name
+    - name: $select
+      value: code,name
+    body:
+      selector: by-code
+      values:
+        code: SYNTHETIC-ORG-001
+  expectedTransport:
+    path: /v1/records/records:lookup
+    fixedHeaders:
+    - name: Accept
+      value: application/json
+cases:
+- id: positive
+  response:
+    data:
+      domainData:
+        code: SYNTHETIC-ORG-001
+        name: Synthetic Works
+        label: SYNTHETIC-PRIVATE-LABEL
+  expected:
+    lookup: match
+    derivationRuns: true
+    signed: true
+    facts:
+      name: Synthetic Works
+    value: true
+- id: negative-empty-name
+  response:
+    data:
+      domainData:
+        code: SYNTHETIC-ORG-001
+        name: ''
+  expected:
+    lookup: match
+    derivationRuns: true
+    signed: true
+    facts:
+      name: ''
+    value: false
+- id: boundary-null-name
+  response:
+    data:
+      domainData:
+        code: SYNTHETIC-ORG-001
+        name: null
+  expected:
+    lookup: no_match
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+- id: missing-name
+  response:
+    data:
+      domainData:
+        code: SYNTHETIC-ORG-001
+  expected:
+    lookup: no_match
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+- id: no-match
+  declaredUnresolved: true
+  expected:
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+    sourceRequestCount: 1
+- id: returned-identity-mismatch
+  response:
+    data:
+      domainData:
+        code: SYNTHETIC-WRONG-IDENTITY
+        name: Synthetic Works
+  expected:
+    error: source_protocol_error
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: missing-identity
+  response:
+    data:
+      domainData:
+        name: Synthetic Works
+  expected:
+    error: source_protocol_error
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: wrong-identity-type
+  response:
+    data:
+      domainData:
+        code: 7
+        name: Synthetic Works
+  expected:
+    error: source_protocol_error
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: source-failure
+  sourceFailure: timeout
+  expected:
+    publicProblem: source.unavailable
+    signed: false
+- id: output-gate-refuses-protected-reference
+  derivationMutation: return-raw-reference
+  expected:
+    outputGate: rejected
+    signed: false
+- id: anti-reconstruction
+  bundleMutation: duplicate-disclosure-family
+  expected:
+    bundle: rejected
+privacyExpectation:
+  evidenceContains:
+  - urn:example:concept:record-named:named
+  evidenceExcludes:
+  - breg-8-registry-6-record-7-by-code
+  - SYNTHETIC-ORG-001
+  - SYNTHETIC-WRONG-IDENTITY
+  - SYNTHETIC-PRIVATE-LABEL
+  - Synthetic Works
+  diagnosticsExclude:
+  - SYNTHETIC-ORG-001
+  - SYNTHETIC-WRONG-IDENTITY
+  - SYNTHETIC-PRIVATE-LABEL
+  - Synthetic Works

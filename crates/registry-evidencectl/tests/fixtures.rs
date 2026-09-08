@@ -977,3 +977,68 @@ fn evidence_bin_env_var_is_used_when_the_flag_is_omitted() {
     let invocations = read_argv_log(&argv_log);
     assert_eq!(invocations.len(), 2, "check plus one fixture");
 }
+
+#[test]
+fn local_target_created_before_questions_uses_current_local_caller_governance() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    let created = evidencectl()
+        .args(["new"])
+        .arg(&project)
+        .args(["--transport", "sqlite-extract", "--profile", "local"])
+        .output()
+        .unwrap();
+    assert!(created.status.success(), "{}", stderr_of(&created));
+    fs::rename(project.join("questions"), root.join("questions")).unwrap();
+    let target = project.join("local-target");
+    let created = evidencectl()
+        .args(["target", "new"])
+        .arg(&target)
+        .arg("--project")
+        .arg(&project)
+        .arg("--local")
+        .output()
+        .unwrap();
+    assert!(created.status.success(), "{}", stderr_of(&created));
+    fs::rename(root.join("questions"), project.join("questions")).unwrap();
+    let governance_path = target.join("governance.yaml");
+    let original = fs::read(&governance_path).unwrap();
+    let stub = write_stub_evidence(&root);
+    let argv_log = root.join("argv.log");
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--target")
+        .arg(&target)
+        .arg("--local")
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "13")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert!(stdout_of(&output).contains("13 cases"));
+    assert_eq!(fs::read(&governance_path).unwrap(), original);
+    let mut governance: serde_json::Value = serde_norway::from_slice(&original).unwrap();
+    governance["assuranceProfile"] = serde_json::json!("production");
+    fs::write(
+        &governance_path,
+        serde_norway::to_string(&governance).unwrap(),
+    )
+    .unwrap();
+    let rejected = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--target")
+        .arg(&target)
+        .arg("--local")
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(stderr_of(&rejected).contains("assuranceProfile local"));
+}

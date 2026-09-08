@@ -464,6 +464,12 @@ pub(crate) fn map_authority_claim(
     }
 }
 
+/// Validate the shape and field bounds of one direct scalar row claim.
+/// This authoring preflight grants no authority and performs no authentication.
+pub fn valid_direct_scalar_claim(value: &Value, field_type: &FieldTypeSource) -> bool {
+    mapped_scalar_claim(value, field_type).is_ok()
+}
+
 fn mapped_scalar_claim(
     value: &Value,
     field_type: &FieldTypeSource,

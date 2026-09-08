@@ -80,6 +80,33 @@ pub struct NewArgs {
 }
 
 pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
+    create(args, true)
+}
+
+/// Start source-first authoring through the same staged project and key setup
+/// used by `new`. There is no question until its author supplies its meaning.
+pub(crate) fn create_source_project(directory: &Path) -> Result<()> {
+    let starter = tempfile::tempdir().context("staging the source-first project description")?;
+    write_new_file(
+        &starter.path().join("README.md"),
+        b"# Evidence source project\n\nThis project holds imported source facts and a local connection. Author a question, its derivation, and fixtures under questions/, derivations/, and fixtures/ before building or starting Evidence. Source credentials grant no Evidence caller authority.\n",
+        0o644,
+    )?;
+    create(
+        NewArgs {
+            directory: directory.to_path_buf(),
+            openapi: None,
+            transport: None,
+            starter: Some(starter.path().to_path_buf()),
+            profile: Some(AuthoringProfile::Local),
+            _generate_keys: false,
+        },
+        false,
+    )?;
+    Ok(())
+}
+
+fn create(args: NewArgs, report: bool) -> anyhow::Result<ExitCode> {
     let source = match (args.openapi.as_deref(), args.transport, args.starter.as_deref()) {
         (Some(openapi), None, None) => AuthoringSource::OpenApi(openapi),
         (None, Some(AuthoringTransport::SqliteExtract), None) => AuthoringSource::SqliteExtract,
@@ -187,6 +214,9 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         .with_context(|| format!("setting permissions on {}", staged_root.display()))?;
     publish(staging, &args.directory)?;
 
+    if !report {
+        return Ok(ExitCode::SUCCESS);
+    }
     println!(
         "Created an editable {} authoring project in {}",
         source.label(),

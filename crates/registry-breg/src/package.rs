@@ -46,8 +46,7 @@ use crate::migration_plan::{
 };
 use crate::model::{
     CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
-    CompiledQueryKind, CompiledQueryOperation, CompiledQueryTemporalValueKind,
-    CompiledRouteInventory,
+    CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRouteInventory,
 };
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
@@ -1772,10 +1771,11 @@ fn query_changed_by_access_grant_delta(
             let Some(after_entity) = candidate.entities.get(&before.entity_id) else {
                 return false;
             };
+            let Some(operation) = query_governing_operation(previous, before) else {
+                return false;
+            };
             match after_entity.access_profiles.get(&before.profile_id) {
-                Some(after_profile) => !after_profile
-                    .operations
-                    .contains(&query_governing_operation(before.kind)),
+                Some(after_profile) => !after_profile.operations.contains(&operation),
                 None => true,
             }
         }
@@ -1786,19 +1786,17 @@ fn query_changed_by_access_grant_delta(
             let Some(after_profile) = after_entity.access_profiles.get(&after.profile_id) else {
                 return false;
             };
-            if !after_profile
-                .operations
-                .contains(&query_governing_operation(after.kind))
-            {
+            let Some(operation) = query_governing_operation(candidate, after) else {
+                return false;
+            };
+            if !after_profile.operations.contains(&operation) {
                 return false;
             }
             let Some(before_entity) = previous.entities.get(&after.entity_id) else {
                 return false;
             };
             match before_entity.access_profiles.get(&after.profile_id) {
-                Some(before_profile) => !before_profile
-                    .operations
-                    .contains(&query_governing_operation(after.kind)),
+                Some(before_profile) => !before_profile.operations.contains(&operation),
                 None => true,
             }
         }
@@ -1806,13 +1804,18 @@ fn query_changed_by_access_grant_delta(
     }
 }
 
-fn query_governing_operation(kind: CompiledQueryKind) -> Operation {
-    match kind {
-        CompiledQueryKind::List | CompiledQueryKind::Current | CompiledQueryKind::AsOf => {
-            Operation::List
-        }
-        CompiledQueryKind::Snapshot => Operation::Snapshot,
-    }
+fn query_governing_operation(
+    baseline: &CompiledRegistryMigrationBaseline,
+    query: &CompiledQueryOperation,
+) -> Option<Operation> {
+    // Lookup queries share the bounded List execution kind. The compiled
+    // route, not that execution shape, identifies the authority they require.
+    baseline
+        .routes
+        .routes
+        .iter()
+        .find(|route| route.id == query.route_id && route.entity_id == query.entity_id)
+        .map(|route| route.operation)
 }
 
 fn additive_migration_plan(

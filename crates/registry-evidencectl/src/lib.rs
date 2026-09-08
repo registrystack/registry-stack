@@ -20,6 +20,7 @@ mod jwks;
 mod keygen;
 mod request;
 mod scaffold;
+mod source_add;
 mod source_cli;
 mod source_import;
 mod source_mock;
@@ -310,10 +311,28 @@ mod tests {
             .filter(|(_, argument)| !argument.is_hide_set())
             .collect();
         assert_eq!(
-            documented.len(),
-            13,
-            "every documented --project must be covered by this rule: {:?}",
-            documented.iter().map(|(path, _)| path).collect::<Vec<_>>()
+            documented
+                .iter()
+                .map(|(path, _)| path.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "evidencectl build",
+                "evidencectl fixtures run",
+                "evidencectl source add",
+                "evidencectl source suggest",
+                "evidencectl source mock serve",
+                "evidencectl source mock generate",
+                "evidencectl source mock check",
+                "evidencectl source diff",
+                "evidencectl source import",
+                "evidencectl source update",
+                "evidencectl source detach",
+                "evidencectl target new",
+                "evidencectl target explain",
+                "evidencectl doctor",
+                "evidencectl tooling editor",
+            ]),
+            "every documented --project must be covered by this rule"
         );
 
         for (path, argument) in &projects {
@@ -367,10 +386,12 @@ mod tests {
                 "--output",
                 "candidate",
             ],
+            vec!["evidencectl", "source", "add", "registry"],
             vec!["evidencectl", "source", "diff", "exports/registry"],
             vec!["evidencectl", "source", "import", "exports/registry"],
             vec!["evidencectl", "source", "update", "exports/registry"],
             vec!["evidencectl", "source", "detach", "registry"],
+            vec!["evidencectl", "target", "new", "targets/local", "--local"],
             vec!["evidencectl", "tooling", "editor"],
         ] {
             assert!(
@@ -378,6 +399,35 @@ mod tests {
                 "{arguments:?} must work from inside the project directory"
             );
         }
+    }
+
+    #[test]
+    fn target_project_context_is_optional_and_only_used_for_local_creation() {
+        for (options, local) in [
+            (vec!["--local"], true),
+            (vec!["--settings", "settings.yaml"], false),
+        ] {
+            let mut arguments = vec!["evidencectl", "target", "new", "target"];
+            arguments.extend(options);
+            let cli = Cli::try_parse_from(arguments).expect("project context is optional");
+            let Command::Target(target::TargetCommand::New(args)) = cli.command else {
+                panic!("target new parsed");
+            };
+            assert_eq!(args.local, local);
+            assert!(args.project.is_none());
+            assert_eq!(args.settings.is_some(), !local);
+        }
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "target",
+            "new",
+            "target",
+            "--settings",
+            "settings.yaml",
+            "--project",
+            ".",
+        ])
+        .is_err());
     }
 
     #[test]

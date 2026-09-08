@@ -139,6 +139,18 @@ fn selector_schema(kind: &FieldTypeSource) -> Result<(Value, u64), Diagnostic> {
     }
 }
 
+/// Whether a compiled field type fits the canonical Evidence fact schema.
+/// Authoring tools use this to offer choices before exporting an exact source.
+pub fn supports_scalar_fact(kind: &FieldTypeSource) -> bool {
+    scalar_schema(kind).is_ok()
+}
+
+/// Whether a compiled field type fits the canonical Evidence selector schema.
+/// Exact source export still validates identity grants, names and total bounds.
+pub fn supports_selector_field(kind: &FieldTypeSource) -> bool {
+    selector_schema(kind).is_ok()
+}
+
 fn object(properties: Map<String, Value>, required: Vec<String>) -> Value {
     json!({"type":"object","additionalProperties":false,"required":required,"properties":properties})
 }
@@ -252,9 +264,21 @@ pub fn export_evidence_source(
             selector_id.len(),
             selector_id
         );
-        if !local_name(&profile) {
-            return Err(refusal("selectors","the connection/entity/selector names produce a profile longer than 64 bytes; use shorter stable technical names or a custom adapter"));
+        if !profile.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        }) {
+            return Err(refusal(
+                "selectors",
+                "selector profile names require lowercase technical identifiers",
+            ));
         }
+        // The existing length-framed spelling is an unambiguous digest input.
+        // Keep short published names stable and bound only oversized names.
+        let profile = if profile.len() > 64 {
+            format!("breg-{}", &digest(profile.as_bytes())[..59])
+        } else {
+            profile
+        };
         let mut selector_fields = Map::new();
         let mut maximum = 0_u64;
         let mut body_fields = Vec::new();

@@ -7,6 +7,8 @@
 
 mod config;
 pub mod examples;
+mod export_client;
+mod prepare_source;
 mod private;
 #[cfg(test)]
 mod tests;
@@ -79,6 +81,10 @@ enum DevAction {
     Start(StartArgs),
     /// Stop only this project's supervised services, preserving its database.
     Stop(StopArgs),
+    /// Copy an explicitly selected retained local client credential pair.
+    ExportClient(export_client::ExportClientArgs),
+    /// Review or prepare a bounded lookup successor for a stopped retained registry.
+    PrepareSource(Box<prepare_source::PrepareSourceArgs>),
 }
 
 #[derive(Debug, Args)]
@@ -143,6 +149,8 @@ struct State {
     database_port: u16,
     clients_file: PathBuf,
     source_digest: String,
+    sequence: u64,
+    baseline_runtime: Option<PathBuf>,
     instance_id: String,
     source_revision: String,
     container_id: Option<String>,
@@ -233,7 +241,7 @@ impl State {
             json!({"ok":true,"command":"dev","status":self.status,"project":self.project,
             "stateFile":self.root().join("state.json"),"runtimeConfig":self.root().join("runtime.yaml"),
             "bregUrl":self.breg_origin(),"tokenEndpoint":format!("{}/token",self.mint_origin()),
-            "audience":self.audience(),"packageRevision":self.package_revision,
+            "audience":self.audience(),"packageRevision":self.package_revision,"packageSequence":self.sequence,"activationPending":!self.activated,
             "clients":clients.clients.iter().map(|client|json!({"id":client.id,"accessProfiles":client.access_profiles,
                 "clientIdFile":client.client_id_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("client-id")),
                 "assertionKeyFile":client.assertion_key_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("assertion-key.jwk"))})).collect::<Vec<_>>()}),
@@ -245,6 +253,8 @@ pub fn run(args: DevArgs) -> Result<Value> {
     match args.action {
         Some(DevAction::Stop(args)) => stop(&args.project, args.remove, args.docker_bin.as_deref()),
         Some(DevAction::Start(args)) => start(args),
+        Some(DevAction::ExportClient(args)) => export_client::run(args),
+        Some(DevAction::PrepareSource(args)) => prepare_source::run(*args),
         None => start(args.start),
     }
 }
@@ -297,6 +307,12 @@ fn read_state(root: &Path) -> Result<State> {
             anyhow::anyhow!("retained dev state is invalid; preserve it for inspection")
         })?;
     if state.version != 1
+        || state.sequence == 0
+        || state.baseline_runtime
+            != (state.sequence > 1).then(|| {
+                root.join(format!("baseline-{}", state.sequence - 1))
+                    .join("runtime.yaml")
+            })
         || state.root() != root
         || uuid::Uuid::parse_str(&state.owner).is_err()
         || state
@@ -382,8 +398,8 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
     let identity = compiled
         .package()
         .context("local development requires an authored package identity")?;
-    if identity.environment != "local" || identity.sequence != 1 {
-        bail!("dev initializes only package.environment: local and package.sequence: 1; edit the teaching project explicitly before first start");
+    if identity.environment != "local" {
+        bail!("dev requires package.environment: local");
     }
     let mut files = BTreeMap::from([("registry.yaml".into(), source.project_bytes)]);
     for asset in source.project_assets {
@@ -428,6 +444,7 @@ fn start(args: StartArgs) -> Result<Value> {
     let _lock = private::lock(&parent.join("dev.lock"))?;
     let root = parent.join("dev");
     let existing = if root.exists() {
+        prepare_source::recover(&root)?;
         Some(read_state(&root)?)
     } else {
         None
@@ -476,6 +493,11 @@ fn start(args: StartArgs) -> Result<Value> {
         let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
         state
     } else {
+        let compiled = crate::compile(&project, crate::ProfileArg::Production, "dev")
+            .map_err(|_| anyhow::anyhow!("project no longer compiles"))?;
+        if compiled.package().context("package missing")?.sequence != 1 {
+            bail!("first dev start requires package.sequence: 1");
+        }
         let previous = previous.as_ref();
         let state = State {
             version: 1,
@@ -496,6 +518,8 @@ fn start(args: StartArgs) -> Result<Value> {
                 .unwrap_or(55432),
             clients_file,
             source_digest: digest,
+            sequence: 1,
+            baseline_runtime: None,
             instance_id,
             source_revision,
             container_id: None,
@@ -514,6 +538,9 @@ fn start(args: StartArgs) -> Result<Value> {
         initialize(&root, &state, &clients, &files)?;
         read_state(&root)?
     };
+    if state.sequence > 1 && state.container_id.is_none() {
+        bail!("the retained successor database was explicitly removed; a successor package cannot initialize empty records. Create a fresh project with package.sequence: 1 before starting a new database");
+    }
     verify_outputs(&state)?;
     let breg = executable("breg", args.breg_bin.as_deref())?;
     let mint = executable("mint", args.mint_bin.as_deref())?;
@@ -910,10 +937,17 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
                 apply
                     .arg("apply")
                     .arg("--runtime-config")
-                    .arg(root.join("runtime.yaml"))
+                    .arg(
+                        state
+                            .baseline_runtime
+                            .clone()
+                            .unwrap_or_else(|| root.join("runtime.yaml")),
+                    )
                     .arg("--package")
-                    .arg(root.join("build/package"))
-                    .arg("--initial");
+                    .arg(root.join("build/package"));
+                if state.sequence == 1 {
+                    apply.arg("--initial");
+                }
                 command(&mut apply, &root, "apply", None)?;
             }
             state.activated = true;
@@ -1778,19 +1812,7 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         &root.join("schema-test-credentials.yaml"),
         serde_norway::to_string(&credentials)?.as_bytes(),
     )?;
-    // Failed, unpublished build/receipt paths belong solely to this journal.
-    for path in [
-        root.join("schema-test-receipt.json"),
-        root.join("runtime.yaml"),
-    ] {
-        if path.exists() {
-            private::check(&path, false)?;
-            fs::remove_file(path)?;
-        }
-    }
-    if root.join("build").exists() {
-        fs::remove_dir_all(root.join("build"))?;
-    }
+    clear_package_outputs(&root)?;
     let mut test = ctl(state);
     test.arg("test")
         .arg(root.join("project"))
@@ -1802,6 +1824,9 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         .arg(DATABASE_ID)
         .arg("--output")
         .arg(root.join("schema-test-receipt.json"));
+    if let Some(baseline) = &state.baseline_runtime {
+        test.arg("--baseline-runtime-config").arg(baseline);
+    }
     let report: Value = serde_json::from_slice(&command(&mut test, &root, "schema-test", None)?)?;
     let fingerprint = report["schemaFingerprint"]
         .as_str()
@@ -1818,6 +1843,9 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         .arg(root.join("schema-test-receipt.json"))
         .arg("--output")
         .arg(root.join("build"));
+    if let Some(baseline) = &state.baseline_runtime {
+        package.arg("--baseline-runtime-config").arg(baseline);
+    }
     let report: Value = serde_json::from_slice(&command(&mut package, &root, "package", None)?)?;
     let revision = report["packageRevision"]
         .as_str()
@@ -1825,6 +1853,38 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     config::runtime(&root, state, clients, revision, false)?;
     state.package_revision = Some(revision.into());
     state.save()
+}
+
+/// Clear only this journal's rebuild outputs, preserving predecessor packages.
+/// The native schema-test receipt is a value-free public compiler artifact;
+/// runtime configuration remains an owner-only deployment binding.
+fn clear_package_outputs(root: &Path) -> Result<()> {
+    private::check(root, true)?;
+    let receipt = root.join("schema-test-receipt.json");
+    match fs::symlink_metadata(&receipt) {
+        Ok(metadata) => {
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.uid() != rustix::process::geteuid().as_raw()
+            {
+                bail!(
+                    "schema-test receipt must be an ordinary owned single-link compiler artifact"
+                );
+            }
+            fs::remove_file(receipt)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error.into()),
+    }
+    let runtime = root.join("runtime.yaml");
+    if runtime.exists() {
+        private::check(&runtime, false)?;
+        fs::remove_file(runtime)?;
+    }
+    if root.join("build").exists() {
+        fs::remove_dir_all(root.join("build"))?;
+    }
+    Ok(())
 }
 
 fn http(

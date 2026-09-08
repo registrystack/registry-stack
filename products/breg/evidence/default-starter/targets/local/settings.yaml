@@ -1,0 +1,103 @@
+# Synthetic loopback deployment only. Review the fixed authority and connection.
+# Set the absolute runtime paths. target new --signing-public-key binds the generated public key.
+formatVersion: 1
+governance:
+  version: 1
+  assuranceProfile: local
+  service:
+    providerId: urn:example:provider:record-evidence
+    trustDomain: urn:example:trust:record-evidence
+    publicOrigin: http://127.0.0.1:8080
+  issuer:
+    id: urn:example:issuer:record-evidence
+  authentication:
+    kind: oidc-access-token
+    issuer: http://127.0.0.1:8082
+    audiences:
+    - urn:example:audience:record-evidence
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - ES256
+    jwksUri: http://127.0.0.1:8082/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    grantIdClaim: evidence_grant_id
+    grantAuthorityClaim: evidence_authority
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
+  audit:
+    format: keyed-jsonl
+    hashSecretRef: secret:file/audit-hmac-key
+    hashKeyVersion: 1
+    failClosed: true
+  subjectBinding:
+    secretRef: secret:file/subject-binding-hmac-key
+    keyVersion: 1
+  rateLimits:
+    requestsPerPrincipalPerMinute: 60
+    burstPerPrincipal: 10
+    failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+  signing:
+    format: flattened-jws-json
+    algorithm: ES256
+    publishedPublicJwkFiles: []
+    revokedKeyIds: []
+    jwksPath: /.well-known/evidence/jwks.json
+    maximumAssertionValiditySeconds: 300
+    verifierClockSkewSeconds: 30
+  responseFormats:
+  - signed-jws
+  sourceConnections:
+    registry:
+      baseUrl: http://127.0.0.1:8090
+      authentication:
+        kind: oauth2-client-credentials
+        tokenEndpoint: http://127.0.0.1:8091/token
+        clientIdRef: secret:file/registry-client-id
+        clientAssertionKeyRef: secret:file/registry-client-key
+        maximumCacheSeconds: 60
+      concurrencyLimit: 4
+      admissionTimeoutMilliseconds: 5000
+      tokenTimeoutMilliseconds: 5000
+  authorityProfiles:
+    record-verifier:
+      kind: explicit-request
+      requesterTags:
+      - record-verifier
+      grants:
+      - requirement: urn:example:requirement:record-active:v1
+        purpose: record-verification
+        audienceFrom: authenticated-requester
+        responseFormats:
+        - signed-jws
+        subjects:
+        - role: subject
+          selectorProfile: breg-8-registry-6-record-7-by-code
+          valueOrigin: request
+runtime:
+  version: 1
+  bundleDirectory: /absolute/path/to/candidate/bundle
+  listener:
+    bindHost: 127.0.0.1
+    port: 8080
+    tlsTermination: operator-controlled-upstream
+    trustProxyIdentityHeaders: false
+    maximumRequestBytes: 65536
+    maximumConcurrentRequests: 64
+    requestTimeoutMilliseconds: 10000
+    shutdownGraceMilliseconds: 30000
+  secretProviders:
+    file:
+      root: /absolute/path/to/evidence/secrets
+  signer:
+    kind: local-jwk
+    privateKeyRef: secret:file/signing-p256-private-jwk
+  auditStorage:
+    path: /absolute/path/to/evidence/audit/evidence.jsonl
+    maximumFileBytes: 1073741824
+  outboundTls:
+    systemRoots: true
+    trustProfiles: {}
+publicKeys: {}

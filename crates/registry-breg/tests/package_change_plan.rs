@@ -2469,3 +2469,42 @@ fn disagreeing_environment_identity_keys_refuse_the_package_and_name_both_values
         ]
     );
 }
+
+#[test]
+fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
+    let fixture = include_bytes!("../../../products/breg/evidence/registry/registry.yaml");
+    let mut source: serde_json::Value = serde_norway::from_slice(fixture).unwrap();
+    source["entities"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("selectorProfiles");
+    source["accessProfiles"].as_array_mut().unwrap().truncate(1);
+    let compile = |source: &serde_json::Value| {
+        let project = parse_project_yaml(&serde_json::to_vec(source).unwrap()).unwrap();
+        compile_project(&project, &[], CompileProfile::Production).unwrap()
+    };
+    let previous = compile(&source);
+    source["package"]["sequence"] = serde_json::json!(2);
+    source["entities"][0]["selectorProfiles"] =
+        serde_json::json!([{"id":"by-code","fields":["code"]}]);
+    source["accessProfiles"].as_array_mut().unwrap().push(serde_json::json!({
+        "id":"source","principalClaim":"registry_principal","requiredScopes":["registry:source:lookup"],
+        "grants":[{"entity":"record","operations":["lookup"],"readableFields":["code","status"],
+            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":[]}]}));
+    let candidate = compile(&source);
+    let changes = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    let plan = change_set_to_applicable_migration_plan(&changes)
+        .expect("lookup-only authority is a policy successor");
+    assert!(plan.statements.is_empty());
+    assert!(changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
+    // Changing an existing query projection does not become a grant addition.
+    source["package"]["sequence"] = serde_json::json!(3);
+    source["accessProfiles"][1]["grants"][0]["readableFields"] =
+        serde_json::json!(["code", "status", "label"]);
+    let widened = compile(&source);
+    let changes = compiled_registry_change_set(&candidate, &widened, PRIOR_REVISION);
+    assert!(change_set_to_applicable_migration_plan(&changes).is_err());
+}

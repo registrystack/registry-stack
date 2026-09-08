@@ -2989,6 +2989,20 @@ fn render_governance_parts(
     (grants, requirement_value)
 }
 
+/// Local target baseline for source-first authoring. Actual local grants are
+/// compiled from authored questions and access policies by `dev`.
+pub(crate) fn local_target_governance(project: &Path) -> Result<Value> {
+    let (key, _) = local_signing_public_jwk(project)?;
+    let mut governance = render_local_bundle(&[], &[], LocalServicePorts::new(8080, 8081)?, &key)?;
+    let object = governance
+        .as_object_mut()
+        .expect("local bundle is a mapping");
+    for name in ["selectorProfiles", "sources", "requirements"] {
+        object.remove(name);
+    }
+    Ok(governance)
+}
+
 fn render_local_bundle(
     questions: &[QuestionPlan],
     access_policies: &[AuthoredAccessPolicy],
