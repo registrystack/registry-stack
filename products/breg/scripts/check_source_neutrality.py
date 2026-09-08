@@ -88,6 +88,9 @@ FORBIDDEN_RUST_TYPE_IDENTIFIERS = (
     "Filing",
     "OfficerAppointment",
 )
+# Membership is a configured authorization primitive. Concrete fixture names
+# such as group-membership remain forbidden above; the generic term is not a
+# signal of domain-specific production behavior.
 FORBIDDEN_DOMAIN_COMPONENTS = (
     "site",
     "sites",
@@ -99,8 +102,6 @@ FORBIDDEN_DOMAIN_COMPONENTS = (
     "persons",
     "household",
     "households",
-    "membership",
-    "memberships",
     "assessment",
     "assessments",
     "observation",

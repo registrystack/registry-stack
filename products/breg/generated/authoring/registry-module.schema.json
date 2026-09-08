@@ -70,6 +70,86 @@
       ],
       "type": "object"
     },
+    "ActionHandlerRefusalSource": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ActionHandlerSource": {
+      "additionalProperties": false,
+      "properties": {
+        "abi": {
+          "enum": [
+            "registry.action-handler/v1"
+          ],
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RhaiScriptKindSource"
+        },
+        "refusals": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActionHandlerRefusalSource"
+          },
+          "type": "array"
+        },
+        "script": {
+          "type": "string"
+        },
+        "writes": {
+          "items": {
+            "$ref": "#/$defs/ActionHandlerWriteSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "script",
+        "abi",
+        "writes"
+      ],
+      "type": "object"
+    },
+    "ActionHandlerWriteSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "target": {
+          "$ref": "#/$defs/ActionTargetSource"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "operation",
+        "fields"
+      ],
+      "type": "object"
+    },
     "ActionInputSource": {
       "oneOf": [
         {
@@ -330,6 +410,24 @@
       "type": "object",
       "unevaluatedProperties": false
     },
+    "ActionRequirementSource": {
+      "additionalProperties": false,
+      "properties": {
+        "equals": true,
+        "field": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "field",
+        "equals"
+      ],
+      "type": "object"
+    },
     "ActionSource": {
       "additionalProperties": false,
       "properties": {
@@ -340,6 +438,16 @@
           },
           "type": "array"
         },
+        "handler": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionHandlerSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -347,6 +455,13 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/ActionInputSource"
+          },
+          "type": "array"
+        },
+        "requires": {
+          "description": "Acceptance-time checks over exact existing reference inputs, combined with AND.",
+          "items": {
+            "$ref": "#/$defs/ActionRequirementSource"
           },
           "type": "array"
         }
@@ -557,12 +672,6 @@
       ],
       "type": "object"
     },
-    "ChangeRequestPlannerKindSource": {
-      "enum": [
-        "rhai"
-      ],
-      "type": "string"
-    },
     "ChangeRequestPlannerSource": {
       "additionalProperties": false,
       "properties": {
@@ -570,7 +679,7 @@
           "type": "string"
         },
         "kind": {
-          "$ref": "#/$defs/ChangeRequestPlannerKindSource"
+          "$ref": "#/$defs/RhaiScriptKindSource"
         },
         "requestFields": {
           "default": [],
@@ -2126,6 +2235,12 @@
       ],
       "type": "object"
     },
+    "RhaiScriptKindSource": {
+      "enum": [
+        "rhai"
+      ],
+      "type": "string"
+    },
     "RowBoundarySource": {
       "additionalProperties": false,
       "properties": {
@@ -2197,6 +2312,13 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "pattern": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "required": {
           "default": false,
@@ -2330,6 +2452,13 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "pattern": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "required": {
           "default": false,

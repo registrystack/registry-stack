@@ -130,6 +130,7 @@ pub fn compile_project_with_assets(
     resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
     validate_entities(&sources, profile, &mut diagnostics);
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
+    crate::membership::validate(&sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
     validate_derived_assets(&sources, &derived_origins, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
@@ -137,7 +138,18 @@ pub fn compile_project_with_assets(
     }
 
     let (mut entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
+    crate::membership::compile(&mut entities);
     crate::change_request::compile_change_requests(
+        &action_sources
+            .values()
+            .filter_map(|action| {
+                action
+                    .source
+                    .handler
+                    .as_ref()
+                    .map(|handler| (action.source_module.clone(), handler.script.clone()))
+            })
+            .collect(),
         &sources,
         &change_request_origins,
         assets,
@@ -145,7 +157,7 @@ pub fn compile_project_with_assets(
     )
     .map_err(CompileFailure::from_errors)?;
     let action_inventory =
-        compile_immediate_actions(&action_sources, &entities, &project.access_profiles)
+        compile_immediate_actions(&action_sources, &entities, &project.access_profiles, assets)
             .map_err(CompileFailure::from_errors)?;
     findings.extend(crate::access::compiled_access_findings(
         &entities,
@@ -1636,6 +1648,7 @@ fn expand_project_access(
                 sortable_fields: grant.sortable_fields.clone(),
                 spatial_queries: grant.spatial_queries.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
+                membership_boundaries: grant.membership_boundaries.clone(),
                 request_visibility: grant.request_visibility,
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
@@ -1829,6 +1842,22 @@ fn validate_entity_fields(
                 "entities[].fields[].id",
                 "a field identifier is duplicated",
             ));
+        }
+        if let Some(pattern) = &field.pattern {
+            let path = format!("entities[{}].fields[{}].pattern", entity.id, field.id);
+            if !matches!(
+                field.field_type,
+                FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
+            ) {
+                errors.push(Diagnostic::error(
+                    "field.pattern.type_unsupported",
+                    &path,
+                    "pattern requires a persisted string or text field",
+                ));
+            } else if pattern.len() > 4096 || pattern.contains('\0') {
+                errors.push(Diagnostic::error("field.pattern.bounds_invalid", &path,
+                    "PostgreSQL pattern must be at most 4096 UTF-8 bytes and contain no NUL; syntax is validated by PostgreSQL schema-test"));
+            }
         }
         match &field.field_type {
             FieldTypeSource::String {
@@ -4154,6 +4183,7 @@ fn compile_entities(
                 CompiledField {
                     id: field.id,
                     field_type: field.field_type,
+                    pattern: field.pattern,
                     required: field.required,
                     classification: field.classification,
                     valid_time_role: field.valid_time_role,
@@ -4263,6 +4293,12 @@ fn compile_entities(
             constraints.insert(id, normalized_constraint(constraint));
         }
         for field in &source.fields {
+            if field.pattern.is_some() {
+                constraint_names.insert(
+                    format!("pattern:{}", field.id),
+                    crate::generated_ddl::field_pattern_constraint_name(&source.id, &field.id),
+                );
+            }
             if matches!(field.field_type, FieldTypeSource::Reference { .. }) {
                 let id = format!("reference:{}", field.id);
                 let physical = builder
@@ -4366,6 +4402,7 @@ fn compile_entities(
                 constraints,
                 indexes,
                 access_profiles: profiles,
+                membership_boundaries: BTreeMap::new(),
                 events,
             },
         );

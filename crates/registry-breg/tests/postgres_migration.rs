@@ -848,6 +848,11 @@ enum Variant {
     RankRequired,
     LegacyRemoved,
     BatchAddedRequired,
+    PatternAdded,
+    PatternTightened,
+    PatternLoosened,
+    PatternInvalid,
+    PatternQuoted,
 }
 
 #[derive(Clone, Copy)]
@@ -1067,6 +1072,19 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         r#",{"id":"batch","type":"string","maxLength":16,"classification":"internal","required":true}"#
     } else {
         ""
+    };
+    let pattern = match variant {
+        Variant::PatternAdded => Some("^[0-9]+$"),
+        Variant::PatternTightened => Some("^[0-9]{13}$"),
+        Variant::PatternLoosened => Some("[0-9]"),
+        Variant::PatternInvalid => Some("["),
+        Variant::PatternQuoted => Some(r"^a'\\b$"),
+        _ => None,
+    };
+    let legacy = if let Some(pattern) = pattern {
+        format!(",{{\"id\":\"legacy\",\"type\":\"string\",\"maxLength\":16,\"classification\":\"internal\",\"pattern\":{}}}", serde_json::to_string(pattern).unwrap())
+    } else {
+        legacy.to_owned()
     };
     format!(
         r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
@@ -2371,4 +2389,565 @@ fn digest(bytes: &[u8]) -> String {
 
 fn quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_patterns_validate_empty_tables_existing_rows_and_exact_target_recovery() {
+    use registry_breg::generated_ddl::field_pattern_constraint_name;
+    let database = TestDatabase::create(1).await;
+    let base = compile_variant(Variant::Base, 1);
+    let added = compile_variant(Variant::PatternAdded, 2);
+    let tightened = compile_variant(Variant::PatternTightened, 3);
+    let loosened = compile_variant(Variant::PatternLoosened, 4);
+    let removed = compile_variant(Variant::Base, 5);
+    let base_fp = initial_fingerprint(&database, &base).await;
+    let added_fp = initial_fingerprint(&database, &added).await;
+    let tightened_fp = initial_fingerprint(&database, &tightened).await;
+    let loosened_fp = initial_fingerprint(&database, &loosened).await;
+    let removed_fp = initial_fingerprint(&database, &removed).await;
+    assert_ne!(base_fp, added_fp);
+    assert_ne!(added_fp, tightened_fp);
+    assert_eq!(base_fp, removed_fp);
+
+    // This is the installer used by pre-sign schema-test. A native syntax error
+    // must fail before any fixture value exists to exercise its CHECK.
+    let invalid = compile_variant(Variant::PatternInvalid, 1);
+    let (mut migration, task) = database.connect_migration().await;
+    let transaction = migration.transaction().await.unwrap();
+    let error = install_compiled_schema(&transaction, &invalid, &database.runtime_role).await;
+    assert!(
+        matches!(error, Err(registry_breg::postgres::PostgresKernelError::FieldPatternSyntax { entity_id, field_id }) if entity_id == "asset" && field_id == "legacy"),
+        "invalid ARE syntax is addressed even with empty tables"
+    );
+    transaction.rollback().await.unwrap();
+    task.abort();
+
+    let initial = prepare_and_load_initial(&base, &base_fp);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .unwrap();
+    let table = quote(&base.entities()["asset"].physical_table);
+    let field = quote(&base.entities()["asset"].fields["legacy"].physical_name);
+    database
+        .admin
+        .execute(
+            &format!("INSERT INTO registry_data.{table} (record_id, {field}, active_package_revision) VALUES ($1, $2, $3)"),
+            &[&Uuid::from_u128(91), &"invalid", &active.package_revision],
+        )
+        .await
+        .unwrap();
+    let prepared = prepare_package(build_request(
+        Variant::PatternAdded,
+        2,
+        Some(&active.package_revision),
+        &added_fp,
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(base.clone()),
+        },
+        DATABASE,
+    ))
+    .unwrap();
+    let addition = publish_and_load(
+        prepared,
+        local_context(
+            DATABASE,
+            PackageIntent::Activation {
+                active_revision: &active.package_revision,
+                active_sequence: 1,
+            },
+        ),
+    );
+    assert_value_free(
+        apply(
+            &database,
+            &addition,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .await
+        .err(),
+        MigrationError::FieldPatternExistingRows {
+            entity_id: "asset".to_owned(),
+            field_id: "legacy".to_owned(),
+        },
+    );
+    assert_non_ready_target(&database, &active, &addition, "failed").await;
+    database
+        .admin
+        .execute(
+            &format!("UPDATE registry_data.{table} SET {field} = $1"),
+            &[&"12"],
+        )
+        .await
+        .unwrap();
+    let mut active = apply(
+        &database,
+        &addition,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("corrected existing data admits exact pinned successor");
+    assert_ready_target(&database, &active).await;
+
+    // Changed/removal constraints remain reviewed operations under the existing
+    // evolution contract, with exact object coverage and backup binding.
+    let mut prior = added;
+    for (sequence, variant, candidate, target_fp) in [
+        (3, Variant::PatternTightened, tightened, tightened_fp),
+        (4, Variant::PatternLoosened, loosened, loosened_fp),
+        (5, Variant::Base, removed, removed_fp),
+    ] {
+        let id = format!("pattern-{sequence}");
+        let backup_bytes = format!(
+            "-- Synthetic pattern migration recovery evidence for {}\n",
+            active.package_revision
+        )
+        .into_bytes();
+        let backup = ExternalBackupBinding {
+            database_id: DATABASE.to_owned(),
+            prior_revision: active.package_revision.clone(),
+            prior_schema_fingerprint: active.schema_fingerprint.clone(),
+            sha256: digest(&backup_bytes),
+            byte_length: backup_bytes.len() as u64,
+            created_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+            max_age_seconds: 3600,
+        };
+        let source = pattern_reviewed_source(&id, &active, &prior, &candidate, &target_fp, backup);
+        let package =
+            prepare_and_load_reviewed(sequence, &active, &prior, variant, &target_fp, source);
+        let directory = tempfile::tempdir().unwrap();
+        let backup_path = directory.path().join("pattern.backup");
+        fs::write(&backup_path, backup_bytes).unwrap();
+        fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let binding = package.reviewed_migration_plan().unwrap().migrations()[0]
+            .descriptor
+            .backup_binding_path
+            .as_deref()
+            .unwrap();
+        let evidence = [DestructiveBackupEvidence::new(binding, &backup_path)];
+        if sequence == 3 {
+            assert_value_free(
+                apply_with_evidence(&database, &package, &active, &evidence)
+                    .await
+                    .err(),
+                MigrationError::FieldPatternExistingRows {
+                    entity_id: "asset".to_owned(),
+                    field_id: "legacy".to_owned(),
+                },
+            );
+            assert_non_ready_target(&database, &active, &package, "failed").await;
+            database
+                .admin
+                .execute(
+                    &format!("UPDATE registry_data.{table} SET {field} = $1"),
+                    &[&"0123456789012"],
+                )
+                .await
+                .unwrap();
+        }
+        active = apply_with_evidence(&database, &package, &active, &evidence)
+            .await
+            .expect("reviewed native pattern transition activates validated catalog");
+        assert_ready_target(&database, &active).await;
+        assert_eq!(active.schema_fingerprint, target_fp);
+        let names: Vec<String> = database.admin.query("SELECT conname FROM pg_catalog.pg_constraint WHERE conrelid = $1::text::regclass AND conname LIKE 'breg_pattern_%'", &[&format!("registry_data.{table}")]).await.unwrap().iter().map(|row| row.get(0)).collect();
+        if sequence == 5 {
+            assert!(names.is_empty(), "removal leaves no orphan check");
+        } else {
+            assert_eq!(names, [field_pattern_constraint_name("asset", "legacy")]);
+        }
+        if sequence == 3 {
+            for invalid in [
+                "012345678901",
+                "01234567890123",
+                "٠١٢٣٤٥٦٧٨٩٠١٢",
+                " 123456789012",
+                "0123456789012\n",
+                "012345\n789012",
+                "",
+            ] {
+                let error = database
+                    .admin
+                    .execute(
+                        &format!("UPDATE registry_data.{table} SET {field} = $1"),
+                        &[&invalid],
+                    )
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    error.code(),
+                    Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION)
+                );
+                assert_eq!(
+                    error.as_db_error().unwrap().constraint(),
+                    Some(field_pattern_constraint_name("asset", "legacy").as_str())
+                );
+            }
+            let stored: String = database
+                .admin
+                .query_one(&format!("SELECT {field} FROM registry_data.{table}"), &[])
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(
+                stored, "0123456789012",
+                "native text integrity preserves the leading zero"
+            );
+            database
+                .admin
+                .execute(
+                    &format!("UPDATE registry_data.{table} SET {field} = NULL"),
+                    &[],
+                )
+                .await
+                .unwrap();
+            database
+                .admin
+                .execute(
+                    &format!("UPDATE registry_data.{table} SET {field} = $1"),
+                    &[&"0123456789012"],
+                )
+                .await
+                .unwrap();
+        } else if sequence == 4 {
+            database
+                .admin
+                .execute(
+                    &format!("UPDATE registry_data.{table} SET {field} = $1"),
+                    &[&"prefix1suffix"],
+                )
+                .await
+                .expect("native regex remains unanchored when authored unanchored");
+        } else {
+            database
+                .admin
+                .execute(
+                    &format!("UPDATE registry_data.{table} SET {field} = $1"),
+                    &[&"arbitrary"],
+                )
+                .await
+                .expect("removed pattern no longer enforces its old rule");
+        }
+        prior = candidate;
+    }
+    database.cleanup().await;
+}
+
+fn pattern_reviewed_source(
+    id: &str,
+    current: &ExpectedRegistryIdentity,
+    prior: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    final_fingerprint: &str,
+    backup: ExternalBackupBinding,
+) -> ReviewedMigrationSource {
+    use registry_breg::generated_ddl::field_pattern_constraint_name;
+    let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
+        .changes
+        .into_iter()
+        .find(|change| {
+            matches!(
+                change.code,
+                CompiledRegistryChangeCode::FieldPatternChanged
+                    | CompiledRegistryChangeCode::FieldPatternRemoved
+            )
+        })
+        .unwrap();
+    let entity = &prior.entities()["asset"];
+    let name = field_pattern_constraint_name("asset", "legacy");
+    let base = format!("modules/core/migrations/{id}");
+    let step_path = format!("{base}/steps/pattern.sql");
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let mut sql = format!(
+        "ALTER TABLE registry_data.{} DROP CONSTRAINT {}",
+        entity.physical_table, name
+    );
+    if let Some(statement) = candidate
+        .ddl()
+        .statements
+        .iter()
+        .find(|s| s.id == "entity.asset.field.legacy.pattern")
+    {
+        // Expression syntax was independently validated by the candidate installer.
+        // Reviewed SQL owns only the managed constraint replacement.
+        sql.push_str(", ");
+        sql.push_str(
+            statement
+                .sql
+                .split_once(" ADD CONSTRAINT ")
+                .map(|(_, body)| format!("ADD CONSTRAINT {body}"))
+                .unwrap()
+                .as_str(),
+        );
+    }
+    let assertion = format!(
+        "SELECT pg_catalog.count(*) >= 0 FROM registry_data.{}",
+        entity.physical_table
+    );
+    let descriptor = ReviewedMigrationDescriptor {
+        id: id.to_owned(),
+        change_class: CompiledRegistryChangeClass::DestructiveOrIrreversible,
+        covers: vec![ReviewedChangeCover::from(&change)],
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 1000,
+        statement_timeout_ms: 5000,
+        steps: vec![ReviewedMigrationStepDescriptor::TransactionalSql {
+            id: "pattern".to_owned(),
+            sql_path: step_path.clone(),
+            objects: vec![ReviewedMigrationObject {
+                schema: "registry_data".to_owned(),
+                table: entity.physical_table.clone(),
+                entity_id: "asset".to_owned(),
+                kind: ReviewedMigrationObjectKind::Constraint,
+                member_id: Some("pattern:legacy".to_owned()),
+                physical_name: name,
+            }],
+            affected_rows: None,
+        }],
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path.clone(),
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path.clone(),
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: Some(format!("{base}/backup.json")),
+    };
+    reviewed_source(ReviewedSourceRequest {
+        descriptor,
+        current,
+        final_fingerprint,
+        steps: vec![(step_path, sql)],
+        pre: (pre_path, assertion.clone()),
+        post: (post_path, assertion),
+        backup: Some(backup),
+        row_assertions: Vec::new(),
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_patterns_quote_apostrophes_and_backslashes_independent_of_session_settings() {
+    let database = TestDatabase::create(1).await;
+    let registry = compile_variant(Variant::PatternQuoted, 1);
+    let (mut migration, task) = database.connect_migration().await;
+    let transaction = migration.transaction().await.unwrap();
+    transaction
+        .batch_execute("SET LOCAL standard_conforming_strings = off")
+        .await
+        .unwrap();
+    install_compiled_schema(&transaction, &registry, &database.runtime_role)
+        .await
+        .expect("generated native expression is safely quoted");
+    transaction.commit().await.unwrap();
+    task.abort();
+    let entity = &registry.entities()["asset"];
+    let table = quote(&entity.physical_table);
+    let field = quote(&entity.fields["legacy"].physical_name);
+    let accepted = r"a'\b";
+    database.admin.execute(&format!("INSERT INTO registry_data.{table} (record_id, {field}, active_package_revision) VALUES ($1, $2, 'synthetic-package')"), &[&Uuid::from_u128(92), &accepted]).await.expect("quoted pattern keeps literal apostrophe and backslash semantics");
+    let actual: String = database
+        .admin
+        .query_one(&format!("SELECT {field} FROM registry_data.{table}"), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(actual, accepted);
+    let rejected = database
+        .admin
+        .execute(
+            &format!("UPDATE registry_data.{table} SET {field} = $1"),
+            &[&"a'b"],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        rejected.code(),
+        Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION)
+    );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_patterns_invalid_initial_activation_fails_closed_in_maintenance() {
+    let database = TestDatabase::create(1).await;
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    // The local unsigned test policy permits exercising the activation defense
+    // independently of the production pre-sign schema-test refusal.
+    let prepared = prepare_package(build_request(
+        Variant::PatternInvalid,
+        1,
+        None,
+        &fingerprint,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+        DATABASE,
+    ))
+    .unwrap();
+    let invalid = publish_and_load(
+        prepared,
+        local_context(DATABASE, PackageIntent::InitialActivation),
+    );
+    assert_value_free(
+        apply(&database, &invalid, ApplyPrecondition::InitialActivation)
+            .await
+            .err(),
+        MigrationError::FieldPatternSyntax {
+            entity_id: "asset".to_owned(),
+            field_id: "legacy".to_owned(),
+        },
+    );
+    let row = database.admin.query_one("SELECT maintenance_status, maintenance_target_revision FROM registry_internal.registry_state WHERE singleton", &[]).await.unwrap();
+    assert_eq!(row.get::<_, String>(0), "failed");
+    assert_eq!(
+        row.get::<_, Option<String>>(1).as_deref(),
+        Some(invalid.manifest().package_revision.as_str())
+    );
+    let tables: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = 'registry_data'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        tables, 0,
+        "invalid constraint activation commits no current-row schema"
+    );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_patterns_invalid_successors_report_the_field_for_additive_and_reviewed_paths() {
+    for reviewed in [false, true] {
+        let database = TestDatabase::create(1).await;
+        let variant = if reviewed {
+            Variant::PatternAdded
+        } else {
+            Variant::Base
+        };
+        let prior = compile_variant(variant, 1);
+        let fingerprint = initial_fingerprint(&database, &prior).await;
+        let prepared = prepare_package(build_request(
+            variant,
+            1,
+            None,
+            &fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+            DATABASE,
+        ))
+        .unwrap();
+        let initial = publish_and_load(
+            prepared,
+            local_context(DATABASE, PackageIntent::InitialActivation),
+        );
+        let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+            .await
+            .unwrap();
+        let invalid = compile_variant(Variant::PatternInvalid, 2);
+        // An unsigned test package supplies a synthetic fingerprint to reach
+        // activation independently of the pre-sign native syntax refusal.
+        let target_fingerprint = format!("sha256:{}", "f".repeat(64));
+        let (package, error) = if reviewed {
+            let bytes = b"-- Synthetic pre-activation pattern backup\n";
+            let backup = ExternalBackupBinding {
+                database_id: DATABASE.to_owned(),
+                prior_revision: active.package_revision.clone(),
+                prior_schema_fingerprint: active.schema_fingerprint.clone(),
+                sha256: digest(bytes),
+                byte_length: bytes.len() as u64,
+                created_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+                max_age_seconds: 3600,
+            };
+            let source = pattern_reviewed_source(
+                "invalid-pattern",
+                &active,
+                &prior,
+                &invalid,
+                &target_fingerprint,
+                backup,
+            );
+            let package = prepare_and_load_reviewed(
+                2,
+                &active,
+                &prior,
+                Variant::PatternInvalid,
+                &target_fingerprint,
+                source,
+            );
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("pattern.backup");
+            fs::write(&path, bytes).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            let binding = package.reviewed_migration_plan().unwrap().migrations()[0]
+                .descriptor
+                .backup_binding_path
+                .as_deref()
+                .unwrap();
+            let error = apply_with_evidence(
+                &database,
+                &package,
+                &active,
+                &[DestructiveBackupEvidence::new(binding, &path)],
+            )
+            .await
+            .err();
+            (package, error)
+        } else {
+            let prepared = prepare_package(build_request(
+                Variant::PatternInvalid,
+                2,
+                Some(&active.package_revision),
+                &target_fingerprint,
+                PackageMigrationPlanInput::Successor {
+                    prior_registry: Box::new(prior.clone()),
+                },
+                DATABASE,
+            ))
+            .unwrap();
+            let package = publish_and_load(
+                prepared,
+                local_context(
+                    DATABASE,
+                    PackageIntent::Activation {
+                        active_revision: &active.package_revision,
+                        active_sequence: 1,
+                    },
+                ),
+            );
+            let error = apply(
+                &database,
+                &package,
+                ApplyPrecondition::Successor { current: &active },
+            )
+            .await
+            .err();
+            (package, error)
+        };
+        assert_value_free(
+            error,
+            MigrationError::FieldPatternSyntax {
+                entity_id: "asset".to_owned(),
+                field_id: "legacy".to_owned(),
+            },
+        );
+        assert_non_ready_target(&database, &active, &package, "failed").await;
+        let (migration, task) = database.connect_migration().await;
+        assert_eq!(
+            managed_schema_fingerprint(
+                &migration,
+                &database.runtime_role,
+                &ExpectedManagedCatalog::compiled(&prior)
+            )
+            .await
+            .unwrap(),
+            fingerprint,
+            "syntax refusal preserves the pre-activation catalog on an empty table"
+        );
+        task.abort();
+        database.cleanup().await;
+    }
 }

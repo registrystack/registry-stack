@@ -431,7 +431,31 @@ struct ClaimsSource {
     #[serde(default)]
     purpose: Option<String>,
     #[serde(default)]
-    direct_claims: BTreeMap<String, String>,
+    direct_claims: BTreeMap<String, DirectClaimSource>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(untagged)]
+enum DirectClaimSource {
+    String(String),
+    StringSet(Vec<String>),
+}
+
+impl DirectClaimSource {
+    fn verified_value(&self) -> Result<VerifiedClaimValue, FixtureError> {
+        let values = match self {
+            Self::String(value) => std::slice::from_ref(value),
+            Self::StringSet(values) => values.as_slice(),
+        };
+        if values.iter().any(|value| value.len() > MAX_BINDING_BYTES) {
+            return Err(FixtureError::AuthorityWideningRefused);
+        }
+        match self {
+            Self::String(value) => VerifiedClaimValue::direct_string(value.clone()),
+            Self::StringSet(values) => VerifiedClaimValue::direct_string_set(values.clone()),
+        }
+        .map_err(|_| FixtureError::AuthorityWideningRefused)
+    }
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
@@ -452,6 +476,12 @@ struct ExpectationSource {
     count: Option<usize>,
     #[serde(default)]
     problem_code: Option<String>,
+    #[serde(default)]
+    refusal_code: Option<String>,
+    #[serde(default)]
+    entity_id: Option<String>,
+    #[serde(default)]
+    field_id: Option<String>,
 }
 
 /// A complete journey suite that has been resolved against one exact compiled
@@ -513,8 +543,17 @@ struct ValidatedStep {
     response_readable_fields: BTreeSet<String>,
     action: ActionSource,
     expect: ExpectationSource,
+    problem_bindings: FixtureProblemBindings,
     capture: Option<String>,
     capture_results: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Default)]
+struct FixtureProblemBindings {
+    refusal_label: Option<String>,
+    refusal_field_paths: BTreeSet<String>,
+    request_field_paths: BTreeSet<String>,
+    pattern_field: Option<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -687,7 +726,14 @@ pub fn validate_fixture_journeys(
                         .ok_or(FixtureError::LogicalReferenceRefused)?;
                     let profile = action_profile_from_grant(grant);
                     validate_claims(&step.claims, &profile, step.expect.outcome)?;
-                    validate_immediate_action_fields(&step.request, action, &capture_sources)?;
+                    validate_immediate_action_fields(
+                        &step.request,
+                        action,
+                        &capture_sources,
+                        step.expect.outcome == ExpectedOutcome::Refusal
+                            && step.expect.status == 400
+                            && step.expect.problem_code.as_deref() == Some("request.invalid"),
+                    )?;
                     validate_expectation(
                         &step.expect,
                         operation,
@@ -814,6 +860,13 @@ pub fn validate_fixture_journeys(
                         },
                     );
                 }
+                let problem_bindings = compile_problem_bindings(
+                    &expect,
+                    &action,
+                    entity_id.as_deref(),
+                    action_id.as_deref(),
+                    registry,
+                )?;
                 Ok(ValidatedStep {
                     id: step.id,
                     entity: entity_id,
@@ -825,6 +878,7 @@ pub fn validate_fixture_journeys(
                     response_readable_fields,
                     action,
                     expect,
+                    problem_bindings,
                     capture,
                     capture_results: step.capture_results,
                 })
@@ -1117,9 +1171,7 @@ fn validate_claims(
         .map(|boundary| boundary.claim.as_str())
         .collect::<BTreeSet<_>>();
     if claims.direct_claims.iter().any(|(name, value)| {
-        !boundary_claims.contains(name.as_str())
-            || value.is_empty()
-            || value.len() > MAX_BINDING_BYTES
+        !boundary_claims.contains(name.as_str()) || value.verified_value().is_err()
     }) {
         return Err(FixtureError::AuthorityWideningRefused);
     }
@@ -1168,6 +1220,7 @@ fn action_profile_from_grant(grant: &CompiledActionGrant) -> AccessProfileSource
             .iter()
             .flat_map(|target| target.row_boundaries.iter().cloned())
             .collect(),
+        membership_boundaries: Vec::new(),
         request_visibility: None,
         lookups: Vec::new(),
         read_paths: Vec::new(),
@@ -1185,11 +1238,12 @@ fn validate_immediate_action_fields(
     request: &ActionSource,
     action: &CompiledAction,
     captures: &BTreeMap<String, CaptureSource>,
+    expects_invalid_request: bool,
 ) -> Result<(), FixtureError> {
     match request {
         ActionSource::TargetConditions { input } => {
             let required = condition_input_api_names(action);
-            validate_action_input_map(input, action, captures, Some(&required))?;
+            validate_action_input_map(input, action, captures, Some(&required), false)?;
             if input.keys().collect::<BTreeSet<_>>() != required.iter().collect::<BTreeSet<_>>() {
                 return Err(FixtureError::LogicalReferenceRefused);
             }
@@ -1199,7 +1253,7 @@ fn validate_immediate_action_fields(
             preconditions,
             idempotency_key,
         } => {
-            validate_action_input_map(input, action, captures, None)?;
+            validate_action_input_map(input, action, captures, None, expects_invalid_request)?;
             let condition_inputs = condition_input_api_names(action);
             for (name, condition) in preconditions {
                 if !condition_inputs.contains(name) {
@@ -1217,9 +1271,10 @@ fn validate_immediate_action_fields(
                     }
                 }
             }
-            if condition_inputs
-                .iter()
-                .any(|name| !preconditions.contains_key(name.as_str()))
+            if !expects_invalid_request
+                && condition_inputs
+                    .iter()
+                    .any(|name| !preconditions.contains_key(name.as_str()))
             {
                 return Err(FixtureError::LogicalReferenceRefused);
             }
@@ -1237,7 +1292,9 @@ fn validate_action_input_map(
     action: &CompiledAction,
     captures: &BTreeMap<String, CaptureSource>,
     accepted_names: Option<&BTreeSet<String>>,
+    expects_invalid_request: bool,
 ) -> Result<(), FixtureError> {
+    let condition_inputs = condition_input_api_names(action);
     let inputs_by_api_name = action
         .inputs
         .iter()
@@ -1253,12 +1310,25 @@ fn validate_action_input_map(
         let declared = inputs_by_api_name
             .get(name.as_str())
             .ok_or(FixtureError::LogicalReferenceRefused)?;
-        if !fixture_action_input_value_is_valid(value, declared, captures) {
+        let admitted_invalid_scalar = expects_invalid_request
+            && !value.is_object()
+            && !value.is_array()
+            && !matches!(
+                declared.field_type,
+                crate::contract::FieldTypeSource::Reference { .. }
+            );
+        let valid = if value.is_null() {
+            action.handler.is_some() && !declared.required && !condition_inputs.contains(name)
+        } else {
+            fixture_action_input_value_is_valid(value, declared, captures, action.handler.is_some())
+        };
+        if !admitted_invalid_scalar && !valid {
             return Err(FixtureError::LogicalReferenceRefused);
         }
     }
     for declared in &action.inputs {
-        if declared.required
+        if !expects_invalid_request
+            && (declared.required || condition_inputs.contains(&declared.api_name))
             && accepted_names.is_none_or(|accepted| accepted.contains(&declared.api_name))
             && !input.contains_key(&declared.api_name)
         {
@@ -1275,6 +1345,7 @@ fn fixture_action_input_value_is_valid(
     value: &Value,
     declared: &crate::model::CompiledActionInput,
     captures: &BTreeMap<String, CaptureSource>,
+    is_handler_input: bool,
 ) -> bool {
     if let crate::contract::FieldTypeSource::Reference { target, .. } = &declared.field_type {
         if let Some(reference) = value.as_object().and_then(|object| {
@@ -1288,7 +1359,11 @@ fn fixture_action_input_value_is_valid(
                 .is_some_and(|source| source.entity.as_deref() == Some(target.as_str()));
         }
     }
-    validate_field_value(FieldValue::Json(value), &declared.field_type)
+    if is_handler_input {
+        crate::action_handler::validate_input_value(value, &declared.field_type).is_ok()
+    } else {
+        validate_field_value(FieldValue::Json(value), &declared.field_type)
+    }
 }
 
 fn condition_input_api_names(action: &CompiledAction) -> BTreeSet<String> {
@@ -1972,6 +2047,9 @@ fn internalize_expectation(
         fields: internalize_data(response_entity, &expectation.fields)?,
         count: expectation.count,
         problem_code: expectation.problem_code.clone(),
+        refusal_code: expectation.refusal_code.clone(),
+        entity_id: expectation.entity_id.clone(),
+        field_id: expectation.field_id.clone(),
     })
 }
 
@@ -2209,6 +2287,9 @@ fn externalize_expectation(
         fields: externalize_data(response_entity, &expectation.fields)?,
         count: expectation.count,
         problem_code: expectation.problem_code.clone(),
+        refusal_code: expectation.refusal_code.clone(),
+        entity_id: expectation.entity_id.clone(),
+        field_id: expectation.field_id.clone(),
     })
 }
 
@@ -2219,6 +2300,19 @@ fn validate_expectation(
     captures: bool,
     captures_results: bool,
 ) -> Result<(), FixtureError> {
+    let declared_refusal = expectation.problem_code.as_deref() == Some("action.refused");
+    if declared_refusal != expectation.refusal_code.is_some()
+        || (declared_refusal && (operation != Operation::Invoke || captures_results))
+    {
+        return Err(FixtureError::JourneyShapeRefused);
+    }
+    if expectation.entity_id.is_some() != expectation.field_id.is_some()
+        || (expectation.entity_id.is_some()
+            && (expectation.status != 409
+                || expectation.problem_code.as_deref() != Some("mutation.conflict")))
+    {
+        return Err(FixtureError::JourneyShapeRefused);
+    }
     if captures_results && operation != Operation::Invoke {
         return Err(FixtureError::JourneyShapeRefused);
     }
@@ -2297,6 +2391,116 @@ fn validate_expectation(
         }
     }
     Ok(())
+}
+
+fn compile_problem_bindings(
+    expectation: &ExpectationSource,
+    request: &ActionSource,
+    entity_id: Option<&str>,
+    action_id: Option<&str>,
+    registry: &CompiledRegistry,
+) -> Result<FixtureProblemBindings, FixtureError> {
+    let mut bindings = FixtureProblemBindings::default();
+    let action = action_id.and_then(|id| {
+        registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == id)
+    });
+    if expectation.problem_code.as_deref() == Some("request.invalid") {
+        if let Some(action) = action {
+            bindings
+                .request_field_paths
+                .extend([String::new(), "/input".to_owned()]);
+            let condition_inputs = condition_input_api_names(action);
+            for input in &action.inputs {
+                let alias = input.api_name.replace('~', "~0").replace('/', "~1");
+                bindings
+                    .request_field_paths
+                    .insert(format!("/input/{alias}"));
+                if matches!(request, ActionSource::Invoke { .. }) {
+                    bindings
+                        .request_field_paths
+                        .insert(format!("/preconditions/{alias}"));
+                    if condition_inputs.contains(&input.api_name) {
+                        bindings
+                            .request_field_paths
+                            .insert(format!("/preconditions/{alias}/ifMatch"));
+                    }
+                }
+            }
+            if matches!(request, ActionSource::Invoke { .. }) {
+                bindings
+                    .request_field_paths
+                    .insert("/preconditions".to_owned());
+            }
+        }
+    }
+    if matches!(
+        expectation.problem_code.as_deref(),
+        Some("action.refused" | "action.handler_failed")
+    ) {
+        let action = action.ok_or(FixtureError::LogicalReferenceRefused)?;
+        let handler = action
+            .handler
+            .as_ref()
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        if !matches!(request, ActionSource::Invoke { .. }) {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+        if let Some(code) = &expectation.refusal_code {
+            bindings.refusal_label = Some(
+                handler
+                    .refusals
+                    .get(code)
+                    .cloned()
+                    .ok_or(FixtureError::LogicalReferenceRefused)?,
+            );
+            bindings.refusal_field_paths = action
+                .inputs
+                .iter()
+                .map(|input| {
+                    format!(
+                        "/input/{}",
+                        input.api_name.replace('~', "~0").replace('/', "~1")
+                    )
+                })
+                .collect();
+        }
+    }
+    if let (Some(expected_entity), Some(expected_field)) =
+        (&expectation.entity_id, &expectation.field_id)
+    {
+        let mut target_entities = BTreeSet::new();
+        if let Some(action) = action.filter(|_| matches!(request, ActionSource::Invoke { .. })) {
+            target_entities.extend(
+                action
+                    .effects
+                    .iter()
+                    .map(|effect| effect.target.entity_id.as_str()),
+            );
+        }
+        if let Some(entity) = entity_id.and_then(|id| registry.entities().get(id)) {
+            if matches!(
+                request.operation(),
+                Operation::Create | Operation::Patch | Operation::Batch
+            ) {
+                target_entities.insert(entity.id.as_str());
+            }
+        }
+        if !target_entities.contains(expected_entity.as_str()) {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+        let field = registry
+            .entities()
+            .get(expected_entity)
+            .and_then(|entity| entity.fields.get(expected_field))
+            .filter(|field| field.pattern.is_some())
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        bindings.pattern_field = Some((expected_entity.clone(), field.id.clone()));
+    }
+    Ok(bindings)
 }
 
 fn canonical_size(value: &Value) -> Result<usize, FixtureError> {
@@ -2984,36 +3188,45 @@ impl SchemaTestRuntime {
             .authenticate(token)
             .await
             .map_err(|_| FixtureError::RequestConstructionRefused)?;
-        let scopes = verified.scopes.into_iter().collect::<BTreeSet<_>>();
-        if scopes != step.claims.scopes
-            || mapped.principal_claim() != step.profile.principal_claim.as_deref()
-            || mapped.principal() != step.claims.principal.as_deref()
-            || mapped.purpose() != step.claims.purpose.as_deref()
+        assert_exact_claims(
+            &step.claims,
+            &step.profile,
+            &mapped,
+            &verified.scopes.into_iter().collect(),
+        )
+    }
+}
+
+fn assert_exact_claims(
+    claims: &ClaimsSource,
+    profile: &AccessProfileSource,
+    mapped: &VerifiedRequestClaims,
+    scopes: &BTreeSet<String>,
+) -> Result<(), FixtureError> {
+    if scopes != &claims.scopes
+        || mapped.principal_claim() != profile.principal_claim.as_deref()
+        || mapped.principal() != claims.principal.as_deref()
+        || mapped.purpose() != claims.purpose.as_deref()
+    {
+        return Err(FixtureError::AuthorityWideningRefused);
+    }
+    for (name, expected) in &claims.direct_claims {
+        if mapped.direct_claim(name).map(VerifiedClaimValue::values)
+            != Some(expected.verified_value()?.values())
         {
             return Err(FixtureError::AuthorityWideningRefused);
         }
-        for (name, expected) in &step.claims.direct_claims {
-            if mapped
-                .direct_claim(name)
-                .map(VerifiedClaimValue::values)
-                .as_ref()
-                != Some(&BTreeSet::from([expected.clone()]))
-            {
-                return Err(FixtureError::AuthorityWideningRefused);
-            }
-        }
-        let actual_names = step
-            .profile
-            .row_boundaries
-            .iter()
-            .filter(|boundary| mapped.direct_claim(&boundary.claim).is_some())
-            .map(|boundary| boundary.claim.clone())
-            .collect::<BTreeSet<_>>();
-        if actual_names != step.claims.direct_claims.keys().cloned().collect() {
-            return Err(FixtureError::AuthorityWideningRefused);
-        }
-        Ok(())
     }
+    let actual_names = profile
+        .row_boundaries
+        .iter()
+        .filter(|boundary| mapped.direct_claim(&boundary.claim).is_some())
+        .map(|boundary| boundary.claim.clone())
+        .collect::<BTreeSet<_>>();
+    if actual_names != claims.direct_claims.keys().cloned().collect() {
+        return Err(FixtureError::AuthorityWideningRefused);
+    }
+    Ok(())
 }
 
 struct SchemaTestReadiness {
@@ -3630,7 +3843,8 @@ fn verified_claims(step: &ValidatedStep) -> Result<VerifiedRequestClaims, Fixtur
         .direct_claims
         .iter()
         .map(|(name, value)| {
-            VerifiedClaimValue::direct_string(value.clone())
+            value
+                .verified_value()
                 .map(|value| (name.clone(), value))
                 .map_err(|_| FixtureError::RequestConstructionRefused)
         })
@@ -3763,10 +3977,54 @@ fn assert_response(
                 .problem_code
                 .as_deref()
                 .ok_or(FixtureError::ResponseShapeRefused)?;
-            let object = exact_object(
-                document,
-                &["type", "title", "status", "detail", "code", "traceId"],
-            )?;
+            let mut keys = vec!["type", "title", "status", "detail", "code", "traceId"];
+            let expected_detail = if code == "action.refused" {
+                keys.push("refusalCode");
+                if document.get("fieldPath").is_some() {
+                    keys.push("fieldPath");
+                    if !document
+                        .get("fieldPath")
+                        .and_then(Value::as_str)
+                        .is_some_and(|path| {
+                            step.problem_bindings.refusal_field_paths.contains(path)
+                        })
+                    {
+                        return Err(FixtureError::ExpectationMismatch);
+                    }
+                }
+                if document.get("refusalCode").and_then(Value::as_str)
+                    != step.expect.refusal_code.as_deref()
+                {
+                    return Err(FixtureError::ExpectationMismatch);
+                }
+                Some(
+                    step.problem_bindings
+                        .refusal_label
+                        .as_deref()
+                        .ok_or(FixtureError::ResponseShapeRefused)?,
+                )
+            } else if let Some((entity, field)) = &step.problem_bindings.pattern_field {
+                keys.extend(["entityId", "fieldId"]);
+                if document.get("entityId").and_then(Value::as_str) != Some(entity.as_str())
+                    || document.get("fieldId").and_then(Value::as_str) != Some(field.as_str())
+                {
+                    return Err(FixtureError::ExpectationMismatch);
+                }
+                Some("The field does not conform to its declared storage pattern.")
+            } else {
+                None
+            };
+            if code == "request.invalid" && document.get("fieldPath").is_some() {
+                keys.push("fieldPath");
+                if !document
+                    .get("fieldPath")
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| step.problem_bindings.request_field_paths.contains(path))
+                {
+                    return Err(FixtureError::ExpectationMismatch);
+                }
+            }
+            let object = exact_object(document, &keys)?;
             let trace_id = object
                 .get("traceId")
                 .and_then(Value::as_str)
@@ -3780,7 +4038,12 @@ fn assert_response(
                 || !object
                     .get("detail")
                     .and_then(Value::as_str)
-                    .is_some_and(|detail| details.contains(&detail))
+                    .is_some_and(|detail| {
+                        expected_detail.map_or_else(
+                            || details.contains(&detail),
+                            |expected| detail == expected,
+                        )
+                    })
                 || object.get("code").and_then(Value::as_str) != Some(code)
             {
                 return Err(FixtureError::ExpectationMismatch);
@@ -4469,9 +4732,11 @@ static PLAN_REFUSED_DETAILS: [&str; ChangeRequestPlannerError::PLAN_REFUSALS.len
     details
 };
 
-/// The title and the admissible details for one expectable problem. Every code
-/// but a refused plan carries exactly one detail; a refused plan carries one
-/// per closed planner kind.
+static HANDLER_FAILED_DETAILS: [&str; 1] =
+    ["The action handler could not produce an accepted result."];
+
+/// Static problem titles/details. Handler refusals resolve their exact label
+/// from the compiled catalogue; planner and handler faults use closed kinds.
 fn problem_contract(
     status: u16,
     code: Option<&str>,
@@ -4480,6 +4745,8 @@ fn problem_contract(
         (400, "query.invalid") => Some(("Bad Request", &["The query request is invalid."])),
         (400, "request.invalid") => Some(("Bad Request", &["The request is invalid."])),
         (400, "request.plan_refused") => Some(("Bad Request", &PLAN_REFUSED_DETAILS)),
+        (500, "action.handler_failed") => Some(("Internal Server Error", &HANDLER_FAILED_DETAILS)),
+        (422, "action.refused") => Some(("Unprocessable Entity", &[])),
         (404, "resource.not_found") => {
             Some(("Not Found", &["The requested resource was not found."]))
         }
@@ -5542,6 +5809,93 @@ mod tests {
         PackageSourceFile, SignaturePolicy,
     };
 
+    #[test]
+    fn fixed_optional_from_input_preflight_refuses_null_except_for_expected_invalid_requests() {
+        let project = parse_project_yaml(include_bytes!(
+            "../tests/fixtures/fixed-optional-action-input.yaml"
+        ))
+        .unwrap();
+        let registry =
+            compile_project_with_assets(&project, &[], &[], CompileProfile::Authoring).unwrap();
+        let action = &registry.actions().actions[0];
+        let input = Map::from_iter([("displayLabel".to_owned(), json!("A label"))]);
+        assert!(validate_action_input_map(&input, action, &BTreeMap::new(), None, false).is_ok());
+        let null = Map::from_iter([("displayLabel".to_owned(), Value::Null)]);
+        assert_eq!(
+            validate_action_input_map(&null, action, &BTreeMap::new(), None, false),
+            Err(FixtureError::LogicalReferenceRefused)
+        );
+        assert!(validate_action_input_map(&null, action, &BTreeMap::new(), None, true).is_ok());
+    }
+
+    #[test]
+    fn fixture_claim_sets_match_authenticated_values_exactly() {
+        let profile: AccessProfileSource = serde_json::from_value(json!({
+            "id": "registrar",
+            "principalClaim": "registry_principal",
+            "operations": ["get"],
+            "rowBoundaries": [
+                {"field": "owner", "claim": "allowed_owners", "operator": "in"},
+                {"field": "district", "claim": "district", "operator": "equals"}
+            ]
+        }))
+        .unwrap();
+        let claims: ClaimsSource = serde_json::from_value(json!({
+            "principal": "fixture-registrar",
+            "scopes": ["registry:read"],
+            "purpose": "case-management",
+            "directClaims": {"allowed_owners": ["owner-b", "owner-a"], "district": "north"}
+        }))
+        .unwrap();
+        let mapped = |owners: &[&str], include_district: bool| {
+            let mut direct = BTreeMap::from([(
+                "allowed_owners".to_owned(),
+                VerifiedClaimValue::direct_string_set(owners.iter().copied()).unwrap(),
+            )]);
+            if include_district {
+                direct.insert(
+                    "district".to_owned(),
+                    VerifiedClaimValue::direct_string("north").unwrap(),
+                );
+            }
+            VerifiedRequestClaims::authenticated(
+                "registry_principal",
+                "fixture-registrar",
+                claims.scopes.clone(),
+                claims.purpose.clone(),
+                direct,
+            )
+            .unwrap()
+        };
+        let exact = mapped(&["owner-a", "owner-b"], true);
+        assert_eq!(
+            assert_exact_claims(&claims, &profile, &exact, &claims.scopes),
+            Ok(())
+        );
+        for mismatched in [
+            mapped(&["owner-a"], true),
+            mapped(&["owner-a", "owner-b", "owner-c"], true),
+            mapped(&["owner-a", "owner-b"], false),
+        ] {
+            assert_eq!(
+                assert_exact_claims(&claims, &profile, &mismatched, &claims.scopes),
+                Err(FixtureError::AuthorityWideningRefused)
+            );
+        }
+        let mut undeclared = claims.clone();
+        undeclared.direct_claims.remove("district");
+        assert_eq!(
+            assert_exact_claims(&undeclared, &profile, &exact, &claims.scopes),
+            Err(FixtureError::AuthorityWideningRefused)
+        );
+        let widened_scopes =
+            BTreeSet::from(["registry:read".to_owned(), "registry:write".to_owned()]);
+        assert_eq!(
+            assert_exact_claims(&claims, &profile, &exact, &widened_scopes),
+            Err(FixtureError::AuthorityWideningRefused)
+        );
+    }
+
     const PROJECT_TEMPLATE: &[u8] =
         include_bytes!("../tests/fixtures/fixture-tooling/project.yaml");
     const MODULE_SOURCE: &[u8] = include_bytes!("../tests/fixtures/fixture-tooling/module.yaml");
@@ -6595,7 +6949,11 @@ journeys:
                 record_ref: "before-submit".to_owned(),
                 etag_ref: "before-submit".to_owned(),
             },
+            problem_bindings: FixtureProblemBindings::default(),
             expect: ExpectationSource {
+                refusal_code: None,
+                entity_id: None,
+                field_id: None,
                 outcome: ExpectedOutcome::Success,
                 status: 200,
                 problem_code: None,
@@ -6791,7 +7149,11 @@ journeys:
                 record_ref: "before-submit".to_owned(),
                 etag_ref: "before-submit".to_owned(),
             },
+            problem_bindings: FixtureProblemBindings::default(),
             expect: ExpectationSource {
+                refusal_code: None,
+                entity_id: None,
+                field_id: None,
                 outcome: ExpectedOutcome::Refusal,
                 status: 400,
                 problem_code: Some("request.plan_refused".to_owned()),
@@ -6800,6 +7162,133 @@ journeys:
             },
             capture: None,
             capture_results: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn handler_and_pattern_problem_responses_are_closed_against_compiled_bindings() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/person-registration-rhai");
+        let mut project =
+            parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+        project
+            .entities
+            .iter_mut()
+            .find(|entity| entity.id == "person")
+            .unwrap()
+            .fields
+            .iter_mut()
+            .find(|field| field.id == "display-name")
+            .unwrap()
+            .pattern = Some(".*".to_owned());
+        let assets = project
+            .actions
+            .iter()
+            .filter_map(|action| action.handler.as_ref())
+            .map(|handler| ModuleAssetSource {
+                module: None,
+                path: handler.script.clone(),
+                bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let registry =
+            compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring).unwrap();
+        let suite = validate_fixture_journeys(
+            &std::fs::read(root.join("tests/journeys.yaml")).unwrap(),
+            &registry,
+        )
+        .unwrap();
+        let refusal = suite
+            .journeys
+            .iter()
+            .flat_map(|journey| &journey.steps)
+            .find(|step| step.expect.problem_code.as_deref() == Some("action.refused"))
+            .unwrap();
+        let document = json!({"type":crate::problem::ProblemCode::ActionRefused.type_uri(),"title":"Unprocessable Entity","status":422,"detail":refusal.problem_bindings.refusal_label,"code":"action.refused","traceId":"11111111111111111111111111111111","refusalCode":"blank-name","fieldPath":"/input/givenName"});
+        assert_response(refusal, StatusCode::UNPROCESSABLE_ENTITY, &document).unwrap();
+        let mut no_field = document.clone();
+        no_field.as_object_mut().unwrap().remove("fieldPath");
+        assert_response(refusal, StatusCode::UNPROCESSABLE_ENTITY, &no_field).unwrap();
+        for (field, value) in [
+            ("detail", json!("private-canary")),
+            ("refusalCode", json!("unknown")),
+            ("fieldPath", json!("/input/given-name")),
+            ("fieldPath", json!("/input/unknown")),
+            ("data", json!("private-canary")),
+        ] {
+            let mut changed = document.clone();
+            changed[field] = value;
+            assert!(assert_response(refusal, StatusCode::UNPROCESSABLE_ENTITY, &changed).is_err());
+        }
+        let pattern = suite
+            .journeys
+            .iter()
+            .flat_map(|journey| &journey.steps)
+            .find(|step| step.id == "ordinary-create-enforces-identifier-pattern")
+            .unwrap();
+        let document = json!({"type":crate::problem::ProblemCode::MutationConflict.type_uri(),"title":"Conflict","status":409,"detail":"The field does not conform to its declared storage pattern.","code":"mutation.conflict","traceId":"11111111111111111111111111111111","entityId":"person","fieldId":"identifier"});
+        assert_response(pattern, StatusCode::CONFLICT, &document).unwrap();
+        for (field, value) in [
+            ("detail", json!("private-canary")),
+            ("entityId", json!("unrelated")),
+            ("fieldId", json!("display-name")),
+            ("value", json!("private-canary")),
+            ("fieldPath", json!("/data/identifier")),
+        ] {
+            let mut changed = document.clone();
+            changed[field] = value;
+            assert!(assert_response(pattern, StatusCode::CONFLICT, &changed).is_err());
+        }
+        for missing_keys in [
+            vec!["fieldId"],
+            vec!["entityId"],
+            vec!["entityId", "fieldId"],
+        ] {
+            let mut missing = document.clone();
+            for key in missing_keys {
+                missing.as_object_mut().unwrap().remove(key);
+            }
+            assert!(assert_response(pattern, StatusCode::CONFLICT, &missing).is_err());
+        }
+        let generic = suite
+            .journeys
+            .iter()
+            .flat_map(|journey| &journey.steps)
+            .find(|step| step.id == "duplicate-identifier")
+            .unwrap();
+        let mut generic_document = document.clone();
+        generic_document.as_object_mut().unwrap().remove("entityId");
+        generic_document.as_object_mut().unwrap().remove("fieldId");
+        generic_document["detail"] = json!("The mutation conflicts with current state.");
+        assert_response(generic, StatusCode::CONFLICT, &generic_document).unwrap();
+        assert!(assert_response(generic, StatusCode::CONFLICT, &document).is_err());
+        assert!(assert_response(pattern, StatusCode::CONFLICT, &generic_document).is_err());
+
+        let mut concealed = plan_refused_step();
+        concealed.action = ActionSource::ApplyRequest {
+            record_ref: "before-apply".to_owned(),
+            etag_ref: "before-apply".to_owned(),
+            proposal_version: None,
+            proposal_version_ref: None,
+            effect_digest: None,
+            effect_digest_ref: None,
+        };
+        concealed.expect.status = 409;
+        concealed.expect.problem_code = Some("mutation.conflict".to_owned());
+        assert_response(&concealed, StatusCode::CONFLICT, &generic_document).unwrap();
+        assert!(assert_response(&concealed, StatusCode::CONFLICT, &document).is_err());
+        let invalid = suite
+            .journeys
+            .iter()
+            .flat_map(|journey| &journey.steps)
+            .find(|step| step.id == "omitted-patch-missing-condition")
+            .unwrap();
+        let document = json!({"type":crate::problem::ProblemCode::RequestInvalid.type_uri(),"title":"Bad Request","status":400,"detail":"The request is invalid.","code":"request.invalid","traceId":"11111111111111111111111111111111","fieldPath":"/preconditions/registerId"});
+        assert_response(invalid, StatusCode::BAD_REQUEST, &document).unwrap();
+        for path in ["/preconditions/unknown", "/private/path", "/input/register"] {
+            let mut changed = document.clone();
+            changed["fieldPath"] = json!(path);
+            assert!(assert_response(invalid, StatusCode::BAD_REQUEST, &changed).is_err());
         }
     }
 

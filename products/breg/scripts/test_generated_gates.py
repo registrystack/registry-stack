@@ -41,6 +41,10 @@ class GeneratedGateTests(unittest.TestCase):
             baselines / "household-contact-actions",
             baselines / "household-contact-actions",
         ))
+        self.assertEqual([], COMPARATOR.compare(
+            baselines / "person-registration-rhai",
+            baselines / "person-registration-rhai",
+        ))
 
         with tempfile.TemporaryDirectory() as temporary:
             candidate = Path(temporary) / "candidate"
@@ -61,6 +65,7 @@ class GeneratedGateTests(unittest.TestCase):
         self.assertIn("business-establishments", generated_gate)
         self.assertIn("asset-site-placement-change-requests", generated_gate)
         self.assertIn("publicschema-household-change-requests", generated_gate)
+        self.assertIn("acceptance/person-registration-rhai", generated_gate)
         self.assertIn('export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"', generated_gate)
         self.assertIn("authoring_baseline", generated_gate)
         self.assertIn("--features schema --example authoring-schema", generated_gate)

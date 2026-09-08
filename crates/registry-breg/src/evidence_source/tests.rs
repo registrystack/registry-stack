@@ -179,6 +179,132 @@ fn consumed_behavior_ignores_unselected_fields_but_reaches_sql_and_authority() {
     );
 }
 
+fn membership_project() -> Value {
+    let mut source = project();
+    source["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
+        "id":"organization","type":"reference","target":"organization","classification":"internal"
+    }));
+    source["entities"].as_array_mut().unwrap().extend([
+        json!({"id":"organization","route":"organizations","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
+            {"id":"name","type":"string","maxLength":80,"classification":"internal"}]}),
+        json!({"id":"membership","route":"memberships","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
+            {"id":"organization","type":"reference","target":"organization","classification":"internal"},
+            {"id":"other-organization","type":"reference","target":"organization","classification":"internal"},
+            {"id":"principal","type":"string","maxLength":80,"classification":"restricted"},
+            {"id":"other-principal","type":"string","maxLength":80,"classification":"restricted"},
+            {"id":"active","type":"boolean","classification":"internal"},
+            {"id":"other-active","type":"boolean","classification":"internal"}]}),
+    ]);
+    source["accessProfiles"][0]["grants"][0]["membershipBoundaries"] = json!([{
+        "field":"organization","membershipEntity":"membership","membershipKeyField":"organization",
+        "principalField":"principal","activeField":"active"
+    }]);
+    source
+}
+
+#[test]
+fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authority() {
+    let original = membership_project();
+    let registry = compiled(&original, SQL);
+    let before = export_evidence_source(&registry, &options()).unwrap();
+    for (name, value) in [
+        ("principalField", "other-principal"),
+        ("activeField", "other-active"),
+        ("membershipKeyField", "other-organization"),
+    ] {
+        let mut changed = original.clone();
+        changed["accessProfiles"][0]["grants"][0]["membershipBoundaries"][0][name] = json!(value);
+        let after_registry = compiled(&changed, SQL);
+        assert_eq!(
+            select_policies(&registry, &registry.entities()["record"], "evidence-source"),
+            select_policies(
+                &after_registry,
+                &after_registry.entities()["record"],
+                "evidence-source"
+            ),
+            "the root policy calls the same stable membership helper"
+        );
+        assert_ne!(
+            before.behavior_revision,
+            export_evidence_source(&after_registry, &options())
+                .unwrap()
+                .behavior_revision,
+            "changing {name} must change consumed membership behavior"
+        );
+    }
+    let mut changed_field = original.clone();
+    changed_field["entities"][2]["fields"][2]["maxLength"] = json!(64);
+    assert_ne!(
+        before.behavior_revision,
+        export_evidence_source(&compiled(&changed_field, SQL), &options())
+            .unwrap()
+            .behavior_revision,
+        "the principal field contract is consumed even when helper SQL stays the same"
+    );
+    let mut changed_policy = original.clone();
+    changed_policy["accessProfiles"][0]["grants"].as_array_mut().unwrap().push(json!({
+        "entity":"membership","operations":["get"],"readableFields":["active"],"rowBoundaries":[]
+    }));
+    assert_ne!(
+        before.behavior_revision,
+        export_evidence_source(&compiled(&changed_policy, SQL), &options())
+            .unwrap()
+            .behavior_revision,
+        "effective SELECT rules on the membership source are consumed"
+    );
+    let mut unrelated = original.clone();
+    unrelated["entities"][2]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"private-note","type":"string","maxLength":80,"classification":"restricted"
+        }));
+    assert_eq!(
+        before.behavior_revision,
+        export_evidence_source(&compiled(&unrelated, SQL), &options())
+            .unwrap()
+            .behavior_revision,
+        "unrelated membership source fields do not change a stored-field lookup"
+    );
+    for artifact in &before.artifacts {
+        let text = std::str::from_utf8(&artifact.bytes).unwrap();
+        assert!(!text.contains("membershipBoundaries") && !text.contains("other-principal"));
+    }
+}
+
+#[test]
+fn reached_derived_source_consumes_its_membership_helper() {
+    let mut original = membership_project();
+    let boundary = original["accessProfiles"][0]["grants"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("membershipBoundaries")
+        .unwrap();
+    original["entities"].as_array_mut().unwrap().push(json!({
+        "id":"flag","route":"flags","primaryDataset":"test-dataset","mutationMode":"mutable","fields":[
+            {"id":"code","type":"string","maxLength":32,"classification":"internal"},
+            {"id":"organization","type":"reference","target":"organization","classification":"internal"},
+            {"id":"enabled","type":"boolean","classification":"internal"}]
+    }));
+    original["accessProfiles"][0]["grants"].as_array_mut().unwrap().push(json!({
+        "entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":[],
+        "membershipBoundaries":boundary
+    }));
+    let sql = "SELECT r.id AS id, f.enabled AS active FROM registry_source.record r JOIN registry_source.flag f ON f.code = r.code";
+    let mut selection = options();
+    selection.fields = vec!["active".into()];
+    let before = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
+    original["accessProfiles"][0]["grants"][1]["membershipBoundaries"][0]["principalField"] =
+        json!("other-principal");
+    assert_ne!(
+        before.behavior_revision,
+        export_evidence_source(&compiled(&original, sql), &selection)
+            .unwrap()
+            .behavior_revision,
+        "membership semantics on a reached source affect the derived answer"
+    );
+}
+
 #[test]
 fn refuses_ungiven_authority_and_incompatible_selector_semantics() {
     let mut hidden = project();

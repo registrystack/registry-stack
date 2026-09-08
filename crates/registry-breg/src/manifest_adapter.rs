@@ -637,6 +637,7 @@ mod tests {
     fn decimal_projection_preserves_the_canonical_string_wire_contract() {
         let projected = project_field(
             &CompiledField {
+                pattern: None,
                 id: "measurement".to_owned(),
                 field_type: FieldTypeSource::Decimal {
                     precision: 12,

@@ -62,6 +62,17 @@ field's create requirement, not a requirement to include the field in PATCH.
 write. `removable` is true only for optional PATCH-writable fields. Removal sets
 the stored value to null, and nested JSON Patch paths are unsupported.
 
+A persisted string/text field with a native format rule also includes
+`storageValidation: {"kind": "postgresql-are", "pattern": "^[0-9]{13}$"}`.
+This is PostgreSQL's regular-expression contract, evaluated with the native `~`
+operator. It is separate from `schema`: JSON Schema and OpenAPI regular-expression
+semantics differ, so clients must not pass this expression to a JavaScript regex
+validator and treat its result as authoritative. No anchors or flags are added.
+Null remains permitted wherever requiredness and request-detail retention permit
+it; an empty string is matched normally. A failed check returns `409
+mutation.conflict` with the authored `entityId` and `fieldId`, without a stored
+value or physical database name.
+
 Schema formats and Registry extensions retain their server meanings: int64
 requires lossless signed 64-bit values, decimals use fixed-scale strings,
 structured values preserve their declared schema and byte bound, and CRS84

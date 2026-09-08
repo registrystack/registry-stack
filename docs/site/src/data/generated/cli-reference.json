@@ -389,9 +389,9 @@
             {
               "name": "planner-test",
               "invocation": "bregctl project planner-test",
-              "about": "Run one captured Rhai request planner with bounded synthetic JSON",
+              "about": "Test a Rhai request planner or action handler with bounded synthetic JSON",
               "long_about": null,
-              "usage": "bregctl project planner-test [OPTIONS] --entity <ENTITY> --request <JSON_FILE> <PROJECT>",
+              "usage": "bregctl project planner-test [OPTIONS] <--entity <ENTITY>|--action <ACTION>> <PROJECT>",
               "arguments": [
                 {
                   "display": "<PROJECT>",
@@ -406,8 +406,8 @@
               "options": [
                 {
                   "display": "--entity <ENTITY>",
-                  "description": "Compiled change-request entity whose Rhai planner will run",
-                  "always_required": true,
+                  "description": "Compiled change-request entity whose Rhai planner will run; pair with --request",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -415,8 +415,35 @@
                 },
                 {
                   "display": "--request <JSON_FILE>",
-                  "description": "Bounded strict JSON object containing synthetic request fields. A symbolic link at any component of this path is refused.",
-                  "always_required": true,
+                  "description": "Bounded strict JSON object containing synthetic request fields; requires --entity. A symbolic link at any component of this path is refused.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--action <ACTION>",
+                  "description": "Compiled immediate action whose Rhai handler will run; pair with --input",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--input <JSON_FILE>",
+                  "description": "Bounded strict JSON object using authored action input IDs, without an HTTP envelope; requires --action. A symbolic link at any component of this path is refused.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--expect <JSON_FILE>",
+                  "description": "With --action and --input, assert exact synthetic effects or a declared refusal without printing values. A symbolic link at any component of this path is refused.",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -446,7 +473,100 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "required_exactly_one",
+                  "when": null,
+                  "arguments": [
+                    "--entity <ENTITY>",
+                    "--action <ACTION>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--entity <ENTITY>",
+                  "arguments": [
+                    "--request <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--request <JSON_FILE>",
+                  "arguments": [
+                    "--entity <ENTITY>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--action <ACTION>",
+                  "arguments": [
+                    "--input <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--input <JSON_FILE>",
+                  "arguments": [
+                    "--action <ACTION>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--expect <JSON_FILE>",
+                  "arguments": [
+                    "--input <JSON_FILE>",
+                    "--action <ACTION>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--action <ACTION>",
+                    "--entity <ENTITY>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--action <ACTION>",
+                    "--request <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--entity <ENTITY>",
+                    "--expect <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--entity <ENTITY>",
+                    "--input <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--expect <JSON_FILE>",
+                    "--request <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--input <JSON_FILE>",
+                    "--request <JSON_FILE>"
+                  ]
+                }
+              ],
               "subcommands": []
             }
           ]
@@ -5504,6 +5624,20 @@
                   "arguments": [
                     "[QUESTION]",
                     "--profile <PROFILE>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--requirement <REQUIREMENT>",
+                  "arguments": [
+                    "--profile <PROFILE>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--purpose <PURPOSE>",
+                  "arguments": [
+                    "<QUESTION>"
                   ]
                 },
                 {

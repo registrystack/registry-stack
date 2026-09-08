@@ -54,7 +54,9 @@ impl From<PostgresKernelError> for HistoryMaintenanceError {
     fn from(error: PostgresKernelError) -> Self {
         match error {
             PostgresKernelError::RoleInvariant(_) => Self::MigrationAuthority,
-            PostgresKernelError::Configuration(_) => Self::InvalidInput,
+            PostgresKernelError::Configuration(_)
+            | PostgresKernelError::FieldPatternSyntax { .. }
+            | PostgresKernelError::FieldPatternExistingRows { .. } => Self::InvalidInput,
             PostgresKernelError::Connection
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild

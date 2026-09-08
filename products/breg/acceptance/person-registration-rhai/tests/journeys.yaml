@@ -1,0 +1,649 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+- id: person-registration-and-native-integrity
+  steps:
+  - id: register-padded-name
+    action: register-person
+    accessProfile: person-registrar
+    claims: &registrar_claims
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
+    request:
+      operation: invoke
+      idempotencyKey: person-full-name
+      input:
+        identifier: "0123456789012"
+        givenName: '  Mina  '
+        familyName: ' Example '
+    expect:
+      outcome: success
+      status: 200
+    capture: person-receipt
+    captureResults:
+      person: full-name-person
+  - id: read-exact-stored-name
+    entity: person
+    accessProfile: person-reader
+    claims: &reader_claims
+      principal: synthetic-person-reader
+      scopes:
+      - registry:person:read
+      purpose: person-registration-audit
+    request:
+      operation: get
+      recordRef: full-name-person
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        identifier: "0123456789012"
+        displayName: Mina Example
+  - id: recover-committed-receipt
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: person-full-name
+      input:
+        identifier: "0123456789012"
+        givenName: '  Mina  '
+        familyName: ' Example '
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      person: replayed-person
+  - id: same-key-changed-input
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: person-full-name
+      input:
+        identifier: "0123456789013"
+        givenName: '  Mina  '
+        familyName: ' Example '
+    expect:
+      outcome: refusal
+      status: 409
+      problemCode: idempotency.conflict
+  - id: duplicate-identifier
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: duplicate-identifier
+      input:
+        identifier: "0123456789012"
+        givenName: '  Mina  '
+        familyName: ' Example '
+    expect:
+      outcome: refusal
+      status: 409
+      problemCode: mutation.conflict
+  - id: single-given-name
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: single-given-name
+      input:
+        identifier: "0123456789014"
+        givenName: '  Mina  '
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      person: given-only-person
+  - id: read-single-given-name
+    entity: person
+    accessProfile: person-reader
+    claims: *reader_claims
+    request:
+      operation: get
+      recordRef: given-only-person
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        identifier: "0123456789014"
+        displayName: Mina
+  - id: single-family-name
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: single-family-name
+      input:
+        identifier: "0123456789015"
+        familyName: ' Example '
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      person: family-only-person
+  - id: read-single-family-name
+    entity: person
+    accessProfile: person-reader
+    claims: *reader_claims
+    request:
+      operation: get
+      recordRef: family-only-person
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        identifier: "0123456789015"
+        displayName: Example
+  - id: explicit-null-family-name
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: explicit-null-family-name
+      input:
+        identifier: "0123456789018"
+        givenName: '  Mina  '
+        familyName: null
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      person: null-family-person
+  - id: read-name-with-null-family
+    entity: person
+    accessProfile: person-reader
+    claims: *reader_claims
+    request:
+      operation: get
+      recordRef: null-family-person
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        identifier: "0123456789018"
+        displayName: Mina
+  - id: omitted-name-refusal
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: omitted-name-refusal
+      input:
+        identifier: "0123456789019"
+    expect:
+      outcome: refusal
+      status: 422
+      problemCode: action.refused
+      refusalCode: blank-name
+  - id: null-name-refusal
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: null-name-refusal
+      input:
+        identifier: "0123456789020"
+        givenName: null
+        familyName: null
+    expect:
+      outcome: refusal
+      status: 422
+      problemCode: action.refused
+      refusalCode: blank-name
+  - id: blank-name-refusal
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: blank-name-refusal
+      input:
+        identifier: "0123456789016"
+        givenName: ' '
+        familyName: '  '
+    expect:
+      outcome: refusal
+      status: 422
+      problemCode: action.refused
+      refusalCode: blank-name
+  - id: overlong-identifier
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: overlong-identifier
+      input:
+        identifier: "01234567890123"
+        givenName: '  Mina  '
+        familyName: ' Example '
+    expect:
+      outcome: refusal
+      status: 400
+      problemCode: request.invalid
+  - id: ordinary-create-preserves-supplied-display-name
+    entity: person
+    accessProfile: person-administrator
+    claims: &administrator_claims
+      principal: synthetic-person-administrator
+      scopes:
+      - registry:person:manage
+      purpose: person-maintenance
+    request:
+      operation: create
+      data:
+        identifier: "0123456789017"
+        displayName: '  Supplied unchanged  '
+    expect:
+      outcome: success
+      status: 201
+      fields:
+        identifier: "0123456789017"
+        displayName: '  Supplied unchanged  '
+    capture: ordinary-person
+  - id: read-ordinary-value
+    entity: person
+    accessProfile: person-reader
+    claims: *reader_claims
+    request:
+      operation: get
+      recordRef: ordinary-person
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        identifier: "0123456789017"
+        displayName: '  Supplied unchanged  '
+  - id: short-identifier
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: short-identifier
+      input:
+        identifier: "012345678901"
+        givenName: Synthetic
+        familyName: Example
+    expect:
+      outcome: refusal
+      status: 409
+      problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
+  - id: unicode-identifier
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: unicode-identifier
+      input:
+        identifier: ٠١٢٣٤٥٦٧٨٩٠١٢
+        givenName: Synthetic
+        familyName: Example
+    expect:
+      outcome: refusal
+      status: 409
+      problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
+  - id: whitespace-identifier
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: whitespace-identifier
+      input:
+        identifier: ' 123456789012'
+        givenName: Synthetic
+        familyName: Example
+    expect:
+      outcome: refusal
+      status: 409
+      problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
+  - id: embedded-newline-identifier
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: embedded-newline-identifier
+      input:
+        identifier: '012345
+
+          789012'
+        givenName: Synthetic
+        familyName: Example
+    expect:
+      outcome: refusal
+      status: 409
+      problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
+  - id: trailing-newline-identifier
+    action: register-person
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: trailing-newline-identifier
+      input:
+        identifier: '012345678901
+
+          '
+        givenName: Synthetic
+        familyName: Example
+    expect:
+      outcome: refusal
+      status: 409
+      problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
+  - id: ordinary-create-enforces-identifier-pattern
+    entity: person
+    accessProfile: person-administrator
+    claims: *administrator_claims
+    request:
+      operation: create
+      data:
+        identifier: not-digits
+        displayName: Supplied
+    expect:
+      outcome: refusal
+      status: 409
+      problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
+  - id: ordinary-patch-enforces-identifier-pattern
+    entity: person
+    accessProfile: person-administrator
+    claims: *administrator_claims
+    request:
+      operation: patch
+      recordRef: ordinary-person
+      etagRef: ordinary-person
+      changes:
+      - field: identifier
+        value: short
+    expect:
+      outcome: refusal
+      status: 409
+      problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
+- id: coordinated-registration-and-omission
+  steps:
+  - id: create-active-register
+    entity: register
+    accessProfile: person-administrator
+    claims: *administrator_claims
+    request:
+      operation: create
+      data:
+        registerCode: SYNTH-REGISTER-001
+        active: true
+    expect:
+      outcome: success
+      status: 201
+    capture: active-register
+  - id: read-initial-register-condition
+    action: register-person-with-registration
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: target_conditions
+      input:
+        registerId:
+          recordRef: active-register
+    expect:
+      outcome: success
+      status: 200
+    capture: initial-register-condition
+  - id: create-person-registration-and-patch
+    action: register-person-with-registration
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: create-person-registration-and-patch
+      input:
+        identifier: '1123456789012'
+        givenName: '  Mina  '
+        familyName: ' Example '
+        registerId:
+          recordRef: active-register
+        registrationCode: create-person-registration-and-patch
+        recordRegistration: true
+        updateRegister: true
+      preconditions:
+        registerId:
+          conditionRef: initial-register-condition
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      person: coordinated-person
+      registration: coordinated-registration
+      register: patched-register
+  - id: read-coordinated-person
+    entity: person
+    accessProfile: person-reader
+    claims: *reader_claims
+    request:
+      operation: get
+      recordRef: coordinated-person
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        identifier: '1123456789012'
+        displayName: Mina Example
+  - id: read-coordinated-registration
+    entity: registration
+    accessProfile: person-reader
+    claims: *reader_claims
+    request:
+      operation: get
+      recordRef: coordinated-registration
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        registrationCode: create-person-registration-and-patch
+  - id: omitted-patch-stale-condition
+    action: register-person-with-registration
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: omitted-patch-stale-condition
+      input:
+        identifier: '1123456789013'
+        givenName: '  Mina  '
+        familyName: ' Example '
+        registerId:
+          recordRef: active-register
+        registrationCode: omitted-patch-stale-condition
+        recordRegistration: false
+        updateRegister: false
+      preconditions:
+        registerId:
+          conditionRef: initial-register-condition
+    expect:
+      outcome: refusal
+      status: 412
+      problemCode: precondition.failed
+  - id: omitted-patch-missing-condition
+    action: register-person-with-registration
+    accessProfile: person-registrar
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
+    request:
+      operation: invoke
+      idempotencyKey: omitted-patch-missing-condition
+      input:
+        identifier: '1123456789013'
+        givenName: '  Mina  '
+        familyName: ' Example '
+        registerId:
+          recordRef: active-register
+        registrationCode: omitted-patch-stale-condition
+        recordRegistration: false
+        updateRegister: false
+    expect:
+      outcome: refusal
+      status: 400
+      problemCode: request.invalid
+  - id: read-current-register-condition
+    action: register-person-with-registration
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: target_conditions
+      input:
+        registerId:
+          recordRef: active-register
+    expect:
+      outcome: success
+      status: 200
+    capture: current-register-condition
+  - id: create-person-only
+    action: register-person-with-registration
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: create-person-only
+      input:
+        identifier: '1123456789014'
+        givenName: '  Mina  '
+        registerId:
+          recordRef: active-register
+        registrationCode: create-person-only
+        recordRegistration: false
+        updateRegister: false
+      preconditions:
+        registerId:
+          conditionRef: current-register-condition
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      person: coordinated-person-only
+  - id: read-coordinated-person-only
+    entity: person
+    accessProfile: person-reader
+    claims: *reader_claims
+    request:
+      operation: get
+      recordRef: coordinated-person-only
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        identifier: '1123456789014'
+        displayName: Mina
+  - id: create-person-and-registration-only
+    action: register-person-with-registration
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: create-person-and-registration-only
+      input:
+        identifier: '1123456789015'
+        givenName: null
+        familyName: ' Example '
+        registerId:
+          recordRef: active-register
+        registrationCode: create-person-and-registration-only
+        recordRegistration: true
+        updateRegister: false
+      preconditions:
+        registerId:
+          conditionRef: current-register-condition
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      person: no-patch-person
+      registration: no-patch-registration
+  - id: read-register-for-maintenance
+    entity: register
+    accessProfile: person-administrator
+    claims: *administrator_claims
+    request:
+      operation: get
+      recordRef: active-register
+    expect:
+      outcome: success
+      status: 200
+    capture: register-before-inactivation
+  - id: inactivate-register
+    entity: register
+    accessProfile: person-administrator
+    claims: *administrator_claims
+    request:
+      operation: patch
+      recordRef: register-before-inactivation
+      etagRef: register-before-inactivation
+      changes:
+      - field: active
+        value: false
+    expect:
+      outcome: success
+      status: 200
+  - id: read-inactive-register-condition
+    action: register-person-with-registration
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: target_conditions
+      input:
+        registerId:
+          recordRef: active-register
+    expect:
+      outcome: success
+      status: 200
+    capture: inactive-register-condition
+  - id: omitted-patch-retains-active-requirement
+    action: register-person-with-registration
+    accessProfile: person-registrar
+    claims: *registrar_claims
+    request:
+      operation: invoke
+      idempotencyKey: omitted-patch-retains-active-requirement
+      input:
+        identifier: '1123456789016'
+        givenName: '  Mina  '
+        familyName: ' Example '
+        registerId:
+          recordRef: active-register
+        registrationCode: omitted-patch-retains-active-requirement
+        recordRegistration: false
+        updateRegister: false
+      preconditions:
+        registerId:
+          conditionRef: inactive-register-condition
+    expect:
+      outcome: refusal
+      status: 412
+      problemCode: precondition.failed

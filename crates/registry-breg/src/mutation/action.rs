@@ -2,6 +2,7 @@
 
 use super::*;
 
+use crate::action_handler::{evaluate_admitted_action_detailed, ActionHandlerOutcome};
 use crate::api::{ActionTargetConditionsInput, HeldReadResponse, ImmediateActionInput};
 
 type ActionInputs = Map<String, Value>;
@@ -17,6 +18,7 @@ struct ActionEffectResult {
 }
 
 impl MutationCoordinator {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_immediate_action(
         &self,
         client: &mut Client,
@@ -25,6 +27,7 @@ impl MutationCoordinator {
         claims: &ActionClaimContext,
         target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
         fault: FaultControl,
+        deadline: tokio::time::Instant,
     ) -> Result<MutationOutcome, MutationError> {
         if !profile_is_keyed(&self.audit_profile) {
             return Err(MutationError::Unavailable);
@@ -63,6 +66,7 @@ impl MutationCoordinator {
             },
         )?;
         let reserved_creates = reserve_action_create_ids(action)?;
+        let mut candidate = None;
         let application_id = Uuid::new_v4();
         let mut retryable_attempts = 0;
         let result = loop {
@@ -81,6 +85,8 @@ impl MutationCoordinator {
                     input.route_id,
                     input.correlation,
                     fault,
+                    deadline,
+                    &mut candidate,
                 )
                 .await;
             if matches!(attempt, Err(MutationError::RetryableConflict))
@@ -204,7 +210,12 @@ impl MutationCoordinator {
         route_id: &str,
         correlation: &RequestCorrelation,
         fault: FaultControl,
+        deadline: tokio::time::Instant,
+        candidate: &mut Option<Vec<CompiledActionEffect>>,
     ) -> Result<MutationOutcome, MutationError> {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(MutationError::Unavailable);
+        }
         let transaction = begin_action_transaction(
             client,
             self.lock_key,
@@ -266,6 +277,60 @@ impl MutationCoordinator {
             });
         }
 
+        // Receipt recovery precedes computation. Once verified, retain this
+        // candidate and the host-reserved identities across confirmed aborts.
+        if candidate.is_none() {
+            *candidate = Some(if action.handler.is_some() {
+                // Keep receipt recovery and evaluation under the same key lock.
+                // The blocking worker receives only owned compiled declarations
+                // and bounded inputs, so cancellation cannot leave a worker
+                // holding database authority or committing late effects.
+                let compiled_action = action.clone();
+                let handler_inputs = input_values.clone();
+                let outcome = tokio::task::spawn_blocking(move || {
+                    evaluate_admitted_action_detailed(
+                        &compiled_action,
+                        &handler_inputs,
+                        deadline.into_std(),
+                    )
+                })
+                .await
+                .map_err(|_| MutationError::Unavailable)?
+                .map_err(|diagnostic| {
+                    // Locations are compiled identifiers and the cause is a
+                    // static repair message. Never render Rhai errors, source,
+                    // input values, or script-selected unknown identifiers.
+                    tracing::error!(
+                        action_id = %action.id,
+                        slot_id = diagnostic.slot.as_deref(),
+                        field_id = diagnostic.field.as_deref(),
+                        handler_failure = diagnostic.kind.code(),
+                        cause = diagnostic.message,
+                        "action handler produced no effects"
+                    );
+                    MutationError::ActionHandlerFailure(diagnostic.kind)
+                })?;
+                match outcome {
+                    ActionHandlerOutcome::Effects(effects) => effects,
+                    ActionHandlerOutcome::Refusal(mut refusal) => {
+                        refusal.field = refusal.field.and_then(|id| {
+                            action
+                                .inputs
+                                .iter()
+                                .find(|input| input.id == id)
+                                .map(|input| input.api_name.clone())
+                        });
+                        return Err(MutationError::ActionRefusal(refusal));
+                    }
+                }
+            } else {
+                action.effects.clone()
+            });
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(MutationError::Unavailable);
+        }
+        let effects = candidate.as_ref().ok_or(MutationError::Unavailable)?;
         let application_reference = action_application_reference(
             &self.audit_profile,
             &self.expected.package_revision,
@@ -305,7 +370,7 @@ impl MutationCoordinator {
                 application_id,
             )
             .await?;
-        let ordered = ordered_action_effects(action)?;
+        let ordered = ordered_action_effects(effects)?;
         let groups = ordered_action_effect_groups(&ordered, &patch_bases, reserved_creates)?;
         let mut rows = BTreeMap::<String, CurrentRow>::new();
         let mut results = Vec::<ActionEffectResult>::new();
@@ -562,12 +627,11 @@ impl MutationCoordinator {
         }
         let mut current = match effect.operation {
             Operation::Create => {
-                insert_action_create_row(transaction, entity, &record_uuid.to_string(), &fields)
-                    .await?
+                insert_current_row(transaction, entity, &record_uuid.to_string(), &fields).await?
             }
             Operation::Patch => {
                 let before = before.ok_or(MutationError::PreconditionFailed)?;
-                let mut next = apply_patch_row(
+                let mut next = update_current_row(
                     transaction,
                     entity,
                     &record_uuid.to_string(),
@@ -687,6 +751,8 @@ impl MutationCoordinator {
                 .await
                 .map_err(map_database_error)?;
             load_action_row(transaction, entity, &record_id.to_string(), true).await?;
+            verify_action_requirements(transaction, entity, action, input_values, record_id)
+                .await?;
         }
         transaction
             .execute(
@@ -1116,13 +1182,27 @@ fn validate_action_input(
     if input.keys().any(|key| !expected.contains(key.as_str())) {
         return Err(MutationError::InvalidRequest);
     }
+    let condition_inputs = existing_target_inputs(action);
     for source in &action.inputs {
         match input.get(&source.id) {
-            Some(value) if !validate_field_value(FieldValue::Json(value), &source.field_type) => {
+            None | Some(Value::Null)
+                if source.required || condition_inputs.contains(&source.id) =>
+            {
                 return Err(MutationError::InvalidRequest);
             }
-            None if source.required => return Err(MutationError::InvalidRequest),
-            Some(_) | None => {}
+            Some(value) => {
+                let valid = if action.handler.is_some() {
+                    value.is_null()
+                        || crate::action_handler::validate_input_value(value, &source.field_type)
+                            .is_ok()
+                } else {
+                    validate_field_value(FieldValue::Json(value), &source.field_type)
+                };
+                if !valid {
+                    return Err(MutationError::InvalidRequest);
+                }
+            }
+            None => {}
         }
     }
     Ok(input)
@@ -1259,7 +1339,39 @@ fn action_target_group_context(
         .iter()
         .map(|effect| effect.id.clone())
         .collect::<BTreeSet<_>>();
-    let fields = effects
+    // PostgreSQL receives the compiled ceiling for these selected slots. The
+    // candidate may mutate only a subset, which is checked independently.
+    let declared_effects = effects
+        .iter()
+        .map(|effect| {
+            let declared = action
+                .effects
+                .iter()
+                .find(|declared| declared.id == effect.id)
+                .ok_or(MutationError::InvalidRequest)?;
+            if declared.operation != effect.operation || declared.target != effect.target {
+                return Err(MutationError::InvalidRequest);
+            }
+            let ceiling = declared
+                .mutations
+                .iter()
+                .map(|mutation| match mutation {
+                    CompiledActionMutation::Set { field, .. }
+                    | CompiledActionMutation::Clear { field } => field,
+                })
+                .collect::<BTreeSet<_>>();
+            if effect.mutations.iter().any(|mutation| {
+                !ceiling.contains(match mutation {
+                    CompiledActionMutation::Set { field, .. }
+                    | CompiledActionMutation::Clear { field } => field,
+                })
+            }) {
+                return Err(MutationError::InvalidRequest);
+            }
+            Ok(declared)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let fields = declared_effects
         .iter()
         .flat_map(|effect| &effect.mutations)
         .map(|mutation| match mutation {
@@ -1305,9 +1417,9 @@ fn reserve_action_create_ids(
 }
 
 fn ordered_action_effects(
-    action: &CompiledAction,
+    effects: &[CompiledActionEffect],
 ) -> Result<Vec<&CompiledActionEffect>, MutationError> {
-    let mut remaining = action.effects.iter().collect::<Vec<_>>();
+    let mut remaining = effects.iter().collect::<Vec<_>>();
     let mut resolved = BTreeSet::new();
     let mut ordered = Vec::with_capacity(remaining.len());
     while !remaining.is_empty() {
@@ -1345,7 +1457,36 @@ fn ordered_action_effect_groups<'a>(
             groups.push(vec![*effect]);
         }
     }
-    Ok(groups)
+    order_action_effect_groups(groups)
+}
+
+fn order_action_effect_groups(
+    mut remaining: Vec<Vec<&CompiledActionEffect>>,
+) -> Result<Vec<Vec<&CompiledActionEffect>>, MutationError> {
+    // Aliased patch slots write one physical row. Folding a later patch into
+    // an earlier group can introduce dependencies that the first slot lacked.
+    // Order the groups by their complete dependency sets before executing any.
+    let mut resolved = BTreeSet::new();
+    let mut ordered = Vec::with_capacity(remaining.len());
+    while !remaining.is_empty() {
+        let position = remaining
+            .iter()
+            .position(|group| {
+                let members = group
+                    .iter()
+                    .map(|effect| &effect.id)
+                    .collect::<BTreeSet<_>>();
+                group
+                    .iter()
+                    .flat_map(|effect| &effect.depends_on)
+                    .all(|dependency| resolved.contains(dependency) || members.contains(dependency))
+            })
+            .ok_or(MutationError::InvalidRequest)?;
+        let group = remaining.remove(position);
+        resolved.extend(group.iter().map(|effect| effect.id.clone()));
+        ordered.push(group);
+    }
+    Ok(ordered)
 }
 
 fn action_effect_target_key(
@@ -1384,6 +1525,7 @@ fn action_effect_document(
                     .get(field)
                     .ok_or(MutationError::InvalidRequest)?;
                 let value = match value {
+                    CompiledActionValue::Literal { value } => value.clone(),
                     CompiledActionValue::FromInput { input } => input_values
                         .get(input)
                         .cloned()
@@ -1458,6 +1600,47 @@ fn action_held_response(
     .map_err(MutationError::from)
 }
 
+async fn verify_action_requirements(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    action: &CompiledAction,
+    inputs: &ActionInputs,
+    record_id: Uuid,
+) -> Result<(), MutationError> {
+    for requirement in action
+        .requires
+        .iter()
+        .filter(|requirement| requirement.entity_id == entity.id)
+    {
+        let required_id = Uuid::parse_str(&input_record_id(inputs, &requirement.input)?)
+            .map_err(|_| MutationError::InvalidRequest)?;
+        if required_id != record_id {
+            continue;
+        }
+        let field = entity
+            .fields
+            .get(&requirement.field)
+            .ok_or(MutationError::InvalidRequest)?;
+        let expected = sql_value(&requirement.equals, &field.field_type)?;
+        // The exact row is already authorized and locked until commit. Use its
+        // PostgreSQL type's equality, including decimal and timestamp semantics.
+        let sql = format!(
+            "SELECT {} IS NOT DISTINCT FROM {} FROM registry_data.{} WHERE record_id = $1::text::uuid AND record_lifecycle = 'active'",
+            quote_identifier(&field.physical_name),
+            typed_parameter(2, &field.field_type),
+            quote_identifier(&entity.physical_table),
+        );
+        let row = transaction
+            .query_opt(&sql, &[&record_id.to_string(), &expected])
+            .await
+            .map_err(map_database_error)?;
+        if !row.is_some_and(|row| row.get::<_, bool>(0)) {
+            return Err(MutationError::PreconditionFailed);
+        }
+    }
+    Ok(())
+}
+
 async fn load_action_row(
     transaction: &Transaction<'_>,
     entity: &CompiledEntity,
@@ -1473,120 +1656,6 @@ async fn load_action_row(
     );
     let row = transaction
         .query_opt(&sql, &[&id])
-        .await
-        .map_err(map_database_error)?
-        .ok_or(MutationError::PreconditionFailed)?;
-    row_to_current(entity, &row)
-}
-
-async fn insert_action_create_row(
-    transaction: &Transaction<'_>,
-    entity: &CompiledEntity,
-    record_id: &str,
-    data: &Map<String, Value>,
-) -> Result<CurrentRow, MutationError> {
-    let submitted_fields = entity
-        .fields
-        .values()
-        .filter(|field| data.contains_key(&field.id))
-        .collect::<Vec<_>>();
-    let mut values = Vec::<Option<String>>::with_capacity(submitted_fields.len() + 1);
-    values.push(Some(record_id.to_owned()));
-    for field in &submitted_fields {
-        values.push(sql_value(&data[&field.id], &field.field_type)?);
-    }
-    let parameters = values
-        .iter()
-        .map(|value| value as &(dyn ToSql + Sync))
-        .collect::<Vec<_>>();
-    let table = quote_identifier(&entity.physical_table);
-    let field_columns = submitted_fields
-        .iter()
-        .map(|field| quote_identifier(&field.physical_name))
-        .collect::<Vec<_>>();
-    let field_parameters = submitted_fields
-        .iter()
-        .enumerate()
-        .map(|(index, field)| typed_parameter(index + 2, &field.field_type))
-        .collect::<Vec<_>>();
-    let returning = returning_projection(entity);
-    let mut columns = vec![
-        "record_id".to_owned(),
-        "record_revision".to_owned(),
-        "record_lifecycle".to_owned(),
-    ];
-    columns.extend(field_columns);
-    let mut placeholders = vec![
-        "$1::text::uuid".to_owned(),
-        "1".to_owned(),
-        "'active'".to_owned(),
-    ];
-    placeholders.extend(field_parameters);
-    let sql = format!(
-        "INSERT INTO registry_data.{table} ({}) VALUES ({}) RETURNING {returning}",
-        columns.join(", "),
-        placeholders.join(", ")
-    );
-    let row = transaction
-        .query_one(&sql, &parameters)
-        .await
-        .map_err(map_database_error)?;
-    row_to_current(entity, &row)
-}
-
-async fn apply_patch_row(
-    transaction: &Transaction<'_>,
-    entity: &CompiledEntity,
-    record_id: &str,
-    expected_revision: i64,
-    data: Map<String, Value>,
-) -> Result<CurrentRow, MutationError> {
-    let submitted_fields = entity
-        .fields
-        .values()
-        .filter(|field| data.contains_key(&field.id))
-        .collect::<Vec<_>>();
-    if submitted_fields.is_empty() {
-        return Err(MutationError::InvalidRequest);
-    }
-    let mut values = Vec::<Option<String>>::with_capacity(submitted_fields.len() + 2);
-    values.push(Some(record_id.to_owned()));
-    for field in &submitted_fields {
-        values.push(sql_value(&data[&field.id], &field.field_type)?);
-    }
-    values.push(Some(expected_revision.to_string()));
-    let parameters = values
-        .iter()
-        .map(|value| value as &(dyn ToSql + Sync))
-        .collect::<Vec<_>>();
-    let table = quote_identifier(&entity.physical_table);
-    let assignments = submitted_fields
-        .iter()
-        .enumerate()
-        .map(|(index, field)| {
-            format!(
-                "{} = {}",
-                quote_identifier(&field.physical_name),
-                typed_parameter(index + 2, &field.field_type)
-            )
-        })
-        .collect::<Vec<_>>();
-    let expected_parameter = values.len();
-    let returning = returning_projection(entity);
-    let sql = format!(
-        "UPDATE registry_data.{table}
-         SET record_revision = record_revision + 1,
-             active_package_revision = DEFAULT,
-             updated_at = transaction_timestamp(),
-             {}
-         WHERE record_id = $1::text::uuid
-           AND record_revision = ${expected_parameter}::text::bigint
-           AND record_lifecycle = 'active'
-         RETURNING {returning}",
-        assignments.join(", ")
-    );
-    let row = transaction
-        .query_opt(&sql, &parameters)
         .await
         .map_err(map_database_error)?
         .ok_or(MutationError::PreconditionFailed)?;
@@ -1735,4 +1804,77 @@ fn canonical_action_request_digest(
     }))
     .map_err(|_| MutationError::InvalidRequest)?;
     Ok(Sha256::digest(canonical).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_optional_from_input_has_the_same_type_contract_at_admission_and_materialization() {
+        let project = crate::contract::parse_project_yaml(include_bytes!(
+            "../../tests/fixtures/fixed-optional-action-input.yaml"
+        ))
+        .unwrap();
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let action = &registry.actions().actions[0];
+        let entity = &registry.entities()["entry"];
+        let effect = &action.effects[0];
+        assert!(action.handler.is_none());
+        let value = Map::from_iter([("label".to_owned(), json!("A label"))]);
+        assert_eq!(validate_action_input(action, value.clone()).unwrap(), value);
+        assert_eq!(
+            action_effect_document(action, entity, effect, &value, &BTreeMap::new(), None).unwrap(),
+            value
+        );
+
+        let null = Map::from_iter([("label".to_owned(), Value::Null)]);
+        assert!(matches!(
+            action_effect_document(action, entity, effect, &null, &BTreeMap::new(), None),
+            Err(MutationError::InvalidRequest)
+        ));
+        assert!(matches!(
+            validate_action_input(action, null),
+            Err(MutationError::InvalidRequest)
+        ));
+    }
+
+    #[test]
+    fn aliased_patch_group_waits_for_every_selected_create_dependency() {
+        let effect = |id: &str, operation, dependencies: &[&str]| CompiledActionEffect {
+            id: id.to_owned(),
+            target: crate::model::CompiledActionTarget {
+                entity_id: "synthetic".to_owned(),
+                binding: if operation == Operation::Create {
+                    CompiledActionTargetBinding::Create
+                } else {
+                    CompiledActionTargetBinding::Existing {
+                        input: "target".to_owned(),
+                    }
+                },
+            },
+            operation,
+            mutations: vec![],
+            depends_on: dependencies.iter().map(|id| (*id).to_owned()).collect(),
+        };
+        let first_patch = effect("first-patch", Operation::Patch, &[]);
+        let create = effect("create", Operation::Create, &[]);
+        let dependent_patch = effect("dependent-patch", Operation::Patch, &["create"]);
+        let groups =
+            order_action_effect_groups(vec![vec![&first_patch, &dependent_patch], vec![&create]])
+                .unwrap();
+        assert_eq!(groups[0][0].id, "create");
+        assert_eq!(
+            groups[1]
+                .iter()
+                .map(|effect| effect.id.as_str())
+                .collect::<Vec<_>>(),
+            ["first-patch", "dependent-patch"]
+        );
+    }
 }

@@ -83,12 +83,31 @@ HOUSEHOLD_CONTACT_ACTIONS_PATHS = (
     "generated/schemas/service-center.schema.json",
 )
 
+PERSON_REGISTRATION_RHAI_PATHS = (
+    "compiled/actions.json",
+    "generated/action-schemas/register-person.invoke.input.schema.json",
+    "generated/action-schemas/register-person.invoke.response.schema.json",
+    "generated/action-schemas/register-person-with-registration.invoke.input.schema.json",
+    "generated/action-schemas/register-person-with-registration.invoke.response.schema.json",
+    "generated/action-schemas/register-person-with-registration.target-conditions.input.schema.json",
+    "generated/action-schemas/register-person-with-registration.target-conditions.response.schema.json",
+    "generated/manifest/dcat.jsonld",
+    "generated/manifest/registry-manifest.json",
+    "generated/metadata/registry.json",
+    "generated/openapi.json",
+    "generated/postgres/schema.sql",
+    "generated/schemas/person.schema.json",
+    "generated/schemas/registration.schema.json",
+    "generated/schemas/register.schema.json",
+)
+
 EXPECTED_PATHS_BY_BASELINE = {
     "asset-site-placement": ASSET_SITE_PLACEMENT_PATHS,
     "business-establishments": BUSINESS_ESTABLISHMENTS_PATHS,
     "asset-site-placement-change-requests": ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS,
     "publicschema-household-change-requests": PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS,
     "person-name-change-rhai": PERSON_NAME_CHANGE_RHAI_PATHS,
+    "person-registration-rhai": PERSON_REGISTRATION_RHAI_PATHS,
     "asset-registration-actions": ASSET_REGISTRATION_ACTIONS_PATHS,
     "household-contact-actions": HOUSEHOLD_CONTACT_ACTIONS_PATHS,
 }

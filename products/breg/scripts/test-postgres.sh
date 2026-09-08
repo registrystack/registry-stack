@@ -56,6 +56,8 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_history_rebaseline \
     --test postgres_workspace_metadata \
     --test postgres_mutation \
+    --test postgres_immediate_action_requirements \
+    --test postgres_membership_access \
     --test postgres_mutation_logical_names \
     --test postgres_webhook_outbox \
     --test postgres_webhook_delivery \
@@ -78,6 +80,8 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_history_migration \
     --test postgres_immediate_action_examples \
     --test postgres_immediate_action_activation \
+    --test postgres_registry_extensibility \
+    --test postgres_action_handlers \
     --test postgres_request_activation \
     --test postgres_audit_tooling \
     --test postgres_package \

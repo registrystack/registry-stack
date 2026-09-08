@@ -207,7 +207,23 @@ fn access_direction(
     after: &serde_json::Value,
 ) -> AccessChangeDirection {
     use AccessChangeDirection::{Narrowing, ReviewRequired, Widening};
-    let reverse = matches!(field, "requiredScopes" | "rowBoundaries");
+    // Empty membership requirements are omitted from the serialized profile.
+    // Compare them as an empty conjunction when the first or last rule changes.
+    let empty = serde_json::Value::Array(Vec::new());
+    let before = if field == "membershipBoundaries" && before.is_null() {
+        &empty
+    } else {
+        before
+    };
+    let after = if field == "membershipBoundaries" && after.is_null() {
+        &empty
+    } else {
+        after
+    };
+    let reverse = matches!(
+        field,
+        "requiredScopes" | "rowBoundaries" | "membershipBoundaries"
+    );
     if let (Some(before), Some(after)) = (before.as_array(), after.as_array()) {
         if matches!(field, "requiredPurposes" | "allowedPurposes") {
             if after.is_empty() {

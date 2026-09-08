@@ -171,7 +171,9 @@ impl From<PostgresKernelError> for ReconcileError {
     fn from(error: PostgresKernelError) -> Self {
         match error {
             PostgresKernelError::RoleInvariant(_) => Self::MigrationAuthority,
-            PostgresKernelError::Configuration(_) => Self::InvalidInput,
+            PostgresKernelError::Configuration(_)
+            | PostgresKernelError::FieldPatternSyntax { .. }
+            | PostgresKernelError::FieldPatternExistingRows { .. } => Self::InvalidInput,
             PostgresKernelError::Connection
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild
@@ -186,6 +188,8 @@ impl From<MigrationError> for ReconcileError {
         match error {
             MigrationError::PackageBinding | MigrationError::EmptyPlan => Self::PackageBinding,
             MigrationError::ApplyFailed
+            | MigrationError::FieldPatternSyntax { .. }
+            | MigrationError::FieldPatternExistingRows { .. }
             | MigrationError::ActiveRequestProposals
             | MigrationError::BackupEvidence => Self::Unavailable,
         }

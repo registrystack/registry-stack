@@ -283,6 +283,9 @@ pub enum CompiledRegistryChangeCode {
     FieldTypeChanged,
     FieldPhysicalNameChanged,
     FieldRequirednessChanged,
+    FieldPatternAdded,
+    FieldPatternChanged,
+    FieldPatternRemoved,
     FieldClassificationChanged,
     FieldTemporalRoleChanged,
     DerivedRelationAdded,
@@ -1404,6 +1407,32 @@ fn compare_fields(
                 ),
             );
         }
+        if previous_field.pattern != candidate_field.pattern {
+            let (class, code) = match (&previous_field.pattern, &candidate_field.pattern) {
+                (None, Some(_)) => (
+                    CompiledRegistryChangeClass::CompatibleAdditive,
+                    CompiledRegistryChangeCode::FieldPatternAdded,
+                ),
+                (Some(_), None) => (
+                    CompiledRegistryChangeClass::DestructiveOrIrreversible,
+                    CompiledRegistryChangeCode::FieldPatternRemoved,
+                ),
+                _ => (
+                    CompiledRegistryChangeClass::DestructiveOrIrreversible,
+                    CompiledRegistryChangeCode::FieldPatternChanged,
+                ),
+            };
+            push_change(
+                changes,
+                class,
+                code,
+                target(
+                    CompiledRegistryChangeTargetKind::Field,
+                    Some(entity_id),
+                    Some(field_id.as_str()),
+                ),
+            );
+        }
         if previous_field.required != candidate_field.required {
             let class = if candidate_field.required {
                 CompiledRegistryChangeClass::DataBackfillRequired
@@ -1792,14 +1821,81 @@ fn additive_migration_plan(
     changes: Vec<CompiledRegistryChange>,
 ) -> MigrationPlan {
     let mut new_statement_ids = BTreeSet::<String>::new();
-    let mut replacement_view_statement_ids = BTreeSet::<String>::new();
+    let mut replacement_statement_ids = BTreeSet::<String>::new();
     let mut added_columns = BTreeMap::<String, Vec<DdlStatement>>::new();
     let previous_ddl = generate_ddl_with_actions(
         &previous.entities,
         &previous.physical_names,
         &previous.actions,
     );
-    let mut removed_spatial_statements = Vec::new();
+    let mut removed_dependency_statements = Vec::new();
+    let previous_membership_functions = previous_ddl
+        .statements
+        .iter()
+        .filter(|statement| {
+            statement.kind == DdlStatementKind::Function
+                && statement.id.starts_with("registry_context.membership_")
+        })
+        .map(|statement| (statement.id.as_str(), statement))
+        .collect::<BTreeMap<_, _>>();
+    let candidate_membership_functions = candidate
+        .ddl()
+        .statements
+        .iter()
+        .filter(|statement| {
+            statement.kind == DdlStatementKind::Function
+                && statement.id.starts_with("registry_context.membership_")
+        })
+        .map(|statement| (statement.id.as_str(), statement))
+        .collect::<BTreeMap<_, _>>();
+    for (id, statement) in &candidate_membership_functions {
+        if previous_membership_functions.get(id) != Some(statement) {
+            new_statement_ids.insert((*id).to_owned());
+            if previous_membership_functions.contains_key(id) {
+                replacement_statement_ids.insert((*id).to_owned());
+            }
+        }
+    }
+    // Drop obsolete membership policies before their helper dependencies. The
+    // activation ACL reconciliation installs the candidate policies afterward.
+    for table in &previous_ddl.tables {
+        let candidate_table = candidate
+            .ddl()
+            .tables
+            .iter()
+            .find(|other| other.entity_id == table.entity_id);
+        for policy in &table.policies {
+            let membership_policy = policy.name.starts_with("registry_membership_")
+                || policy
+                    .using_expression
+                    .iter()
+                    .chain(&policy.check_expression)
+                    .any(|expression| expression.contains("registry_context.\"membership_"));
+            if membership_policy
+                && !candidate_table.is_some_and(|other| other.policies.contains(policy))
+            {
+                removed_dependency_statements.push(drop_policy_statement(
+                    &table.entity_id,
+                    table,
+                    &policy.name,
+                ));
+            }
+        }
+    }
+    for function in &previous_ddl.functions {
+        if function.name.starts_with("membership_")
+            && !candidate_membership_functions.contains_key(function.id.as_str())
+        {
+            removed_dependency_statements.push(DdlStatement {
+                id: format!("{}.drop", function.id),
+                kind: DdlStatementKind::Function,
+                sql: format!(
+                    "DROP FUNCTION registry_context.{}(uuid)",
+                    quote_identifier(&function.name)
+                ),
+            });
+        }
+    }
     if candidate.ddl().requires_postgis && !previous_ddl.requires_postgis {
         new_statement_ids.insert(spatial_bbox_function_statement().id);
     }
@@ -1822,7 +1918,7 @@ fn additive_migration_plan(
             if previous_view_statement.is_some() {
                 // The view depends on the generated geometry and helper. Drop
                 // it before either dependency changes, then recreate it below.
-                removed_spatial_statements.push(
+                removed_dependency_statements.push(
                     drop_spatial_candidate_view_statement(previous_entity)
                         .expect("generated candidate view has a drop statement"),
                 );
@@ -1852,7 +1948,7 @@ fn additive_migration_plan(
                             .any(|candidate| candidate.name == policy.name)
                     }))
             {
-                removed_spatial_statements.push(DdlStatement {
+                removed_dependency_statements.push(DdlStatement {
                     id: format!(
                         "entity.{}.policy.{}.drop",
                         previous_table.entity_id, policy.name
@@ -1868,11 +1964,11 @@ fn additive_migration_plan(
         }
         for field in removed_fields {
             let projection = spatial_projection_statements(previous_entity, field);
-            removed_spatial_statements.extend([projection.drop_index, projection.drop_column]);
+            removed_dependency_statements.extend([projection.drop_index, projection.drop_column]);
         }
     }
     if previous_ddl.requires_postgis && !candidate.ddl().requires_postgis {
-        removed_spatial_statements.push(drop_spatial_bbox_function_statement());
+        removed_dependency_statements.push(drop_spatial_bbox_function_statement());
     }
 
     for (entity_id, candidate_entity) in candidate.entities() {
@@ -1890,6 +1986,16 @@ fn additive_migration_plan(
         }
         let previous_entity = &previous.entities[entity_id];
         for (field_id, field) in &candidate_entity.fields {
+            // Added checks always scan existing data, including when a previously
+            // unconstrained column is present. Changes/removals require reviewed DDL.
+            if field.pattern.is_some()
+                && previous_entity
+                    .fields
+                    .get(field_id)
+                    .is_none_or(|prior| prior.pattern.is_none())
+            {
+                new_statement_ids.insert(format!("entity.{entity_id}.field.{field_id}.pattern"));
+            }
             if previous_entity.fields.contains_key(field_id) {
                 continue;
             }
@@ -1903,7 +2009,7 @@ fn additive_migration_plan(
                 new_statement_ids.insert(format!("entity.{entity_id}.field.{field_id}.reference"));
             }
             let source_view_id = format!("entity.{entity_id}.source-view");
-            replacement_view_statement_ids.insert(source_view_id.clone());
+            replacement_statement_ids.insert(source_view_id.clone());
             new_statement_ids.insert(source_view_id);
         }
         let previous_fields = spatial_projection_fields(previous_entity);
@@ -1925,7 +2031,7 @@ fn additive_migration_plan(
                         && previous != relation =>
                 {
                     let derived_view_id = format!("entity.{entity_id}.derived.{relation_id}.view");
-                    replacement_view_statement_ids.insert(derived_view_id.clone());
+                    replacement_statement_ids.insert(derived_view_id.clone());
                     new_statement_ids.insert(derived_view_id);
                 }
                 None => {
@@ -1947,7 +2053,7 @@ fn additive_migration_plan(
         }
     }
 
-    let mut statements = removed_spatial_statements;
+    let mut statements = removed_dependency_statements;
     for statement in &candidate.ddl().statements {
         if let Some(entity_id) = table_statement_entity_id(&statement.id) {
             if let Some(columns) = added_columns.get(entity_id) {
@@ -1956,7 +2062,7 @@ fn additive_migration_plan(
         }
         if new_statement_ids.contains(statement.id.as_str()) {
             statements.push(
-                if replacement_view_statement_ids.contains(statement.id.as_str()) {
+                if replacement_statement_ids.contains(statement.id.as_str()) {
                     replacement_statement(statement)
                 } else {
                     statement.clone()
@@ -1975,6 +2081,17 @@ fn additive_migration_plan(
 }
 
 fn replacement_statement(statement: &DdlStatement) -> DdlStatement {
+    if statement.kind == DdlStatementKind::Function
+        && statement.id.starts_with("registry_context.membership_")
+    {
+        return DdlStatement {
+            id: statement.id.clone(),
+            kind: statement.kind,
+            sql: statement
+                .sql
+                .replacen("CREATE FUNCTION ", "CREATE OR REPLACE FUNCTION ", 1),
+        };
+    }
     if statement.kind != DdlStatementKind::View {
         return statement.clone();
     }
@@ -2590,6 +2707,12 @@ fn validate_declared_package_assets(
                 .and_then(|request| request.planner.as_ref())
                 .map(|planner| planner.script.as_str())
         })
+        .chain(project.actions.iter().filter_map(|action| {
+            action
+                .handler
+                .as_ref()
+                .map(|handler| handler.script.as_str())
+        }))
         .collect::<BTreeSet<_>>();
     let supplied_project = project_assets
         .iter()
@@ -2607,7 +2730,16 @@ fn validate_declared_package_assets(
         let source = sources_by_id
             .get(module.id.as_str())
             .ok_or(PackageError::Derivation)?;
-        let mut declared = BTreeSet::new();
+        let mut declared = module
+            .actions
+            .iter()
+            .filter_map(|action| {
+                action
+                    .handler
+                    .as_ref()
+                    .map(|handler| handler.script.as_str())
+            })
+            .collect::<BTreeSet<_>>();
         for entity in &module.entities {
             declared.extend(entity.derived.iter().map(|derived| derived.sql.as_str()));
             if let Some(script) = entity

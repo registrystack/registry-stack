@@ -14,6 +14,115 @@ fn compile_json(
     compile_project(&project, &[], CompileProfile::Authoring)
 }
 
+#[test]
+fn invoke_schema_requires_fixed_patch_targets_even_when_the_input_is_optional() {
+    let mut source: serde_json::Value =
+        serde_json::from_str(&household_contact_project("")).unwrap();
+    source["actions"][0]["inputs"][0]["required"] = serde_json::json!(false);
+    // This input also supplies a membership link. Keep that link nullable so
+    // the fixture reaches patch-target admission rather than value typing.
+    source["entities"][2]["fields"][1]["required"] = serde_json::json!(false);
+    let compiled = compile_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let schema: serde_json::Value = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/action-schemas/register-household-contact.invoke.input.schema.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    let mut input = serde_json::json!({
+        "input": {
+            "householdId": "550e8400-e29b-41d4-a716-446655440000",
+            "personCode": "PERSON-1", "legalName": "Example Person"
+        },
+        "preconditions": {"householdId": {"ifMatch": "\"condition\""}}
+    });
+    assert!(validator.is_valid(&input));
+    input["input"]["householdId"] = serde_json::Value::Null;
+    assert!(!validator.is_valid(&input));
+    input["input"]
+        .as_object_mut()
+        .unwrap()
+        .remove("householdId");
+    assert!(!validator.is_valid(&input));
+}
+
+#[test]
+fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_results() {
+    use registry_breg::compiler::compile_project_with_assets;
+    use registry_breg::contract::ModuleAssetSource;
+    use serde_json::{json, Value};
+
+    let mut source: Value = serde_json::from_str(&household_contact_project("")).unwrap();
+    let effects = source["actions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("effects")
+        .unwrap();
+    let writes = effects
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|effect| {
+            json!({
+                "id": effect["id"], "target": effect["target"], "operation": effect["operation"],
+                "fields": effect["set"].as_object().unwrap().keys().collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+    source["actions"][0]["handler"] = json!({
+        "kind": "rhai", "script": "scripts/handler.rhai", "abi": "registry.action-handler/v1",
+        "writes": writes
+    });
+    let mut limited = source["accessProfiles"][0].clone();
+    limited["id"] = json!("person-result-only");
+    limited["default"] = json!(false);
+    limited["grants"][0]["results"] = json!(["person"]);
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(limited);
+    let source = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let compiled = compile_project_with_assets(&source, &[], &[ModuleAssetSource {
+        module: None, path: "scripts/handler.rhai".to_owned(),
+        bytes: br#"fn handle(ctx) { #{effects:[#{id:"person",set:#{"person-code":ctx.inputs["person-code"],"legal-name":ctx.inputs["legal-name"]}}]} }"#.to_vec(),
+    }], CompileProfile::Authoring).unwrap();
+    let schema: Value = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/action-schemas/register-household-contact.invoke.response.schema.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    let reference =
+        json!({"entity":"person", "recordId":"550e8400-e29b-41d4-a716-446655440000", "revision":1});
+    let mut receipt = json!({"action":"register-household-contact", "applicationId":"550e8400-e29b-41d4-a716-446655440001", "results":{"person":reference}});
+    assert!(
+        validator.is_valid(&receipt),
+        "overlapping disclosure ceilings permit the same subset"
+    );
+    receipt["results"] = json!({});
+    assert!(
+        validator.is_valid(&receipt),
+        "selected effects need not be disclosed by the selected grant"
+    );
+    receipt["results"]["undeclared-result"] = reference;
+    assert!(
+        !validator.is_valid(&receipt),
+        "optional slots do not open the result contract"
+    );
+}
+
 fn household_contact_project(extra: &str) -> String {
     r#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",

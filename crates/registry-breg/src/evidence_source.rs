@@ -463,7 +463,12 @@ fn selected_behavior(
                     .find(|entity| entity.source_relation.sql_name == range.relname)
                     .ok_or_else(|| refusal("derived", "compiled SQL source relation is absent"))?;
                 let source_access = source.access_profiles.get(&options.access_profile);
-                sources.insert(source.id.clone(),json!({"relation":source.source_relation,"canonicalId":source.canonical_id,"fields":source.stored_fields,"tombstone":source.tombstone,"accessRequirements":source.access_requirements,"rowBoundaries":source_access.map(|access|&access.row_boundaries),"requestVisibility":source_access.and_then(|access|access.request_visibility.as_ref()),"selectPolicies":select_policies(registry,source,&options.access_profile)}));
+                let mut behavior = json!({"relation":source.source_relation,"canonicalId":source.canonical_id,"fields":source.stored_fields,"tombstone":source.tombstone,"accessRequirements":source.access_requirements,"rowBoundaries":source_access.map(|access|&access.row_boundaries),"requestVisibility":source_access.and_then(|access|access.request_visibility.as_ref()),"selectPolicies":select_policies(registry,source,&options.access_profile)});
+                let membership = membership_behavior(registry, source, &options.access_profile)?;
+                if !membership.is_empty() {
+                    behavior["membershipBoundaries"] = json!(membership);
+                }
+                sources.insert(source.id.clone(), behavior);
             }
         }
         derived.insert(id,json!({"sha256":relation.sql_sha256,"key":relation.key_field,"execution":relation.execution,"fields":relation.fields.iter().map(|id|&entity.derived_fields[id]).collect::<Vec<_>>() }));
@@ -474,9 +479,73 @@ fn selected_behavior(
         .map(|boundary| &boundary.field)
         .map(|id| field(entity, id).map(|field| json!(field)))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(
-        json!({"protocol":"breg-evidence-lookup-v1","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1","entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"anonymous":access.anonymous,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requestVisibility":access.request_visibility,"requirements":entity.access_requirements,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources}),
-    )
+    let mut behavior = json!({"protocol":"breg-evidence-lookup-v1","readSemantics":"collection-dependencies-v1/evaluation-date-transaction-v1","entity":entity.id,"route":entity.route,"canonicalId":entity.canonical_id,"tombstone":entity.tombstone,"fields":logical_fields,"selectors":selectors,"access":{"profile":access.id,"anonymous":access.anonymous,"principalClaim":access.principal_claim,"requiredScopes":access.required_scopes,"requiredPurposes":access.required_purposes,"rowBoundaries":access.row_boundaries,"boundaryFields":boundary_fields,"requestVisibility":access.request_visibility,"requirements":entity.access_requirements,"selectPolicies":select_policies(registry,entity,&options.access_profile)},"derived":derived,"sources":sources});
+    let membership = membership_behavior(registry, entity, &options.access_profile)?;
+    if !membership.is_empty() {
+        behavior["access"]["membershipBoundaries"] = json!(membership);
+    }
+    Ok(behavior)
+}
+
+fn membership_behavior(
+    registry: &CompiledRegistry,
+    entity: &CompiledEntity,
+    profile: &str,
+) -> Result<Vec<Value>, Diagnostic> {
+    crate::membership::boundaries(entity, profile)
+        .iter()
+        .enumerate()
+        .map(|(index, boundary)| {
+            let root_field = entity
+                .fields
+                .get(&boundary.field)
+                .ok_or_else(|| refusal("access", "compiled membership root field is absent"))?;
+            let source = registry
+                .entities()
+                .get(&boundary.membership_entity)
+                .ok_or_else(|| refusal("access", "compiled membership source is absent"))?;
+            let function_id = format!(
+                "registry_context.{}",
+                crate::membership::function_name(&entity.id, profile, index)
+            );
+            let function = registry
+                .ddl()
+                .statements
+                .iter()
+                .find(|statement| statement.id == function_id)
+                .ok_or_else(|| refusal("access", "compiled membership function is absent"))?;
+            let source_fields = [
+                &boundary.membership_key_column,
+                &boundary.principal_column,
+                &boundary.active_column,
+            ]
+            .into_iter()
+            .map(|column| {
+                source
+                    .fields
+                    .values()
+                    .find(|field| &field.physical_name == column)
+                    .ok_or_else(|| refusal("access", "compiled membership source field is absent"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+            // Names stay stable across membership changes. Consume the actual
+            // helper and the leaf source's effective SELECT rules and fields.
+            // These dependencies affect identity only; none are exported facts.
+            Ok(json!({
+                "boundary": boundary,
+                "field": root_field,
+                "function": function,
+                "source": {
+                    "table": source.physical_table,
+                    "canonicalId": source.canonical_id,
+                    "fields": source_fields,
+                    "tombstone": source.tombstone,
+                    "accessRequirements": source.access_requirements,
+                    "selectPolicies": select_policies(registry, source, profile),
+                }
+            }))
+        })
+        .collect()
 }
 
 fn select_policies<'a>(

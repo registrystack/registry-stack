@@ -45,6 +45,21 @@ path = "tests/postgres_immediate_action_activation.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
+name = "postgres_registry_extensibility"
+path = "tests/postgres_registry_extensibility.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_immediate_action_requirements"
+path = "tests/postgres_immediate_action_requirements.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_membership_access"
+path = "tests/postgres_membership_access.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_webhook_outbox"
 path = "tests/postgres_webhook_outbox.rs"
 required-features = ["postgres-test"]

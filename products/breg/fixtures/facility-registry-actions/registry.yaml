@@ -1,0 +1,95 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: facility-registry-actions
+  canonicalBaseIri: https://facility-registry-actions.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: facility-registry-actions-fixture
+  sequence: 1
+  sourceRevision: facility-registry-actions-fixture-0.1.0
+manifestProjection:
+  accessProfile: facility-owner
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://facility-registry-actions.example.gov
+    title: Facility Registry Actions Catalog
+    description: Facilities with initial operator assignments and governed ownership transfer.
+    publisher:
+      id: facility-registry-authority
+      name: Facility Registry Authority
+      iri: https://facility-registry-actions.example.gov/authority
+  publicService: {id: facility-registry-service, title: Facility Registry Actions Catalog}
+  datasets:
+    - id: facility-registry-actions
+      title: Facility Registry
+      description: Configured facility registrations and initial operator assignments.
+      owner: Facility Registry Authority
+      status: active
+  dataServices:
+    - id: facility-registry-data-service
+      title: Facility Registry Actions Catalog
+      endpointUrl: https://facility-registry-actions.example.gov
+      servesDatasets: [facility-registry-actions]
+  distributions: []
+modules:
+  - id: facility-registry-actions-core
+    version: 0.1.0
+    digest: "sha256:71acf0a03c62bcbc592c80195f6c171c8f5ee7a0512fdf121ecd1655e245a7d5"
+entities: []
+accessProfiles:
+  - id: facility-registrar
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:facility:register]
+    requiredPurposes: [facility-administration]
+    grants:
+      - action: register-facility
+        operations: [invoke]
+        targets:
+          - entity: facility
+            rowBoundaries:
+              - {field: owner, claim: registry_principal, operator: equals}
+          - entity: initial-operator-assignment
+            rowBoundaries: []
+          - entity: operator
+            rowBoundaries: []
+        results: [facility, initial-assignment]
+  - id: facility-transfer
+    principalClaim: registry_principal
+    requiredScopes: [registry:facility:transfer]
+    requiredPurposes: [facility-administration]
+    grants:
+      - action: transfer-facility
+        operations: [invoke]
+        targets:
+          - entity: facility
+            rowBoundaries:
+              - {field: owner, claim: allowed_owners, operator: in}
+        results: [facility]
+  - id: facility-owner
+    principalClaim: registry_principal
+    requiredScopes: [registry:facility:read]
+    requiredPurposes: [facility-administration]
+    grants:
+      - entity: facility
+        operations: [get, list]
+        readableFields: [facility-code, label, owner]
+        filterableFields: [facility-code]
+        rowBoundaries:
+          - {field: owner, claim: registry_principal, operator: equals}
+  - id: operator-administrator
+    principalClaim: registry_principal
+    requiredScopes: [registry:operator:manage]
+    requiredPurposes: [facility-administration]
+    grants:
+      - entity: operator
+        rowBoundaries: []
+        operations: [create, get, patch]
+        readableFields: [operator-code, status]
+        writableFields: [operator-code, status]
+vocabularies:
+  - id: operator-status
+    values: [active, inactive]

@@ -5042,6 +5042,8 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
     assert_eq!(
         value["components"]["schemas"]["Problem"]["properties"]["code"]["enum"],
         json!([
+            "action.handler_failed",
+            "action.refused",
             "authentication.refused",
             "idempotency.conflict",
             "lookup.unresolved",
@@ -5598,6 +5600,7 @@ fn public_profile_cannot_process_an_internal_field() {
         required_scopes: Default::default(),
         required_purposes: Default::default(),
         grants: vec![AccessGrantSource {
+            membership_boundaries: Vec::new(),
             entity: "asset-item".to_owned(),
             action: None,
             operations: [Operation::Get].into_iter().collect(),

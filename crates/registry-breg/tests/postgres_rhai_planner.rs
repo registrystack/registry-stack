@@ -477,6 +477,187 @@ async fn staged_rhai_final_approval_applies_atomically_and_faults_roll_back_ever
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn automatic_submission_and_approval_emit_the_committed_transition_with_its_audit() {
+    let _test_guard = PLANNER_TEST_LOCK.lock().await;
+    for review_required in [false, true] {
+        let database = TestDatabase::create(8).await;
+        let registry = Arc::new(lifecycle_rhai_registry(review_required));
+        let package_id = "automatic-rhai-lifecycle";
+        let identity = install_staged_registry(&database, &registry, package_id).await;
+        let app = staged_router(
+            &database,
+            registry.clone(),
+            identity.clone(),
+            package_id,
+            None,
+        );
+        let fault_app = staged_router(
+            &database,
+            registry.clone(),
+            identity,
+            package_id,
+            Some(MutationFaultPoint::BeforeTerminalAudit),
+        );
+        reset_test_planner_invocation_count();
+        let operator = verified_claims("lifecycle-operator", "person-maintenance", &[]);
+        let submitter = verified_claims(
+            "lifecycle-submitter",
+            "person-name-change",
+            &["registry:person-name:submit"],
+        );
+        let reviewer = verified_claims("lifecycle-reviewer", "person-name-final", &[]);
+        let person = direct_create_record(
+            &app,
+            "/v1/records/persons?accessProfile=person-operator",
+            operator,
+            "lifecycle-person",
+            json!({"personCode":"LIFECYCLE-001","displayName":"Before"}),
+        )
+        .await;
+        let request = direct_create_record(
+            &app,
+            "/v1/records/person-name-change-requests?accessProfile=name-change-submitter",
+            submitter.clone(),
+            "lifecycle-request",
+            json!({"person":person.id,"givenName":"Dorothy","familyName":"Vaughan","handling":"routine"}),
+        )
+        .await;
+        let draft = direct_get_record(
+            &app,
+            &format!(
+                "/v1/records/person-name-change-requests/{}?accessProfile=name-change-submitter",
+                request.id
+            ),
+            submitter.clone(),
+        )
+        .await;
+        let submit = action(&draft.body, "submit_request");
+        let (ready_action, actor, body, transition, from_state) = if review_required {
+            let submitted =
+                direct_send_action(&app, &submit, submitter, "lifecycle-submit", json!({})).await;
+            assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
+            assert_eq!(submitted.body["request"]["bregState"], "submitted");
+            let pending = direct_get_record(
+                &app,
+                &format!("/v1/records/person-name-change-requests/{}?accessProfile=staged-final-reviewer", request.id),
+                reviewer.clone(),
+            )
+            .await;
+            (
+                action(&pending.body, "approve_request"),
+                reviewer,
+                json!({
+                    "proposalVersion": pending.body["request"]["proposalVersion"],
+                    "effectDigest": pending.body["request"]["effectDigest"]
+                }),
+                "approve",
+                "submitted",
+            )
+        } else {
+            (submit, submitter, json!({}), "submit", "draft")
+        };
+        let before_fault = staged_persistence_snapshot(&database, &request.id).await;
+        let failed = direct_send_action(
+            &fault_app,
+            &ready_action,
+            actor.clone(),
+            "lifecycle-terminal-fault",
+            body.clone(),
+        )
+        .await;
+        assert_eq!(failed.status, StatusCode::SERVICE_UNAVAILABLE);
+        let mut after_fault = staged_persistence_snapshot(&database, &request.id).await;
+        assert_eq!(after_fault.audit, before_fault.audit + 1);
+        after_fault.audit = before_fault.audit;
+        assert_eq!(
+            after_fault, before_fault,
+            "{transition} terminal failure rolls back its event and effects"
+        );
+        let applied = direct_send_action(
+            &app,
+            &ready_action,
+            actor.clone(),
+            "lifecycle-ready",
+            body.clone(),
+        )
+        .await;
+        assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
+        assert_eq!(applied.body["request"]["bregState"], "applied");
+        let invocations = test_planner_invocation_count();
+        let replay = direct_send_action(&app, &ready_action, actor, "lifecycle-ready", body).await;
+        assert_eq!(replay.status, StatusCode::OK, "{}", replay.body);
+        assert_eq!(replay.bytes, applied.bytes);
+        assert_eq!(test_planner_invocation_count(), invocations);
+        let events = database.admin.query(
+            "SELECT record_reference, payload FROM registry_internal.registry_outbox WHERE trigger = 'request_lifecycle'",
+            &[],
+        ).await.unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "exact replay emits no second {transition} event"
+        );
+        let record_reference: String = events[0].get(0);
+        let event: Value = serde_json::from_slice(&events[0].get::<_, Vec<u8>>(1)).unwrap();
+        assert_eq!(event["recordId"], request.id);
+        assert_eq!(event["revision"], applied.body["revision"]);
+        assert_eq!(event["values"], json!({"handling":"routine"}));
+        assert_eq!(event["request"]["transition"], transition);
+        assert_eq!(event["request"]["fromState"], from_state);
+        assert_eq!(event["request"]["toState"], "applied");
+        assert_eq!(
+            event["request"]["stage"],
+            if review_required {
+                json!("final")
+            } else {
+                Value::Null
+            }
+        );
+        assert_eq!(
+            event["request"]["effectDigest"],
+            applied.body["request"]["effectDigest"]
+        );
+        let operation = if review_required {
+            registry_breg::contract::Operation::ApproveRequest
+        } else {
+            registry_breg::contract::Operation::SubmitRequest
+        };
+        let route = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| {
+                route.entity_id == "person-name-change-request" && route.operation == operation
+            })
+            .unwrap();
+        let audits = database
+            .admin
+            .query(
+                "SELECT envelope FROM registry_internal.registry_audit ORDER BY created_at, envelope_id",
+                &[],
+            )
+            .await
+            .unwrap();
+        let terminal = audits
+            .iter()
+            .map(|row| {
+                serde_json::from_slice::<Value>(&row.get::<_, Vec<u8>>(0)).unwrap()["record"]
+                    .clone()
+            })
+            .filter(|record| record["phase"] == "terminal" && record["operationId"] == route.id)
+            .collect::<Vec<_>>();
+        assert_eq!(terminal.len(), 2);
+        assert_eq!(terminal[0]["outcome"], "committed");
+        assert_eq!(terminal[1]["outcome"], "replayed");
+        for record in terminal {
+            assert_eq!(record["recordReference"], record_reference);
+            assert_eq!(record["recordRevision"], event["revision"]);
+        }
+        database.cleanup().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_failing_rhai_planner_refuses_the_submission_and_records_its_kind() {
     let _test_guard = PLANNER_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
@@ -640,7 +821,7 @@ fn refusing_rhai_registry() -> registry_breg::CompiledRegistry {
     .expect("refusing Rhai project closes under the Production compiler")
 }
 
-fn staged_rhai_registry() -> registry_breg::CompiledRegistry {
+fn staged_rhai_project() -> Value {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/acceptance/person-name-change-rhai");
     let project_bytes = std::fs::read(root.join("registry.yaml"))
@@ -675,6 +856,43 @@ fn staged_rhai_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries": []
             }]
         }));
+    project
+}
+
+fn staged_rhai_registry() -> registry_breg::CompiledRegistry {
+    compile_rhai_project(staged_rhai_project(), CompileProfile::Production)
+}
+
+fn lifecycle_rhai_registry(review_required: bool) -> registry_breg::CompiledRegistry {
+    let mut project = staged_rhai_project();
+    let request = project["entities"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entity| entity["id"] == "person-name-change-request")
+        .unwrap();
+    request["events"] = json!([{
+        "id":"automatic-name-change-applied", "trigger":"request_lifecycle", "projection":["handling"],
+        "when":{"kind":"request_lifecycle","toStates":["applied"]}
+    }]);
+    if !review_required {
+        request["changeRequest"]["review"] = json!({"mode":"none"});
+        project["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|profile| profile["id"] != "staged-final-reviewer");
+    }
+    // These events exercise transactional capture without an external delivery
+    // destination. Production package journeys remain in the tests above.
+    compile_rhai_project(project, CompileProfile::Authoring)
+}
+
+fn compile_rhai_project(
+    project: Value,
+    profile: CompileProfile,
+) -> registry_breg::CompiledRegistry {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/person-name-change-rhai");
     let project =
         parse_project_json(&serde_json::to_vec(&project).expect("staged Rhai project serializes"))
             .expect("staged Rhai project follows the strict contract");
@@ -687,9 +905,9 @@ fn staged_rhai_registry() -> registry_breg::CompiledRegistry {
             bytes: std::fs::read(root.join("scripts/person-name-change.rhai"))
                 .expect("committed Rhai planner is readable"),
         }],
-        CompileProfile::Production,
+        profile,
     )
-    .expect("staged Rhai project closes under the Production compiler")
+    .expect("Rhai test project compiles")
 }
 
 async fn install_staged_registry(

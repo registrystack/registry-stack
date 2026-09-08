@@ -1,0 +1,19 @@
+{
+  "effects": [
+    {
+      "id": "person",
+      "set": {
+        "identifier": "0123456789013",
+        "display-name": "Mina Example"
+      }
+    },
+    {
+      "id": "register",
+      "set": {
+        "last-person": {
+          "fromEffect": "person"
+        }
+      }
+    }
+  ]
+}

@@ -115,6 +115,15 @@ fn field(
         "required": required, "nullable": !required, "readOnly": stored.is_none(),
         "removable": patch.contains(id) && !required,
     });
+    if let Some(pattern) = entity
+        .fields
+        .get(id)
+        .and_then(|field| field.pattern.as_ref())
+    {
+        value["storageValidation"] = json!({
+            "kind": "postgresql-are", "pattern": pattern,
+        });
+    }
     if let FieldTypeSource::Reference { target, .. } = &logical.field_type {
         let targets = surfaces
             .iter()

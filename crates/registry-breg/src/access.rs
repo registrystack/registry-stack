@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::compiler::operation_id;
 use crate::contract::{
     AccessProfileSource, AccessRequirementsSource, Classification, EntitySource, FieldTypeSource,
-    Operation, RowBoundarySource,
+    MembershipBoundarySource, Operation, RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{CompiledActionInventory, CompiledEntity, CompiledRegistry};
@@ -153,6 +153,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
             if entity.classification != Classification::Public
                 && profile.operations.contains(&Operation::List)
                 && profile.row_boundaries.is_empty()
+                && profile.membership_boundaries.is_empty()
                 && profile.request_visibility.is_none()
             {
                 findings.push(Diagnostic::finding("access.profile.unrestricted_collection", format!("{path}.rowBoundaries"),
@@ -165,6 +166,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                     .any(|operation| !matches!(operation, Operation::Get | Operation::List));
             if entity.classification != Classification::Public
                 && profile.row_boundaries.is_empty()
+                && profile.membership_boundaries.is_empty()
                 && ((!profile.operations.contains(&Operation::List)
                     && profile.request_visibility.is_none())
                     || unrestricted_non_read)
@@ -175,6 +177,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
             if profile.anonymous
                 && profile.operations.contains(&Operation::List)
                 && profile.row_boundaries.is_empty()
+                && profile.membership_boundaries.is_empty()
             {
                 findings.push(Diagnostic::finding("access.profile.anonymous_collection", format!("{path}.operations"),
                     "`list` is granted to unauthenticated callers, so every row this profile can read is world-readable and no claim can narrow it. Confirm the whole collection is meant to be public"));
@@ -302,6 +305,8 @@ pub struct RowReachExplanation {
     pub surface: &'static str,
     pub rows: &'static str,
     pub row_boundaries: Vec<RowBoundarySource>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub membership_boundaries: Vec<MembershipBoundarySource>,
     pub owner_only_request_reads: bool,
 }
 
@@ -315,18 +320,21 @@ fn row_reach(
                    source_path: String,
                    surface,
                    boundaries: &[RowBoundarySource],
+                   memberships: &[MembershipBoundarySource],
                    owner| {
         reach.push(RowReachExplanation {
             entity: entity.to_owned(),
             profile: profile.to_owned(),
             source_path,
             surface,
-            rows: if boundaries.is_empty() {
-                "all"
-            } else {
-                "claim_bound"
+            rows: match (boundaries.is_empty(), memberships.is_empty()) {
+                (true, true) => "all",
+                (false, true) => "claim_bound",
+                (true, false) => "membership_bound",
+                (false, false) => "claim_and_membership_bound",
             },
             row_boundaries: boundaries.to_vec(),
+            membership_boundaries: memberships.to_vec(),
             owner_only_request_reads: owner,
         });
     };
@@ -339,6 +347,7 @@ fn row_reach(
                 format!("{path}.rowBoundaries"),
                 "entity",
                 &profile.row_boundaries,
+                &profile.membership_boundaries,
                 profile.request_visibility.is_some(),
             );
             for stage in &profile.review_stages {
@@ -352,6 +361,7 @@ fn row_reach(
                         ),
                         "review_target",
                         &target.row_boundaries,
+                        &[],
                         false,
                     );
                 }
@@ -366,6 +376,7 @@ fn row_reach(
                     ),
                     "apply_target",
                     &target.row_boundaries,
+                    &[],
                     false,
                 );
             }
@@ -379,6 +390,7 @@ fn row_reach(
                     ),
                     "request_presence",
                     &target.row_boundaries,
+                    &[],
                     false,
                 );
             }
@@ -396,6 +408,7 @@ fn row_reach(
                     ),
                     "action_target",
                     &target.row_boundaries,
+                    &[],
                     false,
                 );
             }
@@ -414,7 +427,7 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
     AccessExplanation {
         scope_matching: "all required scopes must be present",
         purpose_matching: "one allowed purpose must match; empty means unrestricted",
-        row_matching: "all claim-bound row predicates must hold; explicit empty boundaries mean no claim-bound row restriction; requestVisibility owner additionally limits request reads",
+        row_matching: "all claim-bound and current membership row predicates must hold; explicit empty rowBoundaries mean no claim-bound row restriction; requestVisibility owner additionally limits request reads",
         profile_selection: "one profile per request; selecting its name never grants authority and profiles are not merged",
         relationship_matching: "relationship paths use the root profile row boundaries and the path's target field permissions; target direct profiles do not apply",
         missing_claims: "missing required direct claims cannot satisfy their row boundary or verified-claim lookup; types and scalar/set shape are listed in claimContract",

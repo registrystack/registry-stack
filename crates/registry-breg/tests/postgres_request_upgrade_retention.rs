@@ -64,6 +64,28 @@ async fn active_request_upgrade_guard_allows_unrelated_changes_and_refuses_relev
         "changed relevant request contract requires explicit rebase or cancellation"
     );
 
+    let mut project = parse_project_json(&change_request_project(false, "internal")).unwrap();
+    project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == REQUEST_ENTITY)
+        .unwrap()
+        .fields
+        .iter_mut()
+        .find(|field| field.id == "reason")
+        .unwrap()
+        .pattern = Some("^[A-Z]+$".to_owned());
+    let changed_pattern = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    assert_ne!(
+        request_fingerprint(&base),
+        request_fingerprint(&changed_pattern)
+    );
+    assert_eq!(
+        guard_successor_activation(&migration, &changed_pattern).await,
+        Err(RequestRetentionError::ActiveProposalRequiresRebase),
+        "a changed native pattern cannot silently apply an approved frozen proposal"
+    );
+
     migration_task.abort();
     database.cleanup().await;
 }
@@ -183,6 +205,12 @@ async fn canceled_draft_without_proposal_erases_current_detail_and_bound_sidecar
 async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_provenance_links() {
     load_postgres_env();
     let registry = compiled_registry(false, "internal");
+    assert_eq!(
+        registry.entities()[REQUEST_ENTITY].fields["reason"]
+            .pattern
+            .as_deref(),
+        Some("^[[:print:]]+$")
+    );
     let fingerprint = request_fingerprint(&registry);
     let database = TestDatabase::create(1).await;
     let (mut migration, migration_task) = database.connect_migration().await;
@@ -367,6 +395,12 @@ async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_prove
 async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_audits() {
     load_postgres_env();
     let registry = compiled_registry(false, "internal");
+    assert_eq!(
+        registry.entities()[REQUEST_ENTITY].fields["reason"]
+            .pattern
+            .as_deref(),
+        Some("^[[:print:]]+$")
+    );
     let fingerprint = request_fingerprint(&registry);
     let database = TestDatabase::create(2).await;
     let (migration, migration_task) = database.connect_migration().await;
@@ -1274,7 +1308,7 @@ fn change_request_project(
               {{"id":"tenant","type":"string","maxLength":64,"required":true,"classification":"internal"}},
               {{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"}},
               {{"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"}},
-              {{"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"{request_reason_classification}"}}
+              {{"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"{request_reason_classification}","pattern":"^[[:print:]]+$"}}
             ],
             "changeRequest":{{
               "retention":{{"mode":"operator_erase"}},

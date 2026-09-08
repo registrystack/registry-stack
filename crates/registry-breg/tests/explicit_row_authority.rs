@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_breg::contract::{
-    AccessGrantSource, AccessRequirementsSource, ActionTargetGrantSource, ApplyTargetGrantSource,
-    RequestPresenceGrantSource, ReviewStageTargetGrantSource,
+    AccessGrantSource, AccessProfileSource, AccessRequirementsSource, ActionTargetGrantSource,
+    ApplyTargetGrantSource, RequestPresenceGrantSource, ReviewStageTargetGrantSource,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -46,4 +46,29 @@ fn invocation_and_mandatory_requirements_do_not_invent_row_grants() {
     }))
     .expect("requirements constrain grants and do not grant rows");
     assert!(floor.row_boundaries.is_empty());
+}
+
+#[test]
+fn membership_preserves_explicit_row_declarations_and_round_trips() {
+    let boundaries = json!([{
+        "field":"organization", "membershipEntity":"membership",
+        "membershipKeyField":"organization", "principalField":"principal",
+        "activeField":"active"
+    }]);
+    let mut grant = json!({
+        "entity":"record", "operations":["get"], "membershipBoundaries": boundaries
+    });
+    requires_explicit_rows::<AccessGrantSource>(grant.clone());
+    grant["rowBoundaries"] = json!([]);
+    let parsed: AccessGrantSource = serde_json::from_value(grant).unwrap();
+    assert_eq!(parsed.membership_boundaries.len(), 1);
+    assert_eq!(
+        serde_json::to_value(parsed).unwrap()["membershipBoundaries"],
+        boundaries
+    );
+
+    requires_explicit_rows::<AccessProfileSource>(json!({
+        "id":"member", "principalClaim":"sub", "operations":["get"],
+        "membershipBoundaries": boundaries
+    }));
 }
