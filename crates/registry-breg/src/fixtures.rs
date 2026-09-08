@@ -1294,6 +1294,7 @@ fn validate_action_input_map(
         .iter()
         .map(|input| (input.api_name.as_str(), input))
         .collect::<BTreeMap<_, _>>();
+    let condition_inputs = condition_input_api_names(action);
     for (name, value) in input {
         if name.len() > MAX_IDENTIFIER_BYTES {
             return Err(FixtureError::LogicalReferenceRefused);
@@ -1311,9 +1312,14 @@ fn validate_action_input_map(
                 declared.field_type,
                 crate::contract::FieldTypeSource::Reference { .. }
             );
-        if !admitted_invalid_scalar
-            && !fixture_action_input_value_is_valid(value, declared, captures)
-        {
+        // Only handlers accept explicit optional nulls; fixed mappings have no
+        // null assignment semantics. Existing targets require concrete references.
+        let valid_value = if value.is_null() {
+            action.handler.is_some() && !declared.required && !condition_inputs.contains(name)
+        } else {
+            fixture_action_input_value_is_valid(value, declared, captures)
+        };
+        if !admitted_invalid_scalar && !valid_value {
             return Err(FixtureError::LogicalReferenceRefused);
         }
     }

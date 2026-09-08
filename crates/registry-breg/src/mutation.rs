@@ -3,7 +3,7 @@
 //! One product-owned PostgreSQL transaction for a complete record mutation.
 
 mod action;
-pub use action::erase_expired_action_evidence;
+pub(crate) use action::erase_expired_action_evidence;
 mod request;
 pub(crate) use request::request_action_etag;
 

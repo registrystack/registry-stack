@@ -121,6 +121,7 @@ class PostgresRunnerTests(unittest.TestCase):
         proof = next(index for index, call in enumerate(calls) if "postgres_action_evidence" in call)
         self.assertLess(builds[0], proof)
         self.assertIn("postgres_action_evidence_targets", calls[proof])
+        self.assertIn("postgres_action_evidence_retention", calls[proof])
         result, calls = self.run_lane("--lane", "immediate-actions")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse(any(call[0] == "build" for call in calls))

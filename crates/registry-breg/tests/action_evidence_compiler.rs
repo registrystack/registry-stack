@@ -261,3 +261,86 @@ fn evidence_identifiers_use_the_governed_action_grammar() {
         assert!(compile(source, Some(contracts())).is_err(), "provider {id}");
     }
 }
+
+#[test]
+fn evidence_calls_require_v2_in_statements_expressions_and_nested_blocks() {
+    for body in [
+        r#"evidence::resolve("status", #{});"#,
+        r#"let result = evidence::resolve("status", #{});"#,
+        r#"if ctx.inputs.givenName != "" { evidence::resolve("status", #{}); }"#,
+        r#"try { evidence::resolve("status", #{}); } catch (error) { }"#,
+    ] {
+        let script = format!("fn handle(ctx) {{ {body} #{{effects: []}} }}");
+        for abi in ["registry.action-handler/v1", "registry.action-handler/v2"] {
+            let mut source = configured();
+            source["actions"][0]["handler"]["abi"] = json!(abi);
+            if abi.ends_with("/v1") {
+                source["actions"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("evidence");
+            }
+            let source = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+            let assets = vec![
+                ModuleAssetSource {
+                    module: None,
+                    path: "handlers/register.rhai".into(),
+                    bytes: script.as_bytes().to_vec(),
+                },
+                ModuleAssetSource {
+                    module: None,
+                    path: "evidence/contracts.json".into(),
+                    bytes: serde_json::to_vec(&contracts()).unwrap(),
+                },
+            ];
+            let result =
+                compile_project_with_assets(&source, &[], &assets, CompileProfile::Authoring);
+            if abi.ends_with("/v1") {
+                let failure = result.expect_err("v1 must not admit an unavailable Evidence helper");
+                assert!(
+                    failure
+                        .diagnostics()
+                        .iter()
+                        .any(|diagnostic| diagnostic.code == "action.handler.helper_contract"),
+                    "{body}"
+                );
+            } else {
+                assert!(result.is_ok(), "v2 admits {body}: {result:?}");
+            }
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn published_authoring_schema_accepts_farmer_v2_and_rejects_unknown_abi() {
+    let documents = registry_breg::schema::documents().unwrap();
+    let schema: Value =
+        serde_json::from_str(&documents[registry_breg::schema::REGISTRY_PROJECT_SCHEMA_FILE])
+            .unwrap();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    let mut farmer: Value = serde_norway::from_str(include_str!(
+        "../../../products/breg/acceptance/farmer-landholding-evidence/registry.yaml"
+    ))
+    .unwrap();
+    let errors = validator
+        .validate(&farmer)
+        .err()
+        .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>());
+    assert!(
+        errors.is_none(),
+        "actual farmer authoring must validate: {errors:?}"
+    );
+    let handler = farmer["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find_map(|action| action.get_mut("handler"))
+        .unwrap();
+    assert_eq!(handler["abi"], "registry.action-handler/v2");
+    handler["abi"] = json!("registry.action-handler/v3");
+    assert!(!validator.is_valid(&farmer));
+}

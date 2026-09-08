@@ -114,6 +114,32 @@ impl TestDatabase {
         connect(self.migration_raw.clone()).await
     }
 
+    /// Reuse the exact fixture migration credentials against another disposable
+    /// database, for proving endpoint/identity separation with identical roles.
+    #[allow(dead_code)] // Only binding tests use this shared-harness helper.
+    pub async fn connect_migration_to(&self, database: &str) -> (Client, JoinHandle<()>) {
+        let mut config = self.migration_raw.clone();
+        config.dbname(database);
+        connect(config).await
+    }
+
+    #[allow(dead_code)] // Only binding tests use this shared-harness helper.
+    pub fn migration_config_for_database(&self, database: &str) -> ConnectionConfig {
+        let mut config = self.migration_raw.clone();
+        config.dbname(database);
+        ConnectionConfig::from_test_config(
+            config,
+            PoolBounds::new(
+                1,
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
     pub async fn cleanup(self) {
         self.admin_task.abort();
         let (root, root_task) = connect(self.admin_root).await;

@@ -1125,6 +1125,15 @@ fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contrac
     validate_fixture_journeys(source.as_bytes(), &registry)
         .expect("the complete authored handler and native-pattern suite preflights");
     for changed in [
+        source.replacen("identifier: \"0123456789012\"", "identifier: null", 1),
+        source.replace(
+            "registerId:\n          recordRef: active-register",
+            "registerId: null",
+        ),
+        source.replace(
+            "recordRef: active-register",
+            "recordRef: uncaptured-register",
+        ),
         source.replace("      refusalCode: blank-name\n", ""),
         source.replace("refusalCode: blank-name", "refusalCode: unknown"),
         source.replace("status: 422", "status: 400"),

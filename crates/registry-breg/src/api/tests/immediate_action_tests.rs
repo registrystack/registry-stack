@@ -128,6 +128,46 @@ fn a_fixed_patch_target_remains_required_when_its_input_is_declared_optional() {
 }
 
 #[test]
+fn fixed_action_optional_values_reject_explicit_null_in_schema_and_admission() {
+    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+    project.actions[0].inputs[1].required = false;
+    project.entities[0].fields[0].required = false;
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let action = &registry.actions().actions[0];
+    let schema = crate::artifacts::openapi_action_input_schema(action);
+    let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+    let mut body = json!({
+        "input": {"caseId": "00000000-0000-4000-8000-000000000001"},
+        "preconditions": {"caseId": {"ifMatch": "\"opaque\""}}
+    });
+    assert!(validator.is_valid(&body));
+    assert!(parse_body(
+        action,
+        ActionRouteKind::Invoke,
+        &serde_json::to_vec(&body).unwrap()
+    )
+    .is_ok());
+    body["input"]["newLabel"] = json!("Changed");
+    assert!(validator.is_valid(&body));
+    assert!(parse_body(
+        action,
+        ActionRouteKind::Invoke,
+        &serde_json::to_vec(&body).unwrap()
+    )
+    .is_ok());
+    body["input"]["newLabel"] = Value::Null;
+    assert!(!validator.is_valid(&body));
+    assert_eq!(
+        parse_error_path(
+            action,
+            ActionRouteKind::Invoke,
+            &serde_json::to_vec(&body).unwrap()
+        ),
+        "/input/newLabel"
+    );
+}
+
+#[test]
 fn malformed_action_body_reports_only_safe_field_paths() {
     let registry = compiled();
     let action = &registry.actions().actions[0];

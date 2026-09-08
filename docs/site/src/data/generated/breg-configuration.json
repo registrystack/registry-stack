@@ -1742,7 +1742,8 @@
           "type": "string",
           "required": "conditional",
           "values": [
-            "registry.action-handler/v1"
+            "registry.action-handler/v1",
+            "registry.action-handler/v2"
           ],
           "values_conditional": false,
           "constraints": [],
@@ -7434,7 +7435,8 @@
           "type": "string",
           "required": "conditional",
           "values": [
-            "registry.action-handler/v1"
+            "registry.action-handler/v1",
+            "registry.action-handler/v2"
           ],
           "values_conditional": false,
           "constraints": [],

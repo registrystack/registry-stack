@@ -348,13 +348,12 @@ fn contains_governed_member(value: &serde_norway::Value) -> bool {
     match value {
         serde_norway::Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
             key.as_str().is_some_and(|key| GOVERNED.contains(&key))
-                // Destination-map keys are compiler-issued logical ids. Do not
+                // Binding-map keys are compiler-issued logical ids. Do not
                 // reinterpret an id such as `events` as a governed field; the
-                // strict destination value type rejects every undeployed key.
-                || (key
-                    .as_str()
-                    .is_none_or(|key| key != "eventDestinations")
-                    && contains_governed_member(value))
+                // strict binding value types still reject undeployed members.
+                || (key.as_str().is_none_or(|key| {
+                    !matches!(key, "eventDestinations" | "evidenceProviders")
+                }) && contains_governed_member(value))
         }),
         serde_norway::Value::Sequence(values) => values.iter().any(contains_governed_member),
         _ => false,

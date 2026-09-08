@@ -2,7 +2,7 @@
 //! Input-only immediate action evaluation inside the shared bounded Rhai kernel.
 
 use crate::{
-    contract::{Operation, ACTION_HANDLER_ABI_V1},
+    contract::{Operation, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2},
     data::{validate_field_value, FieldValue},
     model::*,
     rhai_planner::{
@@ -138,10 +138,15 @@ pub struct ActionHandlerRefusal {
 }
 
 pub fn compile_source(source: &str) -> Result<AST, ActionHandlerError> {
+    compile_source_for_abi(source, ACTION_HANDLER_ABI_V2)
+}
+
+pub(crate) fn compile_source_for_abi(source: &str, abi: &str) -> Result<AST, ActionHandlerError> {
     let ast =
         rhai_planner::compile_entrypoint(source, "handle").map_err(ActionHandlerError::from)?;
     // An invalid helper arity would otherwise be a catchable language dispatch
-    // error before the host can poison the evaluation. Reject it at compilation.
+    // error before the host can poison the evaluation. Reject it at compilation,
+    // along with every Evidence call in an ABI that does not expose the module.
     let mut valid = true;
     ast.walk(&mut |nodes| {
         let call = match nodes.last() {
@@ -154,7 +159,8 @@ pub fn compile_source(source: &str) -> Result<AST, ActionHandlerError> {
                 .path
                 .first()
                 .is_some_and(|part| part.as_str() == "evidence")
-                && (call.namespace.path.len() != 1
+                && (abi != ACTION_HANDLER_ABI_V2
+                    || call.namespace.path.len() != 1
                     || call.name != "resolve"
                     || call.args.len() != 2)
         }) {
@@ -327,13 +333,13 @@ pub(crate) fn evaluate_with_engine(
         ));
     };
     if handler.abi != ACTION_HANDLER_ABI_V1
-        && !(handler.abi == "registry.action-handler/v2" && resolver.is_some())
+        && !(handler.abi == ACTION_HANDLER_ABI_V2 && resolver.is_some())
     {
         return Err(ActionHandlerError::Source.into());
     }
     let source =
         std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
-    let ast = compile_source(source)?;
+    let ast = compile_source_for_abi(source, &handler.abi)?;
     let mut ctx = Map::new();
     ctx.insert(
         "inputs".into(),

@@ -822,7 +822,11 @@ pub(crate) fn openapi_action_response_schema_id(action_id: &str) -> String {
 
 pub(crate) fn openapi_action_input_schema(action: &CompiledAction) -> Value {
     let condition_inputs = action_condition_inputs(action);
-    let input_schema = action_input_properties_schema(action.inputs.iter(), &condition_inputs);
+    let input_schema = action_input_properties_schema(
+        action.inputs.iter(),
+        &condition_inputs,
+        action.handler.is_some(),
+    );
     let mut properties = Map::from_iter([("input".to_owned(), input_schema)]);
     if !condition_inputs.is_empty() {
         properties.insert(
@@ -1200,6 +1204,7 @@ fn reference_input_metadata(input: &CompiledActionInput) -> Option<Value> {
 fn action_input_properties_schema<'a>(
     inputs: impl IntoIterator<Item = &'a CompiledActionInput>,
     condition_inputs: &[&CompiledActionInput],
+    handler_inputs: bool,
 ) -> Value {
     let inputs = inputs.into_iter().collect::<Vec<_>>();
     let is_required = |input: &CompiledActionInput| {
@@ -1210,7 +1215,7 @@ fn action_input_properties_schema<'a>(
         .map(|input| {
             (
                 input.api_name.clone(),
-                field_value_schema(&input.field_type, !is_required(input)),
+                field_value_schema(&input.field_type, handler_inputs && !is_required(input)),
             )
         })
         .collect::<Map<_, _>>();

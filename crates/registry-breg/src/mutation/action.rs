@@ -1256,6 +1256,9 @@ fn validate_action_input(
             {
                 return Err(MutationError::InvalidRequest);
             }
+            Some(Value::Null) if action.handler.is_none() => {
+                return Err(MutationError::InvalidRequest);
+            }
             Some(value)
                 if !value.is_null()
                     && !validate_field_value(FieldValue::Json(value), &source.field_type) =>
@@ -2124,8 +2127,8 @@ async fn insert_action_evidence(
 /// Erase only expired protected Evidence material with the migration role.
 /// Runtime roles have INSERT only; history erasure has a separate scope.
 /// A future cutoff cannot erase material whose retention has not expired.
-pub async fn erase_expired_action_evidence(
-    client: &tokio_postgres::Client,
+pub(crate) async fn erase_expired_action_evidence(
+    client: &tokio_postgres::Transaction<'_>,
     before: chrono::DateTime<chrono::Utc>,
 ) -> Result<u64, MutationError> {
     client
@@ -2141,6 +2144,50 @@ pub async fn erase_expired_action_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_action_admission_keeps_null_specific_to_handlers() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/person-registration-rhai");
+        let project = crate::contract::parse_project_yaml(
+            &std::fs::read(root.join("registry.yaml")).unwrap(),
+        )
+        .unwrap();
+        let assets = project
+            .actions
+            .iter()
+            .filter_map(|action| action.handler.as_ref())
+            .map(|handler| crate::contract::ModuleAssetSource {
+                module: None,
+                path: handler.script.clone(),
+                bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let registry = crate::compiler::compile_project_with_assets(
+            &project,
+            &[],
+            &assets,
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let mut action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == "register-person")
+            .unwrap()
+            .clone();
+        let input = Map::from_iter([
+            ("identifier".to_owned(), json!("0123456789012")),
+            ("family-name".to_owned(), Value::Null),
+        ]);
+        assert!(validate_action_input(&action, input.clone()).is_ok());
+        action.handler = None;
+        assert!(matches!(
+            validate_action_input(&action, input),
+            Err(MutationError::InvalidRequest)
+        ));
+    }
 
     #[test]
     fn aliased_patch_group_waits_for_every_selected_create_dependency() {

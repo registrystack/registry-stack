@@ -47,3 +47,4 @@ traceability:
   - {id: BREG-SEC-44, state: enforced, negativeId: BREG-NEG-44, negativeTest: {path: crates/registry-breg/tests/postgres_action_evidence.rs, name: signed_evidence_actions_release_postgres_and_commit_atomic_transcripts}}
   - {id: BREG-SEC-45, state: enforced, negativeId: BREG-NEG-45, negativeTest: {path: crates/registry-breg/tests/postgres_action_evidence.rs, name: caught_failed_helper_cannot_commit_or_make_another_disclosure}}
   - {id: BREG-SEC-46, state: enforced, negativeId: BREG-NEG-46, negativeTest: {path: crates/registry-breg/src/artifacts.rs, name: evidence_dependency_problem_is_static_and_has_service_unavailable_status}}
+  - {id: BREG-SEC-47, state: enforced, negativeId: BREG-NEG-47, negativeTest: {path: crates/registry-breg/tests/postgres_action_evidence_retention.rs, name: retention_refuses_misbound_database_with_identical_roles_and_catalog_drift}}

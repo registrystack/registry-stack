@@ -102,7 +102,8 @@ print(binaries[0])
   export BREG_TEST_EVIDENCE_BINARY="$evidence_binary"
   uv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg --features postgres-test,tooling \
     --test postgres_action_evidence \
-    --test postgres_action_evidence_targets
+    --test postgres_action_evidence_targets \
+    --test postgres_action_evidence_retention
 fi
 
 if [[ "$lane" == all || "$lane" == immediate-actions ]]; then

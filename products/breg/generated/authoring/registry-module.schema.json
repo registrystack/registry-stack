@@ -131,7 +131,8 @@
       "properties": {
         "abi": {
           "enum": [
-            "registry.action-handler/v1"
+            "registry.action-handler/v1",
+            "registry.action-handler/v2"
           ],
           "type": "string"
         },

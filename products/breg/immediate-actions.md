@@ -683,6 +683,9 @@ The operator command `bregctl evidence-retention erase-expired --runtime-config
 assertions and verification context using the configured migration role. The
 cutoff cannot be in the future. It reports only a count and keeps receipts
 replayable; runtime database credentials cannot delete retained evidence.
+The operator configuration must match the active package. On the configured
+migration database, the command verifies the expected Registry identity, catalog
+and readiness while holding the Registry transaction lock through deletion.
 Ordinary history erasure does not cover this separate retention scope.
 
 Eligibility remains an operation-level rule. Configure grants so CRUD, other

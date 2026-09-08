@@ -1768,6 +1768,59 @@ fn event_destination_shape_is_strict_and_governed_webhooks_remain_refused() {
 }
 
 #[test]
+fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_closed() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let bindings = r#"evidenceProviders:
+  events:
+    baseUrl: https://evidence-endpoint-canary.example
+    trustBindingId: evidence-trust-canary
+    tokenRef: secret:file/evidence-token-canary
+    trustedJwksRef: secret:file/evidence-jwks-canary
+  entities:
+    baseUrl: https://evidence-endpoint-canary.example
+    trustBindingId: evidence-trust-canary
+    tokenRef: secret:file/evidence-token-canary
+    trustedJwksRef: secret:file/evidence-jwks-canary
+"#;
+    let valid = format!("{base}{bindings}");
+    let config = parse_runtime_config_with_env(&valid, env_lookup)
+        .expect("compiler-valid provider ids may match governed field names");
+    assert!(!format!("{config:?}").contains("canary"));
+
+    // Only the logical-id map is exempted from the heuristic traversal. The
+    // closed provider type still refuses actual governed or unknown members,
+    // malformed binding values and missing members.
+    for raw in [
+        valid.replace("    tokenRef:", "    fields: []\n    tokenRef:"),
+        valid.replace("    tokenRef:", "    events: []\n    tokenRef:"),
+        valid.replace(
+            "    tokenRef:",
+            "    token: inline-secret-canary\n    tokenRef:",
+        ),
+        format!("{base}evidenceProviders:\n  events: []\n"),
+        format!("{base}evidenceProviders:\n  entities: {{}}\n"),
+    ] {
+        let error = parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("malformed or undeployed provider binding member is refused");
+        assert_eq!(error, RuntimeConfigError::Document);
+        assert!(!format!("{error:?}: {error}").contains("canary"));
+    }
+    for member in ["events", "entities"] {
+        let raw = format!("{valid}{member}: []\n");
+        assert_eq!(
+            parse_runtime_config_with_env(&raw, env_lookup)
+                .expect_err("actual top-level governed members remain refused"),
+            RuntimeConfigError::GovernedMember
+        );
+    }
+}
+
+#[test]
 fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refused() {
     let fixture = RuntimeFixture::new();
     let valid = runtime_with_event_destinations(

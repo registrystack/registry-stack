@@ -497,11 +497,11 @@ fn compile_handler(
         errors.push(Diagnostic::error(code, format!("{path}.script"), &message));
         return None;
     }
-    if crate::action_handler::compile_source(script).is_err() {
+    if crate::action_handler::compile_source_for_abi(script, &source.abi).is_err() {
         errors.push(Diagnostic::error(
             "action.handler.helper_contract",
             format!("{path}.script"),
-            "Evidence helpers must use evidence::resolve with exactly two arguments",
+            "Evidence helpers require registry.action-handler/v2 and evidence::resolve with exactly two arguments",
         ));
         return None;
     }

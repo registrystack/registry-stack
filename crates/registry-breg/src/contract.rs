@@ -632,7 +632,7 @@ pub struct ActionHandlerSource {
 
 #[cfg(feature = "schema")]
 fn action_handler_abi_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({"type": "string", "enum": [ACTION_HANDLER_ABI_V1]})
+    schemars::json_schema!({"type": "string", "enum": [ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2]})
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
