@@ -109,7 +109,6 @@ def main() -> None:
         server = subprocess.Popen([str(args.breg), "--config", str(active_runtime)], stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 20
-            readiness_failure = "no response"
             while True:
                 if server.poll() is not None:
                     raise SystemExit("person registration server stopped before readiness")
