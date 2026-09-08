@@ -14,6 +14,7 @@ import {
   validateCatalog,
   validateReviewMetadata,
 } from './generate-cli-reference.mjs';
+import { cliReferenceDigest } from './cli-reference-digest.mjs';
 
 function argument(display) {
   return {
@@ -253,5 +254,27 @@ test('the docs check generates missing outputs before validating CLI parity', as
   assert.equal(sourceSteps[0], 'npm run generate');
   assert.ok(
     sourceSteps.indexOf('npm run generate') < sourceSteps.indexOf('npm run check:cli-reference'),
+  );
+});
+
+test('the digest helper reports the values the review record must carry', async () => {
+  const catalog = fixtureCatalog();
+  const execute = async () => `${JSON.stringify(catalog, null, 2)}\n`;
+  const digest = await cliReferenceDigest('/unused', { execute });
+  assert.deepEqual(digest, {
+    reviewed_source_version: '0.21.0',
+    reviewed_catalog_sha256: catalogDigest(catalog),
+  });
+  const malformed = async () => 'not json';
+  await assert.rejects(cliReferenceDigest('/unused', { execute: malformed }), /did not emit JSON/u);
+});
+
+test('the digest helper is published as an npm script', async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  );
+  assert.equal(
+    packageJson.scripts['cli-reference:digest'],
+    'node scripts/cli-reference-digest.mjs',
   );
 });
