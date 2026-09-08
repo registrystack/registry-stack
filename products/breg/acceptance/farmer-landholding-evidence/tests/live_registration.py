@@ -89,17 +89,22 @@ def main() -> None:
         server = subprocess.Popen([str(args.breg), "--config", str(active_runtime)], stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 20
+            readiness_failure = "no response"
             while True:
                 if server.poll() is not None:
                     raise SystemExit("farmer BREG process stopped before readiness")
                 try:
                     with urllib.request.urlopen(base + "/ready", timeout=1) as ready:
+                        readiness_failure = f"HTTP {ready.status}"
                         if ready.status == 200:
                             break
+                except urllib.error.HTTPError as error:
+                    readiness_failure = f"HTTP {error.code}"
+                    error.close()
                 except (urllib.error.URLError, TimeoutError):
-                    pass
+                    readiness_failure = "connection unavailable or timed out"
                 if time.monotonic() >= deadline:
-                    raise SystemExit("farmer BREG readiness deadline exceeded")
+                    raise SystemExit(f"farmer BREG readiness deadline exceeded ({readiness_failure})")
                 time.sleep(0.1)
             inputs = {"farmerPrefix": " TH ", "farmerNumber": " 00042 ", "parcelCode": "LIVE-P-001", "includeCategory": True}
             body = {"input": inputs}

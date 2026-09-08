@@ -123,19 +123,23 @@ def main():
 
         def do_POST(self):
             if self.path != "/v1/facts" or self.headers.get("Authorization") != "Bearer " + source_token:
-                return self.send_json(403, {})
+                self.send_json(403, {})
+                return
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 4096:
-                return self.send_json(400, {})
+                self.send_json(400, {})
+                return
             request = json.loads(self.rfile.read(length))
             with request_lock:
                 with requests_path.open("a") as log:
                     log.write(json.dumps(request) + "\n")
             control = json.loads(control_path.read_text())
             if request.get("reference") not in ("TH-00042", "TH-00043") or control.get("mode") == "missing":
-                return self.send_json(200, {"total": 0})
+                self.send_json(200, {"total": 0})
+                return
             if control.get("mode") == "ambiguous":
-                return self.send_json(200, {"total": 2})
+                self.send_json(200, {"total": 2})
+                return
             reference = "TH-99999" if control.get("mode") == "mismatch" else request["reference"]
             self.send_json(200, {"total": 1, "reference": reference, "active": control["active"] and request["reference"] != "TH-00043", "category": control["category"]})
 
