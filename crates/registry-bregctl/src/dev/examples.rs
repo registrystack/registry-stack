@@ -530,7 +530,10 @@ fn run_example(args: RunArgs) -> Result<Value> {
                 })
                 .collect();
             if candidates.len() != 1 {
-                bail!("review needs one completed first-record attempt; run bregctl examples run first-record or select --from-attempt ID");
+                bail!(
+                    "review needs one completed first-record attempt; run bregctl examples run first-record {} or select --from-attempt ID",
+                    shell_path(&project)
+                );
             }
             attempt.from_attempt = Some(candidates[0].id);
             attempt.captures = candidates[0].captures.clone();
@@ -1476,7 +1479,7 @@ mod tests {
             .tempdir()
             .unwrap()
             .keep();
-        let project = temp.join("project");
+        let project = temp.join("project with ' spaces");
         copy_tree(&assets(), &project);
         permit_fixture_sample_deletion(&project);
         let binaries = std::env::current_exe()
@@ -1512,6 +1515,24 @@ mod tests {
             "--database-port",
             &ports[2],
         ]);
+        assert_ne!(std::env::current_dir().unwrap(), owned.project);
+        let error = run_example(test_args(&owned.project, "reviewed-change"))
+            .unwrap_err()
+            .to_string();
+        let expected_project = format!(
+            "'{}/project with '\\'' spaces'",
+            temp.canonicalize().unwrap().display()
+        );
+        assert_eq!(
+            error,
+            format!(
+                "review needs one completed first-record attempt; run bregctl examples run first-record {expected_project} or select --from-attempt ID"
+            )
+        );
+        assert!(attempts(&owned.project.join(".breg/dev/examples"))
+            .unwrap()
+            .is_empty());
+        assert_eq!(observed_count_and_apply_action(&owned.project).0, 0);
         child(&owned.project, "first-record", None, Some("create"));
         let interrupted = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
         assert_eq!(interrupted.len(), 1);
