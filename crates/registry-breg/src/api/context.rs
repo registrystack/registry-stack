@@ -208,6 +208,7 @@ pub struct AuthorizedRequestContext {
     row_boundaries: Vec<VerifiedRowBoundary>,
     request_actions: Vec<VerifiedRequestAction>,
     request_presence: Vec<VerifiedRequestPresence>,
+    submitter_targets: BTreeMap<String, Vec<VerifiedRowBoundary>>,
 }
 
 impl AuthorizedRequestContext {
@@ -224,7 +225,20 @@ impl AuthorizedRequestContext {
             row_boundaries,
             request_actions: Vec::new(),
             request_presence: Vec::new(),
+            submitter_targets: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn with_submitter_targets(
+        mut self,
+        targets: BTreeMap<String, Vec<VerifiedRowBoundary>>,
+    ) -> Self {
+        self.submitter_targets = targets;
+        self
+    }
+
+    pub(crate) fn submitter_targets(&self) -> &BTreeMap<String, Vec<VerifiedRowBoundary>> {
+        &self.submitter_targets
     }
 
     pub(crate) fn with_request_visibility(

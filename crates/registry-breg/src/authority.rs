@@ -103,6 +103,19 @@ pub fn authority_inventory(
                     )?;
                 }
             }
+            for id in &profile.submitter_targets {
+                let target = target_entity(registry, id)?;
+                let grant = target
+                    .access_profiles
+                    .get(&profile.id)
+                    .ok_or(AuthorityInventoryError::TargetEntityNotCompiled)?;
+                inventory.boundaries(
+                    target,
+                    &profile.id,
+                    &format!("{surface}/submitterTargets/{id}"),
+                    &grant.row_boundaries,
+                )?;
+            }
             for stage in &profile.review_stages {
                 for target in &stage.targets {
                     inventory.boundaries(

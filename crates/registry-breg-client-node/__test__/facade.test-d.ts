@@ -58,3 +58,16 @@ client.continueList({
 })
 // @ts-expect-error Relay-only record members are not promised by BReg.
 record.data.lifecycleState.toUpperCase()
+
+client.createRecordJson(create, '{"wide":9007199254740992}', 'exact-create')
+client.patchRecordJson(patch, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', '[{"op":"remove","field":"name"}]', 'exact-patch')
+client.getRecordJson('people', '9f6973f9-10b3-4c58-b41b-494cba26796f').then(result => result.valueJson.toUpperCase())
+client.listRecordsJson('people').then(result => result.continuation?.skiptoken.toUpperCase())
+client.lookupRecordJson('people', 'identifier', '{"name":"Ada"}')
+client.lifecycleActionsJson(authority, '{}')
+client.executeLifecycleActionJson(action, 'exact-action')
+action.bodyJson.toUpperCase()
+action.reviewJson?.toUpperCase()
+metadata.operations.map(operation => operation.query?.filterableFields.map(field => field.apiName))
+// @ts-expect-error Exact JSON methods require text, not already coerced JavaScript values.
+client.createRecordJson(create, { wide: 9007199254740992 }, 'exact-create')

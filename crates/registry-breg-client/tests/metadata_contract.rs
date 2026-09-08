@@ -648,3 +648,31 @@ fn debug_and_errors_do_not_render_response_controlled_values() {
     let rendered = format!("{selection:?} {selection}");
     assert!(!rendered.contains(canary));
 }
+
+#[test]
+fn list_query_and_presentation_descriptors_are_retained_without_authority() {
+    let mut value = fixture();
+    value["operations"][2]["query"] = json!({
+        "kind": "odata",
+        "selectableFields": [{"id": "legal-name", "apiName": "legalName"}],
+        "filterableFields": [{"id": "__request_breg_state", "apiName": "bregState", "operators": ["equals", "in"]}],
+        "sortableFields": [{"id": "legal-name", "apiName": "legalName", "directions": ["asc", "desc"]}],
+        "allowCount": true, "defaultPageSize": 25, "maxPageSize": 100,
+        "maxFilterClauses": 5, "maxInValues": 10,
+        "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
+        "temporal": {"mode": "current"}
+    });
+    let metadata = parse(&value);
+    let operation = metadata.operation("records.company.get").unwrap();
+    assert_eq!(
+        operation.fields()[0].label(),
+        "Response-controlled presentation"
+    );
+    let query = operation.query().unwrap();
+    assert_eq!(query.filterable_fields[0].api_name, "bregState");
+    assert_eq!(query.filterable_fields[0].operators, ["equals", "in"]);
+    assert_eq!(query.max_page_size, 100);
+    assert!(metadata
+        .select_direct_write("records.company.get", "company-writer")
+        .is_err());
+}

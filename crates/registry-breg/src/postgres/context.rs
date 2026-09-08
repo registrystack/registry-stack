@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::time::Duration;
 
@@ -194,6 +194,7 @@ pub struct ClaimContext {
     purpose: Option<String>,
     row_boundaries: Vec<RowBoundaryContext>,
     canonical_row_boundaries: String,
+    submitter_targets: BTreeMap<String, ClaimContext>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -290,6 +291,7 @@ impl ClaimContext {
             purpose,
             row_boundaries,
             canonical_row_boundaries,
+            submitter_targets: BTreeMap::new(),
         })
     }
 
@@ -320,7 +322,96 @@ impl ClaimContext {
             purpose,
             row_boundaries,
             canonical_row_boundaries,
+            submitter_targets: BTreeMap::new(),
         })
+    }
+
+    pub(crate) fn with_submitter_targets(
+        mut self,
+        registry: &CompiledRegistry,
+        targets: BTreeMap<String, Vec<RowBoundaryContext>>,
+    ) -> Result<Self> {
+        let profile = registry
+            .entities()
+            .get(&self.entity_id)
+            .and_then(|entity| entity.access_profiles.get(&self.access_profile))
+            .ok_or_else(invalid_context)?;
+        if !targets
+            .keys()
+            .all(|id| profile.submitter_targets.contains(id))
+        {
+            return Err(invalid_context());
+        }
+        self.submitter_targets = targets
+            .into_iter()
+            .map(|(id, boundaries)| {
+                let target = Self::for_compiled(
+                    registry,
+                    &id,
+                    self.principal.clone(),
+                    &self.access_profile,
+                    self.purpose.clone(),
+                    boundaries,
+                )?;
+                Ok((id, target))
+            })
+            .collect::<Result<_>>()?;
+        Ok(self)
+    }
+
+    pub(crate) fn with_api_submitter_targets(
+        self,
+        registry: &CompiledRegistry,
+        context: &crate::api::AuthorizedRequestContext,
+    ) -> Result<Self> {
+        let targets = context
+            .submitter_targets()
+            .iter()
+            .map(|(id, boundaries)| {
+                let boundaries = boundaries
+                    .iter()
+                    .map(|boundary| match boundary.operator() {
+                        crate::api::RowBoundaryOperator::Equals if boundary.values().len() == 1 => {
+                            Ok(RowBoundaryContext::Equals {
+                                field: boundary.field().to_owned(),
+                                value: boundary
+                                    .values()
+                                    .first()
+                                    .ok_or_else(invalid_context)?
+                                    .clone(),
+                            })
+                        }
+                        crate::api::RowBoundaryOperator::In => Ok(RowBoundaryContext::In {
+                            field: boundary.field().to_owned(),
+                            values: boundary.values().clone(),
+                        }),
+                        _ => Err(invalid_context()),
+                    })
+                    .collect::<Result<_>>()?;
+                Ok((id.clone(), boundaries))
+            })
+            .collect::<Result<_>>()?;
+        self.with_submitter_targets(registry, targets)
+    }
+
+    #[must_use]
+    pub fn submitter_targets(&self) -> &BTreeMap<String, ClaimContext> {
+        &self.submitter_targets
+    }
+
+    /// Switch only the verified row predicates within the existing selected-profile transaction.
+    pub(crate) async fn install_row_boundaries(
+        &self,
+        transaction: &tokio_postgres::Transaction<'_>,
+    ) -> Result<()> {
+        self.validate()?;
+        transaction
+            .execute(
+                "SELECT set_config('registry.row_boundaries', $1, true)",
+                &[&self.canonical_row_boundaries],
+            )
+            .await?;
+        Ok(())
     }
 
     #[must_use]
@@ -3085,6 +3176,7 @@ mod tests {
                         read_paths: Vec::new(),
                         review_stages: Vec::new(),
                         apply_targets: Vec::new(),
+                        submitter_targets: Default::default(),
                         request_presence: Vec::new(),
                         targets: Vec::new(),
                         results: BTreeSet::new(),
@@ -3121,6 +3213,7 @@ mod tests {
                         read_paths: Vec::new(),
                         review_stages: Vec::new(),
                         apply_targets: Vec::new(),
+                        submitter_targets: Default::default(),
                         request_presence: Vec::new(),
                         targets: Vec::new(),
                         results: BTreeSet::new(),

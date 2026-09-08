@@ -1640,6 +1640,7 @@ fn validate_grant_access_requirements(
             read_paths: Vec::new(),
             review_stages: Vec::new(),
             apply_targets: Vec::new(),
+            submitter_targets: BTreeSet::new(),
             request_presence: Vec::new(),
             allow_count: false,
             revision_access: false,
@@ -1737,6 +1738,7 @@ fn entity_grant_fields_empty(grant: &crate::contract::AccessGrantSource) -> bool
         && grant.read_paths.is_empty()
         && grant.review_stages.is_empty()
         && grant.apply_targets.is_empty()
+        && grant.submitter_targets.is_empty()
         && grant.request_presence.is_empty()
         && !grant.allow_count
         && !grant.revision_access

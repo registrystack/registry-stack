@@ -35,6 +35,53 @@ pub struct CompleteOutcome {
     pub location: Option<String>,
 }
 
+/// Validated product result serialized before the JavaScript number boundary.
+#[napi(object)]
+pub struct JsonOutcome {
+    pub kind: String,
+    pub value_json: String,
+    pub continuation: Option<Value>,
+    pub trace_id: String,
+    pub etag: Option<String>,
+    pub location: Option<String>,
+}
+
+fn exact_input(value: &str) -> Result<Value> {
+    registry_breg_client::decode_exact_json(value.as_bytes()).map_err(|_| {
+        binding_error(
+            "invalid_request",
+            "JSON value is invalid or cannot be represented exactly",
+        )
+    })
+}
+
+fn complete_json_value<T: Serialize>(
+    value: T,
+    metadata: registry_breg_client::BRegResponseMetadata,
+) -> Result<JsonOutcome> {
+    let (trace_id, etag, location) = metadata_parts(&metadata);
+    Ok(JsonOutcome {
+        kind: "complete".into(),
+        value_json: serde_json::to_string(&value)
+            .map_err(|_| binding_error("protocol", "client result is not representable"))?,
+        continuation: None,
+        trace_id,
+        etag,
+        location,
+    })
+}
+
+fn page_json_value<T: Serialize>(value: BRegComplete<BRegPage<T>>) -> Result<JsonOutcome> {
+    let mut result = complete_json_value(value.value.value, value.metadata)?;
+    result.continuation = value
+        .value
+        .continuation
+        .map(|value| serde_json::to_value(value.projection()))
+        .transpose()
+        .map_err(|_| binding_error("protocol", "client continuation is not representable"))?;
+    Ok(result)
+}
+
 #[napi(object)]
 pub struct PageOutcome {
     pub kind: String,
@@ -870,6 +917,20 @@ pub struct LifecycleAction {
 #[napi]
 impl LifecycleAction {
     #[napi(getter)]
+    pub fn body_json(&self) -> Result<String> {
+        serde_json::to_string(&self.inner.body().to_value())
+            .map_err(|_| binding_error("protocol", "action body is not representable"))
+    }
+    #[napi(getter)]
+    pub fn review_json(&self) -> Result<Option<String>> {
+        self.inner
+            .review()
+            .map(|value| serde_json::to_string(&review_value(value)))
+            .transpose()
+            .map_err(|_| binding_error("protocol", "action review is not representable"))
+    }
+
+    #[napi(getter)]
     pub fn operation(&self) -> String {
         self.inner.operation().identifier().to_owned()
     }
@@ -904,6 +965,35 @@ pub struct Metadata {
 
 #[napi]
 impl Metadata {
+    /// Caller-filtered inert descriptors. Selectors below remain the only authority constructors.
+    #[napi(getter)]
+    pub fn operations(&self) -> Value {
+        Value::Array(self.inner.operations().iter().map(|operation| {
+            let request = operation.request();
+            json!({
+                "id": operation.identifier(), "method": operation.method(), "path": operation.path(),
+                "kind": operation.kind().as_str(), "sourceEntity": operation.source_entity(),
+                "responseEntity": operation.response_entity(), "accessProfile": operation.access_profile(),
+                "entityLabel": operation.entity_label(), "titleFields": operation.title_fields(),
+                "requiredCapabilities": operation.required_capabilities(),
+                "readableFields": operation.readable_fields(), "createWritableFields": operation.create_writable_fields(),
+                "patchWritableFields": operation.patch_writable_fields(), "query": operation.query(),
+                "fields": operation.fields().iter().map(|field| json!({
+                    "id": field.identifier(), "apiName": field.api_name(), "label": field.label(),
+                    "schemaJson": field.schema().to_string(), "required": field.required(),
+                    "nullable": field.nullable(), "readOnly": field.read_only(), "removable": field.removable(),
+                    "referenceTargetEntity": field.reference_target_entity(),
+                })).collect::<Vec<_>>(),
+                "request": { "fieldNames": request.field_names(), "queryParameters": request.query_parameters(),
+                    "body": request.body(), "contentType": request.content_type(),
+                    "schemaJson": request.schema().map(Value::to_string),
+                    "idempotencyKeyRequired": request.idempotency_key_required(), "ifMatchRequired": request.if_match_required(),
+                    "mutationSemantics": request.mutation_semantics(), "patchPathPrefix": request.patch_path_prefix(),
+                    "patchOperations": request.patch_operations(), "removeSemantics": request.remove_semantics() },
+            })
+        }).collect())
+    }
+
     #[napi(getter)]
     pub fn registry_identifier(&self) -> String {
         self.inner.registry_identifier().to_owned()
@@ -1211,5 +1301,167 @@ impl BaseRegistryClient {
             .await
             .map_err(client_error)?;
         complete_value(receipt_value(&value), metadata)
+    }
+    #[napi]
+    pub async fn get_record_json(
+        &self,
+        entity_route: String,
+        record_identifier: String,
+        options: Option<Value>,
+    ) -> Result<JsonOutcome> {
+        let options = options_object(options, "record options must be an object")?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .get_record(
+                &entity_route,
+                &record_identifier,
+                &record_options(options.as_ref())?,
+            )
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    #[napi]
+    pub async fn list_records_json(
+        &self,
+        entity_route: String,
+        options: Option<Value>,
+    ) -> Result<JsonOutcome> {
+        self.inner
+            .list_records(&entity_route, &list_request(options)?)
+            .await
+            .map_err(client_error)
+            .and_then(page_json_value)
+    }
+
+    #[napi]
+    pub async fn continue_list_json(&self, value: Value) -> Result<JsonOutcome> {
+        let projection: BRegContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| binding_error("invalid_request", "continuation is invalid"))?;
+        let continuation = BRegContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        self.inner
+            .continue_list(&continuation)
+            .await
+            .map_err(client_error)
+            .and_then(page_json_value)
+    }
+
+    #[napi]
+    pub async fn lookup_record_json(
+        &self,
+        entity_route: String,
+        selector: String,
+        values_json: Option<String>,
+        options: Option<Value>,
+    ) -> Result<JsonOutcome> {
+        let values = values_json.map(|value| exact_input(&value)).transpose()?;
+        let request = lookup_request(selector, values, options)?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .lookup_record(&entity_route, &request)
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    #[napi]
+    pub async fn create_record_json(
+        &self,
+        binding: &CreateBinding,
+        data_json: String,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<JsonOutcome> {
+        let data = exact_input(&data_json)?;
+        let data = data
+            .as_object()
+            .cloned()
+            .ok_or_else(|| binding_error("invalid_request", "create data must be an object"))?;
+        let request = BRegCreateRequest::new(data)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let operation = binding.inner.clone();
+        let BRegComplete { value, metadata } = self
+            .inner
+            .create_record(&operation, &request, &key, format(format_value)?)
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    #[napi]
+    pub async fn patch_record_json(
+        &self,
+        binding: &PatchBinding,
+        record_identifier: String,
+        etag: String,
+        operations_json: String,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<JsonOutcome> {
+        let record_identifier = uuid::Uuid::parse_str(&record_identifier)
+            .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+        let etag = BRegEtag::parse(&etag).map_err(|_| {
+            binding_error(
+                "invalid_request",
+                "etag must be a strong Base Registry Engine entity tag",
+            )
+        })?;
+        let request = patch_request(exact_input(&operations_json)?)?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let operation = binding.inner.clone();
+        let BRegComplete { value, metadata } = self
+            .inner
+            .patch_record(
+                &operation,
+                record_identifier,
+                &etag,
+                &request,
+                &key,
+                format(format_value)?,
+            )
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    #[napi]
+    pub fn lifecycle_actions_json(
+        &self,
+        authority: &LifecycleAuthority,
+        record_json: String,
+        format_value: Option<String>,
+    ) -> Result<Vec<LifecycleAction>> {
+        let record = parse_record(exact_input(&record_json)?, format(format_value)?)?;
+        self.inner.lifecycle_actions(&authority.inner, &record)
+            .map(|actions| actions.into_iter().map(|inner| LifecycleAction { inner }).collect())
+            .map_err(|error| {
+                let code = match error {
+                    BRegLifecyclePromotionError::Authority => "authority",
+                    BRegLifecyclePromotionError::Binding => "binding",
+                };
+                mapped_error(json!({"kind": "lifecycle_promotion", "code": code, "message": error.to_string()}))
+            })
+    }
+
+    #[napi]
+    pub async fn execute_lifecycle_action_json(
+        &self,
+        action: &LifecycleAction,
+        idempotency_key: String,
+    ) -> Result<JsonOutcome> {
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let action = action.inner.clone();
+        let BRegComplete { value, metadata } = self
+            .inner
+            .execute_lifecycle_action(&action, &key)
+            .await
+            .map_err(client_error)?;
+        complete_json_value(receipt_value(&value), metadata)
     }
 }

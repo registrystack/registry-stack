@@ -16,6 +16,14 @@ export declare class BaseRegistryClient {
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   lifecycleActions(authority: BRegLifecycleAuthority, record: any, formatValue?: string | undefined | null): Array<BRegLifecycleAction>
   executeLifecycleAction(action: BRegLifecycleAction, idempotencyKey: string): Promise<CompleteOutcome>
+  getRecordJson(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
+  listRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  continueListJson(value: any): Promise<JsonOutcome>
+  lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null): Promise<JsonOutcome>
+  createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
+  patchRecordJson(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operationsJson: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
+  lifecycleActionsJson(authority: BRegLifecycleAuthority, recordJson: string, formatValue?: string | undefined | null): Array<BRegLifecycleAction>
+  executeLifecycleActionJson(action: BRegLifecycleAction, idempotencyKey: string): Promise<JsonOutcome>
 }
 
 export declare class BRegCreateBinding {
@@ -24,6 +32,8 @@ export declare class BRegCreateBinding {
 export type CreateBinding = BRegCreateBinding
 
 export declare class BRegLifecycleAction {
+  get bodyJson(): string
+  get reviewJson(): string | null
   get operation(): string
   get stage(): string | null
   get href(): string
@@ -38,6 +48,8 @@ export declare class BRegLifecycleAuthority {
 export type LifecycleAuthority = BRegLifecycleAuthority
 
 export declare class BRegMetadata {
+  /** Caller-filtered inert descriptors. Selectors below remain the only authority constructors. */
+  get operations(): any
   get registryIdentifier(): string
   get registryVersion(): string
   get registryRevision(): string
@@ -57,6 +69,16 @@ export type PatchBinding = BRegPatchBinding
 export interface CompleteOutcome {
   kind: string
   value: any
+  traceId: string
+  etag?: string
+  location?: string
+}
+
+/** Validated product result serialized before the JavaScript number boundary. */
+export interface JsonOutcome {
+  kind: string
+  valueJson: string
+  continuation?: any
   traceId: string
   etag?: string
   location?: string

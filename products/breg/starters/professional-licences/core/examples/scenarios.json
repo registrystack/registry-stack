@@ -16,13 +16,13 @@
           "capture": "nursing"
         },
         {
-          "id": "engineering",
+          "id": "community",
           "operation": "create",
           "entity": "professional-license",
           "client": "editor",
           "accessProfile": "editor",
-          "input": "engineering",
-          "capture": "engineering"
+          "input": "community",
+          "capture": "community"
         },
         {
           "id": "suspended",

@@ -48,6 +48,42 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
     let other_submitter = claims("other-submitter-principal", None);
     let reviewer = claims("reviewer-principal", Some("review"));
 
+    let metadata = response_parts(
+        send(
+            &app,
+            Method::GET,
+            "/v1/registry?accessProfile=reviewer",
+            Some(reviewer.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(metadata.status, StatusCode::OK);
+    let queue = metadata.body["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|operation| operation["id"] == "records.correction-request.list")
+        .unwrap();
+    for (id, api_name) in [
+        ("__request_breg_state", "bregState"),
+        ("__request_proposal_version", "proposalVersion"),
+        ("__request_effect_digest", "effectDigest"),
+    ] {
+        assert!(queue["query"]["filterableFields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field["id"] == id && field["apiName"] == api_name));
+    }
+    assert!(queue["query"]["sortableFields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field["apiName"] == "proposalVersion"));
+
     let first_site = create_record(
         &app,
         "/v1/records/sites?accessProfile=steward",

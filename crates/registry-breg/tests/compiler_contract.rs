@@ -5620,6 +5620,7 @@ fn public_profile_cannot_process_an_internal_field() {
             read_paths: Vec::new(),
             review_stages: Vec::new(),
             apply_targets: Vec::new(),
+            submitter_targets: Default::default(),
             request_presence: Vec::new(),
             targets: Vec::new(),
             results: Default::default(),
@@ -7105,4 +7106,46 @@ fn entity_classification_defaults_while_field_classification_stays_explicit() {
             .contains("missing field `classification`"),
         "{diagnostic:?}"
     );
+}
+
+#[test]
+fn structured_root_arrays_preserve_schema_and_closed_nested_object_validation() {
+    for (schema, accepted) in [
+        (
+            json!({"type":"array","items":{"type":"string","enum":["a","b"]},"minItems":1,"maxItems":2,"uniqueItems":true}),
+            true,
+        ),
+        (
+            json!({"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"code":{"type":"string"}}}}),
+            true,
+        ),
+        (
+            json!({"type":"array","items":{"type":"object","properties":{"code":{"type":"string"}}}}),
+            false,
+        ),
+        (
+            json!({"type":"array","items":{"$ref":"https://example.invalid/schema"}}),
+            false,
+        ),
+        (json!({"type":"string"}), false),
+    ] {
+        let source = json!({
+            "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
+            "registry":{"id":"array-schema","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+            "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+                "fields":[{"id":"codes","type":"structured","required":true,"classification":"internal","maxBytes":512,"schema":schema}]}]
+        });
+        let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        let result = compile_project(&project, &[], CompileProfile::Authoring);
+        assert_eq!(result.is_ok(), accepted, "schema: {schema}");
+        if let Ok(compiled) = result {
+            assert_eq!(
+                compiled.entities()["record"].fields["codes"].field_type,
+                FieldTypeSource::Structured {
+                    max_bytes: 512,
+                    schema
+                }
+            );
+        }
+    }
 }

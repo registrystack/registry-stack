@@ -2501,6 +2501,27 @@ fn authorize_direct_route_base<'a>(
         selected_profile.to_owned(),
         row_boundaries,
     );
+    let submitter_targets = profile
+        .submitter_targets
+        .iter()
+        .map(|id| {
+            let target = service
+                .registry
+                .entities()
+                .get(id)?
+                .access_profiles
+                .get(selected_profile)?;
+            Some((id.clone(), authorize_profile_claims(target, claims).ok()?))
+        })
+        .collect::<Option<BTreeMap<_, _>>>();
+    if matches!(
+        route.operation,
+        Operation::Create | Operation::Patch | Operation::SubmitRequest | Operation::ReviseRequest
+    ) && submitter_targets.is_none()
+    {
+        return None;
+    }
+    context = context.with_submitter_targets(submitter_targets.unwrap_or_default());
     if include_request_visibility {
         let (actions, presence) =
             request_visibility_authority(service, entity, selected_profile, claims, options);

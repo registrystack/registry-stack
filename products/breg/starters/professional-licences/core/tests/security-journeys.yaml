@@ -26,7 +26,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "Supervized community practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "Supervized community practice"
             }
           },
           "expect": {
@@ -55,7 +58,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -100,9 +106,12 @@
               "record": {
                 "recordRef": "first-record"
               },
-              "reason": "Synthetic spelling correction",
+              "reason": "Correction to the recorded nursing decision",
               "supportingReference": "SYNTHETIC-SUPPORT-001",
-              "practiceScope": "Supervised community practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "Supervised community practice"
             }
           },
           "expect": {
@@ -269,7 +278,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "Supervized community practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "Supervized community practice"
             }
           },
           "capture": "approval-does-not-apply"
@@ -345,7 +357,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "Supervised community practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "Supervised community practice"
             }
           },
           "capture": "corrected-record"
@@ -369,7 +384,10 @@
               },
               "reason": "Synthetic rejection exercise",
               "supportingReference": "SYNTHETIC-SUPPORT-002",
-              "practiceScope": "Unapproved wider scope"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "Disputed recorded conditions"
             }
           },
           "expect": {
@@ -492,7 +510,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "Supervised community practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "Supervised community practice"
             }
           },
           "capture": "rejection-preserves-record"
@@ -519,7 +540,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -528,7 +552,7 @@
           }
         },
         {
-          "id": "seed-engineering",
+          "id": "seed-community",
           "entity": "professional-license",
           "accessProfile": "editor",
           "claims": {
@@ -545,11 +569,14 @@
               "personReference": "https://people.example.org/people/synthetic-lic-002",
               "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
               "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
-              "professionCode": "example-engineering",
+              "professionCode": "example-nursing",
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -579,7 +606,10 @@
               "licenceStatus": "recorded-suspended",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -609,7 +639,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-01-01",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -639,7 +672,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2025-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -670,7 +706,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-02-30",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -701,7 +740,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -732,7 +774,10 @@
               "licenceStatus": "unrecognized",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -762,7 +807,10 @@
               "professionCode": "example-nursing",
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-general-nursing-care"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {

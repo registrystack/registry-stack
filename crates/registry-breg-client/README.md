@@ -127,3 +127,12 @@ Opaque authority handles are never deserialized from saved state.
 as inert JSON bytes over the native `/revisions` route. It does not decode history
 semantics or follow continuations. Applications must not label a first page as a
 complete history when the response advertises more pages.
+
+
+`BRegMetadataOperation::query()` retains typed caller-filtered query capabilities,
+including the request workflow filter fields advertised by the runtime. Field
+labels, entity labels, and title fields are descriptive hints and do not create
+operation authority. `decode_exact_json` decodes bounded JSON with duplicate
+refusal and rejects literals that would silently round. Mutation builders retain
+the server's additional integer restrictions. The Node facade offers explicit
+JSON text input and result methods for values outside JavaScript's safe range.

@@ -42,3 +42,17 @@ pub use response::*;
 pub const DEFAULT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Invalid, duplicate-containing, overlarge, or numerically lossy JSON input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("JSON value is invalid or cannot be represented exactly")]
+pub struct BRegExactJsonError;
+
+/// Decode bounded JSON without duplicate members or silently rounded literals.
+/// Mutation builders additionally enforce BReg's supported binary64 integer model.
+pub fn decode_exact_json(bytes: &[u8]) -> Result<serde_json::Value, BRegExactJsonError> {
+    if bytes.len() > DEFAULT_MAX_RESPONSE_BYTES as usize {
+        return Err(BRegExactJsonError);
+    }
+    strict_json::from_slice(bytes).map_err(|()| BRegExactJsonError)
+}

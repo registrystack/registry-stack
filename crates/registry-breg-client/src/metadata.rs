@@ -383,6 +383,7 @@ impl BRegChangeRequestCapability {
 pub struct BRegMetadataField {
     id: String,
     api_name: String,
+    label: String,
     schema: Value,
     required: bool,
     nullable: bool,
@@ -403,6 +404,11 @@ impl BRegMetadataField {
     #[must_use]
     pub fn identifier(&self) -> &str {
         &self.id
+    }
+
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
     }
 
     #[must_use]
@@ -541,6 +547,42 @@ impl fmt::Debug for BRegOperationRequest {
     }
 }
 
+/// Caller-visible list capability. Descriptive metadata does not grant authority.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BRegQueryDescriptor {
+    pub kind: String,
+    pub selectable_fields: Vec<BRegQueryField>,
+    pub filterable_fields: Vec<BRegQueryField>,
+    pub sortable_fields: Vec<BRegQueryField>,
+    pub allow_count: bool,
+    pub default_page_size: u64,
+    pub max_page_size: u64,
+    pub max_filter_clauses: u64,
+    pub max_in_values: u64,
+    pub pagination: BRegQueryPagination,
+    pub temporal: Option<Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BRegQueryField {
+    pub id: String,
+    pub api_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operators: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directions: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BRegQueryPagination {
+    pub parameter: String,
+    pub response_path: String,
+    pub exclusive: bool,
+}
+
 /// One authoritative operation from caller-filtered runtime metadata.
 #[derive(Clone, PartialEq)]
 pub struct BRegMetadataOperation {
@@ -557,9 +599,25 @@ pub struct BRegMetadataOperation {
     create_writable_fields: Vec<String>,
     patch_writable_fields: Vec<String>,
     request: BRegOperationRequest,
+    entity_label: String,
+    title_fields: Vec<String>,
+    query: Option<BRegQueryDescriptor>,
 }
 
 impl BRegMetadataOperation {
+    #[must_use]
+    pub fn entity_label(&self) -> &str {
+        &self.entity_label
+    }
+    #[must_use]
+    pub fn title_fields(&self) -> &[String] {
+        &self.title_fields
+    }
+    #[must_use]
+    pub fn query(&self) -> Option<&BRegQueryDescriptor> {
+        self.query.as_ref()
+    }
+
     #[must_use]
     pub fn identifier(&self) -> &str {
         &self.id
@@ -673,6 +731,8 @@ impl BRegMetadata {
         }
         let value = decode_unique_json(bytes)?;
         validate_value_bounds(&value)?;
+        crate::strict_json::validate_number_tokens(bytes)
+            .map_err(|()| metadata_error(BRegMetadataErrorKind::Json))?;
         parse_metadata(value)
     }
 
@@ -1544,7 +1604,7 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         }
     }
     let request = parse_request(required(&mut operation, "request")?)?;
-    bounded_text(required(&mut operation, "entityLabel")?)?;
+    let entity_label = bounded_text(required(&mut operation, "entityLabel")?)?;
     validate_envelope_identifier(required(&mut operation, "identifier")?)?;
     let title_fields = identifier_array(required(&mut operation, "titleFields")?)?;
     ensure_unique(title_fields.iter().map(String::as_str))?;
@@ -1555,7 +1615,10 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
     }
     validate_selectors(required(&mut operation, "selectors")?)?;
-    validate_query(required(&mut operation, "query")?)?;
+    let query_value = required(&mut operation, "query")?;
+    validate_query(query_value.clone())?;
+    let query = serde_json::from_value(query_value)
+        .map_err(|_| metadata_error(BRegMetadataErrorKind::Shape))?;
     if let Some(read_path) = operation.remove("readPath") {
         validate_read_path(read_path)?;
     }
@@ -1574,6 +1637,9 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         create_writable_fields,
         patch_writable_fields,
         request,
+        entity_label,
+        title_fields,
+        query,
     })
 }
 
@@ -1586,7 +1652,7 @@ fn parse_field(value: Value) -> Result<BRegMetadataField, BRegMetadataError> {
     let nullable = boolean(required(&mut field, "nullable")?)?;
     let read_only = boolean(required(&mut field, "readOnly")?)?;
     let removable = boolean(required(&mut field, "removable")?)?;
-    bounded_text(required(&mut field, "label")?)?;
+    let label = bounded_text(required(&mut field, "label")?)?;
     let (reference_target_entity, references) = field
         .remove("reference")
         .map(parse_references)
@@ -1603,6 +1669,7 @@ fn parse_field(value: Value) -> Result<BRegMetadataField, BRegMetadataError> {
     Ok(BRegMetadataField {
         id,
         api_name,
+        label,
         schema,
         required: required_value,
         nullable,
@@ -1744,6 +1811,15 @@ fn validate_query(value: Value) -> Result<(), BRegMetadataError> {
     finish(query)
 }
 
+fn query_field_identifier(value: Value) -> Result<String, BRegMetadataError> {
+    match value.as_str() {
+        Some("__request_breg_state" | "__request_proposal_version" | "__request_effect_digest") => {
+            string(value)
+        }
+        _ => identifier(value),
+    }
+}
+
 fn validate_field_identities(
     value: Value,
     extra_member: Option<&str>,
@@ -1752,7 +1828,7 @@ fn validate_field_identities(
     let mut api_names = BTreeSet::new();
     for field in array(value)? {
         let mut field = object(field)?;
-        if !ids.insert(identifier(required(&mut field, "id")?)?)
+        if !ids.insert(query_field_identifier(required(&mut field, "id")?)?)
             || !api_names.insert(api_name(required(&mut field, "apiName")?)?)
         {
             return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));

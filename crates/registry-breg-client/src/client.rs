@@ -898,7 +898,10 @@ fn decode_registry_record(
         BRegRecordFormat::Json => RegistryRecordRepresentation::Json,
         BRegRecordFormat::JsonLd => RegistryRecordRepresentation::JsonLdSharedContext,
     };
-    RegistryRecordResponse::from_slice(body, representation).map_err(|_| {
+    let value = crate::strict_json::from_slice(body).map_err(|_| {
+        BaseRegistryClientError::protocol(status, BRegProtocolFailure::Body, Some(trace_id.clone()))
+    })?;
+    RegistryRecordResponse::from_value(value, representation).map_err(|_| {
         BaseRegistryClientError::protocol(status, BRegProtocolFailure::Body, Some(trace_id.clone()))
     })
 }

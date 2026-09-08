@@ -4940,3 +4940,6 @@ async fn reviewed_native_pattern_failure_rolls_back_prior_effect_and_preserves_f
     assert_eq!(household.body["data"]["contactPerson"], Value::Null);
     database.cleanup().await;
 }
+
+#[path = "support/submitter_targets.rs"]
+mod submitter_targets;

@@ -3,8 +3,12 @@
     "record": {
       "recordRef": "first-record"
     },
-    "practiceScope": "Supervised community practice",
-    "reason": "Correct the spelling of the recorded scope, without granting a new entitlement.",
-    "supportingReference": "SYNTHETIC-REVIEW-001"
+    "reason": "Correct transcription of the existing nursing decision, including its recorded activities and conditions.",
+    "supportingReference": "SYNTHETIC-REVIEW-001",
+    "licensedActivities": [
+      "example-general-nursing-care",
+      "example-health-education"
+    ],
+    "authorizationConditions": ""
   }
 }
