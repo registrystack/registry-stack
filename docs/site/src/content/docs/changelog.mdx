@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-08"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -18,6 +18,122 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BREAKING: `bregctl dev` and `bregctl dev stop` take the registry project as a
+  positional argument, and the `--project` flag is gone. Both still default to the
+  current directory. See
+  [create and query your first registry](../tutorials/first-breg/).
+- Replace `--project <dir>` with `<dir>` in every script that starts or stops a local
+  development session.
+- Documented the Base Registry Engine installer that verifies and installs `breg`,
+  `bregctl`, and `mint` together, so running a registry locally needs one toolset
+  rather than the Evidence Gateway toolset as well. See
+  [what you need to run Base Registry Engine](../operate/breg-requirements/).
+- Documented Base Registry Engine from its released installer, binaries, and
+  container image instead of a build from a checkout.
+- Pinned the Base Registry Engine tutorial checkouts to the installed version and
+  documented the `--installed` mode of the quickstart and demo launchers.
+- Documented that `bregctl init` writes a project whose package environment is
+  `local` beside a `dev-clients.yaml` that holds no secret, and that a first
+  `bregctl dev` reads that file from the project directory. A start refuses before it
+  pulls the database image when a journey step names an access profile no local
+  client binds. See [author a registry project](../configure/breg/) and
+  [test with journeys](../configure/breg-journeys/).
+- Documented `bregctl init --from publicschema`, which derives a registry project
+  from the embedded PublicSchema reference model. A terminal wizard asks which
+  concepts become entities, which concepts connect them, and which properties become
+  fields; `--selection <file>` and `--starter <name>` derive a project without
+  prompts, and the written project echoes its selection under
+  `model/selection.yaml`. See
+  [derive a registry from PublicSchema](../tutorials/derive-a-registry-from-publicschema/),
+  [the PublicSchema wizard prompts](../reference/bregctl-publicschema-wizard/), and
+  [how a registry is derived from a model](../explanation/deriving-a-registry-from-a-model/).
+- Documented the report format `bregctl` commands share: one line per error or
+  `finding`, each naming the document key path that caused it, and a closing count.
+  The `init` template declares `minLength: 1` on `code`, a `by-code` selector
+  profile, and a lookup-only `evidence-source` access profile. See
+  [author a registry project](../configure/breg/), which explains the two findings
+  `init` reports.
+- Documented immediate actions whose effects a Rhai handler computes: the handler
+  receives the action input alone, returns either effects for the declared write
+  slots or one refusal from the action's closed catalogue, and the runtime applies
+  the effects in one transaction. A handler runs against bounded synthetic JSON
+  under `bregctl project planner-test`, whose `--action`, `--input`, and `--expect`
+  options assert its exact effects or refusal without printing values. See
+  [governed registry actions](../explanation/governed-registry-actions/) and
+  [declare change requests and actions](../configure/breg-change-control/).
+- Documented the trial action-handler ABI version 2, in which a handler resolves a
+  verified Evidence Gateway assertion through `evidence::resolve` under fixed call,
+  size, and age limits, the runtime binds each provider the package declares in its
+  own configuration, and `bregctl evidence-retention erase-expired` deletes expired
+  assertion bytes and verification context while receipts stay replayable. See
+  [governed registry actions](../explanation/governed-registry-actions/),
+  [deploy a registry](../operate/breg/), and
+  [retain, erase, and audit](../operate/breg-retention/).
+- Documented the native `pattern` rule on a persisted `string` or `text` field, which
+  the compiler renders as a named PostgreSQL CHECK constraint so every writer of a
+  current row is bound by it. See
+  [native field patterns](../explanation/native-field-patterns/).
+- Documented membership read boundaries, which decide a reader's rows from active
+  membership records the same registry governs, without a second database role and
+  without an authorization service. See
+  [membership read boundaries](../explanation/membership-read-boundaries/).
+- Documented the four registry starter projects and the `bregctl examples list` and
+  `bregctl examples run <scenario>` commands that replay their fixed local scenarios,
+  including resuming or restarting a retained attempt. The starters are described in
+  [the starter projects](https://github.com/registrystack/registry-stack/blob/main/products/breg/starters/README.md).
+- Reshaped the remaining Base Registry Engine tutorials and corrected two claims a
+  reader can check: a list without `orderby` is sorted by the identifier the registry
+  assigned, so paging order is not creation order, and a repeated import with the
+  same checkpoint sends nothing yet prints the same counts, because the counts come
+  from the checkpoint. See
+  [query a registry from Python and Node](../tutorials/query-breg-client/) and
+  [query a spatial registry from QGIS](../tutorials/query-a-spatial-registry-from-qgis/).
+- Refused the Base Registry Engine operations that could leave a partial result
+  looking complete: a migration the open file limit cannot hold, an audit export
+  whose directory cannot be made durable, a data publication reported before it is
+  synchronized, and a `dev stop` where no session exists. Unreadable stored bytes are
+  classified as such and named in the service log. See
+  [change an active registry](../operate/breg-changes/),
+  [move data in bulk](../operate/breg-data/), and
+  [retain, erase, and audit](../operate/breg-retention/).
+- Documented `evidencectl source add`, which connects a stopped local registry to an
+  Evidence Gateway project while its records, revisions, and client identities
+  remain. It previews the connection it would make and performs it with `--apply`,
+  and it drives the registry side through a `bregctl` of the same version on `PATH`.
+  See [create and query your first registry](../tutorials/first-breg/) and
+  [the evidencectl workflow reference](../reference/evidencectl/).
+- Constrained `sourceConnections.*.baseUrl` in the Evidence Gateway bundle schema to
+  the canonical origin the runtime already required at startup, so authoring refuses
+  what a deployment refuses. See
+  [Evidence Gateway configuration](../reference/evidence-configuration/).
+- Kept `evidencectl` failures visible rather than silent: a failed unseal is
+  reported, the `evidence` child's diagnostics are bounded and stripped of escape
+  introducers, each authored path is read under its own bound, the version handshake
+  is bounded in time and bytes, the grants one generated profile carries are bounded,
+  a runtime settings key the runtime denies is refused at authoring, captured
+  deployment inputs stay unwritable after `check`, and every URI whitespace the
+  public profile refuses is refused. See
+  [the evidencectl workflow reference](../reference/evidencectl/).
+- Refused a Compose runtime whose preconditions cannot be proven: an unselected
+  product dependency, an invalid healthcheck, and an audit root that every absolute
+  path would resolve under. A passing preflight states the limit of its proof, that
+  containment says where a configured sink resolves and not that the storage behind
+  the mount survives, and every failure path names the dependencies it started.
+  Registry Mint records where its configured audit path resolves. See
+  [deploy with Docker Compose](../tutorials/integrate-evidence-candidate-with-docker-compose/)
+  and [the Registry Mint reference](../reference/mint/).
+- Refused a `registry-manifest/v1` document that lists the same concept term twice on
+  one field. See [contracts](../reference/contracts/).
+- Documented the SLSA build provenance bundle published beside the signed checksum
+  chain for releases from `v0.27.1`. See
+  [OpenSSF and release trust](../security/openssf-evidence/).
+- Generated the CLI reference pages and the site's generated data during the build
+  instead of committing rendered copies, so published command syntax comes from the
+  reviewed source version at build time.
+- Checked link and anchor validity on draft pages, and added a style rule that
+  refuses narration about the documentation in place of a description of the product.
+- Advanced the stale v0.21.0 release-verification and image pins on the operations
+  and Registry Mint reference pages to the documented v0.26.1 release.
 - Clarified that Discovery selection validation checks closed structure and
   capability binding, not trust or currentness, and kept the compatibility
   aliases for existing Node.js and Python adopters. The Rust crate renamed
@@ -27,10 +143,6 @@ relevant product pages on this site rather than duplicating release notes.
 - Added the adopter-owned accepted-service handoff and explicit online renewal
   workflow. Credentials and native Evidence or Relay input and output remain
   outside Discovery and follow local acceptance.
-- Documented Base Registry Engine from its released installer, binaries, and
-  container image instead of a build from a checkout.
-- Pinned the Base Registry Engine tutorial checkouts to the installed version and
-  documented the `--installed` mode of the quickstart and demo launchers.
 
 ## 2026-08-20
 

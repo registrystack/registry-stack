@@ -136,10 +136,9 @@ function seatedSlugs() {
   // `draft: true`, which is the same state in which the generated CLI pages are
   // themselves draft and so are not published either.
   //
-  // That group seats the index and the binaries, not the subcommand pages
-  // under them. Publishing the command-line reference will therefore make this
-  // test name every subcommand page at once, and seating them is part of that
-  // publish rather than a fault in this gate.
+  // That group seats the index, the binaries, and every subcommand page the
+  // docset publishes, which the module reads from the generated tree, so a
+  // catalog that adds a command seats it without an edit here.
   for (const group of cliReferenceSidebar()) {
     for (const item of group.items) seated.add(item.slug);
   }
@@ -399,6 +398,9 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'configure/breg-change-control',
     'configure/breg-journeys',
     'explanation/registry-modeling-patterns',
+    'explanation/governed-registry-actions',
+    'explanation/native-field-patterns',
+    'explanation/membership-read-boundaries',
     'explanation/deriving-a-registry-from-a-model',
     'operate/breg-requirements',
     'tutorials/build-a-breg-production-candidate',
