@@ -177,7 +177,8 @@ refusal. It removes only its own temporary resources.
 
 The journeys verify padded, omitted and null name parts through authorized GETs,
 blank-name refusal (with `expect.refusalCode: blank-name`), duplicate identifiers,
-invalid stored formats, lost-response
+invalid stored formats (with `expect.entityId: person` and
+`expect.fieldId: identifier`), lost-response
 replay, changed-input conflict, the direct CRUD distinction, coordinated writes,
 and omitted patch conditions and requirements. Person and registration creates
 retain the configured events. The runner binds `person-events` to a synthetic

@@ -484,16 +484,16 @@
                 },
                 {
                   "kind": "requires_all",
-                  "when": "<PROJECT>",
+                  "when": "--entity <ENTITY>",
                   "arguments": [
                     "--request <JSON_FILE>"
                   ]
                 },
                 {
                   "kind": "requires_all",
-                  "when": "--entity <ENTITY>",
+                  "when": "--request <JSON_FILE>",
                   "arguments": [
-                    "--request <JSON_FILE>"
+                    "--entity <ENTITY>"
                   ]
                 },
                 {
@@ -505,9 +505,17 @@
                 },
                 {
                   "kind": "requires_all",
-                  "when": "--format <FORMAT>",
+                  "when": "--input <JSON_FILE>",
                   "arguments": [
-                    "--request <JSON_FILE>"
+                    "--action <ACTION>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--expect <JSON_FILE>",
+                  "arguments": [
+                    "--input <JSON_FILE>",
+                    "--action <ACTION>"
                   ]
                 },
                 {
@@ -5616,6 +5624,20 @@
                   "arguments": [
                     "[QUESTION]",
                     "--profile <PROFILE>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--requirement <REQUIREMENT>",
+                  "arguments": [
+                    "--profile <PROFILE>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--purpose <PURPOSE>",
+                  "arguments": [
+                    "<QUESTION>"
                   ]
                 },
                 {

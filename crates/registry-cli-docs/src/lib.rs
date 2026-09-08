@@ -393,8 +393,38 @@ fn group_arguments<'a>(command: &'a Command, group: &ArgGroup) -> Vec<&'a Arg> {
 }
 
 fn required_when_present(command: &Command, argument: &Arg) -> Vec<String> {
-    let selected = baseline_arguments(command, argument);
-    let argv = parser_argv(command, &selected);
+    // Probe conditional requirements independently of required arguments and
+    // groups, which are already documented separately. Choosing a group's
+    // first member would attach that mode's requirements to unrelated flags.
+    let mut probe = command
+        .clone()
+        .mut_args(|argument| argument.required(false));
+    for group in command.get_groups().filter(|group| group.is_required_set()) {
+        probe = probe.mut_group(group.get_id().as_str(), |group| group.required(false));
+    }
+
+    // Earlier positionals must be supplied to reach the current one. Remove
+    // their requirements from the result so only this argument is the trigger.
+    let mut selected = command
+        .get_positionals()
+        .filter(|previous| {
+            previous
+                .get_index()
+                .zip(argument.get_index())
+                .is_some_and(|(previous, current)| previous < current)
+        })
+        .map(|previous| previous.get_id().as_str().to_owned())
+        .collect::<Vec<_>>();
+    let baseline = missing_required_arguments(&probe, &selected);
+    selected.push(argument.get_id().as_str().to_owned());
+    missing_required_arguments(&probe, &selected)
+        .into_iter()
+        .filter(|required| !baseline.contains(required))
+        .collect()
+}
+
+fn missing_required_arguments(command: &Command, selected: &[String]) -> Vec<String> {
+    let argv = parser_argv(command, selected);
     let error = match command.clone().try_get_matches_from(argv) {
         Ok(_) => return Vec::new(),
         Err(error) if error.kind() == ErrorKind::MissingRequiredArgument => error,
@@ -412,34 +442,6 @@ fn required_when_present(command: &Command, argument: &Arg) -> Vec<String> {
             unique
         }
         _ => Vec::new(),
-    }
-}
-
-fn baseline_arguments(command: &Command, current: &Arg) -> Vec<String> {
-    let mut selected = command
-        .get_arguments()
-        .filter(|argument| argument.is_required_set())
-        .map(|argument| argument.get_id().as_str().to_owned())
-        .collect::<Vec<_>>();
-
-    for group in command.get_groups().filter(|group| group.is_required_set()) {
-        let members = group_arguments(command, group);
-        let choice = members
-            .iter()
-            .find(|argument| argument.get_id() == current.get_id())
-            .copied()
-            .or_else(|| members.first().copied());
-        if let Some(choice) = choice {
-            push_unique(&mut selected, choice.get_id().as_str());
-        }
-    }
-    push_unique(&mut selected, current.get_id().as_str());
-    selected
-}
-
-fn push_unique(values: &mut Vec<String>, value: &str) {
-    if !values.iter().any(|existing| existing == value) {
-        values.push(value.to_owned());
     }
 }
 
@@ -820,6 +822,137 @@ mod tests {
             constraint.kind == ConstraintKind::RequiredOneOrMore
                 && constraint.arguments == ["--first", "--second"]
         }));
+    }
+
+    #[test]
+    fn planner_test_requirements_match_both_accepted_modes() {
+        let parser = registry_bregctl::command();
+        for arguments in [
+            vec![
+                "bregctl",
+                "project",
+                "planner-test",
+                "example-project",
+                "--entity",
+                "change-request",
+                "--request",
+                "request.json",
+                "--format",
+                "json",
+            ],
+            vec![
+                "bregctl",
+                "project",
+                "planner-test",
+                "example-project",
+                "--action",
+                "register-person",
+                "--input",
+                "input.json",
+                "--expect",
+                "expected.json",
+                "--format",
+                "json",
+            ],
+        ] {
+            parser
+                .clone()
+                .try_get_matches_from(arguments)
+                .expect("documented planner-test mode parses");
+        }
+
+        let reference = command_reference(parser, None, None);
+        let planner_test = find_command(&[reference], "bregctl project planner-test")
+            .constraints
+            .iter()
+            .filter(|constraint| constraint.kind == ConstraintKind::RequiresAll)
+            .map(|constraint| {
+                let mut arguments = constraint.arguments.clone();
+                arguments.sort();
+                (
+                    constraint.when.clone().expect("requirement trigger"),
+                    arguments,
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            ("--entity <ENTITY>", vec!["--request <JSON_FILE>"]),
+            ("--request <JSON_FILE>", vec!["--entity <ENTITY>"]),
+            ("--action <ACTION>", vec!["--input <JSON_FILE>"]),
+            ("--input <JSON_FILE>", vec!["--action <ACTION>"]),
+            (
+                "--expect <JSON_FILE>",
+                vec!["--action <ACTION>", "--input <JSON_FILE>"],
+            ),
+        ]
+        .into_iter()
+        .map(|(when, arguments)| {
+            (
+                when.to_owned(),
+                arguments.into_iter().map(str::to_owned).collect(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+        assert_eq!(planner_test, expected);
+    }
+
+    #[test]
+    fn positional_requirements_are_not_attributed_to_other_arguments() {
+        let reference = command_reference(
+            Command::new("tool")
+                .arg(
+                    Arg::new("source")
+                        .help("Source document")
+                        .required(true)
+                        .requires("schema"),
+                )
+                .arg(
+                    Arg::new("destination")
+                        .help("Destination document")
+                        .required(true)
+                        .requires("format"),
+                )
+                .arg(
+                    Arg::new("schema")
+                        .long("schema")
+                        .value_name("SCHEMA")
+                        .help("Source schema"),
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_name("FORMAT")
+                        .help("Destination format"),
+                )
+                .arg(
+                    Arg::new("verbose")
+                        .long("verbose")
+                        .help("Show details")
+                        .action(ArgAction::SetTrue),
+                ),
+            None,
+            None,
+        );
+
+        let requirements = reference
+            .constraints
+            .iter()
+            .filter(|constraint| constraint.kind == ConstraintKind::RequiresAll)
+            .map(|constraint| (constraint.when.as_deref(), constraint.arguments.as_slice()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requirements,
+            [
+                (
+                    Some("<SOURCE>"),
+                    ["--schema <SCHEMA>".to_owned()].as_slice()
+                ),
+                (
+                    Some("<DESTINATION>"),
+                    ["--format <FORMAT>".to_owned()].as_slice(),
+                ),
+            ]
+        );
     }
 
     #[test]

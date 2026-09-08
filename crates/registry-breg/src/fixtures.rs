@@ -478,6 +478,10 @@ struct ExpectationSource {
     problem_code: Option<String>,
     #[serde(default)]
     refusal_code: Option<String>,
+    #[serde(default)]
+    entity_id: Option<String>,
+    #[serde(default)]
+    field_id: Option<String>,
 }
 
 /// A complete journey suite that has been resolved against one exact compiled
@@ -549,7 +553,7 @@ struct FixtureProblemBindings {
     refusal_label: Option<String>,
     refusal_field_paths: BTreeSet<String>,
     request_field_paths: BTreeSet<String>,
-    pattern_fields: BTreeSet<(String, String)>,
+    pattern_field: Option<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -2044,6 +2048,8 @@ fn internalize_expectation(
         count: expectation.count,
         problem_code: expectation.problem_code.clone(),
         refusal_code: expectation.refusal_code.clone(),
+        entity_id: expectation.entity_id.clone(),
+        field_id: expectation.field_id.clone(),
     })
 }
 
@@ -2282,6 +2288,8 @@ fn externalize_expectation(
         count: expectation.count,
         problem_code: expectation.problem_code.clone(),
         refusal_code: expectation.refusal_code.clone(),
+        entity_id: expectation.entity_id.clone(),
+        field_id: expectation.field_id.clone(),
     })
 }
 
@@ -2295,6 +2303,13 @@ fn validate_expectation(
     let declared_refusal = expectation.problem_code.as_deref() == Some("action.refused");
     if declared_refusal != expectation.refusal_code.is_some()
         || (declared_refusal && (operation != Operation::Invoke || captures_results))
+    {
+        return Err(FixtureError::JourneyShapeRefused);
+    }
+    if expectation.entity_id.is_some() != expectation.field_id.is_some()
+        || (expectation.entity_id.is_some()
+            && (expectation.status != 409
+                || expectation.problem_code.as_deref() != Some("mutation.conflict")))
     {
         return Err(FixtureError::JourneyShapeRefused);
     }
@@ -2454,7 +2469,9 @@ fn compile_problem_bindings(
                 .collect();
         }
     }
-    if expectation.problem_code.as_deref() == Some("mutation.conflict") {
+    if let (Some(expected_entity), Some(expected_field)) =
+        (&expectation.entity_id, &expectation.field_id)
+    {
         let mut target_entities = BTreeSet::new();
         if let Some(action) = action.filter(|_| matches!(request, ActionSource::Invoke { .. })) {
             target_entities.extend(
@@ -2471,26 +2488,17 @@ fn compile_problem_bindings(
             ) {
                 target_entities.insert(entity.id.as_str());
             }
-            if matches!(
-                request.operation(),
-                Operation::SubmitRequest | Operation::ApproveRequest | Operation::ApplyRequest
-            ) {
-                if let Some(plan) = &entity.change_request {
-                    target_entities.extend(plan.target_entities.iter().map(String::as_str));
-                }
-            }
         }
-        for entity_id in target_entities {
-            if let Some(entity) = registry.entities().get(entity_id) {
-                bindings.pattern_fields.extend(
-                    entity
-                        .fields
-                        .values()
-                        .filter(|field| field.pattern.is_some())
-                        .map(|field| (entity.id.clone(), field.id.clone())),
-                );
-            }
+        if !target_entities.contains(expected_entity.as_str()) {
+            return Err(FixtureError::LogicalReferenceRefused);
         }
+        let field = registry
+            .entities()
+            .get(expected_entity)
+            .and_then(|entity| entity.fields.get(expected_field))
+            .filter(|field| field.pattern.is_some())
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        bindings.pattern_field = Some((expected_entity.clone(), field.id.clone()));
     }
     Ok(bindings)
 }
@@ -3995,22 +4003,10 @@ fn assert_response(
                         .as_deref()
                         .ok_or(FixtureError::ResponseShapeRefused)?,
                 )
-            } else if code == "mutation.conflict"
-                && (document.get("entityId").is_some() || document.get("fieldId").is_some())
-            {
+            } else if let Some((entity, field)) = &step.problem_bindings.pattern_field {
                 keys.extend(["entityId", "fieldId"]);
-                let entity = document
-                    .get("entityId")
-                    .and_then(Value::as_str)
-                    .ok_or(FixtureError::ResponseShapeRefused)?;
-                let field = document
-                    .get("fieldId")
-                    .and_then(Value::as_str)
-                    .ok_or(FixtureError::ResponseShapeRefused)?;
-                if !step
-                    .problem_bindings
-                    .pattern_fields
-                    .contains(&(entity.to_owned(), field.to_owned()))
+                if document.get("entityId").and_then(Value::as_str) != Some(entity.as_str())
+                    || document.get("fieldId").and_then(Value::as_str) != Some(field.as_str())
                 {
                     return Err(FixtureError::ExpectationMismatch);
                 }
@@ -6956,6 +6952,8 @@ journeys:
             problem_bindings: FixtureProblemBindings::default(),
             expect: ExpectationSource {
                 refusal_code: None,
+                entity_id: None,
+                field_id: None,
                 outcome: ExpectedOutcome::Success,
                 status: 200,
                 problem_code: None,
@@ -7154,6 +7152,8 @@ journeys:
             problem_bindings: FixtureProblemBindings::default(),
             expect: ExpectationSource {
                 refusal_code: None,
+                entity_id: None,
+                field_id: None,
                 outcome: ExpectedOutcome::Refusal,
                 status: 400,
                 problem_code: Some("request.plan_refused".to_owned()),
@@ -7169,8 +7169,18 @@ journeys:
     fn handler_and_pattern_problem_responses_are_closed_against_compiled_bindings() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/breg/acceptance/person-registration-rhai");
-        let project =
+        let mut project =
             parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+        project
+            .entities
+            .iter_mut()
+            .find(|entity| entity.id == "person")
+            .unwrap()
+            .fields
+            .iter_mut()
+            .find(|field| field.id == "display-name")
+            .unwrap()
+            .pattern = Some(".*".to_owned());
         let assets = project
             .actions
             .iter()
@@ -7229,9 +7239,44 @@ journeys:
             changed[field] = value;
             assert!(assert_response(pattern, StatusCode::CONFLICT, &changed).is_err());
         }
-        let mut missing = document.clone();
-        missing.as_object_mut().unwrap().remove("fieldId");
-        assert!(assert_response(pattern, StatusCode::CONFLICT, &missing).is_err());
+        for missing_keys in [
+            vec!["fieldId"],
+            vec!["entityId"],
+            vec!["entityId", "fieldId"],
+        ] {
+            let mut missing = document.clone();
+            for key in missing_keys {
+                missing.as_object_mut().unwrap().remove(key);
+            }
+            assert!(assert_response(pattern, StatusCode::CONFLICT, &missing).is_err());
+        }
+        let generic = suite
+            .journeys
+            .iter()
+            .flat_map(|journey| &journey.steps)
+            .find(|step| step.id == "duplicate-identifier")
+            .unwrap();
+        let mut generic_document = document.clone();
+        generic_document.as_object_mut().unwrap().remove("entityId");
+        generic_document.as_object_mut().unwrap().remove("fieldId");
+        generic_document["detail"] = json!("The mutation conflicts with current state.");
+        assert_response(generic, StatusCode::CONFLICT, &generic_document).unwrap();
+        assert!(assert_response(generic, StatusCode::CONFLICT, &document).is_err());
+        assert!(assert_response(pattern, StatusCode::CONFLICT, &generic_document).is_err());
+
+        let mut concealed = plan_refused_step();
+        concealed.action = ActionSource::ApplyRequest {
+            record_ref: "before-apply".to_owned(),
+            etag_ref: "before-apply".to_owned(),
+            proposal_version: None,
+            proposal_version_ref: None,
+            effect_digest: None,
+            effect_digest_ref: None,
+        };
+        concealed.expect.status = 409;
+        concealed.expect.problem_code = Some("mutation.conflict".to_owned());
+        assert_response(&concealed, StatusCode::CONFLICT, &generic_document).unwrap();
+        assert!(assert_response(&concealed, StatusCode::CONFLICT, &document).is_err());
         let invalid = suite
             .journeys
             .iter()

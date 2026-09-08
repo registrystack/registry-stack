@@ -280,6 +280,8 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
   - id: unicode-identifier
     action: register-person
     accessProfile: person-registrar
@@ -295,6 +297,8 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
   - id: whitespace-identifier
     action: register-person
     accessProfile: person-registrar
@@ -310,6 +314,8 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
   - id: embedded-newline-identifier
     action: register-person
     accessProfile: person-registrar
@@ -327,6 +333,8 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
   - id: trailing-newline-identifier
     action: register-person
     accessProfile: person-registrar
@@ -344,6 +352,8 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
   - id: ordinary-create-enforces-identifier-pattern
     entity: person
     accessProfile: person-administrator
@@ -357,6 +367,8 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
   - id: ordinary-patch-enforces-identifier-pattern
     entity: person
     accessProfile: person-administrator
@@ -372,6 +384,8 @@ journeys:
       outcome: refusal
       status: 409
       problemCode: mutation.conflict
+      entityId: person
+      fieldId: identifier
 - id: coordinated-registration-and-omission
   steps:
   - id: create-active-register
