@@ -205,7 +205,7 @@ test('requires explicit source-matched human review metadata for current pages',
   assert.doesNotMatch(page, /^draft: true$/mu);
 });
 
-test('writes deterministic pages and detects tracked drift', async () => {
+test('writes deterministic pages and detects local output drift', async () => {
   const root = await mkdtemp(join(tmpdir(), 'registry-cli-reference-'));
   const docsRoot = join(root, 'docs', 'site');
   const output = `${JSON.stringify(fixtureCatalog(), null, 2)}\n`;
@@ -241,16 +241,17 @@ test('writes deterministic pages and detects tracked drift', async () => {
   }
 });
 
-test('the docs check detects CLI drift before generation', async () => {
+test('the docs check generates missing outputs before validating CLI parity', async () => {
   const packageJson = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8'),
   );
   const checkSteps = packageJson.scripts.check.split(' && ');
   const sourceSteps = packageJson.scripts['check:source'].split(' && ');
 
+  assert.equal(packageJson.scripts.pretest, 'npm run generate');
   assert.equal(checkSteps[0], 'npm run check:source');
-  assert.equal(sourceSteps[0], 'npm run check:cli-reference');
+  assert.equal(sourceSteps[0], 'npm run generate');
   assert.ok(
-    sourceSteps.indexOf('npm run check:cli-reference') < sourceSteps.indexOf('npm run generate'),
+    sourceSteps.indexOf('npm run generate') < sourceSteps.indexOf('npm run check:cli-reference'),
   );
 });

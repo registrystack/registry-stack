@@ -13,7 +13,7 @@ the smallest end-to-end demo.
 ## Develop
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
 
@@ -53,8 +53,10 @@ To prepare a new archived docset, follow the
 [canonical archive preparation procedure](../../release/OPERATIONS.md#prepare-the-documentation-archive-lock).
 It builds committed inputs in a fresh Ubuntu 24.04 Linux x64 checkout with
 Node 22.12.0 and the locked npm dependencies. The archive builder stages its
-owned generated inputs from the docset's source ref; the fresh checkout also
-excludes unrelated ignored `public` assets. Pagefind's platform packages can
+owned generated inputs from the docset's source ref. Historical refs supply
+committed outputs; refs with `generate:source` rebuild them in a clean source
+export using that ref's dependency lock. The fresh checkout also excludes
+unrelated ignored `public` assets. Pagefind's platform packages can
 contain different WebAssembly payloads, so normalized gzip metadata does not
 establish identical archive bytes across macOS and Linux.
 
@@ -103,3 +105,25 @@ catalog, and each deployment generates its own OpenAPI description at
 `GET /openapi.json`. The generators read committed schemas and reviewed product-owned
 material only. They never read a country workspace, runtime configuration, environment
 value, or secret.
+
+## Generated references
+
+Commit the source definitions, authored pages, and generators. The CLI pages in
+`src/content/docs/reference/cli/` and JSON in `src/data/generated/` are ignored
+build artifacts, like fetched OpenAPI files and synced product docs. A change to
+one command can change the whole CLI catalog digest; those rendered copies no
+longer enter PR diffs or Git merges.
+
+`npm run dev`, `npm run build`, `npm test`, and `npm run check` generate their
+inputs automatically. Generation requires Rust/Cargo for the public Clap catalog
+and uses the workspace lockfile. To inspect just the generated references, run
+`npm run generate`, then open the local files or use `npm run dev`.
+`npm run check:cli-reference` compares existing local output with the current
+command definitions. The collector's determinism, schema validation, and explicit
+human review metadata remain checked; generation does not publish draft CLI pages.
+
+When updating an older branch, resolve authored source conflicts first. If Git
+reports modify/delete conflicts under either generated directory, accept the
+removal from version control and run `npm run generate` after resolving sources.
+Keep product-owned generated schemas and release artifacts tracked under their
+existing contracts.

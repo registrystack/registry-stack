@@ -14,7 +14,6 @@ import sys
 import tempfile
 import time
 import tomllib
-from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -997,16 +996,6 @@ def validate_release_id(value: str) -> str:
     return value
 
 
-def json_compatible(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): json_compatible(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [json_compatible(item) for item in value]
-    if isinstance(value, (date, datetime)):
-        return value.isoformat()
-    return value
-
-
 def required_yaml(path: Path) -> Any:
     if not path.is_file():
         raise ReleasePlanError(f"required release surface is missing: {path}")
@@ -1695,6 +1684,16 @@ def release_identity_surfaces(
         for path in root.rglob("*"):
             if path.is_symlink() or not path.is_file():
                 continue
+            # Build output must not change a release plan's source inventory.
+            if any(
+                path.is_relative_to(repo / generated_root)
+                for generated_root in (
+                    "docs/site/src/data/generated",
+                    "docs/site/src/content/docs/reference/cli",
+                    "docs/site/src/content/docs/products",
+                )
+            ):
+                continue
             try:
                 body = path.read_text(encoding="utf-8")
             except UnicodeError:
@@ -1793,9 +1792,6 @@ def selected_docsets(
     for name in external:
         if name not in products:
             raise ReleasePlanError(f"docset {tag} is missing external product {name}")
-    generated = required_json(repo / "docs/site/src/data/generated/docsets.json")
-    if json_compatible(data) != generated:
-        raise ReleasePlanError("generated/docsets.json does not exactly mirror docsets.yaml")
     return data, selected, selected_index
 
 
@@ -1979,8 +1975,8 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
         checks.append(
             passed_check(
                 "active-release-identity-surfaces",
-                f"{len(identity_surfaces)} active docs, generated overlay, content "
-                "digest, and inventory surfaces name the release identity",
+                f"{len(identity_surfaces)} authored docs and inventory surfaces "
+                "name the release identity",
             )
         )
         repo_docs_count = validate_repo_docs(repo)
@@ -2006,13 +2002,6 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
             f"{len(openapi_paths)} committed OpenAPI documents use {version}",
         )
     )
-    if uses_release_docs:
-        checks.append(
-            passed_check(
-                "generated-docset-mirror",
-                "generated/docsets.json exactly mirrors docsets.yaml",
-            )
-        )
     return {
         "repo": repo,
         "selected": selected,
@@ -2073,10 +2062,6 @@ def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
         surfaces.extend(
             (
                 (repo / "docs/site/src/data/docsets.yaml", "docset"),
-                (
-                    repo / "docs/site/src/data/generated/docsets.json",
-                    "generated-mirror",
-                ),
                 (repo / "docs/site/src/data/repo-docs.yaml", "active-docs-mirror"),
             )
         )

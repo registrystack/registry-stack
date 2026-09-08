@@ -718,10 +718,10 @@ test('generating writes the reference where the page reads it', async () => {
       await readFile(join(scratch, 'src/data/generated/evidence-configuration.json'), 'utf8'),
     );
     validateEvidenceConfiguration(written);
-    const committed = JSON.parse(
+    const generated = JSON.parse(
       await readFile(join(docsRoot, 'src/data/generated/evidence-configuration.json'), 'utf8'),
     );
-    assert.deepEqual(written, committed, 'the committed reference is stale; run npm run generate');
+    assert.deepEqual(written, generated, 'the generated reference is stale; run npm run generate');
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

@@ -335,6 +335,13 @@ test('bootstrap isolates a dirty generated public archive and restores local fil
   );
   await mkdir(resolve(docsRoot, 'public/examples'), { recursive: true });
   await writeFile(starterPath, 'generated from current source');
+  await mkdir(resolve(docsRoot, 'src/data/generated'), { recursive: true });
+  for (const product of ['evidence', 'breg']) {
+    await writeFile(
+      resolve(docsRoot, `src/data/generated/${product}-configuration.json`),
+      '{"renderer":"current"}',
+    );
+  }
 
   let buildCommands = 0;
   const buildArchive = (targetDocset, options) => buildDocsetArchive(targetDocset, {
