@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs,
-    io::{IsTerminal as _, Write as _},
+    io::{IsTerminal as _, Read as _, Write as _},
     os::unix::fs::MetadataExt as _,
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
@@ -216,7 +216,13 @@ fn configure(
     let binding = connection(&inspection.endpoints, &args.connection);
     target::check_local_connection(&target_path, &args.connection, &binding)?;
     if project.exists() {
-        check_credential_outputs(&project, &args.connection)?;
+        check_credential_outputs(
+            &project,
+            &args.connection,
+            &registry,
+            &selection.client,
+            invoke,
+        )?;
     }
     let row_scope = selection.row.as_ref().map_or_else(
         || json!({"kind": "all-records"}),
@@ -266,7 +272,13 @@ fn configure(
     }
     let lock = source_import::ProjectLock::acquire(&project)?;
     target::check_local_connection(&target_path, &args.connection, &binding)?;
-    check_credential_outputs(&project, &args.connection)?;
+    check_credential_outputs(
+        &project,
+        &args.connection,
+        &registry,
+        &selection.client,
+        invoke,
+    )?;
     // The provider alone writes its candidate, registrations and retained keys.
     // Its identical retry contract preserves the same pending activation.
     prepare.push("--apply".into());
@@ -305,17 +317,12 @@ fn configure(
     target::ensure_local_connection(&project, &target_path, &args.connection, binding)?;
     let id_path = project.join(format!("secrets/{}-client-id", args.connection));
     let key_path = project.join(format!("secrets/{}-client-key", args.connection));
-    let mut export_client = vec![
-        "--format".into(),
-        "json".into(),
-        "dev".into(),
-        "export-client".into(),
-        registry.as_os_str().into(),
-    ];
-    add_pair(&mut export_client, "--client", &selection.client);
-    add_pair(&mut export_client, "--client-id-file", &id_path);
-    add_pair(&mut export_client, "--assertion-key-file", &key_path);
-    invoke(&export_client)?;
+    invoke(&export_client_args(
+        &registry,
+        &selection.client,
+        &id_path,
+        &key_path,
+    ))?;
     candidate.apply(&lock)?;
     report["status"] = json!("prepared");
     report["requiresRestart"] = prepared["requiresRestart"].clone();
@@ -577,6 +584,25 @@ fn provider_args(registry: &Path) -> Vec<OsString> {
     ]
 }
 
+fn export_client_args(
+    registry: &Path,
+    client: &str,
+    id_path: &Path,
+    key_path: &Path,
+) -> Vec<OsString> {
+    let mut arguments = vec![
+        "--format".into(),
+        "json".into(),
+        "dev".into(),
+        "export-client".into(),
+        registry.as_os_str().into(),
+    ];
+    add_pair(&mut arguments, "--client", client);
+    add_pair(&mut arguments, "--client-id-file", id_path);
+    add_pair(&mut arguments, "--assertion-key-file", key_path);
+    arguments
+}
+
 fn add_pair(arguments: &mut Vec<OsString>, flag: &str, value: impl AsRef<std::ffi::OsStr>) {
     arguments.push(flag.into());
     arguments.push(value.as_ref().into());
@@ -685,7 +711,13 @@ fn absolute_destination(path: &Path) -> Result<PathBuf> {
     Ok(parent.join(name))
 }
 
-fn check_credential_outputs(project: &Path, name: &str) -> Result<()> {
+fn check_credential_outputs(
+    project: &Path,
+    name: &str,
+    registry: &Path,
+    client: &str,
+    invoke: &mut impl FnMut(&[OsString]) -> Result<Value>,
+) -> Result<()> {
     let secrets = project.join("secrets");
     let metadata = fs::symlink_metadata(&secrets)
         .context("Evidence project needs its generated private secrets directory")?;
@@ -696,17 +728,53 @@ fn check_credential_outputs(project: &Path, name: &str) -> Result<()> {
     {
         bail!("Evidence secrets must be an ordinary owner-only directory");
     }
+    let mut existing = Vec::new();
     for suffix in ["client-id", "client-key"] {
         match fs::symlink_metadata(secrets.join(format!("{name}-{suffix}"))) {
             Ok(metadata) if metadata.is_file() && metadata.nlink() == 1
                 && metadata.uid() == rustix::process::geteuid().as_raw()
-                && matches!(metadata.mode() & 0o7777, 0o400 | 0o600) => {},
+                && matches!(metadata.mode() & 0o7777, 0o400 | 0o600) => existing.push(suffix),
             Ok(_) => bail!("source credential outputs must be owner-only ordinary files; existing files were preserved"),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
             Err(error) => return Err(error).context("inspecting source credential outputs"),
         }
     }
+    if existing.is_empty() {
+        return Ok(());
+    }
+    // The public provider export owns credential identity and validity. Stage
+    // its retained pair privately so preflight never fills a missing output,
+    // including during dry-run or before the user confirms an interactive setup.
+    let temporary = tempfile::tempdir().context("staging the retained credential comparison")?;
+    let temporary_path = fs::canonicalize(temporary.path())
+        .context("resolving the private credential staging directory")?;
+    invoke(&export_client_args(
+        registry,
+        client,
+        &temporary_path.join("client-id"),
+        &temporary_path.join("client-key"),
+    ))
+    .context("existing connection credentials cannot be reused for the selected client; choose a fresh --connection before applying this source setup")?;
+    for suffix in existing {
+        let current = credential_bytes(&secrets.join(format!("{name}-{suffix}")))?;
+        let retained = credential_bytes(&temporary_path.join(suffix))?;
+        if current.as_slice() != retained.as_slice() {
+            bail!("existing connection credentials differ from the selected retained client; choose a fresh --connection before applying this source setup; existing files were preserved");
+        }
+    }
     Ok(())
+}
+
+fn credential_bytes(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
+    let file = fs::File::open(path).context("reading a source credential for comparison")?;
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take(MAX_PROVIDER_OUTPUT + 1)
+        .read_to_end(&mut bytes)
+        .context("reading a bounded source credential")?;
+    if bytes.len() as u64 > MAX_PROVIDER_OUTPUT {
+        bail!("source credential exceeds its byte limit; existing files were preserved");
+    }
+    Ok(bytes)
 }
 
 fn public_output(binary: &Path, arguments: &[OsString]) -> Result<Vec<u8>> {
@@ -826,6 +894,7 @@ mod tests {
     struct Provider {
         calls: Vec<Vec<OsString>>,
         fail_export_once: bool,
+        clients: BTreeSet<String>,
     }
 
     impl Provider {
@@ -833,6 +902,7 @@ mod tests {
             Self {
                 calls: Vec::new(),
                 fail_export_once: false,
+                clients: BTreeSet::new(),
             }
         }
 
@@ -855,6 +925,7 @@ mod tests {
                         report[key] = json!(option(arguments, flag));
                     }
                     report["status"] = json!(if arguments.iter().any(|arg| arg == "--apply") {
+                        self.clients.insert(option(arguments, "--client"));
                         "prepared"
                     } else {
                         "preview"
@@ -867,7 +938,7 @@ mod tests {
                     } else {
                         json!({"kind":"claim","field":option(arguments,"--row-field"),"claim":option(arguments,"--row-claim")})
                     };
-                    assert_eq!(option(arguments, "--source-id"), "registry-name");
+                    assert!(!option(arguments, "--source-id").is_empty());
                     assert_eq!(option(arguments, "--connection"), "registry");
                 }
                 return Ok(report);
@@ -887,20 +958,28 @@ mod tests {
                 );
             }
             assert!(arguments.iter().any(|arg| arg == "export-client"));
+            let client = option(arguments, "--client");
+            if !self.clients.contains(&client) {
+                bail!("selected client is absent from the retained session");
+            }
             if self.fail_export_once {
                 self.fail_export_once = false;
                 bail!("simulated interruption before credential publication");
             }
+            let key = format!("private-test-key-canary-{client}");
             for (flag, bytes) in [
-                ("--client-id-file", b"retained-client".as_slice()),
-                (
-                    "--assertion-key-file",
-                    b"private-test-key-canary".as_slice(),
-                ),
+                ("--client-id-file", client.as_bytes()),
+                ("--assertion-key-file", key.as_bytes()),
             ] {
                 let path = PathBuf::from(option(arguments, flag));
+                assert_eq!(
+                    fs::canonicalize(path.parent().unwrap())?,
+                    path.parent().unwrap()
+                );
                 if path.exists() {
-                    assert_eq!(fs::read(&path)?, bytes);
+                    if fs::read(&path)? != bytes {
+                        bail!("credential output conflicts with the retained pair");
+                    }
                 } else {
                     fs::write(&path, bytes)?;
                     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
@@ -1099,6 +1178,106 @@ mod tests {
         assert!(error.to_string().contains("different authored settings"));
         assert!(provider.calls.iter().flatten().all(|arg| arg != "--apply"));
         assert_eq!(fs::read(governance).unwrap(), before);
+    }
+
+    #[test]
+    fn another_source_cannot_reuse_connection_credentials_before_provider_apply() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("evidence");
+        let mut provider = Provider::new();
+        configure(args(root.path(), &project), false, &mut |a| {
+            provider.invoke(a)
+        })
+        .unwrap();
+        let id_path = project.join("secrets/registry-client-id");
+        let key_path = project.join("secrets/registry-client-key");
+        let id_before = fs::read(&id_path).unwrap();
+        let key_before = fs::read(&key_path).unwrap();
+        let governance_path = project.join("targets/local/governance.yaml");
+        let governance_before = fs::read(&governance_path).unwrap();
+        provider.calls.clear();
+
+        let mut selected = args(root.path(), &project);
+        selected.source_id = Some("registry-other".into());
+        let error = configure(selected, false, &mut |a| provider.invoke(a)).unwrap_err();
+        assert!(
+            provider
+                .calls
+                .iter()
+                .flatten()
+                .all(|argument| argument != "--apply"),
+            "credential reuse must be refused before preparing another registry client"
+        );
+        assert!(error.to_string().contains("connection"));
+        assert!(!format!("{error:#}").contains("private-test-key-canary"));
+        assert_eq!(fs::read(id_path).unwrap(), id_before);
+        assert_eq!(fs::read(key_path).unwrap(), key_before);
+        assert_eq!(fs::read(governance_path).unwrap(), governance_before);
+        assert!(!project.join("sources/registry-other.yaml").exists());
+        assert!(!provider.clients.contains("registry-other"));
+    }
+
+    #[test]
+    fn a_mismatched_key_is_refused_before_apply_even_when_the_client_id_matches() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("evidence");
+        let mut provider = Provider::new();
+        configure(args(root.path(), &project), false, &mut |a| {
+            provider.invoke(a)
+        })
+        .unwrap();
+        let key_path = project.join("secrets/registry-client-key");
+        fs::write(&key_path, b"different-private-key-canary").unwrap();
+        provider.calls.clear();
+        let error = configure(args(root.path(), &project), false, &mut |a| {
+            provider.invoke(a)
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("choose a fresh --connection"));
+        assert!(!format!("{error:#}").contains("different-private-key-canary"));
+        assert!(provider
+            .calls
+            .iter()
+            .flatten()
+            .all(|argument| argument != "--apply"));
+        assert_eq!(fs::read(key_path).unwrap(), b"different-private-key-canary");
+    }
+
+    #[test]
+    fn partial_credentials_stay_missing_in_dry_run_and_exact_retry_restores_them() {
+        for missing_suffix in ["client-id", "client-key"] {
+            let root = tempfile::tempdir().unwrap();
+            let project = root.path().join("evidence");
+            let mut provider = Provider::new();
+            configure(args(root.path(), &project), false, &mut |a| {
+                provider.invoke(a)
+            })
+            .unwrap();
+            let missing = project.join(format!("secrets/registry-{missing_suffix}"));
+            let retained = fs::read(&missing).unwrap();
+            fs::remove_file(&missing).unwrap();
+            provider.calls.clear();
+
+            let mut preview = args(root.path(), &project);
+            preview.dry_run = true;
+            let report = configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
+            assert_eq!(report["status"], "preview");
+            assert!(
+                !missing.exists(),
+                "preflight must not publish a missing credential"
+            );
+            assert!(provider
+                .calls
+                .iter()
+                .flatten()
+                .all(|argument| argument != "--apply"));
+
+            configure(args(root.path(), &project), false, &mut |a| {
+                provider.invoke(a)
+            })
+            .unwrap();
+            assert_eq!(fs::read(missing).unwrap(), retained);
+        }
     }
 
     #[test]
