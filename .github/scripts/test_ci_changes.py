@@ -747,9 +747,9 @@ class CiChangesTest(unittest.TestCase):
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["breg_contracts"])
                 self.assertTrue(outputs["breg_tutorial"])
-                self.assertTrue(
-                    {"registry-breg", "registry-bregctl", "registry-linkml"}
-                    <= set(outputs["rust_packages"])
+                self.assertLessEqual(
+                    {"registry-breg", "registry-bregctl", "registry-linkml"},
+                    set(outputs["rust_packages"]),
                 )
 
     def test_manifest_core_changes_select_breg_through_linked_code(
