@@ -1,0 +1,728 @@
+id: https://publicschema.org/linkml/agriculture-biology
+name: publicschema-agriculture-biology
+title: Agricultural animals and plant material
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- publicschema-extensions
+- core
+- common
+- identity
+- registry
+- agriculture
+classes:
+  IndividualAnimal:
+    class_uri: publicschema:IndividualAnimal
+    title: Individual Animal
+    description: One animal whose identity persists through changes of tag, keeper, location or registration.
+      An animal is neither a person nor an administrative registry entry.
+    slots:
+    - name
+    - biological_taxon
+    - animal_identifiers
+    - animal_breed
+    - animal_birth_date
+    - animal_birth_year
+    - animal_death_date
+    - animal_sex
+    - biological_dam
+    - biological_sire
+    status: bibo:draft
+    see_also: &id001
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      bibliography_refs: '["woah-identification-2024"]'
+  AnimalGroup:
+    class_uri: publicschema:AnimalGroup
+    title: Animal Group
+    description: Animals identified or managed together as a herd, flock or batch. The group has an identity
+      distinct from individual animals and from a human household or organization; membership can change.
+    slots:
+    - name
+    - biological_taxon
+    - animal_identifiers
+    - animal_group_counts
+    - known_animal_members
+    - predecessor_animal_groups
+    status: bibo:draft
+    see_also:
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      bibliography_refs: '["woah-identification-2024"]'
+  AnimalGroupCount:
+    class_uri: publicschema:AnimalGroupCount
+    title: Animal Group Count
+    description: An observation of the number of animals in a group at a stated date. A listed subset
+      of individually identified members need not equal this count.
+    slots:
+    - counted_animal_group
+    - animal_count
+    - count_date
+    status: bibo:draft
+    see_also:
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      bibliography_refs: '["woah-identification-2024"]'
+  AnimalBreed:
+    class_uri: publicschema:agri/AnimalBreed
+    title: Animal Breed
+    description: A named livestock population recognized as a breed in a stated source or community. It
+      is distinct from any individual animal and from a dated national breed population or risk assessment.
+    slots:
+    - name
+    - biological_taxon
+    - breed_source
+    - breed_context
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/dad-is/data/en/
+    annotations:
+      source_domain: agri
+      bibliography_refs: '["fao-dad-is-data"]'
+  CropPlanting:
+    class_uri: publicschema:agri/CropPlanting
+    title: Crop Planting
+    description: A cultivation episode involving one or more crop components on a holding or agricultural
+      parcel. It can include mixed crops and perennial establishment; a declaration about it is a separate
+      administrative assertion.
+    slots:
+    - planting_holding
+    - planting_parcel
+    - planting_components
+    - planting_date
+    - planting_season
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/4/a0135e/a0135e05.htm
+    annotations:
+      source_domain: agri
+      bibliography_refs: '["fao-wca-2010-crop-concepts"]'
+  CropPlantingComponent:
+    class_uri: publicschema:agri/CropPlantingComponent
+    title: Crop Planting Component
+    description: One crop or variety cultivated within a planting episode. Components preserve mixed cropping
+      without assuming their areas partition the land or have a common planting date.
+    slots:
+    - crop_kind
+    - planted_variety
+    - component_planting_date
+    - component_planted_area
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/4/a0135e/a0135e05.htm
+    annotations:
+      source_domain: agri
+      bibliography_refs: '["fao-wca-2010-crop-concepts"]'
+  PlantVariety:
+    class_uri: publicschema:PlantVariety
+    title: Plant Variety
+    description: A plant grouping distinguished by inherited characteristics and capable of propagation
+      as a unit. Its identity is separate from any national listing, breeder right, denomination approval,
+      or physical batch of seed.
+    slots:
+    - name
+    - biological_taxon
+    - variety_denomination
+    - breeder_reference
+    - origin_accessions
+    status: bibo:draft
+    see_also:
+    - https://www.upov.int/documents/d/upov/docs-en-pluto-contribute-pluto-tag-format-description.pdf
+    annotations:
+      bibliography_refs: '["upov-pluto-tag-format"]'
+  GeneticResourceAccession:
+    class_uri: publicschema:GeneticResourceAccession
+    title: Genetic Resource Accession
+    description: A plant genetic resource maintained as an identified accession by a genebank or collection.
+      It may have multiple physical samples or seed lots and need not be a named variety. This draft covers
+      plant accessions only.
+    slots:
+    - accession_number
+    - holding_institute
+    - biological_taxon
+    - accession_variety
+    - collection_date_text
+    - accession_collected_on
+    status: bibo:draft
+    see_also:
+    - https://www.genesys-pgr.org/documentation/apis
+    annotations:
+      bibliography_refs: '["genesys-api-passport"]'
+  SeedLot:
+    class_uri: publicschema:SeedLot
+    title: Seed Lot
+    description: A separately identified quantity of seed managed as one lot for handling, conservation,
+      testing or distribution. Lot identity differs from variety and accession identity. A lot can contain
+      multiple source lots or varieties without implying certification.
+    slots:
+    - name
+    - seed_lot_identifiers
+    - seed_lot_varieties
+    - seed_lot_accessions
+    - source_seed_lots
+    - seed_lot_quantity
+    - seed_lot_produced_on
+    status: bibo:draft
+    see_also:
+    - https://inspection.canada.ca/en/plant-health/seeds/seed-inspection-procedures/oecd-and-eu
+    annotations:
+      bibliography_refs: '["cfia-qsp-152-1"]'
+  AnimalResidence:
+    class_uri: publicschema:agri/AnimalResidence
+    title: Animal Residence
+    description: Association of an individual animal or animal group with a holding or facility where
+      it is kept during a period. A change of keeper need not change residence. This association does
+      not itself record a transport movement.
+    slots:
+    - animal_subject
+    - animal_residence_site
+    - start_date
+    - end_date
+    - recorded_at
+    status: bibo:draft
+    see_also: *id001
+    annotations:
+      source_domain: agri
+      bibliography_refs: '["woah-identification-2024"]'
+  AnimalResponsibility:
+    class_uri: publicschema:AnimalResponsibility
+    title: Animal Responsibility
+    description: A person or organization acting as keeper, owner or another explicitly identified responsibility
+      role for an individual animal or group during a period. Keeping an animal does not establish ownership
+      or residence.
+    slots:
+    - animal_subject
+    - animal_responsible_actor
+    - animal_responsibility_role
+    - start_date
+    - end_date
+    - recorded_at
+    status: bibo:draft
+    see_also: *id001
+    annotations:
+      bibliography_refs: '["woah-identification-2024"]'
+  AnimalMovement:
+    class_uri: publicschema:AnimalMovement
+    title: Animal Movement
+    is_a: Event
+    description: An actual movement of one or more animals from a physical origin site to a destination site,
+      possibly through transit sites. Identified animals and a source managed group retain their identities.
+      The number moved does not assert that every member of the source group moved. Movement alone does
+      not establish a residence period or change of keeper or owner.
+    slots:
+    - moved_animals
+    - movement_source_group
+    - moved_animal_count
+    - movement_origin_site
+    - movement_destination_site
+    - movement_transit_sites
+    - animal_movement_date
+    - recorded_at
+    status: bibo:draft
+    see_also: *id001
+    annotations:
+      bibliography_refs: '["woah-identification-2024"]'
+slots:
+  biological_taxon:
+    slot_uri: publicschema:biological_taxon
+    title: Biological taxon
+    description: Taxonomic classification with its original code or name and source; no universal species
+      code list is implied.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_identifiers:
+    slot_uri: publicschema:animal_identifiers
+    title: Animal identifiers
+    description: Identifiers assigned to the animal or animal group, including replaceable tags. They
+      do not identify a registry entry.
+    range: Identifier
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_breed:
+    slot_uri: publicschema:agri/animal_breed
+    title: Animal breed
+    description: Breed attributed to this animal; attribution is not pedigree certification.
+    range: AnimalBreed
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  animal_birth_date:
+    slot_uri: publicschema:animal_birth_date
+    title: Animal birth date
+    description: Complete date of birth when known; do not invent a day from a year.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_birth_year:
+    slot_uri: publicschema:animal_birth_year
+    title: Animal birth year
+    description: Year of birth when known only to year precision.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_death_date:
+    slot_uri: publicschema:animal_death_date
+    title: Animal death date
+    description: Complete date of death when known; registration closure does not imply death.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_sex:
+    slot_uri: publicschema:animal_sex
+    title: Animal sex
+    description: Recorded biological sex using an identified animal terminology, independent of the Person
+      sex vocabulary.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  biological_dam:
+    slot_uri: publicschema:biological_dam
+    title: Biological dam
+    description: Animal attributed as the biological mother; distinct from a foster mother.
+    range: IndividualAnimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  biological_sire:
+    slot_uri: publicschema:biological_sire
+    title: Biological sire
+    description: Animal attributed as the biological father; unknown parentage is omitted.
+    range: IndividualAnimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_group_counts:
+    slot_uri: publicschema:animal_group_counts
+    title: Animal group counts
+    description: Dated observations of this group size, not a permanent population total.
+    range: AnimalGroupCount
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  known_animal_members:
+    slot_uri: publicschema:known_animal_members
+    title: Known animal members
+    description: Individually identified members known to belong to the group; this list may be incomplete
+      and is not a movement history.
+    range: IndividualAnimal
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  predecessor_animal_groups:
+    slot_uri: publicschema:predecessor_animal_groups
+    title: Predecessor animal groups
+    description: Groups from which this group originated through a split or merge; no full event chronology
+      is asserted.
+    range: AnimalGroup
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  counted_animal_group:
+    slot_uri: publicschema:counted_animal_group
+    title: Counted animal group
+    description: Group whose members were counted.
+    range: AnimalGroup
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_count:
+    slot_uri: publicschema:animal_count
+    title: Animal count
+    description: Number of animals observed in the group, including zero; unknown is omitted.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  count_date:
+    slot_uri: publicschema:count_date
+    title: Count date
+    description: Date to which the animal count applies, distinct from the recording time.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  breed_source:
+    slot_uri: publicschema:agri/breed_source
+    title: Breed source
+    description: Source defining or recognizing this breed concept.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  breed_context:
+    slot_uri: publicschema:agri/breed_context
+    title: Breed context
+    description: Community or geographic context of breed recognition; a matching name alone does not
+      establish cross-country identity.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  planting_holding:
+    slot_uri: publicschema:agri/planting_holding
+    title: Planting holding
+    description: Agricultural holding responsible for this cultivation episode; not necessarily the owner
+      of its land.
+    range: Farm
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  planting_parcel:
+    slot_uri: publicschema:agri/planting_parcel
+    title: Planting parcel
+    description: Agricultural parcel on which this cultivation episode takes place.
+    range: AgriculturalParcel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  planting_components:
+    slot_uri: publicschema:agri/planting_components
+    title: Planting components
+    description: Crops cultivated in this episode, preserving mixtures.
+    range: CropPlantingComponent
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  planting_date:
+    slot_uri: publicschema:agri/planting_date
+    title: Planting date
+    description: Date of planting when a complete common date is known.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  planting_season:
+    slot_uri: publicschema:agri/planting_season
+    title: Planting season
+    description: Locally defined season designation with scheme context; it need not be a calendar year.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  crop_kind:
+    slot_uri: publicschema:agri/crop_kind
+    title: Crop kind
+    description: Crop classification for this component, preserving the source code and terminology.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  planted_variety:
+    slot_uri: publicschema:agri/planted_variety
+    title: Planted variety
+    description: Variety cultivated in this crop component, if identified.
+    range: PlantVariety
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  component_planting_date:
+    slot_uri: publicschema:agri/component_planting_date
+    title: Component planting date
+    description: Date this component was planted when known; components may be planted on different dates.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  component_planted_area:
+    slot_uri: publicschema:agri/component_planted_area
+    title: Component planted area
+    description: Reported area for this component with an area unit; components can overlap, so their
+      sum need not equal parcel area.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  variety_denomination:
+    slot_uri: publicschema:variety_denomination
+    title: Variety denomination
+    description: Name used to designate this variety; spelling alone is not a global identifier or proof
+      of approval.
+    range: string
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  breeder_reference:
+    slot_uri: publicschema:breeder_reference
+    title: Breeder reference
+    description: Reference assigned by the breeder, preserved as supplied and interpreted in breeder context.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  origin_accessions:
+    slot_uri: publicschema:origin_accessions
+    title: Origin accessions
+    description: Accessions reported as origins of the variety, without asserting a complete pedigree.
+    range: GeneticResourceAccession
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  accession_number:
+    slot_uri: publicschema:accession_number
+    title: Accession number
+    description: Identifier assigned within the holding collection; it is not globally unique on its own.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  holding_institute:
+    slot_uri: publicschema:holding_institute
+    title: Holding institute
+    description: Organization maintaining the accession.
+    range: Organization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  accession_variety:
+    slot_uri: publicschema:accession_variety
+    title: Accession variety
+    description: Named variety associated with the accession, when established; accession and variety
+      remain distinct.
+    range: PlantVariety
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  collection_date_text:
+    slot_uri: publicschema:collection_date_text
+    title: Collection date text
+    description: Original collecting date notation, including incomplete dates; retain its source format
+      without fabricating precision.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  accession_collected_on:
+    slot_uri: publicschema:accession_collected_on
+    title: Accession collected on
+    description: Complete date of collection when known.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  seed_lot_identifiers:
+    slot_uri: publicschema:seed_lot_identifiers
+    title: Seed lot identifiers
+    description: Identifiers assigned to this physical lot, not to its variety or accession.
+    range: Identifier
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  seed_lot_varieties:
+    slot_uri: publicschema:seed_lot_varieties
+    title: Seed lot varieties
+    description: Varieties represented in the lot; an empty or absent list does not imply varietal purity.
+    range: PlantVariety
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  seed_lot_accessions:
+    slot_uri: publicschema:seed_lot_accessions
+    title: Seed lot accessions
+    description: Accessions whose material is represented by this seed lot.
+    range: GeneticResourceAccession
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  source_seed_lots:
+    slot_uri: publicschema:source_seed_lots
+    title: Source seed lots
+    description: Source lots used to form this lot; this alone does not express proportions or establish
+      certified blend status.
+    range: SeedLot
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  seed_lot_quantity:
+    slot_uri: publicschema:seed_lot_quantity
+    title: Seed lot quantity
+    description: Quantity describing this lot with an explicit unit; no inventory balance or current availability
+      is implied.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  seed_lot_produced_on:
+    slot_uri: publicschema:seed_lot_produced_on
+    title: Seed lot produced on
+    description: Complete date of production of this lot when known.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_subject:
+    slot_uri: publicschema:animal_subject
+    title: Animal subject
+    description: URI of the IndividualAnimal or AnimalGroup described by this association. It identifies
+      the animal subject rather than a tag or registry entry.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_residence_site:
+    slot_uri: publicschema:agri/animal_residence_site
+    title: Animal residence site
+    description: URI of the Farm or AgriculturalFacility where the animal or group is kept. This is not
+      the keeper's home address.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: agriculture
+  animal_responsible_actor:
+    slot_uri: publicschema:animal_responsible_actor
+    title: Animal responsible actor
+    description: URI of the Person or Organization holding the stated responsibility for the animal or
+      group.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_responsibility_role:
+    slot_uri: publicschema:animal_responsibility_role
+    title: Animal responsibility role
+    description: Scheme-qualified responsibility such as keeper or owner. The role must not be inferred
+      from residence or treated as proof of legal title.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  moved_animals:
+    slot_uri: publicschema:moved_animals
+    title: Moved animals
+    description: Individually identified animals known to have participated in this movement. The list
+      may be incomplete; members of a referenced source group must not be added without movement evidence.
+    range: IndividualAnimal
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  movement_source_group:
+    slot_uri: publicschema:movement_source_group
+    title: Movement source group
+    description: Managed animal group from which the moved animals were drawn. This identifies the
+      source population, not a claim that the whole group or every known member moved.
+    range: AnimalGroup
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  moved_animal_count:
+    slot_uri: publicschema:moved_animal_count
+    title: Moved animal count
+    description: Number of animals participating in this movement, including any not individually
+      identified. It is distinct from a dated observation of the source group's population and does
+      not determine that group's remaining inventory.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  movement_origin_site:
+    slot_uri: publicschema:movement_origin_site
+    title: Movement origin site
+    description: URI of the identified physical site from which the animals departed. A holding's
+      economic identity or an owner or keeper address alone does not identify the departure premises.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  movement_destination_site:
+    slot_uri: publicschema:movement_destination_site
+    title: Movement destination site
+    description: URI of the identified physical site to which the animals moved. A holding's economic
+      identity alone does not identify arrival premises. Arrival does not by itself establish a period
+      of residence or a change of responsibility.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  movement_transit_sites:
+    slot_uri: publicschema:movement_transit_sites
+    title: Movement transit sites
+    description: URIs of identified physical sites through which the animals passed during
+      this movement. This collection does not assert visit order, arrival dates or residence periods.
+    range: uri
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: agriculture
+  animal_movement_date:
+    slot_uri: publicschema:animal_movement_date
+    title: Animal movement date
+    description: Calendar date on which the animals departed the origin site, when known. This is the
+      occurrence date used by this draft, distinct from an arrival date or the time the event was recorded.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: agriculture

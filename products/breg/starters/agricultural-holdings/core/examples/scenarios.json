@@ -1,0 +1,199 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "starter-data",
+      "description": "Create synthetic records and typed relationships through ordinary authorized writes.",
+      "input": "examples/inputs/starter-data.json",
+      "steps": [
+        {
+          "id": "river",
+          "operation": "create",
+          "entity": "farm",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "river",
+          "capture": "river"
+        },
+        {
+          "id": "landless",
+          "operation": "create",
+          "entity": "farm",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "landless",
+          "capture": "landless"
+        },
+        {
+          "id": "collective",
+          "operation": "create",
+          "entity": "farm",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "collective",
+          "capture": "collective"
+        },
+        {
+          "id": "ana",
+          "operation": "create",
+          "entity": "person",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "ana",
+          "capture": "ana"
+        },
+        {
+          "id": "bo",
+          "operation": "create",
+          "entity": "person",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "bo",
+          "capture": "bo"
+        },
+        {
+          "id": "cooperative",
+          "operation": "create",
+          "entity": "organization",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "cooperative",
+          "capture": "cooperative"
+        },
+        {
+          "id": "group",
+          "operation": "create",
+          "entity": "informal-group",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "group",
+          "capture": "group"
+        },
+        {
+          "id": "ana-role",
+          "operation": "create",
+          "entity": "person-holding-operator-role",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "ana-role",
+          "capture": "ana-role"
+        },
+        {
+          "id": "bo-role",
+          "operation": "create",
+          "entity": "person-holding-operator-role",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "bo-role",
+          "capture": "bo-role"
+        },
+        {
+          "id": "cooperative-role",
+          "operation": "create",
+          "entity": "organization-holding-operator-role",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "cooperative-role",
+          "capture": "cooperative-role"
+        },
+        {
+          "id": "group-role",
+          "operation": "create",
+          "entity": "group-holding-operator-role",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "group-role",
+          "capture": "group-role"
+        }
+      ]
+    },
+    {
+      "id": "first-record",
+      "description": "Create an independent record without loading samples. Edit its input before starting.",
+      "input": "examples/inputs/first-record.json",
+      "steps": [
+        {
+          "id": "create",
+          "operation": "create",
+          "entity": "farm",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "record",
+          "capture": "first-record"
+        },
+        {
+          "id": "get",
+          "operation": "get",
+          "entity": "farm",
+          "client": "editor",
+          "accessProfile": "editor",
+          "record": "first-record"
+        }
+      ]
+    },
+    {
+      "id": "reviewed-change",
+      "description": "Submit, inspect, approve or reject, apply, and inspect history. Approval alone changes no record.",
+      "input": "examples/inputs/reviewed-change.json",
+      "steps": [
+        {
+          "id": "draft",
+          "operation": "create",
+          "entity": "name-correction",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "change",
+          "capture": "request"
+        },
+        {
+          "id": "submit",
+          "operation": "submit",
+          "entity": "name-correction",
+          "client": "editor",
+          "accessProfile": "editor",
+          "record": "request"
+        },
+        {
+          "id": "inspect",
+          "operation": "get",
+          "entity": "name-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "approve",
+          "operation": "approve",
+          "entity": "name-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "reject",
+          "operation": "reject",
+          "entity": "name-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "apply",
+          "operation": "apply",
+          "entity": "name-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "history",
+          "operation": "history",
+          "entity": "farm",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "first-record"
+        }
+      ]
+    }
+  ]
+}

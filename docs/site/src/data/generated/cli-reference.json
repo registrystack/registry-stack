@@ -929,6 +929,210 @@
           ]
         },
         {
+          "name": "examples",
+          "invocation": "bregctl examples",
+          "about": "List or explicitly run retained local teaching examples",
+          "long_about": null,
+          "usage": "bregctl examples [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "list",
+              "invocation": "bregctl examples list",
+              "about": "Describe fixed local scenarios without starting services or creating credentials",
+              "long_about": null,
+              "usage": "bregctl examples list [OPTIONS] [PROJECT]",
+              "arguments": [
+                {
+                  "display": "[PROJECT]",
+                  "description": "Authored project containing examples/scenarios.json. A symbolic link at any component of this path is refused.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "run",
+              "invocation": "bregctl examples run",
+              "about": "Run or resume an example against the project's ready owned development instance",
+              "long_about": null,
+              "usage": "bregctl examples run [OPTIONS] <SCENARIO> [PROJECT]",
+              "arguments": [
+                {
+                  "display": "<SCENARIO>",
+                  "description": "Fixed teaching scenario declared by this project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [
+                    "starter-data",
+                    "first-record",
+                    "reviewed-change"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "[PROJECT]",
+                  "description": "Authored project whose owned local development instance is ready. A symbolic link at any component of this path is refused.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--input <INPUT>",
+                  "description": "Editable JSON input (default: the scenario's declared examples input file)",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--attempt <ATTEMPT>",
+                  "description": "Resume exactly this retained execution attempt",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--new-attempt",
+                  "description": "Start a distinct attempt, with new idempotency keys and ordinary uniqueness checks",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--from-attempt <FROM_ATTEMPT>",
+                  "description": "Completed first-record attempt whose captured UUID is the review target",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--step <STEP>",
+                  "description": "Reviewed changes advance one explicit stage; approval never applies a change",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [
+                    "submit",
+                    "inspect",
+                    "approve",
+                    "reject",
+                    "apply",
+                    "history"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--attempt <ATTEMPT>",
+                    "--new-attempt"
+                  ]
+                }
+              ],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "explain",
           "invocation": "bregctl explain",
           "about": "Explain compiled model, access, route, or event inventories",

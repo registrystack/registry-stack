@@ -3645,43 +3645,13 @@ fn resolve_fixture_value_refs(
     value: &Value,
     observations: &BTreeMap<String, Observation>,
 ) -> Result<Value, FixtureError> {
-    match value {
-        Value::Object(object) => {
-            if let Some(record_ref) = object.get("recordRef") {
-                if object.len() != 1 {
-                    return Err(FixtureError::RequestConstructionRefused);
-                }
-                let reference = record_ref
-                    .as_str()
-                    .filter(|reference| valid_stable_id(reference))
-                    .ok_or(FixtureError::RequestConstructionRefused)?;
-                let observation = observations
-                    .get(reference)
-                    .ok_or(FixtureError::RequestConstructionRefused)?;
-                match &observation.kind {
-                    ObservationKind::Record { record_id, .. } => {
-                        Ok(Value::String(record_id.clone()))
-                    }
-                    _ => Err(FixtureError::RequestConstructionRefused),
-                }
-            } else {
-                object
-                    .iter()
-                    .map(|(key, nested)| {
-                        resolve_fixture_value_refs(nested, observations)
-                            .map(|resolved| (key.clone(), resolved))
-                    })
-                    .collect::<Result<Map<String, Value>, FixtureError>>()
-                    .map(Value::Object)
-            }
+    crate::example_references::resolve_record_references(value, |reference| {
+        match &observations.get(reference)?.kind {
+            ObservationKind::Record { record_id, .. } => Some(record_id.clone()),
+            _ => None,
         }
-        Value::Array(items) => items
-            .iter()
-            .map(|item| resolve_fixture_value_refs(item, observations))
-            .collect::<Result<Vec<_>, FixtureError>>()
-            .map(Value::Array),
-        _ => Ok(value.clone()),
-    }
+    })
+    .map_err(|_| FixtureError::RequestConstructionRefused)
 }
 
 fn request_action_body(

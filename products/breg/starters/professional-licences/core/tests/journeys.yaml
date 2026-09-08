@@ -1,0 +1,684 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-journeys/v1",
+  "journeys": [
+    {
+      "id": "starter-model-policy",
+      "steps": [
+        {
+          "id": "first-record",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "personReference": "https://people.example.org/people/journey-first-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "practiceScope": "Supervized community practice"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "first-record"
+        },
+        {
+          "id": "draft-correction",
+          "entity": "scope-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "first-record"
+              },
+              "reason": "Synthetic spelling correction",
+              "supportingReference": "SYNTHETIC-SUPPORT-001",
+              "practiceScope": "Supervised community practice"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "draft"
+        },
+        {
+          "id": "before-submit",
+          "entity": "scope-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-submit"
+        },
+        {
+          "id": "submit-correction",
+          "entity": "scope-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "submit_request",
+            "etagRef": "before-submit",
+            "recordRef": "before-submit"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "review",
+          "entity": "scope-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "review"
+        },
+        {
+          "id": "approve-correction",
+          "entity": "scope-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "approve_request",
+            "etagRef": "review",
+            "proposalVersionRef": "review",
+            "effectDigestRef": "review",
+            "stage": "review",
+            "recordRef": "review"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "approval-does-not-apply",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "personReference": "https://people.example.org/people/journey-first-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "practiceScope": "Supervized community practice"
+            }
+          },
+          "capture": "approval-does-not-apply"
+        },
+        {
+          "id": "before-apply",
+          "entity": "scope-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-apply"
+        },
+        {
+          "id": "apply-correction",
+          "entity": "scope-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "apply_request",
+            "etagRef": "before-apply",
+            "proposalVersionRef": "before-apply",
+            "effectDigestRef": "before-apply",
+            "recordRef": "before-apply"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "corrected-record",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "personReference": "https://people.example.org/people/journey-first-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "practiceScope": "Supervised community practice"
+            }
+          },
+          "capture": "corrected-record"
+        },
+        {
+          "id": "rejected-draft",
+          "entity": "scope-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "first-record"
+              },
+              "reason": "Synthetic rejection exercise",
+              "supportingReference": "SYNTHETIC-SUPPORT-002",
+              "practiceScope": "Unapproved wider scope"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "reject-draft"
+        },
+        {
+          "id": "reject-before-submit",
+          "entity": "scope-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "reject-draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "reject-before-submit"
+        },
+        {
+          "id": "submit-rejected",
+          "entity": "scope-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "submit_request",
+            "etagRef": "reject-before-submit",
+            "recordRef": "reject-before-submit"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "reject-before-decision",
+          "entity": "scope-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "reject-draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "reject-before-decision"
+        },
+        {
+          "id": "reject-correction",
+          "entity": "scope-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "reject_request",
+            "etagRef": "reject-before-decision",
+            "proposalVersionRef": "reject-before-decision",
+            "effectDigestRef": "reject-before-decision",
+            "stage": "review",
+            "recordRef": "reject-before-decision"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "rejection-preserves-record",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "personReference": "https://people.example.org/people/journey-first-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "practiceScope": "Supervised community practice"
+            }
+          },
+          "capture": "rejection-preserves-record"
+        },
+        {
+          "id": "seed-nursing",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-LIC-001",
+              "personReference": "https://people.example.org/people/synthetic-lic-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "practiceScope": "General supervised practice"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          }
+        },
+        {
+          "id": "seed-engineering",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-LIC-002",
+              "personReference": "https://people.example.org/people/synthetic-lic-002",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-engineering",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "practiceScope": "General supervised practice"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          }
+        },
+        {
+          "id": "seed-suspended",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-LIC-003",
+              "personReference": "https://people.example.org/people/synthetic-lic-003",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-suspended",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "practiceScope": "General supervised practice"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          }
+        },
+        {
+          "id": "equal-dates",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "TEST-equal-dates",
+              "personReference": "https://people.example.org/people/test-equal-dates",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-01-01",
+              "practiceScope": "General supervised practice"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          }
+        },
+        {
+          "id": "reversed-dates-refused",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "TEST-reversed-dates-refused",
+              "personReference": "https://people.example.org/people/test-reversed-dates-refused",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2025-12-31",
+              "practiceScope": "General supervised practice"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 409,
+            "problemCode": "mutation.conflict"
+          }
+        },
+        {
+          "id": "malformed-date-refused",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "TEST-malformed-date-refused",
+              "personReference": "https://people.example.org/people/test-malformed-date-refused",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-02-30",
+              "validTo": "2026-12-31",
+              "practiceScope": "General supervised practice"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "invalid-profession-refused",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "TEST-invalid-profession-refused",
+              "personReference": "https://people.example.org/people/test-invalid-profession-refused",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "unrecognized",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "practiceScope": "General supervised practice"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "invalid-status-refused",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "TEST-invalid-status-refused",
+              "personReference": "https://people.example.org/people/test-invalid-status-refused",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "unrecognized",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "practiceScope": "General supervised practice"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "unknown-end-date",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "TEST-unknown-end-date",
+              "personReference": "https://people.example.org/people/test-equal-dates",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "practiceScope": "General supervised practice"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          }
+        }
+      ]
+    }
+  ]
+}

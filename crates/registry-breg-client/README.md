@@ -98,3 +98,32 @@ path while preserving `ActionEvidenceFailed`. Other extensions remain refused.
 Errors retain fixed local reasons, public status or problem codes, validated
 trace identifiers, and bounded retry guidance. They do not retain credentials,
 selectors, response bodies, header values, URLs, or transport error chains.
+
+### Explicit recovery across process restarts
+
+`prepare_create` and `prepare_lifecycle_action` return inert bounded evidence
+with `as_bytes()` and `from_slice()`. Persist it in an owner-only file before
+sending the mutation. The evidence contains request values and the caller's
+idempotency key; its Debug representation is redacted. It contains no tokens.
+
+After restart, fetch caller-filtered `registry_contract` again under the same
+principal and selected profile. Select the current Create binding or lifecycle
+authority, then call `recover_create` or `recover_lifecycle_action`. Recovery
+requires the same source and registry revision and revalidates the original
+request against that authority before returning the request/action and original
+key for an explicitly initiated send. Never replace an uncertain action with a
+newly advertised action. Lifecycle recovery retains the original record evidence,
+so an applied request whose current record no longer advertises Apply can still
+replay the original precondition and body. The runtime remains responsible for
+current authorization, preconditions, and exact idempotency replay.
+
+These APIs do not authenticate saved evidence or bind a token provider to a
+principal. The application must protect its state and bind attempts to its exact
+inputs, selected client/profile, governed package, and database generation.
+Reclamation invalidates attempts; a token refresh does not create a new attempt.
+Opaque authority handles are never deserialized from saved state.
+
+`record_revisions(route, id, profile)` retrieves one bounded first history page
+as inert JSON bytes over the native `/revisions` route. It does not decode history
+semantics or follow continuations. Applications must not label a first page as a
+complete history when the response advertises more pages.

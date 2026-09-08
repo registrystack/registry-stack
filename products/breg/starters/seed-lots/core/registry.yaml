@@ -1,0 +1,517 @@
+{
+  "apiVersion": "registry.registrystack.org/v1alpha1",
+  "kind": "RegistryProject",
+  "registry": {
+    "id": "seed-lots",
+    "canonicalBaseIri": "https://seed-lots.example.org",
+    "version": "0.1.0",
+    "defaultLanguage": "en"
+  },
+  "package": {
+    "environment": "local",
+    "instanceId": "seed-lots-starter",
+    "sequence": 1,
+    "sourceRevision": "seed-lots-core-0.1.0"
+  },
+  "manifestProjection": {
+    "accessProfile": "reader",
+    "classificationCeiling": "restricted",
+    "catalog": {
+      "baseUrl": "https://seed-lots.example.org",
+      "title": "Seed lot register",
+      "description": "Maintain identified physical seed lots, quantities and bounded source/variety references.",
+      "publisher": {
+        "id": "synthetic-custodian",
+        "name": "Synthetic example custodian"
+      }
+    },
+    "publicService": {
+      "id": "directory-service",
+      "title": "Seed lot register"
+    },
+    "datasets": [
+      {
+        "id": "directory",
+        "title": "Seed lot register",
+        "description": "Maintain identified physical seed lots, quantities and bounded source/variety references.",
+        "owner": "Synthetic example custodian",
+        "status": "active"
+      }
+    ],
+    "dataServices": [
+      {
+        "id": "directory-api",
+        "title": "Seed lot register",
+        "endpointUrl": "https://seed-lots.example.org",
+        "servesDatasets": [
+          "directory"
+        ]
+      }
+    ],
+    "distributions": [],
+    "entities": [
+      {
+        "id": "seed-lot",
+        "title": "Seed lot",
+        "conceptUri": "https://publicschema.org/SeedLot",
+        "identifiers": [
+          {
+            "field": "local-identifier",
+            "kind": "local"
+          }
+        ],
+        "fields": [
+          {
+            "id": "lot-number",
+            "concepts": [
+              "https://publicschema.org/seed_lot_identifiers"
+            ]
+          },
+          {
+            "id": "quantity-kg",
+            "concepts": [
+              "https://publicschema.org/seed_lot_quantity"
+            ]
+          },
+          {
+            "id": "produced-on",
+            "concepts": [
+              "https://publicschema.org/seed_lot_produced_on"
+            ]
+          },
+          {
+            "id": "variety",
+            "relationshipRole": "variety",
+            "relationshipConceptUri": "https://publicschema.org/seed_lot_varieties"
+          },
+          {
+            "id": "source-lot",
+            "relationshipRole": "source-lot",
+            "relationshipConceptUri": "https://publicschema.org/source_seed_lots"
+          }
+        ]
+      },
+      {
+        "id": "plant-variety",
+        "title": "Synthetic variety identity",
+        "conceptUri": "https://publicschema.org/PlantVariety",
+        "identifiers": [
+          {
+            "field": "local-identifier",
+            "kind": "local"
+          }
+        ],
+        "fields": [
+          {
+            "id": "variety-denomination",
+            "concepts": [
+              "https://publicschema.org/variety_denomination"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "entities": [
+    {
+      "id": "seed-lot",
+      "primaryDataset": "directory",
+      "route": "seed-lots",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "local-identifier",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "localIdentifier",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        {
+          "id": "lot-number",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "lotNumber",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        {
+          "id": "quantity-kg",
+          "type": "decimal",
+          "required": true,
+          "classification": "restricted",
+          "precision": 12,
+          "scale": 3,
+          "minimum": "0.000",
+          "apiName": "quantityKg"
+        },
+        {
+          "id": "produced-on",
+          "type": "date",
+          "required": false,
+          "classification": "restricted",
+          "apiName": "producedOn"
+        },
+        {
+          "id": "variety",
+          "type": "reference",
+          "required": false,
+          "classification": "restricted",
+          "target": "plant-variety"
+        },
+        {
+          "id": "source-lot",
+          "type": "reference",
+          "required": false,
+          "classification": "restricted",
+          "target": "seed-lot",
+          "apiName": "sourceLot"
+        }
+      ],
+      "changeControl": {
+        "requiredFor": [
+          "patch"
+        ]
+      },
+      "constraints": [
+        {
+          "kind": "unique",
+          "fields": [
+            "local-identifier"
+          ]
+        },
+        {
+          "kind": "unique",
+          "fields": [
+            "lot-number"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plant-variety",
+      "primaryDataset": "directory",
+      "route": "plant-varieties",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "local-identifier",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "localIdentifier",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        {
+          "id": "variety-denomination",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "varietyDenomination",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "unique",
+          "fields": [
+            "local-identifier"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lot-number-correction",
+      "primaryDataset": "directory",
+      "route": "lot-number-corrections",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "record",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "seed-lot"
+        },
+        {
+          "id": "lot-number",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "lotNumber",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        {
+          "id": "reason",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        {
+          "id": "supporting-reference",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "supportingReference",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      ],
+      "changeRequest": {
+        "effects": [
+          {
+            "target": {
+              "fromField": "record"
+            },
+            "operation": "patch",
+            "set": {
+              "lot-number": {
+                "fromField": "lot-number"
+              }
+            }
+          }
+        ],
+        "review": {
+          "stages": [
+            {
+              "id": "review",
+              "approvals": 1,
+              "excludeSubmitter": true
+            }
+          ]
+        },
+        "application": {
+          "mode": "manual"
+        },
+        "retention": {
+          "mode": "operator_erase"
+        }
+      }
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "reader",
+      "default": false,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:reader"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "seed-lot",
+          "operations": [
+            "get",
+            "list"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "lot-number",
+            "quantity-kg",
+            "produced-on",
+            "variety",
+            "source-lot"
+          ],
+          "rowBoundaries": []
+        },
+        {
+          "entity": "plant-variety",
+          "operations": [
+            "get",
+            "list"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "variety-denomination"
+          ],
+          "rowBoundaries": []
+        }
+      ]
+    },
+    {
+      "id": "editor",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:editor"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "seed-lot",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "lot-number",
+            "quantity-kg",
+            "produced-on",
+            "variety",
+            "source-lot"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "local-identifier",
+            "lot-number",
+            "quantity-kg",
+            "produced-on",
+            "variety",
+            "source-lot"
+          ]
+        },
+        {
+          "entity": "plant-variety",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create",
+            "patch"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "variety-denomination"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "local-identifier",
+            "variety-denomination"
+          ]
+        },
+        {
+          "entity": "lot-number-correction",
+          "operations": [
+            "create",
+            "get",
+            "patch",
+            "submit_request",
+            "revise_request",
+            "cancel_request"
+          ],
+          "readableFields": [
+            "record",
+            "lot-number",
+            "reason",
+            "supporting-reference"
+          ],
+          "writableFields": [
+            "record",
+            "lot-number",
+            "reason",
+            "supporting-reference"
+          ],
+          "requestVisibility": "owner",
+          "rowBoundaries": []
+        }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "default": false,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:reviewer"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "seed-lot",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "lot-number",
+            "quantity-kg",
+            "produced-on",
+            "variety",
+            "source-lot"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "plant-variety",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "variety-denomination"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "lot-number-correction",
+          "operations": [
+            "get",
+            "approve_request",
+            "reject_request",
+            "request_revision",
+            "apply_request"
+          ],
+          "readableFields": [
+            "record",
+            "lot-number",
+            "reason",
+            "supporting-reference"
+          ],
+          "rowBoundaries": [],
+          "reviewStages": [
+            {
+              "stage": "review",
+              "targets": [
+                {
+                  "entity": "seed-lot",
+                  "readableFields": [
+                    "local-identifier",
+                    "lot-number",
+                    "quantity-kg",
+                    "produced-on",
+                    "variety",
+                    "source-lot"
+                  ],
+                  "rowBoundaries": []
+                }
+              ]
+            }
+          ],
+          "applyTargets": [
+            {
+              "entity": "seed-lot",
+              "rowBoundaries": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

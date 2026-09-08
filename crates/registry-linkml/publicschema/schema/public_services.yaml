@@ -1,0 +1,379 @@
+id: https://publicschema.org/linkml/public-services
+name: publicschema-public-services
+title: Public services and administrative history
+description: Draft shared descriptions of public services, applications, decisions, appeals and material
+  organizational changes. Local profiles own submission rules and legal effects.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+  cpsv: http://purl.org/vocab/cpsv#
+  cpov: http://data.europa.eu/m8g/
+  org: http://www.w3.org/ns/org#
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- core
+- identity
+- registry
+- government
+classes:
+  PublicService:
+    class_uri: publicschema:PublicService
+    title: Public Service
+    description: A described service provided by or on behalf of a public organization to fulfil a public
+      function. It may serve people, businesses or other organizations and exists independently of any
+      particular application, decision or social protection programme.
+    slots:
+    - name
+    - identifiers
+    - description
+    - service_competent_authorities
+    - service_audience
+    - legal_resources
+    status: bibo:draft
+    close_mappings:
+    - cpsv:PublicService
+    annotations:
+      bibliography_refs: '["gov-cpsv-ap-311"]'
+      external_alignments_json: '[{"label": "Public Service", "match": "close", "note": "CPSV-AP 3.1.1 informs the separation of a catalogue service from its use and its audience and competent authority links. This smaller native description does not implement CPSV-AP cardinalities, its full public funding definition or its RDF wire profile.", "uri": "http://purl.org/vocab/cpsv#PublicService", "vocabulary": "CPSV-AP 3.1.1", "vocabulary_id": "cpsv_ap"}]'
+  ServiceApplication:
+    class_uri: publicschema:ServiceApplication
+    title: Service Application
+    description: A submitted request to use a public service, made by or on behalf of a person or
+      organization. The applicant, submitting actor and requested subject can differ. Submission alone
+      does not establish eligibility, registration, permission or an obligation to grant the request.
+    is_a: Event
+    slots:
+    - public_service
+    - service_applicant
+    - application_subject
+    - submitted_by
+    - submission_representation
+    - receiving_authority
+    - submitted_at
+    - evidence_assertions
+    - recorded_at
+    status: bibo:draft
+    annotations:
+      bibliography_refs: '["gov-cpsv-ap-311"]'
+  AdministrativeDecision:
+    class_uri: publicschema:AdministrativeDecision
+    title: Administrative Decision
+    description: A recorded determination made by an authority about an administrative subject. It may
+      decide an application, initiate a regulatory action or resolve an appeal. Its stated outcome,
+      effective time and legal basis must be interpreted in the applicable jurisdiction; recording a
+      determination does not prove finality or current permission.
+    is_a: Event
+    slots:
+    - decides_application
+    - decision_subject
+    - decision_authority
+    - decision_outcome
+    - decision_made_at
+    - effective_at
+    - legal_resources
+    - decision_authorizations
+    - decision_regulatory_actions
+    - resolves_appeal
+    - evidence_assertions
+    - recorded_at
+    status: bibo:draft
+    annotations:
+      bibliography_refs: '["gov-cpsv-ap-311"]'
+  AdministrativeAppeal:
+    class_uri: publicschema:AdministrativeAppeal
+    title: Administrative Appeal
+    description: A submitted request for review of an identified administrative decision. The appellant,
+      submitting actor and reviewing authority are recorded separately. Filing an appeal does not by
+      itself suspend, replace or overturn the challenged decision.
+    is_a: Event
+    slots:
+    - challenged_decision
+    - appellant
+    - submitted_by
+    - submission_representation
+    - reviewing_authority
+    - submitted_at
+    - evidence_assertions
+    - recorded_at
+    status: bibo:draft
+    annotations:
+      bibliography_refs: '["gov-cpsv-ap-311"]'
+  OrganizationalChangeEvent:
+    class_uri: publicschema:OrganizationalChangeEvent
+    title: Organizational Change Event
+    description: A reported material reorganization, such as a merger, split or succession, relating
+      organizations before and after a change that establishes at least one distinct organizational
+      identity. Earlier organizations and their historical acts remain identifiable. A name correction
+      that retains identity can use RecordLifecycleEvent without introducing a successor organization.
+    is_a: Event
+    slots:
+    - original_organizations
+    - resulting_organizations
+    - lifecycle_kind
+    - effective_at
+    - recorded_at
+    - event_authority
+    - evidence_assertions
+    - legal_resources
+    status: bibo:draft
+    close_mappings:
+    - org:ChangeEvent
+    annotations:
+      bibliography_refs: '["gov-org"]'
+      external_alignments_json: '[{"label": "Change Event", "match": "close", "note": "W3C ORG Recommendation 16 January 2014 supplies the original/resulting organization pattern for a material change with distinct identity. PublicSchema adds registry recording and effective timestamps and does not implement the PROV activity interval or ORG property-chain entailments.", "uri": "http://www.w3.org/ns/org#ChangeEvent", "vocabulary": "W3C ORG 2014", "vocabulary_id": "w3c_org"}]'
+slots:
+  service_competent_authorities:
+    slot_uri: publicschema:service_competent_authorities
+    title: Service competent authorities
+    description: Public organizations responsible for this service description. Historical applications
+      and decisions retain their own receiving and deciding authorities when responsibility changes.
+    range: PublicOrganization
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - cpov:hasCompetentAuthority
+    annotations:
+      category: governance
+      external_alignments_json: '[{"label": "Has competent authority", "match": "close", "note": "CPSV-AP 3.1.1 informs the competent-authority relationship. This native optional field does not implement the upstream minimum cardinality or establish conformance to the full RDF profile.", "uri": "http://data.europa.eu/m8g/hasCompetentAuthority", "vocabulary": "CPSV-AP 3.1.1", "vocabulary_id": "cpsv_ap"}]'
+  service_audience:
+    slot_uri: publicschema:service_audience
+    title: Service audience
+    description: Scheme-qualified categories of intended service users, such as individuals or businesses.
+      An audience category is not a determination that a particular applicant is eligible.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: classification
+  legal_resources:
+    slot_uri: publicschema:legal_resources
+    title: Legal resources
+    description: Identified legal provisions or policy resources relied on for the service, determination
+      or institutional change. A link does not execute a rule or establish which version is applicable.
+    range: uri
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: governance
+  public_service:
+    slot_uri: publicschema:public_service
+    title: Public service
+    description: The described public service to which this application is submitted.
+    range: PublicService
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+  service_applicant:
+    slot_uri: publicschema:service_applicant
+    title: Service applicant
+    description: The URI of the person or organization requesting the service, independently of any
+      actor submitting on its behalf. The consuming profile checks the referenced subject kind.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+      sensitivity: sensitive
+  application_subject:
+    slot_uri: publicschema:application_subject
+    title: Application subject
+    description: The URI of the person, organization, permission, asset or other subject about which
+      the request is made. It need not be the applicant or submitting actor.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+      sensitivity: sensitive
+  submitted_by:
+    slot_uri: publicschema:submitted_by
+    title: Submitted by
+    description: The URI of the person or organization that submitted this application or appeal.
+      Identifying a submitter does not establish their authority to represent someone else.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+      sensitivity: sensitive
+  submission_representation:
+    slot_uri: publicschema:submission_representation
+    title: Submission representation
+    description: The representation relationship cited for this submission. The represented subject,
+      actor, period and scope must be checked for this particular application or appeal.
+    range: RepresentationRole
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+      sensitivity: sensitive
+  receiving_authority:
+    slot_uri: publicschema:receiving_authority
+    title: Receiving authority
+    description: The public organization to which this application was submitted, retained independently
+      of later changes to the service's competent authority.
+    range: PublicOrganization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+  submitted_at:
+    slot_uri: publicschema:submitted_at
+    title: Submitted at
+    description: The timestamp when the application or appeal was submitted, distinct from the time
+      it was recorded or decided.
+    range: datetime
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+  decides_application:
+    slot_uri: publicschema:decides_application
+    title: Decides application
+    description: The service application determined by this decision. An authority-initiated action or
+      an appeal determination need not originate from a service application.
+    range: ServiceApplication
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+      sensitivity: sensitive
+  decision_subject:
+    slot_uri: publicschema:decision_subject
+    title: Decision subject
+    description: The URI of the person, organization, permission, asset or other subject determined by
+      this decision. The decision itself and any resulting authorization retain separate identities.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+      sensitivity: sensitive
+  decision_authority:
+    slot_uri: publicschema:decision_authority
+    title: Decision authority
+    description: The public organization that made this determination. Its historical identity is
+      preserved even if its functions later pass to another organization.
+    range: PublicOrganization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+  decision_outcome:
+    slot_uri: publicschema:decision_outcome
+    title: Decision outcome
+    description: A scheme-qualified determination, such as granting a request or upholding an appealed
+      decision. The code's legal meaning and effect depend on its scheme and applicable jurisdiction.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: classification
+      sensitivity: sensitive
+  decision_made_at:
+    slot_uri: publicschema:decision_made_at
+    title: Decision made at
+    description: The timestamp when the authority made the determination. It is separate from its
+      effective time and the time the record was entered.
+    range: datetime
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+  decision_authorizations:
+    slot_uri: publicschema:decision_authorizations
+    title: Decision authorizations
+    description: Permissions established by this decision. A later suspension or appeal is represented
+      separately and does not rewrite the original grant or its issuing authority.
+    range: Authorization
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: governance
+      sensitivity: sensitive
+  decision_regulatory_actions:
+    slot_uri: publicschema:decision_regulatory_actions
+    title: Decision regulatory actions
+    description: Regulatory actions resulting from this determination, with their own subjects, scopes
+      and conditions. A linked action does not imply that every permission of its holder is affected.
+    range: RegulatoryAction
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: governance
+      sensitivity: sensitive
+  resolves_appeal:
+    slot_uri: publicschema:resolves_appeal
+    title: Resolves appeal
+    description: The appeal determined by this decision. Resolution is a separate determination and
+      retains the link to the original challenged decision.
+    range: AdministrativeAppeal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+      sensitivity: sensitive
+  challenged_decision:
+    slot_uri: publicschema:challenged_decision
+    title: Challenged decision
+    description: The administrative decision for which review is requested. This link alone gives no
+      stay, replacement or reversal effect to the appeal.
+    range: AdministrativeDecision
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+      sensitivity: sensitive
+  appellant:
+    slot_uri: publicschema:appellant
+    title: Appellant
+    description: The URI of the person or organization requesting review, independently of its
+      representative. A reference does not establish standing or a right of appeal under a law.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+      sensitivity: sensitive
+  reviewing_authority:
+    slot_uri: publicschema:reviewing_authority
+    title: Reviewing authority
+    description: The public organization asked to review the challenged decision. Recording it does
+      not establish jurisdiction, independence or admissibility of the appeal.
+    range: PublicOrganization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+  original_organizations:
+    slot_uri: publicschema:original_organizations
+    title: Original organizations
+    description: Organizations that existed before this material organizational change. Participation
+      in a change does not itself assert that each organization ceased to exist.
+    range: Organization
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - org:originalOrganization
+    annotations:
+      category: governance
+      external_alignments_json: '[{"label": "Original organization", "match": "close", "note": "W3C ORG Recommendation 16 January 2014 informs the original-organization link. This native field uses PublicSchema Organization references and does not implement ORG inverse properties or PROV property entailments.", "uri": "http://www.w3.org/ns/org#originalOrganization", "vocabulary": "W3C ORG 2014", "vocabulary_id": "w3c_org"}]'
+  resulting_organizations:
+    slot_uri: publicschema:resulting_organizations
+    title: Resulting organizations
+    description: Organizations created or materially changed by this event. A new organizational
+      identity must not replace the identity of the issuer on its predecessor's historical acts.
+    range: Organization
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - org:resultingOrganization
+    annotations:
+      category: governance
+      external_alignments_json: '[{"label": "Resulting organization", "match": "close", "note": "W3C ORG Recommendation 16 January 2014 informs the resulting-organization link. This native field uses PublicSchema Organization references and does not implement ORG inverse properties or PROV property-chain entailments.", "uri": "http://www.w3.org/ns/org#resultingOrganization", "vocabulary": "W3C ORG 2014", "vocabulary_id": "w3c_org"}]'

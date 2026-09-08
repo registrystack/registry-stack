@@ -11,6 +11,7 @@ mod lifecycle;
 mod metadata;
 mod mutation;
 mod query;
+mod recovery;
 mod response;
 mod strict_json;
 mod transport;
@@ -24,6 +25,7 @@ pub use lifecycle::*;
 pub use metadata::*;
 pub use mutation::*;
 pub use query::*;
+pub use recovery::{BRegPreparedCreate, BRegPreparedLifecycle};
 pub use registry_platform_httputil::client::{
     BearerToken, PrivateKeyJwt, PrivateKeyJwtConfig, StaticToken, TokenError, TokenProvider,
     MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,

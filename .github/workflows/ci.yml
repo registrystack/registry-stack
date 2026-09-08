@@ -1138,6 +1138,15 @@ jobs:
             cargo test --locked --profile ci -p registry-bregctl \
             --test dev_lifecycle -- --ignored
 
+      - name: Verify retained example recovery after process exit
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="target/breg-tutorial-source" \
+            cargo test --locked --profile ci -p registry-bregctl --lib \
+            dev::examples::tests::native_create_and_apply_recover_after_process_exit_without_duplicate_revisions \
+            -- --ignored --exact
+
       - name: Execute the Base Registry Engine tutorial from a reader directory
         shell: bash
         env:

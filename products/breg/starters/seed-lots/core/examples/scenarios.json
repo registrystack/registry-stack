@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "starter-data",
+      "description": "Create fictional variety identities and physical seed lots, including a derived lot with typed references.",
+      "input": "examples/inputs/starter-data.json",
+      "steps": [
+        {
+          "id": "variety-a",
+          "operation": "create",
+          "entity": "plant-variety",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "variety-a",
+          "capture": "variety-a"
+        },
+        {
+          "id": "variety-b",
+          "operation": "create",
+          "entity": "plant-variety",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "variety-b",
+          "capture": "variety-b"
+        },
+        {
+          "id": "source",
+          "operation": "create",
+          "entity": "seed-lot",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "source",
+          "capture": "source"
+        },
+        {
+          "id": "derived",
+          "operation": "create",
+          "entity": "seed-lot",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "derived",
+          "capture": "derived"
+        },
+        {
+          "id": "other",
+          "operation": "create",
+          "entity": "seed-lot",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "other",
+          "capture": "other"
+        }
+      ]
+    },
+    {
+      "id": "first-record",
+      "description": "Create an independent record without loading samples. Edit its input before starting.",
+      "input": "examples/inputs/first-record.json",
+      "steps": [
+        {
+          "id": "create",
+          "operation": "create",
+          "entity": "seed-lot",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "record",
+          "capture": "first-record"
+        },
+        {
+          "id": "get",
+          "operation": "get",
+          "entity": "seed-lot",
+          "client": "editor",
+          "accessProfile": "editor",
+          "record": "first-record"
+        }
+      ]
+    },
+    {
+      "id": "reviewed-change",
+      "description": "Submit, inspect, approve or reject, apply, and inspect history. Approval alone changes no record.",
+      "input": "examples/inputs/reviewed-change.json",
+      "steps": [
+        {
+          "id": "draft",
+          "operation": "create",
+          "entity": "lot-number-correction",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "change",
+          "capture": "request"
+        },
+        {
+          "id": "submit",
+          "operation": "submit",
+          "entity": "lot-number-correction",
+          "client": "editor",
+          "accessProfile": "editor",
+          "record": "request"
+        },
+        {
+          "id": "inspect",
+          "operation": "get",
+          "entity": "lot-number-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "approve",
+          "operation": "approve",
+          "entity": "lot-number-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "reject",
+          "operation": "reject",
+          "entity": "lot-number-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "apply",
+          "operation": "apply",
+          "entity": "lot-number-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "history",
+          "operation": "history",
+          "entity": "seed-lot",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "first-record"
+        }
+      ]
+    }
+  ]
+}

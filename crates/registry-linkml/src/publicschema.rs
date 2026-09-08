@@ -17,13 +17,57 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::model::{ClassDef, EnumDef, Model, PermissibleValue, SlotDef};
-use crate::reader::{read_bundle, ReadError};
+use crate::reader::{ReadError, read_bundle};
 
 /// The embedded files, root first, as `(path under publicschema/, contents)`.
 const FILES: &[(&str, &str)] = &[
     (
         "schema/publicschema.yaml",
         include_str!("../publicschema/schema/publicschema.yaml"),
+    ),
+    (
+        "schema/agriculture.yaml",
+        include_str!("../publicschema/schema/agriculture.yaml"),
+    ),
+    (
+        "schema/farm_operators.yaml",
+        include_str!("../publicschema/schema/farm_operators.yaml"),
+    ),
+    (
+        "schema/government.yaml",
+        include_str!("../publicschema/schema/government.yaml"),
+    ),
+    (
+        "schema/registry.yaml",
+        include_str!("../publicschema/schema/registry.yaml"),
+    ),
+    (
+        "schema/work.yaml",
+        include_str!("../publicschema/schema/work.yaml"),
+    ),
+    (
+        "schema/agriculture_biology.yaml",
+        include_str!("../publicschema/schema/agriculture_biology.yaml"),
+    ),
+    (
+        "schema/agriculture_operations.yaml",
+        include_str!("../publicschema/schema/agriculture_operations.yaml"),
+    ),
+    (
+        "schema/assets.yaml",
+        include_str!("../publicschema/schema/assets.yaml"),
+    ),
+    (
+        "schema/service_capacity.yaml",
+        include_str!("../publicschema/schema/service_capacity.yaml"),
+    ),
+    (
+        "schema/government_relationships.yaml",
+        include_str!("../publicschema/schema/government_relationships.yaml"),
+    ),
+    (
+        "schema/public_services.yaml",
+        include_str!("../publicschema/schema/public_services.yaml"),
     ),
     (
         "schema/assessment.yaml",
@@ -426,9 +470,11 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].category, "identity");
         assert_eq!(groups[0].properties, ["name", "identifiers"]);
-        assert!(property_groups(&super::tests::class(&[]))
-            .unwrap()
-            .is_empty());
+        assert!(
+            property_groups(&super::tests::class(&[]))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

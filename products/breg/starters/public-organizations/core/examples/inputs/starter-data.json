@@ -1,0 +1,34 @@
+{
+  "department": {
+    "localIdentifier": "SYNTHETIC-DEPARTMENT",
+    "name": "Department of Community Services"
+  },
+  "river": {
+    "localIdentifier": "SYNTHETIC-RIVER",
+    "name": "River District Office"
+  },
+  "hill": {
+    "localIdentifier": "SYNTHETIC-HILL",
+    "name": "Hill District Office"
+  },
+  "river-link": {
+    "institutionFrom": {
+      "recordRef": "river"
+    },
+    "institutionTo": {
+      "recordRef": "department"
+    },
+    "relationshipType": "reports-to",
+    "startDate": "2026-01-01"
+  },
+  "hill-link": {
+    "institutionFrom": {
+      "recordRef": "hill"
+    },
+    "institutionTo": {
+      "recordRef": "department"
+    },
+    "relationshipType": "reports-to",
+    "startDate": "2026-01-01"
+  }
+}

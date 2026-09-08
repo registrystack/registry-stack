@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "clients": [
+    {
+      "id": "reader",
+      "accessProfiles": [
+        "reader"
+      ],
+      "scopes": [
+        "starter:reader"
+      ],
+      "claims": {
+        "registry_principal": "synthetic-reader",
+        "registry_purpose": "starter-learning"
+      }
+    },
+    {
+      "id": "editor",
+      "accessProfiles": [
+        "editor"
+      ],
+      "scopes": [
+        "starter:editor"
+      ],
+      "claims": {
+        "registry_principal": "synthetic-editor",
+        "registry_purpose": "starter-learning"
+      }
+    },
+    {
+      "id": "reviewer",
+      "accessProfiles": [
+        "reviewer"
+      ],
+      "scopes": [
+        "starter:reviewer"
+      ],
+      "claims": {
+        "registry_principal": "synthetic-reviewer",
+        "registry_purpose": "starter-learning"
+      }
+    }
+  ]
+}

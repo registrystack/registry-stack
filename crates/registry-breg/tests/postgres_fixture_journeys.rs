@@ -6,6 +6,9 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
+#[path = "support/starter_policy.rs"]
+mod starter_policy;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

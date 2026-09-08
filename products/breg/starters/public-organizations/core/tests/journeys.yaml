@@ -1,0 +1,947 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-journeys/v1",
+  "journeys": [
+    {
+      "id": "starter-model-policy",
+      "steps": [
+        {
+          "id": "seed-department",
+          "entity": "public-organization",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-DEPARTMENT",
+              "name": "Department of Community Services"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "department"
+        },
+        {
+          "id": "seed-river",
+          "entity": "public-organization",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-RIVER",
+              "name": "River District Office"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "river"
+        },
+        {
+          "id": "seed-hill",
+          "entity": "public-organization",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-HILL",
+              "name": "Hill District Office"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "hill"
+        },
+        {
+          "id": "seed-river-link",
+          "entity": "institutional-relationship",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "institutionFrom": {
+                "recordRef": "river"
+              },
+              "institutionTo": {
+                "recordRef": "department"
+              },
+              "relationshipType": "reports-to",
+              "startDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "river-link"
+        },
+        {
+          "id": "seed-hill-link",
+          "entity": "institutional-relationship",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "institutionFrom": {
+                "recordRef": "hill"
+              },
+              "institutionTo": {
+                "recordRef": "department"
+              },
+              "relationshipType": "reports-to",
+              "startDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "hill-link"
+        },
+        {
+          "id": "first-record",
+          "entity": "public-organization",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "name": "Frist Record"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "first-record"
+        },
+        {
+          "id": "draft-correction",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "first-record"
+              },
+              "name": "First Record",
+              "reason": "Synthetic spelling correction",
+              "supportingReference": "SYNTHETIC-SUPPORT-001"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "draft"
+        },
+        {
+          "id": "before-submit",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-submit"
+        },
+        {
+          "id": "submit-correction",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "submit_request",
+            "etagRef": "before-submit",
+            "recordRef": "before-submit"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "review",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "review"
+        },
+        {
+          "id": "approve-correction",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "approve_request",
+            "etagRef": "review",
+            "proposalVersionRef": "review",
+            "effectDigestRef": "review",
+            "stage": "review",
+            "recordRef": "review"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "approval-does-not-apply",
+          "entity": "public-organization",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "name": "Frist Record",
+              "localIdentifier": "JOURNEY-FIRST-001"
+            }
+          },
+          "capture": "approval-does-not-apply"
+        },
+        {
+          "id": "before-apply",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-apply"
+        },
+        {
+          "id": "apply-correction",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "apply_request",
+            "etagRef": "before-apply",
+            "proposalVersionRef": "before-apply",
+            "effectDigestRef": "before-apply",
+            "recordRef": "before-apply"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "corrected-record",
+          "entity": "public-organization",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "name": "First Record",
+              "localIdentifier": "JOURNEY-FIRST-001"
+            }
+          },
+          "capture": "corrected-record"
+        },
+        {
+          "id": "unchanged-river-link",
+          "entity": "institutional-relationship",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "river-link"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "relationshipType": "reports-to",
+              "startDate": "2026-01-01"
+            }
+          },
+          "capture": "unchanged-river-link"
+        },
+        {
+          "id": "unchanged-hill-link",
+          "entity": "institutional-relationship",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "hill-link"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "relationshipType": "reports-to",
+              "startDate": "2026-01-01"
+            }
+          },
+          "capture": "unchanged-hill-link"
+        },
+        {
+          "id": "rejected-draft",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "first-record"
+              },
+              "name": "Rejected Record",
+              "reason": "Synthetic rejection exercise",
+              "supportingReference": "SYNTHETIC-SUPPORT-002"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "reject-draft"
+        },
+        {
+          "id": "reject-before-submit",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "reject-draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "reject-before-submit"
+        },
+        {
+          "id": "submit-rejected",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "submit_request",
+            "etagRef": "reject-before-submit",
+            "recordRef": "reject-before-submit"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "reject-before-decision",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "reject-draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "reject-before-decision"
+        },
+        {
+          "id": "reject-correction",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "reject_request",
+            "etagRef": "reject-before-decision",
+            "proposalVersionRef": "reject-before-decision",
+            "effectDigestRef": "reject-before-decision",
+            "stage": "review",
+            "recordRef": "reject-before-decision"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "rejection-preserves-record",
+          "entity": "public-organization",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "name": "First Record",
+              "localIdentifier": "JOURNEY-FIRST-001"
+            }
+          },
+          "capture": "rejection-preserves-record"
+        },
+        {
+          "id": "relationship-reversed-dates-refused",
+          "entity": "institutional-relationship",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "institutionFrom": {
+                "recordRef": "river"
+              },
+              "institutionTo": {
+                "recordRef": "department"
+              },
+              "relationshipType": "reports-to",
+              "startDate": "2026-02-01",
+              "endDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 409,
+            "problemCode": "mutation.conflict"
+          }
+        },
+        {
+          "id": "relationship-invalid-code-refused",
+          "entity": "institutional-relationship",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "institutionFrom": {
+                "recordRef": "river"
+              },
+              "institutionTo": {
+                "recordRef": "department"
+              },
+              "relationshipType": "owns",
+              "startDate": "2026-02-01",
+              "endDate": "2026-03-01"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        }
+      ]
+    },
+    {
+      "id": "relationship-correction",
+      "steps": [
+        {
+          "id": "create-source",
+          "entity": "public-organization",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "LINK-JOURNEY-SOURCE",
+              "name": "Synthetic Source Office"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "source"
+        },
+        {
+          "id": "create-before",
+          "entity": "public-organization",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "LINK-JOURNEY-BEFORE",
+              "name": "Synthetic Before Office"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "before"
+        },
+        {
+          "id": "create-after",
+          "entity": "public-organization",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "LINK-JOURNEY-AFTER",
+              "name": "Synthetic After Office"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "after"
+        },
+        {
+          "id": "create-link",
+          "entity": "institutional-relationship",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "institutionFrom": {
+                "recordRef": "source"
+              },
+              "institutionTo": {
+                "recordRef": "before"
+              },
+              "relationshipType": "reports-to",
+              "startDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "link"
+        },
+        {
+          "id": "propose-link-correction",
+          "entity": "relationship-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "link"
+              },
+              "institutionFrom": {
+                "recordRef": "source"
+              },
+              "institutionTo": {
+                "recordRef": "after"
+              },
+              "relationshipType": "reports-to",
+              "startDate": "2026-02-01",
+              "reason": "Synthetic documented reporting-link correction",
+              "supportingReference": "SYNTHETIC-LINK-001"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "request"
+        },
+        {
+          "id": "before-submit",
+          "entity": "relationship-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "request"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-submit"
+        },
+        {
+          "id": "submit",
+          "entity": "relationship-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "submit_request",
+            "recordRef": "before-submit",
+            "etagRef": "before-submit"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "before-review",
+          "entity": "relationship-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "request"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-review"
+        },
+        {
+          "id": "approve",
+          "entity": "relationship-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "approve_request",
+            "recordRef": "before-review",
+            "etagRef": "before-review",
+            "proposalVersionRef": "before-review",
+            "effectDigestRef": "before-review",
+            "stage": "review"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "approval-preserves-link",
+          "entity": "institutional-relationship",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "link"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "startDate": "2026-01-01"
+            }
+          }
+        },
+        {
+          "id": "before-apply",
+          "entity": "relationship-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "request"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-apply"
+        },
+        {
+          "id": "apply",
+          "entity": "relationship-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "apply_request",
+            "recordRef": "before-apply",
+            "etagRef": "before-apply",
+            "proposalVersionRef": "before-apply",
+            "effectDigestRef": "before-apply"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "applied-link",
+          "entity": "institutional-relationship",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "link"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "startDate": "2026-02-01",
+              "relationshipType": "reports-to"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

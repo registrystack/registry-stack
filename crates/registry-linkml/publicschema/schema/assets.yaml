@@ -1,0 +1,118 @@
+id: https://publicschema.org/linkml/assets
+name: publicschema-assets
+title: Physical assets, responsibilities and addresses
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- identity
+- registry
+classes:
+  AssetPartyRole:
+    class_uri: publicschema:AssetPartyRole
+    title: Asset Party Role
+    description: A dated assertion that a person or organization has a stated role in relation to a physical
+      asset. Operation (running the asset), upkeep (provisioning or maintaining it), ownership and vehicle
+      keeping are separate responsibilities. One role does not imply another or establish permission to
+      perform a regulated activity.
+    slots:
+    - asset_subject
+    - asset_actor
+    - asset_role_type
+    - start_date
+    - end_date
+    status: bibo:draft
+    annotations:
+      bibliography_refs: '["gov-dvla"]'
+  AssetAddressAssignment:
+    class_uri: publicschema:AssetAddressAssignment
+    title: Asset Address Assignment
+    description: A dated association of a physical asset with an address for a stated physical or postal
+      purpose. It identifies neither the asset owner nor a new asset when the address changes. A separate
+      geometry is a position, not a named administrative Location.
+    slots:
+    - asset_subject
+    - assigned_address
+    - address_purpose
+    - address_geometry
+    - start_date
+    - end_date
+    status: bibo:draft
+    annotations:
+      bibliography_refs: '["w3c-vcard-2014", "ogc-geosparql-11"]'
+slots:
+  asset_subject:
+    slot_uri: publicschema:asset_subject
+    title: Asset subject
+    description: The URI of the physical asset described by this assertion.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: assets
+  asset_actor:
+    slot_uri: publicschema:asset_actor
+    title: Asset actor
+    description: The URI of the person or organization holding the stated role in relation to the asset.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+  asset_role_type:
+    slot_uri: publicschema:asset_role_type
+    title: Asset role type
+    description: A scheme-qualified responsibility of the actor for the physical asset, such as operation,
+      upkeep, ownership or vehicle keeping. A consuming profile defines the precise role codes; operation
+      and upkeep are not synonyms for ownership.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: classification
+  asset_geometry:
+    slot_uri: publicschema:asset_geometry
+    title: Asset geometry
+    description: A geometric representation of the physical asset or network element. It is separate from
+      an address or a named administrative area.
+    range: SpatialGeometry
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: location
+  address_geometry:
+    slot_uri: publicschema:address_geometry
+    title: Address geometry
+    description: A separate geometric position associated with the address; never substituted for a named
+      Location.
+    range: SpatialGeometry
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+  assigned_address:
+    slot_uri: publicschema:assigned_address
+    title: Assigned address
+    description: The structured physical or postal address associated with the physical asset for the
+      stated purpose and period. An address change need not identify a different asset.
+    range: Address
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: location
+  address_purpose:
+    slot_uri: publicschema:address_purpose
+    title: Address purpose
+    description: A scheme-qualified purpose of this address association, such as physical access or postal
+      correspondence. A postal address does not establish the physical position of the asset.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: classification

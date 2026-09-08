@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "starterId": "professional-licences",
+  "variantId": "core",
+  "templateVersion": "0.1.0",
+  "title": "Professional licence register",
+  "description": "Record dated professional authorizations and review practice-scope corrections.",
+  "firstRecordEntity": "professional-license",
+  "publicSchema": {
+    "repository": "https://github.com/PublicSchema/publicschema.org",
+    "commit": "1ea9ce333918693b29aec31068fac412e02cb8dc",
+    "status": "draft",
+    "license": "CC-BY-4.0"
+  },
+  "review": {
+    "entity": "scope-correction",
+    "field": "practiceScope",
+    "submitter": "editor",
+    "reviewer": "reviewer",
+    "applier": "reviewer",
+    "description": "A distinct reviewer approves a fixed practice-scope correction. Approval leaves the licence unchanged until the reviewer applies the frozen effect."
+  },
+  "scopeNotes": [
+    "Person, regulator and jurisdiction URIs are inert external references. No lookup, identity validation or duplication of external masters occurs.",
+    "This register records dated licence facts. It issues no credential and makes no automatic determination of current legal permission to practise.",
+    "Profession and status codes are fixed synthetic examples. Readers see only profession, jurisdiction, recorded status and validity dates."
+  ]
+}

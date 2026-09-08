@@ -1,12 +1,23 @@
 # Written by sync-snapshot.sh; do not edit by hand.
 repository: https://github.com/PublicSchema/publicschema.org
-commit: 5fa11e869d73c5ee4fa78dc6c80ccd0422741f9e
-commitDate: 2026-09-07
+commit: 1ea9ce333918693b29aec31068fac412e02cb8dc
+commitDate: 2026-09-08
 version: "0.3.0"
 license: CC-BY-4.0
 licenseUrl: https://creativecommons.org/licenses/by/4.0/
 files:
   - schema/publicschema.yaml
+  - schema/agriculture.yaml
+  - schema/farm_operators.yaml
+  - schema/government.yaml
+  - schema/registry.yaml
+  - schema/work.yaml
+  - schema/agriculture_biology.yaml
+  - schema/agriculture_operations.yaml
+  - schema/assets.yaml
+  - schema/service_capacity.yaml
+  - schema/government_relationships.yaml
+  - schema/public_services.yaml
   - schema/assessment.yaml
   - schema/biometric.yaml
   - schema/categories.yaml

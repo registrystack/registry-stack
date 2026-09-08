@@ -1,0 +1,305 @@
+id: https://publicschema.org/linkml/agriculture
+name: publicschema-agriculture
+title: Holding and land relationships
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- registry
+- misc
+- common
+- core
+- identity
+- vocabularies
+classes:
+  AgriculturalParcel:
+    class_uri: publicschema:agri/AgriculturalParcel
+    title: Agricultural Parcel
+    description: A contiguous area considered together for agricultural use during
+      a stated period. Its boundaries need not coincide with cadastral parcels or
+      title units; shared use by holdings is represented separately.
+    slots:
+    - name
+    - identifiers
+    - parcel_geometry
+    - parcel_area
+    - location
+    - valid_from
+    - valid_to
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      bibliography_refs: '["fao-wca-2020-vol1", "unece-property-units-2004"]'
+  HoldingParcelLink:
+    class_uri: publicschema:agri/HoldingParcelLink
+    title: Holding Parcel Link
+    description: A dated assertion that a Farm uses an AgriculturalParcel. Multiple
+      holdings may use the same parcel; this relationship does not assert exclusive
+      occupation, ownership or a legal right.
+    slots:
+    - linked_holding
+    - linked_parcel
+    - used_area
+    - start_date
+    - end_date
+    - evidence_assertions
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-vggt"]'
+  LandSpatialUnit:
+    class_uri: publicschema:land/LandSpatialUnit
+    title: Land Spatial Unit
+    description: A separately identified area or volume used in land administration.
+      A cadastral parcel is one possible unit; a spatial unit is not itself a title
+      or right.
+    slots:
+    - name
+    - identifiers
+    - land_geometry
+    - land_area
+    - location
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      bibliography_refs: '["unece-property-units-2004"]'
+  LandAdministrativeUnit:
+    class_uri: publicschema:land/LandAdministrativeUnit
+    title: Land Administrative Unit
+    description: A unit of property administration to which rights, restrictions or
+      responsibilities apply. It may combine several spatial units and must not be
+      confused with a territorial administrative area.
+    slots:
+    - name
+    - identifiers
+    - administrative_spatial_units
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      bibliography_refs: '["unece-property-units-2004"]'
+  LandTenureAssertion:
+    class_uri: publicschema:land/LandTenureAssertion
+    title: Land Tenure Assertion
+    description: A claim concerning a person, organization or collective's right, restriction
+      or responsibility over land. Recording it does not adjudicate competing claims
+      or turn customary tenure into registered ownership. The land object may be an
+      agricultural parcel, spatial unit or administrative property unit.
+    slots:
+    - tenure_holder
+    - tenure_object
+    - tenure_category
+    - tenure_type
+    - tenure_share
+    - valid_from
+    - valid_to
+    - evidence_assertions
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      bibliography_refs: '["fao-vggt", "unece-property-units-2004"]'
+  LandBoundaryAssertion:
+    class_uri: publicschema:land/LandBoundaryAssertion
+    title: Land Boundary Assertion
+    description: A statement of the position and recognition of a land boundary, linked
+      to the spatial unit and supporting survey or other evidence. Geometry alone
+      does not establish legal agreement.
+    slots:
+    - boundary_unit
+    - boundary_geometry
+    - boundary_recognition
+    - evidence_assertions
+    - recorded_at
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      bibliography_refs: '["unece-property-units-2004", "fao-vggt"]'
+  FarmerRegistration:
+    class_uri: publicschema:agri/FarmerRegistration
+    title: Farmer Registration
+    description: Administrative recognition of a person, organization or qualifying
+      collective as an agricultural producer for a stated purpose. It is separate
+      from Farm identity, operation, land title and program eligibility.
+    slots: []
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      bibliography_refs: '["fao-wca-2020-vol1"]'
+    is_a: Registration
+slots:
+  parcel_geometry:
+    slot_uri: publicschema:agri/parcel_geometry
+    title: Parcel geometry
+    description: The geometry describing an agricultural-use parcel, distinct from
+      cadastral evidence.
+    range: SpatialGeometry
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: administrative
+  parcel_area:
+    slot_uri: publicschema:agri/parcel_area
+    title: Parcel area
+    description: The measured area of the agricultural parcel; an area unit is required
+      by area-consuming profiles.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: administrative
+  linked_holding:
+    slot_uri: publicschema:agri/linked_holding
+    title: Linked holding
+    description: The production holding using the linked agricultural parcel.
+    range: Farm
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: administrative
+  linked_parcel:
+    slot_uri: publicschema:agri/linked_parcel
+    title: Linked parcel
+    description: The agricultural parcel used by the holding during the relationship
+      period.
+    range: AgriculturalParcel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: administrative
+  used_area:
+    slot_uri: publicschema:agri/used_area
+    title: Used area
+    description: The area used by this holding within the linked parcel; overlapping
+      uses must not be summed without a policy.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      category: administrative
+  land_geometry:
+    slot_uri: publicschema:land/land_geometry
+    title: Land geometry
+    description: The geometry of the spatial land unit.
+    range: SpatialGeometry
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  land_area:
+    slot_uri: publicschema:land/land_area
+    title: Land area
+    description: The measured area of a spatial land unit, distinct from ownership
+      share.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  administrative_spatial_units:
+    slot_uri: publicschema:land/administrative_spatial_units
+    title: Administrative spatial units
+    description: Spatial units associated with a property administration unit; a spatial
+      unit can be associated with more than one administrative unit.
+    range: LandSpatialUnit
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  tenure_holder:
+    slot_uri: publicschema:land/tenure_holder
+    title: Tenure holder
+    description: The actual person, organization or collective to which the tenure
+      assertion applies; the URI does not create legal personality.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  tenure_object:
+    slot_uri: publicschema:land/tenure_object
+    title: Tenure object
+    description: The identified land object affected by the assertion, with its actual
+      type retained by the local graph.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  tenure_category:
+    slot_uri: publicschema:land/tenure_category
+    title: Tenure category
+    description: The broad category of right, restriction or responsibility, interpreted
+      within an explicit scheme.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  tenure_type:
+    slot_uri: publicschema:land/tenure_type
+    title: Tenure type
+    description: The jurisdictional or customary kind of tenure asserted, preserved
+      without forced conversion to ownership.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  tenure_share:
+    slot_uri: publicschema:land/tenure_share
+    title: Tenure share
+    description: The asserted fractional interest where meaningful; multiple conflicting
+      claims are not automatically normalized or summed.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  boundary_unit:
+    slot_uri: publicschema:land/boundary_unit
+    title: Boundary unit
+    description: The spatial unit whose boundary is described.
+    range: LandSpatialUnit
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  boundary_geometry:
+    slot_uri: publicschema:land/boundary_geometry
+    title: Boundary geometry
+    description: The asserted boundary geometry, whose accuracy and legal recognition
+      are separate concerns.
+    range: SpatialGeometry
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative
+  boundary_recognition:
+    slot_uri: publicschema:land/boundary_recognition
+    title: Boundary recognition
+    description: The scheme-qualified recognition or agreement state of the asserted
+      boundary.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      category: administrative

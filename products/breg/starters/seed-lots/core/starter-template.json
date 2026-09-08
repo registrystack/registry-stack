@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "starterId": "seed-lots",
+  "variantId": "core",
+  "templateVersion": "0.1.0",
+  "title": "Seed lot register",
+  "description": "Maintain identified physical seed lots, quantities and bounded source/variety references.",
+  "firstRecordEntity": "seed-lot",
+  "publicSchema": {
+    "repository": "https://github.com/PublicSchema/publicschema.org",
+    "commit": "1ea9ce333918693b29aec31068fac412e02cb8dc",
+    "status": "draft",
+    "license": "CC-BY-4.0"
+  },
+  "review": {
+    "entity": "lot-number-correction",
+    "field": "lotNumber",
+    "submitter": "editor",
+    "reviewer": "reviewer",
+    "applier": "reviewer",
+    "description": "Correct a transcribed lot number while preserving physical lot identity, quantity and recorded source/variety references. Approval leaves the lot unchanged until explicit application.",
+    "label": "lot number"
+  },
+  "scopeNotes": [
+    "One optional variety and one optional source lot per lot; the local variety identities are synthetic examples.",
+    "Quantities are recorded in kilograms and do not represent a stock balance or current availability.",
+    "Certification, mixtures, multiple sources and operator registrations are outside this profile."
+  ]
+}

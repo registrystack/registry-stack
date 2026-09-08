@@ -738,6 +738,20 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["breg_contracts"])
                 self.assertIn("registry-breg", outputs["rust_packages"])
 
+    def test_starter_inputs_run_compiler_and_native_example_tests(self) -> None:
+        for path in (
+            "products/breg/starters/public-organizations/core/registry.yaml",
+            "products/breg/starters/agricultural-holdings/core/tests/journeys.yaml",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["breg_contracts"])
+                self.assertTrue(outputs["breg_tutorial"])
+                self.assertTrue(
+                    {"registry-breg", "registry-bregctl", "registry-linkml"}
+                    <= set(outputs["rust_packages"])
+                )
+
     def test_manifest_core_changes_select_breg_through_linked_code(
         self,
     ) -> None:
@@ -860,6 +874,18 @@ class CiChangesTest(unittest.TestCase):
                 ),
             )["evidence_tutorial"]
         )
+
+    def test_breg_tutorial_runs_native_example_recovery(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text()
+        breg_job = workflow.split("\n  breg-tutorial:\n", 1)[1].split(
+            "\n  breg-evidence-composition:\n", 1
+        )[0]
+        self.assertIn(
+            "dev::examples::tests::"
+            "native_create_and_apply_recover_after_process_exit_without_duplicate_revisions",
+            breg_job,
+        )
+        self.assertIn("-- --ignored --exact", breg_job)
 
     def test_breg_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
         # The gate's registry is the source of truth for which tutorials it
@@ -1223,11 +1249,12 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["breg_contracts"])
         self.assertFalse(outputs["relay_client_contracts"])
         self.assertIn("registry-breg", outputs["rust_packages"])
-        self.assertNotIn("registry-bregctl", outputs["rust_packages"])
+        # bregctl examples uses the SDK's recoverable write-attempt contract.
+        self.assertIn("registry-bregctl", outputs["rust_packages"])
         self.assertNotIn("registry-relay-client", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"breg", "stack-client"},
+            {"breg", "stack-client", "developer-tools"},
         )
 
     def test_registry_record_change_runs_both_product_clients_and_facade(self) -> None:

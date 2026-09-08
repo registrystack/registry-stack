@@ -1,0 +1,691 @@
+{
+  "apiVersion": "registry.registrystack.org/v1alpha1",
+  "kind": "RegistryProject",
+  "registry": {
+    "id": "public-organizations",
+    "canonicalBaseIri": "https://public-organizations.example.org",
+    "version": "0.1.0",
+    "defaultLanguage": "en"
+  },
+  "package": {
+    "environment": "local",
+    "instanceId": "public-organizations-starter",
+    "sequence": 1,
+    "sourceRevision": "public-organizations-core-0.1.0"
+  },
+  "manifestProjection": {
+    "accessProfile": "reader",
+    "classificationCeiling": "restricted",
+    "catalog": {
+      "baseUrl": "https://public-organizations.example.org",
+      "title": "Public organization directory",
+      "description": "Maintain a small authenticated directory of public organizations and dated institutional links.",
+      "publisher": {
+        "id": "synthetic-custodian",
+        "name": "Synthetic example custodian"
+      }
+    },
+    "publicService": {
+      "id": "directory-service",
+      "title": "Public organization directory"
+    },
+    "datasets": [
+      {
+        "id": "directory",
+        "title": "Public organization directory",
+        "description": "Maintain a small authenticated directory of public organizations and dated institutional links.",
+        "owner": "Synthetic example custodian",
+        "status": "active"
+      }
+    ],
+    "dataServices": [
+      {
+        "id": "directory-api",
+        "title": "Public organization directory",
+        "endpointUrl": "https://public-organizations.example.org",
+        "servesDatasets": [
+          "directory"
+        ]
+      }
+    ],
+    "distributions": [],
+    "entities": [
+      {
+        "id": "public-organization",
+        "title": "Public Organization",
+        "conceptUri": "https://publicschema.org/PublicOrganization",
+        "identifiers": [
+          {
+            "field": "local-identifier",
+            "kind": "local"
+          }
+        ],
+        "fields": [
+          {
+            "id": "name",
+            "concepts": [
+              "https://publicschema.org/name"
+            ]
+          },
+          {
+            "id": "description",
+            "concepts": [
+              "https://publicschema.org/public_mandate"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "institutional-relationship",
+        "title": "Institutional Relationship",
+        "conceptUri": "https://publicschema.org/InstitutionalRelationship",
+        "identifiers": [],
+        "fields": [
+          {
+            "id": "institution-from",
+            "relationshipRole": "institution-from",
+            "relationshipConceptUri": "https://publicschema.org/institution_from"
+          },
+          {
+            "id": "institution-to",
+            "relationshipRole": "institution-to",
+            "relationshipConceptUri": "https://publicschema.org/institution_to"
+          },
+          {
+            "id": "relationship-type",
+            "concepts": [
+              "https://publicschema.org/institutional_relationship_type"
+            ]
+          },
+          {
+            "id": "start-date",
+            "concepts": [
+              "https://publicschema.org/start_date"
+            ]
+          },
+          {
+            "id": "end-date",
+            "concepts": [
+              "https://publicschema.org/end_date"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "entities": [
+    {
+      "id": "public-organization",
+      "primaryDataset": "directory",
+      "route": "public-organizations",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "local-identifier",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "localIdentifier",
+          "maxLength": 160,
+          "minLength": 1
+        },
+        {
+          "id": "name",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 160,
+          "minLength": 1
+        },
+        {
+          "id": "description",
+          "type": "string",
+          "required": false,
+          "classification": "restricted",
+          "maxLength": 500,
+          "minLength": 1
+        }
+      ],
+      "changeControl": {
+        "requiredFor": [
+          "patch"
+        ]
+      },
+      "constraints": [
+        {
+          "kind": "unique",
+          "fields": [
+            "local-identifier"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "institutional-relationship",
+      "primaryDataset": "directory",
+      "route": "institutional-relationships",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "institution-from",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "public-organization",
+          "apiName": "institutionFrom"
+        },
+        {
+          "id": "institution-to",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "public-organization",
+          "apiName": "institutionTo"
+        },
+        {
+          "id": "relationship-type",
+          "type": "vocabulary-code",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "relationshipType",
+          "vocabulary": "https://public-organizations.example.org/relationship-types",
+          "values": [
+            "reports-to"
+          ]
+        },
+        {
+          "id": "start-date",
+          "type": "date",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "startDate"
+        },
+        {
+          "id": "end-date",
+          "type": "date",
+          "required": false,
+          "classification": "restricted",
+          "apiName": "endDate"
+        }
+      ],
+      "changeControl": {
+        "requiredFor": [
+          "patch"
+        ]
+      },
+      "constraints": [
+        {
+          "kind": "compare",
+          "left": "start-date",
+          "operator": "less_than_or_equal",
+          "right": "end-date"
+        }
+      ]
+    },
+    {
+      "id": "name-correction",
+      "primaryDataset": "directory",
+      "route": "name-corrections",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "record",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "public-organization"
+        },
+        {
+          "id": "name",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 160,
+          "minLength": 1
+        },
+        {
+          "id": "reason",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 500,
+          "minLength": 1
+        },
+        {
+          "id": "supporting-reference",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "supportingReference",
+          "maxLength": 500,
+          "minLength": 1
+        }
+      ],
+      "changeRequest": {
+        "effects": [
+          {
+            "target": {
+              "fromField": "record"
+            },
+            "operation": "patch",
+            "set": {
+              "name": {
+                "fromField": "name"
+              }
+            }
+          }
+        ],
+        "review": {
+          "stages": [
+            {
+              "id": "review",
+              "approvals": 1,
+              "excludeSubmitter": true
+            }
+          ]
+        },
+        "application": {
+          "mode": "manual"
+        },
+        "retention": {
+          "mode": "operator_erase"
+        }
+      }
+    },
+    {
+      "id": "relationship-correction",
+      "primaryDataset": "directory",
+      "route": "relationship-corrections",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "record",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "institutional-relationship"
+        },
+        {
+          "id": "institution-from",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "public-organization",
+          "apiName": "institutionFrom"
+        },
+        {
+          "id": "institution-to",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "public-organization",
+          "apiName": "institutionTo"
+        },
+        {
+          "id": "relationship-type",
+          "type": "vocabulary-code",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "relationshipType",
+          "vocabulary": "https://public-organizations.example.org/relationship-types",
+          "values": [
+            "reports-to"
+          ]
+        },
+        {
+          "id": "start-date",
+          "type": "date",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "startDate"
+        },
+        {
+          "id": "reason",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 500,
+          "minLength": 1
+        },
+        {
+          "id": "supporting-reference",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "supportingReference",
+          "maxLength": 500,
+          "minLength": 1
+        }
+      ],
+      "changeRequest": {
+        "effects": [
+          {
+            "target": {
+              "fromField": "record"
+            },
+            "operation": "patch",
+            "set": {
+              "institution-from": {
+                "fromField": "institution-from"
+              },
+              "institution-to": {
+                "fromField": "institution-to"
+              },
+              "relationship-type": {
+                "fromField": "relationship-type"
+              },
+              "start-date": {
+                "fromField": "start-date"
+              }
+            }
+          }
+        ],
+        "review": {
+          "stages": [
+            {
+              "id": "review",
+              "approvals": 1,
+              "excludeSubmitter": true
+            }
+          ]
+        },
+        "application": {
+          "mode": "manual"
+        },
+        "retention": {
+          "mode": "operator_erase"
+        }
+      }
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "reader",
+      "default": false,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:reader"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "public-organization",
+          "operations": [
+            "get",
+            "list"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name",
+            "description"
+          ],
+          "rowBoundaries": []
+        },
+        {
+          "entity": "institutional-relationship",
+          "operations": [
+            "get",
+            "list"
+          ],
+          "readableFields": [
+            "institution-from",
+            "institution-to",
+            "relationship-type",
+            "start-date",
+            "end-date"
+          ],
+          "rowBoundaries": []
+        }
+      ]
+    },
+    {
+      "id": "editor",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:editor"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "public-organization",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name",
+            "description"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "local-identifier",
+            "name",
+            "description"
+          ]
+        },
+        {
+          "entity": "institutional-relationship",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create"
+          ],
+          "readableFields": [
+            "institution-from",
+            "institution-to",
+            "relationship-type",
+            "start-date",
+            "end-date"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "institution-from",
+            "institution-to",
+            "relationship-type",
+            "start-date",
+            "end-date"
+          ]
+        },
+        {
+          "entity": "name-correction",
+          "operations": [
+            "create",
+            "get",
+            "patch",
+            "submit_request",
+            "revise_request",
+            "cancel_request"
+          ],
+          "readableFields": [
+            "record",
+            "name",
+            "reason",
+            "supporting-reference"
+          ],
+          "writableFields": [
+            "record",
+            "name",
+            "reason",
+            "supporting-reference"
+          ],
+          "requestVisibility": "owner",
+          "rowBoundaries": []
+        },
+        {
+          "entity": "relationship-correction",
+          "operations": [
+            "create",
+            "get",
+            "patch",
+            "submit_request",
+            "revise_request",
+            "cancel_request"
+          ],
+          "readableFields": [
+            "record",
+            "institution-from",
+            "institution-to",
+            "relationship-type",
+            "start-date",
+            "reason",
+            "supporting-reference"
+          ],
+          "writableFields": [
+            "record",
+            "institution-from",
+            "institution-to",
+            "relationship-type",
+            "start-date",
+            "reason",
+            "supporting-reference"
+          ],
+          "requestVisibility": "owner",
+          "rowBoundaries": []
+        }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "default": false,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:reviewer"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "public-organization",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name",
+            "description"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "institutional-relationship",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "institution-from",
+            "institution-to",
+            "relationship-type",
+            "start-date",
+            "end-date"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "name-correction",
+          "operations": [
+            "get",
+            "approve_request",
+            "reject_request",
+            "request_revision",
+            "apply_request"
+          ],
+          "readableFields": [
+            "record",
+            "name",
+            "reason",
+            "supporting-reference"
+          ],
+          "rowBoundaries": [],
+          "reviewStages": [
+            {
+              "stage": "review",
+              "targets": [
+                {
+                  "entity": "public-organization",
+                  "readableFields": [
+                    "local-identifier",
+                    "name",
+                    "description"
+                  ],
+                  "rowBoundaries": []
+                }
+              ]
+            }
+          ],
+          "applyTargets": [
+            {
+              "entity": "public-organization",
+              "rowBoundaries": []
+            }
+          ]
+        },
+        {
+          "entity": "relationship-correction",
+          "operations": [
+            "get",
+            "approve_request",
+            "reject_request",
+            "request_revision",
+            "apply_request"
+          ],
+          "readableFields": [
+            "record",
+            "institution-from",
+            "institution-to",
+            "relationship-type",
+            "start-date",
+            "reason",
+            "supporting-reference"
+          ],
+          "rowBoundaries": [],
+          "reviewStages": [
+            {
+              "stage": "review",
+              "targets": [
+                {
+                  "entity": "institutional-relationship",
+                  "readableFields": [
+                    "institution-from",
+                    "institution-to",
+                    "relationship-type",
+                    "start-date",
+                    "end-date"
+                  ],
+                  "rowBoundaries": []
+                }
+              ]
+            }
+          ],
+          "applyTargets": [
+            {
+              "entity": "institutional-relationship",
+              "rowBoundaries": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

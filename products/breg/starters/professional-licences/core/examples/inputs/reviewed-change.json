@@ -1,0 +1,10 @@
+{
+  "change": {
+    "record": {
+      "recordRef": "first-record"
+    },
+    "practiceScope": "Supervised community practice",
+    "reason": "Correct the spelling of the recorded scope, without granting a new entitlement.",
+    "supportingReference": "SYNTHETIC-REVIEW-001"
+  }
+}

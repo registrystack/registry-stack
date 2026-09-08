@@ -36,9 +36,11 @@ historical manifests that record earlier release inputs.
 `crates/registry-linkml/publicschema/` vendors a snapshot of the
 [PublicSchema](https://publicschema.org) reference model: repository
 `https://github.com/PublicSchema/publicschema.org`, commit
-`5fa11e869d73c5ee4fa78dc6c80ccd0422741f9e` from 2026-09-07, version 0.3.0,
+`1ea9ce333918693b29aec31068fac412e02cb8dc` from 2026-09-08, version 0.3.0,
 licensed Creative Commons Attribution 4.0 International. It is a current
-vendored input, not a historical one.
+vendored input, not a historical one. This commit includes the draft government
+and agricultural holder concepts used by the maintained BReg starters; the
+unchanged version string alone does not identify those draft semantics.
 
 `crates/registry-linkml/publicschema/sync-snapshot.sh` refreshes the vendored
 files from a local checkout of the upstream repository and writes `PIN.yaml`

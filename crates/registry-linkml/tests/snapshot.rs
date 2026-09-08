@@ -2,10 +2,10 @@
 //! says it is. The counts below are facts about the pinned commit; a
 //! snapshot refresh that changes them changes this test on purpose.
 
-use registry_linkml::publicschema::{
-    self, convergence, featured, label, property_groups, sensitivity, Sensitivity, LANGUAGES,
-};
 use registry_linkml::Range;
+use registry_linkml::publicschema::{
+    self, LANGUAGES, Sensitivity, convergence, featured, label, property_groups, sensitivity,
+};
 
 #[test]
 fn the_pin_matches_the_embedded_root_schema() {
@@ -27,7 +27,7 @@ fn the_pin_matches_the_embedded_root_schema() {
         "https://github.com/PublicSchema/publicschema.org"
     );
     assert_eq!(pin.commit.len(), 40);
-    assert_eq!(pin.files.len(), 15);
+    assert_eq!(pin.files.len(), 26);
     assert_eq!(pin.files[0], "schema/publicschema.yaml");
     assert_eq!(model.id, "https://publicschema.org/linkml/publicschema");
     assert_eq!(model.name, "publicschema");
@@ -40,11 +40,11 @@ fn the_pin_matches_the_embedded_root_schema() {
 #[test]
 fn the_snapshot_has_the_pinned_shape() {
     let model = publicschema::model().expect("the snapshot reads");
-    assert_eq!(model.classes.len(), 63);
-    assert_eq!(model.slots.len(), 391);
-    assert_eq!(model.enums.len(), 116);
+    assert_eq!(model.classes.len(), 165);
+    assert_eq!(model.slots.len(), 676);
+    assert_eq!(model.enums.len(), 117);
     let values: usize = model.enums.values().map(|e| e.values.len()).sum();
-    assert_eq!(values, 10_233);
+    assert_eq!(values, 10_236);
     let abstract_classes: Vec<&str> = model
         .classes
         .values()
@@ -59,6 +59,7 @@ fn the_snapshot_has_the_pinned_shape() {
             "Credential",
             "Event",
             "Group",
+            "HoldingOperatorRole",
             "Party",
             "Profile",
             "VitalEvent"
@@ -141,9 +142,8 @@ fn slot_conventions_read_from_the_snapshot() {
         convergence(slot).unwrap_or_else(|error| panic!("{error}"));
         sensitivity(slot).unwrap_or_else(|error| panic!("{error}"));
     }
-    // The credential classes are the only ones the pinned snapshot leaves
-    // without a full set of labels, so a consumer must fall back to the
-    // class name.
+    // The draft government and agriculture classes, alongside credentials,
+    // lack some translated labels. Consumers must retain the name fallback.
     let mut unlabelled = Vec::new();
     for class in model.classes.values() {
         convergence(class).unwrap_or_else(|error| panic!("{error}"));
@@ -155,15 +155,14 @@ fn slot_conventions_read_from_the_snapshot() {
             unlabelled.push(class.name.as_str());
         }
     }
-    assert_eq!(
-        unlabelled,
-        [
-            "Credential",
-            "EnrollmentCredential",
-            "IdentityCredential",
-            "PaymentCredential"
-        ]
-    );
+    assert_eq!(unlabelled.len(), 106);
+    for name in [
+        "Credential",
+        "PublicOrganization",
+        "PersonHoldingOperatorRole",
+    ] {
+        assert!(unlabelled.contains(&name));
+    }
     assert!(model.slots.values().all(|slot| slot.title.is_some()));
     assert!(model.enums.values().all(|enum_| enum_.title.is_some()));
     let restricted = model
@@ -172,4 +171,47 @@ fn slot_conventions_read_from_the_snapshot() {
         .filter(|slot| sensitivity(slot).unwrap() == Some(Sensitivity::Restricted))
         .count();
     assert_eq!(restricted, 3);
+}
+
+#[test]
+fn draft_starter_concepts_preserve_typed_holder_semantics() {
+    let model = publicschema::model().expect("the snapshot reads");
+    assert_eq!(
+        publicschema::pin().unwrap().commit,
+        "1ea9ce333918693b29aec31068fac412e02cb8dc"
+    );
+    assert_eq!(
+        model.classes["Farm"].uri,
+        "https://publicschema.org/agri/Farm"
+    );
+    assert!(!model.is_subclass_of("Farm", "Group").unwrap());
+    assert!(model.classes["HoldingOperatorRole"].is_abstract);
+    for (role, field, target) in [
+        (
+            "PersonHoldingOperatorRole",
+            "holding_operator_person",
+            "Person",
+        ),
+        (
+            "OrganizationHoldingOperatorRole",
+            "holding_operator_organization",
+            "Organization",
+        ),
+        (
+            "GroupHoldingOperatorRole",
+            "holding_operator_group",
+            "Group",
+        ),
+    ] {
+        assert!(model.is_subclass_of(role, "HoldingOperatorRole").unwrap());
+        assert_eq!(model.slots[field].range, Range::Class(target.into()));
+    }
+    assert_eq!(
+        model.classes["PublicOrganization"].uri,
+        "https://publicschema.org/PublicOrganization"
+    );
+    assert_eq!(
+        model.slots["operated_holding"].range,
+        Range::Class("Farm".into())
+    );
 }

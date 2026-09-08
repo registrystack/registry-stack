@@ -8,6 +8,52 @@ rather than defining parallel semantics.
 AI-assisted tools may invoke this CLI, but receive no separate authority to
 sign or apply production changes.
 
+`bregctl examples list PROJECT` describes the project's declared teaching
+scenarios and retained attempts without starting services or creating credentials.
+`bregctl examples run SCENARIO PROJECT` uses only that project's ready owned
+`bregctl dev` instance. The fixed scenarios are `starter-data`, `first-record`
+and `reviewed-change`. Inputs default to the file declared in
+`examples/scenarios.json`; `--input FILE` selects a separately editable JSON file.
+The runner uses ordinary native client authorization and never issues a schema-test
+receipt. It accepts no remote endpoint, database credential or script.
+
+The examples v1 catalogue is a closed JSON object with `version: 1` and a
+`scenarios` array. Each scenario declares `id`, `description`, `input` (a relative
+file under `examples/`) and `steps`. Every step declares `id`, `operation`,
+`entity`, `client` and `accessProfile`. A `create` step additionally declares an
+`input` payload key and `capture` alias; other steps declare a `record` alias.
+Inputs contain exactly those named payload objects. A field reference uses the
+same exact `{ "recordRef": "alias" }` form as authored fixtures. Captures must
+precede references, and their entity must match the native metadata's reference
+field target. The catalogue and input files are each bounded to 1 MiB; scenarios
+have at most 100 steps and nested reference inputs at most 32 levels. Payloads
+are checked against caller-filtered create schemas before the first mutation.
+
+`first-record` creates one independent record and reads its returned UUID. Running
+it again with `--attempt ID` reads that same record without repeating the create.
+`reviewed-change` imports one completed first-record attempt; use
+`--from-attempt ID` when more than one exists. Its seven declared steps are
+`draft` (`create`), `submit`, `inspect` (`get`), `approve`, `reject`, `apply` and
+`history`. Run `--step submit` (the default) to create and submit the draft, then
+explicitly run `--step inspect`, `--step approve` or `--step reject`, and
+`--step apply` after approval. Approval alone does not change the target record.
+`--step history` reads the native revision endpoint's first page and retains its
+pagination information in the output; the runner does not follow pages.
+
+Every mutation first persists its exact native request or action, preconditions
+and attempt-scoped idempotency key in owner-only `.breg/dev/examples` state.
+Returned UUIDs are persisted before dependent writes. Uncertain operations resume
+through the native client's validated recovery API with the original action,
+including when an applied action is no longer advertised on the current record.
+A completed mutation never repopulates an edited or deleted sample. Attempts bind
+exact source, package, clients, scenario and input bytes plus the owned database
+container identity. Ordinary stop/start retains attempts; explicit database
+removal invalidates them. Changed inputs require `--new-attempt` and ordinary
+uniqueness checks. Concurrent examples and dev lifecycle changes share the dev
+lock. Failures retain partial progress and never reset the registry; list attempts
+and resume the original command. Successful reports include UUIDs and the actual
+next command.
+
 `bregctl project lock PROJECT` computes the compiler-enforced
 digests for discovered `modules/<id>/module.yaml` sources and their declared
 SQL assets, then rewrites only `PROJECT/registry.yaml`. `--check` performs the

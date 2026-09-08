@@ -410,6 +410,13 @@ impl BRegMetadataField {
         &self.api_name
     }
 
+    /// The declared target entity for this field's typed record reference.
+    /// This is metadata, not authority to read or mutate the target entity.
+    #[must_use]
+    pub fn reference_target_entity(&self) -> Option<&str> {
+        self.reference_target_entity.as_deref()
+    }
+
     /// Returns the bounded, inert JSON Schema value advertised by the BReg.
     #[must_use]
     pub fn schema(&self) -> &Value {
