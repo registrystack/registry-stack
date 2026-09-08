@@ -1319,6 +1319,21 @@ fn resolve_source_connections(
     Ok(())
 }
 
+/// Read authored connection references without requiring questions or secrets.
+pub(crate) fn source_connection_users(
+    project_root: &Path,
+    connection: &str,
+) -> Result<Vec<String>> {
+    Ok(
+        read_named_objects(project_root, SOURCES_DIRECTORY, "source")?
+            .into_iter()
+            .filter_map(|(id, source)| {
+                (source.get("connection").and_then(Value::as_str) == Some(connection)).then_some(id)
+            })
+            .collect(),
+    )
+}
+
 /// Validate imported ordinary artifact references without synthesizing a
 /// deployment, authority, connection, credential, or question. This is a
 /// structural import check; the real Evidence bundle check remains mandatory

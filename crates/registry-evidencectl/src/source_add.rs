@@ -221,6 +221,7 @@ fn configure(
             &args.connection,
             &registry,
             &selection.client,
+            &selection.source_id,
             args.dry_run,
             invoke,
         )?;
@@ -278,6 +279,7 @@ fn configure(
         &args.connection,
         &registry,
         &selection.client,
+        &selection.source_id,
         false,
         invoke,
     )?;
@@ -718,6 +720,7 @@ fn check_credential_outputs(
     name: &str,
     registry: &Path,
     client: &str,
+    source_id: &str,
     allow_missing_directory: bool,
     invoke: &mut impl FnMut(&[OsString]) -> Result<Value>,
 ) -> Result<()> {
@@ -725,7 +728,7 @@ fn check_credential_outputs(
     let metadata = match fs::symlink_metadata(&secrets) {
         // A clean checkout can be previewed before its ignored keys exist.
         Err(error) if allow_missing_directory && error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(());
+            return check_missing_connection_credentials(project, name, source_id);
         }
         result => {
             result.context("Evidence project needs its generated private secrets directory")?
@@ -750,7 +753,7 @@ fn check_credential_outputs(
         }
     }
     if existing.is_empty() {
-        return Ok(());
+        return check_missing_connection_credentials(project, name, source_id);
     }
     // The public provider export owns credential identity and validity. Stage
     // its retained pair privately so preflight never fills a missing output,
@@ -771,6 +774,16 @@ fn check_credential_outputs(
         if current.as_slice() != retained.as_slice() {
             bail!("existing connection credentials differ from the selected retained client; choose a fresh --connection before applying this source setup; existing files were preserved");
         }
+    }
+    Ok(())
+}
+
+fn check_missing_connection_credentials(project: &Path, name: &str, source_id: &str) -> Result<()> {
+    if authoring::source_connection_users(project, name)?
+        .iter()
+        .any(|user| user != source_id)
+    {
+        bail!("connection is already used by another source and its credential pair is absent; restore that connection's retained credentials or choose a fresh --connection before applying this source setup");
     }
     Ok(())
 }
@@ -949,7 +962,7 @@ mod tests {
                         json!({"kind":"claim","field":option(arguments,"--row-field"),"claim":option(arguments,"--row-claim")})
                     };
                     assert!(!option(arguments, "--source-id").is_empty());
-                    assert_eq!(option(arguments, "--connection"), "registry");
+                    assert!(!option(arguments, "--connection").is_empty());
                 }
                 return Ok(report);
             }
@@ -962,6 +975,7 @@ mod tests {
                 write_export(
                     Path::new(&option(arguments, "--output")),
                     &option(arguments, "--source-id"),
+                    &option(arguments, "--connection"),
                 )?;
                 return Ok(
                     json!({"ok":true,"explanation":{"selectorProfiles":{"registry-name":"record-code"}}}),
@@ -999,8 +1013,8 @@ mod tests {
         }
     }
 
-    fn write_export(root: &Path, id: &str) -> Result<()> {
-        let source = format!("transport: http-json\nconnection: registry\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
+    fn write_export(root: &Path, id: &str, connection: &str) -> Result<()> {
+        let source = format!("transport: http-json\nconnection: {connection}\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
         let artifacts = BTreeMap::from([
             (format!("sources/{id}.yaml"), source),
             (
@@ -1085,6 +1099,18 @@ mod tests {
         })
         .unwrap();
         assert_eq!(first, second);
+        // A matching retained pair proves valid existing-client reuse even
+        // when the connection is already referenced by another source.
+        check_credential_outputs(
+            &project,
+            "registry",
+            &registry,
+            "registry-name",
+            "registry-other",
+            false,
+            &mut |a| provider.invoke(a),
+        )
+        .unwrap();
         assert_eq!(
             fs::read(project.join("secrets/signing-p256-private-jwk")).unwrap(),
             signing
@@ -1281,6 +1307,76 @@ mod tests {
     }
 
     #[test]
+    fn missing_credentials_do_not_make_another_sources_connection_available() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("evidence");
+        let mut provider = Provider::new();
+        configure(args(root.path(), &project), false, &mut |a| {
+            provider.invoke(a)
+        })
+        .unwrap();
+        let source_path = project.join("sources/registry-name.yaml");
+        let source_before = fs::read(&source_path).unwrap();
+        let governance_path = project.join("targets/local/governance.yaml");
+        let governance_before = fs::read(&governance_path).unwrap();
+        for suffix in ["client-id", "client-key"] {
+            fs::remove_file(project.join(format!("secrets/registry-{suffix}"))).unwrap();
+        }
+
+        for dry_run in [false, true] {
+            provider.calls.clear();
+            let mut selected = args(root.path(), &project);
+            selected.source_id = Some("registry-other".into());
+            selected.dry_run = dry_run;
+            let error = configure(selected, false, &mut |a| provider.invoke(a)).unwrap_err();
+            assert!(error.to_string().contains("connection"));
+            assert!(provider
+                .calls
+                .iter()
+                .flatten()
+                .all(|argument| argument != "--apply"));
+            assert!(!provider.clients.contains("registry-other"));
+            assert!(!project.join("sources/registry-other.yaml").exists());
+            for suffix in ["client-id", "client-key"] {
+                assert!(!project.join(format!("secrets/registry-{suffix}")).exists());
+            }
+        }
+        assert_eq!(fs::read(&source_path).unwrap(), source_before);
+        assert_eq!(fs::read(&governance_path).unwrap(), governance_before);
+
+        let mut selected = args(root.path(), &project);
+        selected.source_id = Some("registry-other".into());
+        selected.connection = "registry-other".into();
+        configure(selected, false, &mut |a| provider.invoke(a)).unwrap();
+        let source: Value = serde_norway::from_slice(
+            &fs::read(project.join("sources/registry-other.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(source["connection"], "registry-other");
+        assert_eq!(fs::read(&source_path).unwrap(), source_before);
+        for suffix in ["client-id", "client-key"] {
+            assert!(project
+                .join(format!("secrets/registry-other-{suffix}"))
+                .is_file());
+            assert!(!project.join(format!("secrets/registry-{suffix}")).exists());
+        }
+
+        fs::remove_dir_all(project.join("secrets")).unwrap();
+        provider.calls.clear();
+        let mut preview = args(root.path(), &project);
+        preview.source_id = Some("third-source".into());
+        preview.dry_run = true;
+        let error = configure(preview, false, &mut |a| provider.invoke(a)).unwrap_err();
+        assert!(error.to_string().contains("connection"));
+        assert!(provider
+            .calls
+            .iter()
+            .flatten()
+            .all(|argument| argument != "--apply"));
+        assert!(!project.join("secrets").exists());
+    }
+
+    #[test]
     fn a_mismatched_key_is_refused_before_apply_even_when_the_client_id_matches() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("evidence");
@@ -1312,7 +1408,11 @@ mod tests {
 
     #[test]
     fn partial_credentials_stay_missing_in_dry_run_and_exact_retry_restores_them() {
-        for missing_suffix in ["client-id", "client-key"] {
+        for missing_suffixes in [
+            vec!["client-id"],
+            vec!["client-key"],
+            vec!["client-id", "client-key"],
+        ] {
             let root = tempfile::tempdir().unwrap();
             let project = root.path().join("evidence");
             let mut provider = Provider::new();
@@ -1320,9 +1420,15 @@ mod tests {
                 provider.invoke(a)
             })
             .unwrap();
-            let missing = project.join(format!("secrets/registry-{missing_suffix}"));
-            let retained = fs::read(&missing).unwrap();
-            fs::remove_file(&missing).unwrap();
+            let missing: Vec<_> = missing_suffixes
+                .into_iter()
+                .map(|suffix| {
+                    let path = project.join(format!("secrets/registry-{suffix}"));
+                    let retained = fs::read(&path).unwrap();
+                    fs::remove_file(&path).unwrap();
+                    (path, retained)
+                })
+                .collect();
             provider.calls.clear();
 
             let mut preview = args(root.path(), &project);
@@ -1330,7 +1436,7 @@ mod tests {
             let report = configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
             assert_eq!(report["status"], "preview");
             assert!(
-                !missing.exists(),
+                missing.iter().all(|(path, _)| !path.exists()),
                 "preflight must not publish a missing credential"
             );
             assert!(provider
@@ -1343,7 +1449,9 @@ mod tests {
                 provider.invoke(a)
             })
             .unwrap();
-            assert_eq!(fs::read(missing).unwrap(), retained);
+            for (path, retained) in missing {
+                assert_eq!(fs::read(path).unwrap(), retained);
+            }
         }
     }
 

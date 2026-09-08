@@ -20,7 +20,7 @@ use thiserror::Error;
 use crate::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{
-    parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, Operation,
+    parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource,
     PackageIdentitySource, RegistryModule, RegistryProject,
 };
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
@@ -1759,63 +1759,30 @@ fn query_changed_by_access_grant_delta(
 ) -> bool {
     match (before, after) {
         (Some(before), None) => {
-            let Some(before_entity) = previous.entities.get(&before.entity_id) else {
-                return false;
-            };
-            if !before_entity
-                .access_profiles
-                .contains_key(&before.profile_id)
-            {
-                return false;
-            }
-            let Some(after_entity) = candidate.entities.get(&before.entity_id) else {
-                return false;
-            };
-            let Some(operation) = query_governing_operation(previous, before) else {
-                return false;
-            };
-            match after_entity.access_profiles.get(&before.profile_id) {
-                Some(after_profile) => !after_profile.operations.contains(&operation),
-                None => true,
-            }
+            previous.entities.contains_key(&before.entity_id)
+                && candidate.entities.contains_key(&before.entity_id)
+                && route_grants_query(previous, before)
+                && !route_grants_query(candidate, before)
         }
         (None, Some(after)) => {
-            let Some(after_entity) = candidate.entities.get(&after.entity_id) else {
-                return false;
-            };
-            let Some(after_profile) = after_entity.access_profiles.get(&after.profile_id) else {
-                return false;
-            };
-            let Some(operation) = query_governing_operation(candidate, after) else {
-                return false;
-            };
-            if !after_profile.operations.contains(&operation) {
-                return false;
-            }
-            let Some(before_entity) = previous.entities.get(&after.entity_id) else {
-                return false;
-            };
-            match before_entity.access_profiles.get(&after.profile_id) {
-                Some(before_profile) => !before_profile.operations.contains(&operation),
-                None => true,
-            }
+            previous.entities.contains_key(&after.entity_id)
+                && candidate.entities.contains_key(&after.entity_id)
+                && !route_grants_query(previous, after)
+                && route_grants_query(candidate, after)
         }
         _ => false,
     }
 }
 
-fn query_governing_operation(
+fn route_grants_query(
     baseline: &CompiledRegistryMigrationBaseline,
     query: &CompiledQueryOperation,
-) -> Option<Operation> {
-    // Lookup queries share the bounded List execution kind. The compiled
-    // route, not that execution shape, identifies the authority they require.
-    baseline
-        .routes
-        .routes
-        .iter()
-        .find(|route| route.id == query.route_id && route.entity_id == query.entity_id)
-        .map(|route| route.operation)
+) -> bool {
+    // The canonical route owns the grant: lookup shares List's execution kind,
+    // and a read-path query names its target entity while its route names the source.
+    baseline.routes.routes.iter().any(|route| {
+        route.id == query.route_id && route.access_profiles.contains(&query.profile_id)
+    })
 }
 
 fn additive_migration_plan(
