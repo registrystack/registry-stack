@@ -1,0 +1,66 @@
+id: https://publicschema.org/linkml/service-capacity
+name: publicschema-service-capacity
+title: Service capacity observations
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- identity
+- registry
+classes:
+  ServiceCapacityObservation:
+    class_uri: publicschema:ServiceCapacityObservation
+    title: Service Capacity Observation
+    description: An observation of the capacity of a service or facility for a stated measure and time.
+      Capacity is not an unconditional promise of current availability or an accreditation.
+    slots:
+    - capacity_subject
+    - capacity_measure
+    - capacity_quantity
+    - capacity_observed_at
+    status: bibo:draft
+    annotations:
+      bibliography_refs: '["w3c-sosa-2017", "ucum-specification"]'
+slots:
+  capacity_subject:
+    slot_uri: publicschema:capacity_subject
+    title: Capacity subject
+    description: The URI of the facility or service whose capacity was observed.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+  capacity_measure:
+    slot_uri: publicschema:capacity_measure
+    title: Capacity measure
+    description: The scheme-qualified capacity measure, such as staffed beds rather than building beds.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+  capacity_quantity:
+    slot_uri: publicschema:capacity_quantity
+    title: Capacity quantity
+    description: The amount measured for the stated capacity kind.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative
+  capacity_observed_at:
+    slot_uri: publicschema:capacity_observed_at
+    title: Capacity observed at
+    description: The timestamp to which the capacity observation applies, not the time a record was entered.
+    range: datetime
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: administrative

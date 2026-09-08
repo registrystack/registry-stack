@@ -1,0 +1,39 @@
+{
+  "variety-a": {
+    "localIdentifier": "SYNTHETIC-VARIETY-A",
+    "varietyDenomination": "Example Amber"
+  },
+  "variety-b": {
+    "localIdentifier": "SYNTHETIC-VARIETY-B",
+    "varietyDenomination": "Example Blue"
+  },
+  "source": {
+    "localIdentifier": "SYNTHETIC-LOT-SOURCE",
+    "lotNumber": "SYN-2026-001",
+    "quantityKg": "100.000",
+    "producedOn": "2026-01-15",
+    "variety": {
+      "recordRef": "variety-a"
+    }
+  },
+  "derived": {
+    "localIdentifier": "SYNTHETIC-LOT-DERIVED",
+    "lotNumber": "SYN-2026-002",
+    "quantityKg": "25.000",
+    "producedOn": "2026-01-20",
+    "variety": {
+      "recordRef": "variety-a"
+    },
+    "sourceLot": {
+      "recordRef": "source"
+    }
+  },
+  "other": {
+    "localIdentifier": "SYNTHETIC-LOT-OTHER",
+    "lotNumber": "SYN-2026-003",
+    "quantityKg": "50.000",
+    "variety": {
+      "recordRef": "variety-b"
+    }
+  }
+}

@@ -1,0 +1,121 @@
+id: https://publicschema.org/linkml/work
+name: publicschema-work
+title: Work relationships
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- identity
+- registry
+classes:
+  WorkRelationship:
+    class_uri: publicschema:WorkRelationship
+    title: Work Relationship
+    description: Tasks or duties performed or intended to be performed by one person for one economic
+      unit over an optionally known period. This includes employment and other forms of work, such as
+      own-use production. The economic unit is not necessarily a legal organization, employer or work
+      site. Multiple assignments to client holdings do not by themselves create separate work relationships.
+      This is distinct from agricultural holder responsibility and from a person-level labour force status.
+    slots:
+    - work_person
+    - work_economic_unit
+    - start_date
+    - end_date
+    - identifiers
+    - work_functions
+    - work_form
+    - work_status
+    - work_remuneration
+    - work_seasonality
+    status: bibo:draft
+    see_also:
+    - https://webapps.ilo.org/ilostat-files/Documents/ICSE-18_manual.pdf
+    annotations:
+      bibliography_refs: '["ilo-icse18-manual-2023"]'
+slots:
+  work_person:
+    slot_uri: publicschema:work_person
+    title: Working person
+    description: The person who performs or is intended to perform the work described by this relationship
+      or assignment.
+    range: Person
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: employment
+      bibliography_refs: '["ilo-icse18-manual-2023"]'
+  work_economic_unit:
+    slot_uri: publicschema:work_economic_unit
+    title: Work economic unit
+    description: The subject URI of the economic unit for which the work is undertaken. It identifies
+      the enterprise, household production unit or other unit of production, not automatically a client
+      site or a legal employer. The consuming profile checks the locally resolved unit and its meaning.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: employment
+      bibliography_refs: '["ilo-icse18-manual-2023"]'
+  work_functions:
+    slot_uri: publicschema:work_functions
+    title: Work functions
+    description: Scheme-qualified functions performed in this work, such as daily management or harvesting.
+      Function does not establish agricultural holder responsibility or status at work.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: employment
+      bibliography_refs: '["ilo-icse18-manual-2023"]'
+  work_form:
+    slot_uri: publicschema:work_form
+    title: Work form
+    description: The scheme-qualified form of the work described here, such as employment or own-use production.
+      An unpaid arrangement alone does not determine the form of work.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: employment
+      bibliography_refs: '["ilo-icse18-manual-2023"]'
+  work_status:
+    slot_uri: publicschema:work_status
+    title: Status at work
+    description: A scheme-qualified status for the work described here, such as a status in employment
+      or a broader status at work. The scheme must identify the classification and edition. This is not
+      the overall labour force status of the person.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: employment
+      bibliography_refs: '["ilo-icse18-manual-2023"]'
+  work_remuneration:
+    slot_uri: publicschema:work_remuneration
+    title: Work remuneration arrangement
+    description: A scheme-qualified description of how this work is remunerated, or that no remuneration
+      is provided. Absence of a wage does not alone establish that work is outside employment; this is
+      separate from work form and status.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: employment
+      bibliography_refs: '["ilo-icse18-manual-2023"]'
+  work_seasonality:
+    slot_uri: publicschema:work_seasonality
+    title: Work seasonality
+    description: A scheme-qualified description of the seasonal pattern of this work. It does not establish
+      employee status, contract duration, working time or the effective dates of the relationship.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: employment
+      bibliography_refs: '["ilo-icse18-manual-2023"]'

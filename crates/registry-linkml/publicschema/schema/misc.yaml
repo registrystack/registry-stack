@@ -51,9 +51,10 @@ imports:
 - external/dhs
 - external/ocha_cod_ab
 - external/openimis
+- farm_operators
 classes:
   Farm:
-    class_uri: publicschema:Farm
+    class_uri: publicschema:agri/Farm
     title: Farm
     description: 'An economic unit of agricultural production under single management, comprising all
       livestock kept and all land used wholly or partly for agricultural production, without regard to
@@ -62,8 +63,10 @@ classes:
       and climate adaptation programs.
 
       '
-    is_a: Group
     slots:
+    - name
+    - identifiers
+    - holding_operator_roles
     - farm_area_hectares
     - primary_crop
     - livestock_type
@@ -71,6 +74,7 @@ classes:
     - location
     status: bibo:draft
     annotations:
+      source_domain: agri
       label_es: Finca
       label_fr: Exploitation agricole
       description_es: Una unidad económica de producción agrícola bajo gestión única, que comprende todo
@@ -996,13 +1000,14 @@ slots:
         ou a été rejeté.
       convergence_json: '{"system_count": 0, "total_systems": 6}'
   farm_area_hectares:
-    slot_uri: publicschema:farm_area_hectares
+    slot_uri: publicschema:agri/farm_area_hectares
     title: Farm area (hectares)
     description: The total area of the farm in hectares.
     range: decimal
     multivalued: false
     status: bibo:draft
     annotations:
+      source_domain: agri
       label_es: Superficie de la explotación (hectáreas)
       label_fr: Superficie de l'exploitation (hectares)
       description_es: La superficie total de la explotación agrícola en hectáreas.
@@ -1161,13 +1166,14 @@ slots:
       description_fr: La liste des articles dans cette livraison ou ce bon.
       convergence_json: '{"system_count": 0, "total_systems": 6}'
   land_tenure:
-    slot_uri: publicschema:land_tenure
+    slot_uri: publicschema:agri/land_tenure
     title: Land tenure
     description: The legal or customary tenure arrangement under which the farm's land is held.
     range: LandTenure
     multivalued: false
     status: bibo:draft
     annotations:
+      source_domain: agri
       label_es: Tenencia de la tierra
       label_fr: Régime foncier
       description_es: El régimen de tenencia legal o consuetudinario bajo el cual se mantiene la tierra
@@ -1237,13 +1243,14 @@ slots:
         embed the level name in the location record or derive it from a country-specific configuration.",
         "system_count": 0, "total_systems": 6}'
   livestock_type:
-    slot_uri: publicschema:livestock_type
+    slot_uri: publicschema:agri/livestock_type
     title: Livestock type
     description: Types of livestock kept by the agricultural holding.
     range: LivestockType
     multivalued: true
     status: bibo:draft
     annotations:
+      source_domain: agri
       label_es: Tipo de ganado
       label_fr: Type de bétail
       description_es: Tipos de ganado criados por la explotación agrícola.
@@ -1395,13 +1402,14 @@ slots:
       domain_override: crvs
       bibliography_refs: '["semic-core-person"]'
   primary_crop:
-    slot_uri: publicschema:primary_crop
+    slot_uri: publicschema:agri/primary_crop
     title: Primary crop
     description: The primary crop or agricultural activity of the farm.
     range: string
     multivalued: false
     status: bibo:draft
     annotations:
+      source_domain: agri
       label_es: Cultivo principal
       label_fr: Culture principale
       description_es: El cultivo o actividad agrícola principal de la explotación agrícola.

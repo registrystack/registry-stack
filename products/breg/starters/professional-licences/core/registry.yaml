@@ -1,0 +1,476 @@
+{
+  "apiVersion": "registry.registrystack.org/v1alpha1",
+  "kind": "RegistryProject",
+  "registry": {
+    "id": "professional-licences",
+    "canonicalBaseIri": "https://professional-licences.example.org",
+    "version": "0.1.0",
+    "defaultLanguage": "en"
+  },
+  "package": {
+    "environment": "local",
+    "instanceId": "professional-licences-starter",
+    "sequence": 1,
+    "sourceRevision": "professional-licences-core-0.1.0"
+  },
+  "manifestProjection": {
+    "accessProfile": "editor",
+    "classificationCeiling": "restricted",
+    "catalog": {
+      "baseUrl": "https://professional-licences.example.org",
+      "title": "Professional licence register",
+      "description": "Record dated professional authorizations and review practice-scope corrections.",
+      "publisher": {
+        "id": "synthetic-custodian",
+        "name": "Synthetic example custodian"
+      }
+    },
+    "publicService": {
+      "id": "directory-service",
+      "title": "Professional licence register"
+    },
+    "datasets": [
+      {
+        "id": "directory",
+        "title": "Professional licence register",
+        "description": "Record dated professional authorizations and review practice-scope corrections.",
+        "owner": "Synthetic example custodian",
+        "status": "active"
+      }
+    ],
+    "dataServices": [
+      {
+        "id": "directory-api",
+        "title": "Professional licence register",
+        "endpointUrl": "https://professional-licences.example.org",
+        "servesDatasets": [
+          "directory"
+        ]
+      }
+    ],
+    "distributions": [],
+    "entities": [
+      {
+        "id": "professional-license",
+        "title": "Professional License",
+        "conceptUri": "https://publicschema.org/ProfessionalLicense",
+        "identifiers": [
+          {
+            "field": "local-identifier",
+            "kind": "local"
+          }
+        ],
+        "fields": [
+          {
+            "id": "person-reference",
+            "concepts": [
+              "https://publicschema.org/registered_subject"
+            ]
+          },
+          {
+            "id": "regulator-reference",
+            "concepts": [
+              "https://publicschema.org/registration_authority"
+            ]
+          },
+          {
+            "id": "jurisdiction-reference",
+            "concepts": [
+              "https://publicschema.org/registration_jurisdiction"
+            ]
+          },
+          {
+            "id": "profession-code",
+            "concepts": [
+              "https://publicschema.org/profession_code"
+            ]
+          },
+          {
+            "id": "valid-from",
+            "concepts": [
+              "https://publicschema.org/valid_from"
+            ]
+          },
+          {
+            "id": "valid-to",
+            "concepts": [
+              "https://publicschema.org/valid_to"
+            ]
+          },
+          {
+            "id": "practice-scope",
+            "concepts": [
+              "https://publicschema.org/authorization_conditions"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "entities": [
+    {
+      "id": "professional-license",
+      "primaryDataset": "directory",
+      "route": "professional-licenses",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "local-identifier",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "localIdentifier",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        {
+          "id": "person-reference",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "personReference",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        {
+          "id": "regulator-reference",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "regulatorReference",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        {
+          "id": "jurisdiction-reference",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "jurisdictionReference",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        {
+          "id": "profession-code",
+          "type": "vocabulary-code",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "professionCode",
+          "vocabulary": "https://professional-licences.example.org/profession-codes",
+          "values": [
+            "example-nursing",
+            "example-engineering"
+          ]
+        },
+        {
+          "id": "licence-status",
+          "type": "vocabulary-code",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "licenceStatus",
+          "vocabulary": "https://professional-licences.example.org/licence-statuses",
+          "values": [
+            "recorded-active",
+            "recorded-suspended",
+            "recorded-expired"
+          ]
+        },
+        {
+          "id": "valid-from",
+          "type": "date",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "validFrom"
+        },
+        {
+          "id": "valid-to",
+          "type": "date",
+          "required": false,
+          "classification": "restricted",
+          "apiName": "validTo"
+        },
+        {
+          "id": "practice-scope",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "practiceScope",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      ],
+      "changeControl": {
+        "requiredFor": [
+          "patch"
+        ]
+      },
+      "constraints": [
+        {
+          "kind": "unique",
+          "fields": [
+            "local-identifier"
+          ]
+        },
+        {
+          "kind": "compare",
+          "left": "valid-from",
+          "operator": "less_than_or_equal",
+          "right": "valid-to"
+        }
+      ]
+    },
+    {
+      "id": "scope-correction",
+      "primaryDataset": "directory",
+      "route": "scope-corrections",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "record",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "professional-license"
+        },
+        {
+          "id": "practice-scope",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "practiceScope",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        {
+          "id": "reason",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 500,
+          "minLength": 1
+        },
+        {
+          "id": "supporting-reference",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "supportingReference",
+          "maxLength": 500,
+          "minLength": 1
+        }
+      ],
+      "changeRequest": {
+        "effects": [
+          {
+            "target": {
+              "fromField": "record"
+            },
+            "operation": "patch",
+            "set": {
+              "practice-scope": {
+                "fromField": "practice-scope"
+              }
+            }
+          }
+        ],
+        "review": {
+          "stages": [
+            {
+              "id": "review",
+              "approvals": 1,
+              "excludeSubmitter": true
+            }
+          ]
+        },
+        "application": {
+          "mode": "manual"
+        },
+        "retention": {
+          "mode": "operator_erase"
+        }
+      }
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "reader",
+      "default": false,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:reader"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "professional-license",
+          "operations": [
+            "get",
+            "list"
+          ],
+          "readableFields": [
+            "profession-code",
+            "jurisdiction-reference",
+            "licence-status",
+            "valid-from",
+            "valid-to"
+          ],
+          "rowBoundaries": []
+        }
+      ]
+    },
+    {
+      "id": "editor",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:editor"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "professional-license",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "person-reference",
+            "regulator-reference",
+            "jurisdiction-reference",
+            "profession-code",
+            "licence-status",
+            "valid-from",
+            "valid-to",
+            "practice-scope"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "local-identifier",
+            "person-reference",
+            "regulator-reference",
+            "jurisdiction-reference",
+            "profession-code",
+            "licence-status",
+            "valid-from",
+            "valid-to",
+            "practice-scope"
+          ]
+        },
+        {
+          "entity": "scope-correction",
+          "operations": [
+            "create",
+            "get",
+            "patch",
+            "submit_request",
+            "revise_request",
+            "cancel_request"
+          ],
+          "readableFields": [
+            "record",
+            "practice-scope",
+            "reason",
+            "supporting-reference"
+          ],
+          "writableFields": [
+            "record",
+            "practice-scope",
+            "reason",
+            "supporting-reference"
+          ],
+          "requestVisibility": "owner",
+          "rowBoundaries": []
+        }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "default": false,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:reviewer"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "professional-license",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "person-reference",
+            "regulator-reference",
+            "jurisdiction-reference",
+            "profession-code",
+            "licence-status",
+            "valid-from",
+            "valid-to",
+            "practice-scope"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "scope-correction",
+          "operations": [
+            "get",
+            "approve_request",
+            "reject_request",
+            "request_revision",
+            "apply_request"
+          ],
+          "readableFields": [
+            "record",
+            "practice-scope",
+            "reason",
+            "supporting-reference"
+          ],
+          "rowBoundaries": [],
+          "reviewStages": [
+            {
+              "stage": "review",
+              "targets": [
+                {
+                  "entity": "professional-license",
+                  "readableFields": [
+                    "local-identifier",
+                    "person-reference",
+                    "regulator-reference",
+                    "jurisdiction-reference",
+                    "profession-code",
+                    "licence-status",
+                    "valid-from",
+                    "valid-to",
+                    "practice-scope"
+                  ],
+                  "rowBoundaries": []
+                }
+              ]
+            }
+          ],
+          "applyTargets": [
+            {
+              "entity": "professional-license",
+              "rowBoundaries": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

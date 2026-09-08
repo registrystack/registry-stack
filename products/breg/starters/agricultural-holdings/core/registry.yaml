@@ -1,0 +1,947 @@
+{
+  "apiVersion": "registry.registrystack.org/v1alpha1",
+  "kind": "RegistryProject",
+  "registry": {
+    "id": "agricultural-holdings",
+    "canonicalBaseIri": "https://agricultural-holdings.example.org",
+    "version": "0.1.0",
+    "defaultLanguage": "en"
+  },
+  "package": {
+    "environment": "local",
+    "instanceId": "agricultural-holdings-starter",
+    "sequence": 1,
+    "sourceRevision": "agricultural-holdings-core-0.1.0"
+  },
+  "manifestProjection": {
+    "accessProfile": "editor",
+    "classificationCeiling": "restricted",
+    "catalog": {
+      "baseUrl": "https://agricultural-holdings.example.org",
+      "title": "Agricultural holding register",
+      "description": "Maintain agricultural production units and separately asserted holder responsibilities.",
+      "publisher": {
+        "id": "synthetic-custodian",
+        "name": "Synthetic example custodian"
+      }
+    },
+    "publicService": {
+      "id": "directory-service",
+      "title": "Agricultural holding register"
+    },
+    "datasets": [
+      {
+        "id": "directory",
+        "title": "Agricultural holding register",
+        "description": "Maintain agricultural production units and separately asserted holder responsibilities.",
+        "owner": "Synthetic example custodian",
+        "status": "active"
+      }
+    ],
+    "dataServices": [
+      {
+        "id": "directory-api",
+        "title": "Agricultural holding register",
+        "endpointUrl": "https://agricultural-holdings.example.org",
+        "servesDatasets": [
+          "directory"
+        ]
+      }
+    ],
+    "distributions": [],
+    "entities": [
+      {
+        "id": "farm",
+        "title": "Farm",
+        "conceptUri": "https://publicschema.org/agri/Farm",
+        "identifiers": [
+          {
+            "field": "local-identifier",
+            "kind": "local"
+          }
+        ],
+        "fields": [
+          {
+            "id": "name",
+            "concepts": [
+              "https://publicschema.org/name"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "person",
+        "title": "Person",
+        "conceptUri": "https://publicschema.org/Person",
+        "identifiers": [
+          {
+            "field": "local-identifier",
+            "kind": "local"
+          }
+        ],
+        "fields": [
+          {
+            "id": "name",
+            "concepts": [
+              "https://publicschema.org/name"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "organization",
+        "title": "Organization",
+        "conceptUri": "https://publicschema.org/Organization",
+        "identifiers": [
+          {
+            "field": "local-identifier",
+            "kind": "local"
+          }
+        ],
+        "fields": [
+          {
+            "id": "name",
+            "concepts": [
+              "https://publicschema.org/name"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "informal-group",
+        "title": "Informal Group",
+        "conceptUri": "https://publicschema.org/InformalGroup",
+        "identifiers": [
+          {
+            "field": "local-identifier",
+            "kind": "local"
+          }
+        ],
+        "fields": [
+          {
+            "id": "name",
+            "concepts": [
+              "https://publicschema.org/name"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "person-holding-operator-role",
+        "title": "Person Holding Operator Role",
+        "conceptUri": "https://publicschema.org/agri/PersonHoldingOperatorRole",
+        "identifiers": [],
+        "fields": [
+          {
+            "id": "operated-holding",
+            "relationshipRole": "operated-holding",
+            "relationshipConceptUri": "https://publicschema.org/agri/operated_holding"
+          },
+          {
+            "id": "holding-operator-person",
+            "relationshipRole": "holding-operator-person",
+            "relationshipConceptUri": "https://publicschema.org/agri/holding_operator_person"
+          },
+          {
+            "id": "start-date",
+            "concepts": [
+              "https://publicschema.org/start_date"
+            ]
+          },
+          {
+            "id": "end-date",
+            "concepts": [
+              "https://publicschema.org/end_date"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "organization-holding-operator-role",
+        "title": "Organization Holding Operator Role",
+        "conceptUri": "https://publicschema.org/agri/OrganizationHoldingOperatorRole",
+        "identifiers": [],
+        "fields": [
+          {
+            "id": "operated-holding",
+            "relationshipRole": "operated-holding",
+            "relationshipConceptUri": "https://publicschema.org/agri/operated_holding"
+          },
+          {
+            "id": "holding-operator-organization",
+            "relationshipRole": "holding-operator-organization",
+            "relationshipConceptUri": "https://publicschema.org/agri/holding_operator_organization"
+          },
+          {
+            "id": "start-date",
+            "concepts": [
+              "https://publicschema.org/start_date"
+            ]
+          },
+          {
+            "id": "end-date",
+            "concepts": [
+              "https://publicschema.org/end_date"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "group-holding-operator-role",
+        "title": "Group Holding Operator Role",
+        "conceptUri": "https://publicschema.org/agri/GroupHoldingOperatorRole",
+        "identifiers": [],
+        "fields": [
+          {
+            "id": "operated-holding",
+            "relationshipRole": "operated-holding",
+            "relationshipConceptUri": "https://publicschema.org/agri/operated_holding"
+          },
+          {
+            "id": "holding-operator-group",
+            "relationshipRole": "holding-operator-group",
+            "relationshipConceptUri": "https://publicschema.org/agri/holding_operator_group"
+          },
+          {
+            "id": "start-date",
+            "concepts": [
+              "https://publicschema.org/start_date"
+            ]
+          },
+          {
+            "id": "end-date",
+            "concepts": [
+              "https://publicschema.org/end_date"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "entities": [
+    {
+      "id": "farm",
+      "primaryDataset": "directory",
+      "route": "farms",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "local-identifier",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "localIdentifier",
+          "maxLength": 160,
+          "minLength": 1
+        },
+        {
+          "id": "name",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 160,
+          "minLength": 1
+        }
+      ],
+      "changeControl": {
+        "requiredFor": [
+          "patch"
+        ]
+      },
+      "constraints": [
+        {
+          "kind": "unique",
+          "fields": [
+            "local-identifier"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "person",
+      "primaryDataset": "directory",
+      "route": "persons",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "local-identifier",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "localIdentifier",
+          "maxLength": 160,
+          "minLength": 1
+        },
+        {
+          "id": "name",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 160,
+          "minLength": 1
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "unique",
+          "fields": [
+            "local-identifier"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "organization",
+      "primaryDataset": "directory",
+      "route": "organizations",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "local-identifier",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "localIdentifier",
+          "maxLength": 160,
+          "minLength": 1
+        },
+        {
+          "id": "name",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 160,
+          "minLength": 1
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "unique",
+          "fields": [
+            "local-identifier"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "informal-group",
+      "primaryDataset": "directory",
+      "route": "informal-groups",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "local-identifier",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "localIdentifier",
+          "maxLength": 160,
+          "minLength": 1
+        },
+        {
+          "id": "name",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 160,
+          "minLength": 1
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "unique",
+          "fields": [
+            "local-identifier"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "person-holding-operator-role",
+      "primaryDataset": "directory",
+      "route": "person-holding-operator-roles",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "operated-holding",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "farm",
+          "apiName": "operatedHolding"
+        },
+        {
+          "id": "holding-operator-person",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "person",
+          "apiName": "holdingOperatorPerson"
+        },
+        {
+          "id": "start-date",
+          "type": "date",
+          "required": false,
+          "classification": "restricted",
+          "apiName": "startDate"
+        },
+        {
+          "id": "end-date",
+          "type": "date",
+          "required": false,
+          "classification": "restricted",
+          "apiName": "endDate"
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "compare",
+          "left": "start-date",
+          "operator": "less_than_or_equal",
+          "right": "end-date"
+        }
+      ]
+    },
+    {
+      "id": "organization-holding-operator-role",
+      "primaryDataset": "directory",
+      "route": "organization-holding-operator-roles",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "operated-holding",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "farm",
+          "apiName": "operatedHolding"
+        },
+        {
+          "id": "holding-operator-organization",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "organization",
+          "apiName": "holdingOperatorOrganization"
+        },
+        {
+          "id": "start-date",
+          "type": "date",
+          "required": false,
+          "classification": "restricted",
+          "apiName": "startDate"
+        },
+        {
+          "id": "end-date",
+          "type": "date",
+          "required": false,
+          "classification": "restricted",
+          "apiName": "endDate"
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "compare",
+          "left": "start-date",
+          "operator": "less_than_or_equal",
+          "right": "end-date"
+        }
+      ]
+    },
+    {
+      "id": "group-holding-operator-role",
+      "primaryDataset": "directory",
+      "route": "group-holding-operator-roles",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "operated-holding",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "farm",
+          "apiName": "operatedHolding"
+        },
+        {
+          "id": "holding-operator-group",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "informal-group",
+          "apiName": "holdingOperatorGroup"
+        },
+        {
+          "id": "start-date",
+          "type": "date",
+          "required": false,
+          "classification": "restricted",
+          "apiName": "startDate"
+        },
+        {
+          "id": "end-date",
+          "type": "date",
+          "required": false,
+          "classification": "restricted",
+          "apiName": "endDate"
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "compare",
+          "left": "start-date",
+          "operator": "less_than_or_equal",
+          "right": "end-date"
+        }
+      ]
+    },
+    {
+      "id": "name-correction",
+      "primaryDataset": "directory",
+      "route": "name-corrections",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "record",
+          "type": "reference",
+          "required": true,
+          "classification": "restricted",
+          "target": "farm"
+        },
+        {
+          "id": "name",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 160,
+          "minLength": 1
+        },
+        {
+          "id": "reason",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maxLength": 500,
+          "minLength": 1
+        },
+        {
+          "id": "supporting-reference",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "supportingReference",
+          "maxLength": 500,
+          "minLength": 1
+        }
+      ],
+      "changeRequest": {
+        "effects": [
+          {
+            "target": {
+              "fromField": "record"
+            },
+            "operation": "patch",
+            "set": {
+              "name": {
+                "fromField": "name"
+              }
+            }
+          }
+        ],
+        "review": {
+          "stages": [
+            {
+              "id": "review",
+              "approvals": 1,
+              "excludeSubmitter": true
+            }
+          ]
+        },
+        "application": {
+          "mode": "manual"
+        },
+        "retention": {
+          "mode": "operator_erase"
+        }
+      }
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "reader",
+      "default": false,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:reader"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "farm",
+          "operations": [
+            "get",
+            "list"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name"
+          ],
+          "rowBoundaries": []
+        }
+      ]
+    },
+    {
+      "id": "editor",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:editor"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "farm",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "local-identifier",
+            "name"
+          ]
+        },
+        {
+          "entity": "person",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create",
+            "patch"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "local-identifier",
+            "name"
+          ]
+        },
+        {
+          "entity": "organization",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create",
+            "patch"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "local-identifier",
+            "name"
+          ]
+        },
+        {
+          "entity": "informal-group",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create",
+            "patch"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "local-identifier",
+            "name"
+          ]
+        },
+        {
+          "entity": "person-holding-operator-role",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create",
+            "patch"
+          ],
+          "readableFields": [
+            "operated-holding",
+            "holding-operator-person",
+            "start-date",
+            "end-date"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "operated-holding",
+            "holding-operator-person",
+            "start-date",
+            "end-date"
+          ]
+        },
+        {
+          "entity": "organization-holding-operator-role",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create",
+            "patch"
+          ],
+          "readableFields": [
+            "operated-holding",
+            "holding-operator-organization",
+            "start-date",
+            "end-date"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "operated-holding",
+            "holding-operator-organization",
+            "start-date",
+            "end-date"
+          ]
+        },
+        {
+          "entity": "group-holding-operator-role",
+          "operations": [
+            "get",
+            "list",
+            "revisions",
+            "create",
+            "patch"
+          ],
+          "readableFields": [
+            "operated-holding",
+            "holding-operator-group",
+            "start-date",
+            "end-date"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true,
+          "writableFields": [
+            "operated-holding",
+            "holding-operator-group",
+            "start-date",
+            "end-date"
+          ]
+        },
+        {
+          "entity": "name-correction",
+          "operations": [
+            "create",
+            "get",
+            "patch",
+            "submit_request",
+            "revise_request",
+            "cancel_request"
+          ],
+          "readableFields": [
+            "record",
+            "name",
+            "reason",
+            "supporting-reference"
+          ],
+          "writableFields": [
+            "record",
+            "name",
+            "reason",
+            "supporting-reference"
+          ],
+          "requestVisibility": "owner",
+          "rowBoundaries": []
+        }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "default": false,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:reviewer"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "farm",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "person",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "organization",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "informal-group",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "name"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "person-holding-operator-role",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "operated-holding",
+            "holding-operator-person",
+            "start-date",
+            "end-date"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "organization-holding-operator-role",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "operated-holding",
+            "holding-operator-organization",
+            "start-date",
+            "end-date"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "group-holding-operator-role",
+          "operations": [
+            "get",
+            "list",
+            "revisions"
+          ],
+          "readableFields": [
+            "operated-holding",
+            "holding-operator-group",
+            "start-date",
+            "end-date"
+          ],
+          "rowBoundaries": [],
+          "revisionAccess": true
+        },
+        {
+          "entity": "name-correction",
+          "operations": [
+            "get",
+            "approve_request",
+            "reject_request",
+            "request_revision",
+            "apply_request"
+          ],
+          "readableFields": [
+            "record",
+            "name",
+            "reason",
+            "supporting-reference"
+          ],
+          "rowBoundaries": [],
+          "reviewStages": [
+            {
+              "stage": "review",
+              "targets": [
+                {
+                  "entity": "farm",
+                  "readableFields": [
+                    "local-identifier",
+                    "name"
+                  ],
+                  "rowBoundaries": []
+                }
+              ]
+            }
+          ],
+          "applyTargets": [
+            {
+              "entity": "farm",
+              "rowBoundaries": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

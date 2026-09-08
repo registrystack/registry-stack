@@ -19,6 +19,17 @@ checkout="$1"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 files=(
   publicschema.yaml
+  agriculture.yaml
+  farm_operators.yaml
+  government.yaml
+  registry.yaml
+  work.yaml
+  agriculture_biology.yaml
+  agriculture_operations.yaml
+  assets.yaml
+  service_capacity.yaml
+  government_relationships.yaml
+  public_services.yaml
   assessment.yaml
   biometric.yaml
   categories.yaml

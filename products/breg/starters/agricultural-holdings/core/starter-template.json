@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "starterId": "agricultural-holdings",
+  "variantId": "core",
+  "templateVersion": "0.1.0",
+  "title": "Agricultural holding register",
+  "description": "Maintain agricultural production units and separately asserted holder responsibilities.",
+  "firstRecordEntity": "farm",
+  "publicSchema": {
+    "repository": "https://github.com/PublicSchema/publicschema.org",
+    "commit": "1ea9ce333918693b29aec31068fac412e02cb8dc",
+    "status": "draft",
+    "license": "CC-BY-4.0"
+  },
+  "review": {
+    "entity": "name-correction",
+    "field": "name",
+    "submitter": "editor",
+    "reviewer": "reviewer",
+    "applier": "reviewer",
+    "description": "A distinct reviewer approves a fixed name correction. Approval leaves the record unchanged until the reviewer applies the frozen effect."
+  },
+  "scopeNotes": [
+    "A holding is a production unit; registration establishes neither land title nor benefit entitlement.",
+    "Readers see holdings only. Identity records and typed person, organization or informal-group holder responsibilities are restricted to editors and reviewers.",
+    "Holder responsibilities are separate assertions, including joint holders; they do not imply daily management or work."
+  ]
+}

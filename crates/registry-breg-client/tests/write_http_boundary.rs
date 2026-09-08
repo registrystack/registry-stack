@@ -1520,3 +1520,305 @@ async fn source_mismatch_and_invalid_bodies_are_refused_before_token_or_io() {
     assert_eq!(source.token.0.load(Ordering::SeqCst), source_token_count);
     assert_eq!(source.requests.lock().unwrap().len(), source_request_count);
 }
+
+#[tokio::test]
+async fn prepared_create_roundtrip_reuses_exact_request_and_refuses_changed_bindings() {
+    use registry_breg_client::BRegPreparedCreate;
+    let mut changed_metadata = metadata_fixture();
+    changed_metadata["revision"] =
+        json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let fixture = test_client(vec![
+        metadata_response(),
+        mutation_response(
+            StatusCode::CREATED,
+            BRegRecordFormat::JsonLd,
+            RECORD_ID,
+            true,
+        ),
+        metadata_response(),
+        mutation_response(
+            StatusCode::CREATED,
+            BRegRecordFormat::JsonLd,
+            RECORD_ID,
+            true,
+        ),
+        MockResponse::json(StatusCode::OK, changed_metadata),
+    ])
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    let prepared = fixture
+        .client
+        .prepare_create(
+            &binding,
+            &create_request(),
+            &key("attempt-create"),
+            BRegRecordFormat::JsonLd,
+        )
+        .unwrap();
+    fixture
+        .client
+        .create_record(
+            &binding,
+            &create_request(),
+            &key("attempt-create"),
+            BRegRecordFormat::JsonLd,
+        )
+        .await
+        .unwrap();
+    let saved = prepared.as_bytes().to_vec();
+    drop(prepared);
+    let prepared = BRegPreparedCreate::from_slice(&saved).unwrap();
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    let (request, idempotency, format) =
+        fixture.client.recover_create(&binding, &prepared).unwrap();
+    fixture
+        .client
+        .create_record(&binding, &request, &idempotency, format)
+        .await
+        .unwrap();
+    let requests = fixture.requests.lock().unwrap().clone();
+    let replay = &requests[3];
+    assert_eq!(requests[1].uri, replay.uri);
+    assert_eq!(requests[1].body, replay.body);
+    assert_eq!(requests[1].accept, replay.accept);
+    assert_eq!(requests[1].idempotency_key, replay.idempotency_key);
+    let changed = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let token_count = fixture.token.0.load(Ordering::SeqCst);
+    assert!(fixture
+        .client
+        .recover_create(&create_binding(&changed), &prepared)
+        .is_err());
+    let other = test_client(vec![]).await;
+    assert!(other.client.recover_create(&binding, &prepared).is_err());
+    assert_eq!(other.token.0.load(Ordering::SeqCst), 0);
+    let mut tampered: Value = serde_json::from_slice(&saved).unwrap();
+    tampered["body"] = json!("{\"data\":{\"secret\":\"canary\"}}");
+    let tampered = BRegPreparedCreate::from_slice(&serde_json::to_vec(&tampered).unwrap()).unwrap();
+    assert!(fixture.client.recover_create(&binding, &tampered).is_err());
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), token_count);
+    assert!(!format!("{tampered:?}").contains("canary"));
+    assert!(BRegPreparedCreate::from_slice(b"{\"version\":1,\"version\":1}").is_err());
+}
+
+fn apply_metadata_fixture() -> Value {
+    let mut metadata = metadata_fixture();
+    let operation = &mut metadata["operations"][2];
+    operation["id"] = json!("records.company.request.apply");
+    operation["path"] = json!("/v1/records/companies/{record_id}/actions/apply");
+    operation["operation"] = json!("apply_request");
+    operation["request"]["schema"] = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object", "additionalProperties": false,
+        "required": ["proposalVersion", "effectDigest"],
+        "properties": {
+            "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
+            "effectDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the immutable proposal effects displayed to the actor."}
+        }
+    });
+    metadata["entities"][0]["operations"][2]["operation"] = json!("apply_request");
+    metadata
+}
+
+#[tokio::test]
+async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
+    use registry_breg_client::BRegPreparedLifecycle;
+    let metadata = apply_metadata_fixture();
+    let mut record = lifecycle_record_body();
+    record["data"]["request"]["bregState"] = json!("approved");
+    record["data"]["request"]["editable"] = json!(false);
+    let action = &mut record["data"]["request"]["actions"][0];
+    action["operation"] = json!("apply_request");
+    action["href"] = json!(format!(
+        "/v1/records/companies/{RECORD_ID}/actions/apply?accessProfile=company-writer"
+    ));
+    action["proposalVersion"] = json!(7);
+    action["effectDigest"] = json!(EFFECT_DIGEST);
+    let RegistryRecordResponse::Single(original_record) =
+        RegistryRecordResponse::from_value(record.clone(), RegistryRecordRepresentation::Json)
+            .unwrap()
+    else {
+        panic!("single")
+    };
+    record["data"]["request"]["actions"] = json!([]);
+    let RegistryRecordResponse::Single(current_record) =
+        RegistryRecordResponse::from_value(record, RegistryRecordRepresentation::Json).unwrap()
+    else {
+        panic!("single")
+    };
+    let mut receipt = receipt_body(RECORD_ID, "applied");
+    receipt["request"]["application"] = json!({"applicationId": OTHER_RECORD_ID, "proposalVersion": 7, "effectDigest": EFFECT_DIGEST, "appliedAt": "2026-09-08T00:00:00Z"});
+    let mut changed = metadata.clone();
+    changed["revision"] =
+        json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let fixture = test_client(vec![
+        MockResponse::json(StatusCode::OK, metadata.clone()),
+        lifecycle_response(receipt.clone()),
+        MockResponse::json(StatusCode::OK, metadata),
+        lifecycle_response(receipt),
+        metadata_response(),
+        MockResponse::json(StatusCode::OK, changed),
+    ])
+    .await;
+    let contract = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let authority = contract
+        .select_lifecycle("company", "company-writer")
+        .unwrap();
+    let action = fixture
+        .client
+        .lifecycle_actions(&authority, &original_record)
+        .unwrap()
+        .remove(0);
+    let prepared = fixture
+        .client
+        .prepare_lifecycle_action(&authority, &original_record, &action, &key("attempt-apply"))
+        .unwrap();
+    // The mock returns the retained receipt, exercising exact wire replay. Real
+    // commit-before-checkpoint transaction proof belongs to the native journey.
+    fixture
+        .client
+        .execute_lifecycle_action(&action, &key("attempt-apply"))
+        .await
+        .unwrap();
+    let saved = prepared.as_bytes().to_vec();
+    drop(prepared);
+    let prepared = BRegPreparedLifecycle::from_slice(&saved).unwrap();
+    let contract = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let authority = contract
+        .select_lifecycle("company", "company-writer")
+        .unwrap();
+    assert!(fixture
+        .client
+        .lifecycle_actions(&authority, &current_record)
+        .unwrap()
+        .is_empty());
+    let (recovered, key) = fixture
+        .client
+        .recover_lifecycle_action(&authority, &prepared)
+        .unwrap();
+    assert_eq!(action, recovered);
+    fixture
+        .client
+        .execute_lifecycle_action(&recovered, &key)
+        .await
+        .unwrap();
+    let requests = fixture.requests.lock().unwrap().clone();
+    assert_eq!(requests[1].uri, requests[3].uri);
+    assert_eq!(requests[1].body, requests[3].body);
+    assert_eq!(requests[1].if_match, requests[3].if_match);
+    assert_eq!(requests[1].idempotency_key, requests[3].idempotency_key);
+    let contract = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let revoked_authority = contract
+        .select_lifecycle("company", "company-writer")
+        .unwrap();
+    assert!(fixture
+        .client
+        .recover_lifecycle_action(&revoked_authority, &prepared)
+        .is_err());
+    let contract = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let changed_authority = contract
+        .select_lifecycle("company", "company-writer")
+        .unwrap();
+    let token_count = fixture.token.0.load(Ordering::SeqCst);
+    assert!(fixture
+        .client
+        .recover_lifecycle_action(&changed_authority, &prepared)
+        .is_err());
+    for (field, value) in [
+        ("href", json!("https://attacker.invalid/")),
+        ("body", json!("{}")),
+        ("if_match", json!("\"changed\"")),
+    ] {
+        let mut tampered: Value = serde_json::from_slice(&saved).unwrap();
+        tampered[field] = value;
+        let tampered =
+            BRegPreparedLifecycle::from_slice(&serde_json::to_vec(&tampered).unwrap()).unwrap();
+        assert!(fixture
+            .client
+            .recover_lifecycle_action(&authority, &tampered)
+            .is_err());
+    }
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), token_count);
+    let other = test_client(vec![]).await;
+    assert!(other
+        .client
+        .recover_lifecycle_action(&authority, &prepared)
+        .is_err());
+    assert_eq!(other.token.0.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn record_revisions_uses_bounded_native_route_and_refuses_invalid_selectors_before_io() {
+    let fixture = test_client(vec![MockResponse::json(
+        StatusCode::OK,
+        json!({"items": [], "pageInfo": {"hasNextPage": false}}),
+    )])
+    .await;
+    let result = fixture
+        .client
+        .record_revisions("companies", RECORD_ID, Some("company-writer"))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(result.value.as_bytes()).unwrap()["items"],
+        json!([])
+    );
+    let requests = fixture.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[0].uri,
+        format!(
+            "/tenant/base/v1/records/companies/{RECORD_ID}/revisions?accessProfile=company-writer"
+        )
+    );
+    for (route, id, profile) in [
+        ("../companies", RECORD_ID, Some("company-writer")),
+        ("companies", "arbitrary", Some("company-writer")),
+        ("companies", RECORD_ID, Some("invalid?profile")),
+    ] {
+        assert!(fixture
+            .client
+            .record_revisions(route, id, profile)
+            .await
+            .is_err());
+    }
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+}

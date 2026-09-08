@@ -1,0 +1,35 @@
+{
+  "nursing": {
+    "localIdentifier": "SYNTHETIC-LIC-001",
+    "personReference": "https://people.example.org/people/synthetic-lic-001",
+    "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+    "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+    "professionCode": "example-nursing",
+    "licenceStatus": "recorded-active",
+    "validFrom": "2026-01-01",
+    "validTo": "2026-12-31",
+    "practiceScope": "General supervised practice"
+  },
+  "engineering": {
+    "localIdentifier": "SYNTHETIC-LIC-002",
+    "personReference": "https://people.example.org/people/synthetic-lic-002",
+    "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+    "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+    "professionCode": "example-engineering",
+    "licenceStatus": "recorded-active",
+    "validFrom": "2026-01-01",
+    "validTo": "2026-12-31",
+    "practiceScope": "General supervised practice"
+  },
+  "suspended": {
+    "localIdentifier": "SYNTHETIC-LIC-003",
+    "personReference": "https://people.example.org/people/synthetic-lic-003",
+    "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+    "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+    "professionCode": "example-nursing",
+    "licenceStatus": "recorded-suspended",
+    "validFrom": "2026-01-01",
+    "validTo": "2026-12-31",
+    "practiceScope": "General supervised practice"
+  }
+}

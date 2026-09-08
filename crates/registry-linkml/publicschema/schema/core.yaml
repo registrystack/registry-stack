@@ -165,7 +165,7 @@ classes:
         de Person et Group, permettant de les désigner indifféremment dans une référence.
       external_alignments_json: '[{"label": "Person (Core Person)", "match": "related", "note": "SEMIC
         Core Person covers the individual human. Party is the beneficiary-side supertype for persons and
-        organized groups of persons (Household, Family, Farm) that can be enrolled in programs and receive
+        organized groups of persons (Household, Family) that can be enrolled in programs and receive
         services. The broader SEMIC/foaf:Agent vocabulary for acting entities maps to our Agent concept,
         not to Party.", "uri": "http://www.w3.org/ns/person#Person", "vocabulary": "Core Person", "vocabulary_id":
         "semic"}]'
@@ -174,7 +174,7 @@ classes:
         design-principles.md section 3. All six systems do distinguish between individual and group-level
         records and share common identification and naming properties across both, with OpenSPP modelling
         the split explicitly as \"Registrant\"; that evidence accrues to the concrete Party subtypes (Person,
-        Household, Family, Farm), not to the supertype itself.\n", "system_count": 0, "total_systems":
+        Household, Family), not to the supertype itself.\n", "system_count": 0, "total_systems":
         6}'
       bibliography_refs: '["schema-org", "semic-core-person"]'
     abstract: true

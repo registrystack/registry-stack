@@ -1,0 +1,10 @@
+{
+  "change": {
+    "record": {
+      "recordRef": "first-record"
+    },
+    "name": "My First Office",
+    "reason": "Correct a synthetic spelling mistake.",
+    "supportingReference": "SYNTHETIC-REVIEW-001"
+  }
+}

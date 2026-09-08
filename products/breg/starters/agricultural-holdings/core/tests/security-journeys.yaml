@@ -1,0 +1,1218 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-journeys/v1",
+  "journeys": [
+    {
+      "id": "starter-model-policy",
+      "steps": [
+        {
+          "id": "seed-river",
+          "entity": "farm",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-RIVER",
+              "name": "River Holding"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "river"
+        },
+        {
+          "id": "seed-landless",
+          "entity": "farm",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-LANDLESS",
+              "name": "Landless Cooperative Holding"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "landless"
+        },
+        {
+          "id": "seed-collective",
+          "entity": "farm",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-COLLECTIVE",
+              "name": "Hill Collective Holding"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "collective"
+        },
+        {
+          "id": "seed-ana",
+          "entity": "person",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-ANA",
+              "name": "Ana Example"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "ana"
+        },
+        {
+          "id": "seed-bo",
+          "entity": "person",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-BO",
+              "name": "Bo Example"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "bo"
+        },
+        {
+          "id": "seed-cooperative",
+          "entity": "organization",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-COOPERATIVE",
+              "name": "Example Agricultural Cooperative"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "cooperative"
+        },
+        {
+          "id": "seed-group",
+          "entity": "informal-group",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-GROUP",
+              "name": "Hill Growers Group"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "group"
+        },
+        {
+          "id": "seed-ana-role",
+          "entity": "person-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorPerson": {
+                "recordRef": "ana"
+              },
+              "startDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "ana-role"
+        },
+        {
+          "id": "seed-bo-role",
+          "entity": "person-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorPerson": {
+                "recordRef": "bo"
+              },
+              "startDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "bo-role"
+        },
+        {
+          "id": "seed-cooperative-role",
+          "entity": "organization-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "landless"
+              },
+              "holdingOperatorOrganization": {
+                "recordRef": "cooperative"
+              },
+              "startDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "cooperative-role"
+        },
+        {
+          "id": "seed-group-role",
+          "entity": "group-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "collective"
+              },
+              "holdingOperatorGroup": {
+                "recordRef": "group"
+              },
+              "startDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "group-role"
+        },
+        {
+          "id": "first-record",
+          "entity": "farm",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "name": "Frist Record"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "first-record"
+        },
+        {
+          "id": "unscoped-caller-cannot-create",
+          "entity": "farm",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "DENIED-001",
+              "name": "Denied"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 404,
+            "problemCode": "resource.not_found"
+          }
+        },
+        {
+          "id": "missing-scope-cannot-read",
+          "entity": "farm",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 404,
+            "problemCode": "resource.not_found"
+          }
+        },
+        {
+          "id": "draft-correction",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "first-record"
+              },
+              "name": "First Record",
+              "reason": "Synthetic spelling correction",
+              "supportingReference": "SYNTHETIC-SUPPORT-001"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "draft"
+        },
+        {
+          "id": "unscoped-caller-cannot-read-review-material",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 404,
+            "problemCode": "resource.not_found"
+          }
+        },
+        {
+          "id": "before-submit",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-submit"
+        },
+        {
+          "id": "submit-correction",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "submit_request",
+            "etagRef": "before-submit",
+            "recordRef": "before-submit"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "review",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "review"
+        },
+        {
+          "id": "foreign-reviewer-precondition-refused",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "approve_request",
+            "etagRef": "review",
+            "proposalVersionRef": "review",
+            "effectDigestRef": "review",
+            "stage": "review",
+            "recordRef": "review"
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 412,
+            "problemCode": "precondition.failed"
+          }
+        },
+        {
+          "id": "approve-correction",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "approve_request",
+            "etagRef": "review",
+            "proposalVersionRef": "review",
+            "effectDigestRef": "review",
+            "stage": "review",
+            "recordRef": "review"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "approval-does-not-apply",
+          "entity": "farm",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "name": "Frist Record",
+              "localIdentifier": "JOURNEY-FIRST-001"
+            }
+          },
+          "capture": "approval-does-not-apply"
+        },
+        {
+          "id": "before-apply",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-apply"
+        },
+        {
+          "id": "apply-correction",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "apply_request",
+            "etagRef": "before-apply",
+            "proposalVersionRef": "before-apply",
+            "effectDigestRef": "before-apply",
+            "recordRef": "before-apply"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "corrected-record",
+          "entity": "farm",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "name": "First Record",
+              "localIdentifier": "JOURNEY-FIRST-001"
+            }
+          },
+          "capture": "corrected-record"
+        },
+        {
+          "id": "unchanged-ana-role",
+          "entity": "person-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "ana-role"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "startDate": "2026-01-01"
+            }
+          },
+          "capture": "unchanged-ana-role"
+        },
+        {
+          "id": "unchanged-bo-role",
+          "entity": "person-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "bo-role"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "startDate": "2026-01-01"
+            }
+          },
+          "capture": "unchanged-bo-role"
+        },
+        {
+          "id": "unchanged-cooperative-role",
+          "entity": "organization-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "cooperative-role"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "startDate": "2026-01-01"
+            }
+          },
+          "capture": "unchanged-cooperative-role"
+        },
+        {
+          "id": "unchanged-group-role",
+          "entity": "group-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "group-role"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "startDate": "2026-01-01"
+            }
+          },
+          "capture": "unchanged-group-role"
+        },
+        {
+          "id": "rejected-draft",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "first-record"
+              },
+              "name": "Rejected Record",
+              "reason": "Synthetic rejection exercise",
+              "supportingReference": "SYNTHETIC-SUPPORT-002"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "reject-draft"
+        },
+        {
+          "id": "reject-before-submit",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "reject-draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "reject-before-submit"
+        },
+        {
+          "id": "submit-rejected",
+          "entity": "name-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "submit_request",
+            "etagRef": "reject-before-submit",
+            "recordRef": "reject-before-submit"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "reject-before-decision",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "reject-draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "reject-before-decision"
+        },
+        {
+          "id": "reject-correction",
+          "entity": "name-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "reject_request",
+            "etagRef": "reject-before-decision",
+            "proposalVersionRef": "reject-before-decision",
+            "effectDigestRef": "reject-before-decision",
+            "stage": "review",
+            "recordRef": "reject-before-decision"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "rejection-preserves-record",
+          "entity": "farm",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "name": "First Record",
+              "localIdentifier": "JOURNEY-FIRST-001"
+            }
+          },
+          "capture": "rejection-preserves-record"
+        },
+        {
+          "id": "person-unknown-dates",
+          "entity": "person-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorPerson": {
+                "recordRef": "ana"
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "person-unknown"
+        },
+        {
+          "id": "person-equal-dates",
+          "entity": "person-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorPerson": {
+                "recordRef": "ana"
+              },
+              "startDate": "2026-01-01",
+              "endDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "person-equal"
+        },
+        {
+          "id": "person-reversed-dates-refused",
+          "entity": "person-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorPerson": {
+                "recordRef": "ana"
+              },
+              "startDate": "2026-02-01",
+              "endDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 409,
+            "problemCode": "mutation.conflict"
+          }
+        },
+        {
+          "id": "person-malformed-date-refused",
+          "entity": "person-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorPerson": {
+                "recordRef": "ana"
+              },
+              "startDate": "2026-02-30"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "organization-unknown-dates",
+          "entity": "organization-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorOrganization": {
+                "recordRef": "cooperative"
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "organization-unknown"
+        },
+        {
+          "id": "organization-equal-dates",
+          "entity": "organization-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorOrganization": {
+                "recordRef": "cooperative"
+              },
+              "startDate": "2026-01-01",
+              "endDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "organization-equal"
+        },
+        {
+          "id": "organization-reversed-dates-refused",
+          "entity": "organization-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorOrganization": {
+                "recordRef": "cooperative"
+              },
+              "startDate": "2026-02-01",
+              "endDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 409,
+            "problemCode": "mutation.conflict"
+          }
+        },
+        {
+          "id": "organization-malformed-date-refused",
+          "entity": "organization-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorOrganization": {
+                "recordRef": "cooperative"
+              },
+              "startDate": "2026-02-30"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "group-unknown-dates",
+          "entity": "group-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorGroup": {
+                "recordRef": "group"
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "group-unknown"
+        },
+        {
+          "id": "group-equal-dates",
+          "entity": "group-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorGroup": {
+                "recordRef": "group"
+              },
+              "startDate": "2026-01-01",
+              "endDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "group-equal"
+        },
+        {
+          "id": "group-reversed-dates-refused",
+          "entity": "group-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorGroup": {
+                "recordRef": "group"
+              },
+              "startDate": "2026-02-01",
+              "endDate": "2026-01-01"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 409,
+            "problemCode": "mutation.conflict"
+          }
+        },
+        {
+          "id": "group-malformed-date-refused",
+          "entity": "group-holding-operator-role",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "operatedHolding": {
+                "recordRef": "river"
+              },
+              "holdingOperatorGroup": {
+                "recordRef": "group"
+              },
+              "startDate": "2026-02-30"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "unscoped-caller-cannot-read-person",
+          "entity": "person",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "ana"
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 404,
+            "problemCode": "resource.not_found"
+          }
+        }
+      ]
+    }
+  ]
+}

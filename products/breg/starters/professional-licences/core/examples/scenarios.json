@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "starter-data",
+      "description": "Create three fictional dated licence facts. External references are inert strings; no person or regulator lookup occurs.",
+      "input": "examples/inputs/starter-data.json",
+      "steps": [
+        {
+          "id": "nursing",
+          "operation": "create",
+          "entity": "professional-license",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "nursing",
+          "capture": "nursing"
+        },
+        {
+          "id": "engineering",
+          "operation": "create",
+          "entity": "professional-license",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "engineering",
+          "capture": "engineering"
+        },
+        {
+          "id": "suspended",
+          "operation": "create",
+          "entity": "professional-license",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "suspended",
+          "capture": "suspended"
+        }
+      ]
+    },
+    {
+      "id": "first-record",
+      "description": "Create an independent record without loading samples. Edit its input before starting.",
+      "input": "examples/inputs/first-record.json",
+      "steps": [
+        {
+          "id": "create",
+          "operation": "create",
+          "entity": "professional-license",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "record",
+          "capture": "first-record"
+        },
+        {
+          "id": "get",
+          "operation": "get",
+          "entity": "professional-license",
+          "client": "editor",
+          "accessProfile": "editor",
+          "record": "first-record"
+        }
+      ]
+    },
+    {
+      "id": "reviewed-change",
+      "description": "Submit, inspect, approve or reject, apply, and inspect history. Approval alone changes no record.",
+      "input": "examples/inputs/reviewed-change.json",
+      "steps": [
+        {
+          "id": "draft",
+          "operation": "create",
+          "entity": "scope-correction",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "change",
+          "capture": "request"
+        },
+        {
+          "id": "submit",
+          "operation": "submit",
+          "entity": "scope-correction",
+          "client": "editor",
+          "accessProfile": "editor",
+          "record": "request"
+        },
+        {
+          "id": "inspect",
+          "operation": "get",
+          "entity": "scope-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "approve",
+          "operation": "approve",
+          "entity": "scope-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "reject",
+          "operation": "reject",
+          "entity": "scope-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "apply",
+          "operation": "apply",
+          "entity": "scope-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "history",
+          "operation": "history",
+          "entity": "professional-license",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "first-record"
+        }
+      ]
+    }
+  ]
+}

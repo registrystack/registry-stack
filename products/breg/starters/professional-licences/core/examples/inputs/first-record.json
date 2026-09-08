@@ -1,0 +1,13 @@
+{
+  "record": {
+    "localIdentifier": "MY-FIRST-001",
+    "personReference": "https://people.example.org/people/my-first-001",
+    "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+    "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+    "professionCode": "example-nursing",
+    "licenceStatus": "recorded-active",
+    "validFrom": "2026-01-01",
+    "validTo": "2026-12-31",
+    "practiceScope": "Supervized community practice"
+  }
+}

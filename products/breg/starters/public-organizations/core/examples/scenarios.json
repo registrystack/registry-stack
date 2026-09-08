@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "starter-data",
+      "description": "Create synthetic records and typed relationships through ordinary authorized writes.",
+      "input": "examples/inputs/starter-data.json",
+      "steps": [
+        {
+          "id": "department",
+          "operation": "create",
+          "entity": "public-organization",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "department",
+          "capture": "department"
+        },
+        {
+          "id": "river",
+          "operation": "create",
+          "entity": "public-organization",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "river",
+          "capture": "river"
+        },
+        {
+          "id": "hill",
+          "operation": "create",
+          "entity": "public-organization",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "hill",
+          "capture": "hill"
+        },
+        {
+          "id": "river-link",
+          "operation": "create",
+          "entity": "institutional-relationship",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "river-link",
+          "capture": "river-link"
+        },
+        {
+          "id": "hill-link",
+          "operation": "create",
+          "entity": "institutional-relationship",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "hill-link",
+          "capture": "hill-link"
+        }
+      ]
+    },
+    {
+      "id": "first-record",
+      "description": "Create an independent record without loading samples. Edit its input before starting.",
+      "input": "examples/inputs/first-record.json",
+      "steps": [
+        {
+          "id": "create",
+          "operation": "create",
+          "entity": "public-organization",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "record",
+          "capture": "first-record"
+        },
+        {
+          "id": "get",
+          "operation": "get",
+          "entity": "public-organization",
+          "client": "editor",
+          "accessProfile": "editor",
+          "record": "first-record"
+        }
+      ]
+    },
+    {
+      "id": "reviewed-change",
+      "description": "Submit, inspect, approve or reject, apply, and inspect history. Approval alone changes no record.",
+      "input": "examples/inputs/reviewed-change.json",
+      "steps": [
+        {
+          "id": "draft",
+          "operation": "create",
+          "entity": "name-correction",
+          "client": "editor",
+          "accessProfile": "editor",
+          "input": "change",
+          "capture": "request"
+        },
+        {
+          "id": "submit",
+          "operation": "submit",
+          "entity": "name-correction",
+          "client": "editor",
+          "accessProfile": "editor",
+          "record": "request"
+        },
+        {
+          "id": "inspect",
+          "operation": "get",
+          "entity": "name-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "approve",
+          "operation": "approve",
+          "entity": "name-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "reject",
+          "operation": "reject",
+          "entity": "name-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "apply",
+          "operation": "apply",
+          "entity": "name-correction",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "request"
+        },
+        {
+          "id": "history",
+          "operation": "history",
+          "entity": "public-organization",
+          "client": "reviewer",
+          "accessProfile": "reviewer",
+          "record": "first-record"
+        }
+      ]
+    }
+  ]
+}
