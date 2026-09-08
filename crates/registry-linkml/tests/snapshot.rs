@@ -2,10 +2,10 @@
 //! says it is. The counts below are facts about the pinned commit; a
 //! snapshot refresh that changes them changes this test on purpose.
 
-use registry_linkml::Range;
 use registry_linkml::publicschema::{
-    self, LANGUAGES, Sensitivity, convergence, featured, label, property_groups, sensitivity,
+    self, convergence, featured, label, property_groups, sensitivity, Sensitivity, LANGUAGES,
 };
+use registry_linkml::Range;
 
 #[test]
 fn the_pin_matches_the_embedded_root_schema() {

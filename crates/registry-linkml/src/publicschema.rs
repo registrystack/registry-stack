@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::model::{ClassDef, EnumDef, Model, PermissibleValue, SlotDef};
-use crate::reader::{ReadError, read_bundle};
+use crate::reader::{read_bundle, ReadError};
 
 /// The embedded files, root first, as `(path under publicschema/, contents)`.
 const FILES: &[(&str, &str)] = &[
@@ -470,11 +470,9 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].category, "identity");
         assert_eq!(groups[0].properties, ["name", "identifiers"]);
-        assert!(
-            property_groups(&super::tests::class(&[]))
-                .unwrap()
-                .is_empty()
-        );
+        assert!(property_groups(&super::tests::class(&[]))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
