@@ -79,7 +79,8 @@ The `revision` line is the digest of the compiled project; it changes with every
 A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a finding does not.
 The first says the `operator` profile can list every row, which is intended for a registry-wide operations team,
 and the second says the `evidence-source` profile can look up any record by its code.
-Every command in this tutorial repeats both findings, so treat them as expected and read past them to the result.
+Every command in this tutorial that succeeds repeats both findings, so treat them as expected and read past them to the result.
+A check that is refused prints its errors instead, and you will meet one when you change the module.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files() and check(); crates/registry-breg/src/access.rs. */}
 
