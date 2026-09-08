@@ -138,9 +138,15 @@ evidencectl source add ./registry --project ./evidence \
 Choose entity `record`, the unique selector field `code`, and readable fact `name`.
 Choose **All records in this entity** explicitly for these synthetic records.
 The two flags name the source and selector used by the sample question below.
-The tool shows the
-proposed source authority before you accept it. A supplied code is not a row
-authorization rule; for institutional data choose the required row boundary.
+The command reports the proposed source authority and applies nothing. A supplied
+code is not a row authorization rule; for institutional data choose the required
+row boundary. When the report matches your choices, run the same command with
+`--apply` to perform the connection:
+
+```sh
+evidencectl source add ./registry --project ./evidence \
+  --source-id registry-name --selector-profile by-code --apply
+```
 
 This one setup operation prepares a lookup-only source client, exports its
 contract, imports it into Evidence, copies the dedicated credentials privately,
