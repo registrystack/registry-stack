@@ -112,8 +112,12 @@ Authoring check passed.
 ```
 
 Findings are advisories, not failures.
-The example's `asset-operator` and `site-planner` profiles admit any authenticated caller with the
-right purpose and can list every row, and the three remaining codes say the same of other grants.
+The first code is about who may select a profile: `asset-operator` and `site-planner` declare no
+required scope, so any authenticated caller with the right purpose qualifies.
+Each `correction-` profile declares a scope of its own, which is why none of them appear in that group.
+The three remaining codes are about row authority instead.
+They name grants that hold no claim-bound row restriction, within the operations and fields each
+grant allows, and a grant that includes `list` can therefore list every row.
 Leave the findings as they are for this tutorial; `--deny-findings` turns them into failures when
 you want a project held to that bar.
 Every check that passes in this tutorial repeats them, so read past them to the summary line.
