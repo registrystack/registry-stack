@@ -150,13 +150,16 @@ evidencectl source add ./registry --project ./evidence
 
 Choose the entity, an existing required unique scalar field, readable facts, and
 record scope. The review distinguishes registry-wide exact lookups from an
-explicit fixed binding on a string-valued row field. The tool prepares one dedicated lookup-only client
+explicit fixed binding on a string-valued row field. Without `--apply`, the
+command reports the lookup, scope, and dedicated client it would prepare and
+applies nothing. With `--apply`, it prepares one dedicated lookup-only client
 and source contract; it imports the contract and copies that credential into
 Evidence's private secrets directory. Local target endpoints and paths come from
 the retained session and selected project, not from copied settings.
 
-The owning BReg operation is `bregctl dev prepare-source`. Without `--apply`, it
-reports the inventory or proposed change. `--apply` stages a policy-only successor
+The owning BReg operation is `bregctl dev prepare-source`, which `bregctl dev --help`
+omits because `evidencectl source add` is the documented path. Without `--apply`,
+it reports the inventory or proposed change. `--apply` stages a policy-only successor
 while the session is stopped. It adds the selected selector, narrow grant, and
 separate client, then advances the package sequence. The next `dev start` activates
 that successor while preserving record IDs, revisions, values, audit history,

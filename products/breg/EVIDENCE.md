@@ -63,7 +63,8 @@ Use a nonsecret scope label for a fixed boundary. Its value is stored as a clien
 claim in `dev-clients.yaml`, which is ordinary authored configuration. The hidden
 prompt and private input file keep the value out of command arguments and reports;
 they do not make the authored claim private.
-Review the proposed authority before accepting it. Setup
+The command reports the proposed authority and applies nothing until it is
+re-run with `--apply`. Setup
 prepares a dedicated source client and a policy-only successor package, imports
 the generated source contract, copies its credential privately, and configures
 local endpoints and paths from the retained session. It creates no business

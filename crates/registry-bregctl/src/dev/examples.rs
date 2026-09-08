@@ -1642,9 +1642,8 @@ mod tests {
             .map(|l| l.local_addr().unwrap().port().to_string())
             .collect();
         drop(listeners);
+        // The copied starter carries dev-clients.yaml, which a first start reads.
         owned.succeed(&[
-            "--clients-file",
-            owned.project.join("clients.yaml").to_str().unwrap(),
             "--breg-bin",
             binaries.join("breg").to_str().unwrap(),
             "--mint-bin",
