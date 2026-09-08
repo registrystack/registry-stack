@@ -221,6 +221,7 @@ fn configure(
             &args.connection,
             &registry,
             &selection.client,
+            args.dry_run,
             invoke,
         )?;
     }
@@ -277,6 +278,7 @@ fn configure(
         &args.connection,
         &registry,
         &selection.client,
+        false,
         invoke,
     )?;
     // The provider alone writes its candidate, registrations and retained keys.
@@ -716,11 +718,19 @@ fn check_credential_outputs(
     name: &str,
     registry: &Path,
     client: &str,
+    allow_missing_directory: bool,
     invoke: &mut impl FnMut(&[OsString]) -> Result<Value>,
 ) -> Result<()> {
     let secrets = project.join("secrets");
-    let metadata = fs::symlink_metadata(&secrets)
-        .context("Evidence project needs its generated private secrets directory")?;
+    let metadata = match fs::symlink_metadata(&secrets) {
+        // A clean checkout can be previewed before its ignored keys exist.
+        Err(error) if allow_missing_directory && error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(());
+        }
+        result => {
+            result.context("Evidence project needs its generated private secrets directory")?
+        }
+    };
     if !metadata.is_dir()
         || metadata.file_type().is_symlink()
         || metadata.uid() != rustix::process::geteuid().as_raw()
@@ -1119,6 +1129,59 @@ mod tests {
     }
 
     #[test]
+    fn dry_run_accepts_a_clean_project_without_secrets_but_apply_still_requires_them() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("evidence");
+        fs::create_dir_all(project.join("questions")).unwrap();
+        fs::create_dir(project.join("sources")).unwrap();
+        let marker = b"version: 1\n";
+        fs::write(project.join("evidence-project.yaml"), marker).unwrap();
+        let mut provider = Provider::new();
+        let mut preview = args(root.path(), &project);
+        preview.dry_run = true;
+        let report = configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
+        assert_eq!(report["status"], "preview");
+        assert_eq!(
+            provider.calls.len(),
+            2,
+            "preview needs only inspection and provider preview"
+        );
+
+        let error = configure(args(root.path(), &project), false, &mut |a| {
+            provider.invoke(a)
+        })
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("generated private secrets directory"));
+        assert!(provider.clients.is_empty());
+        assert!(provider
+            .calls
+            .iter()
+            .flatten()
+            .all(|argument| argument != "--apply"));
+        let entries: BTreeSet<_> = fs::read_dir(&project)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            BTreeSet::from([
+                OsString::from("evidence-project.yaml"),
+                OsString::from("questions"),
+                OsString::from("sources"),
+            ])
+        );
+        assert_eq!(
+            fs::read(project.join("evidence-project.yaml")).unwrap(),
+            marker
+        );
+        for directory in ["questions", "sources"] {
+            assert_eq!(fs::read_dir(project.join(directory)).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
     fn row_scope_uses_a_private_file_and_never_places_its_value_in_arguments_or_report() {
         let root = tempfile::tempdir().unwrap();
         let value_file = root.path().join("row-value.json");
@@ -1228,19 +1291,23 @@ mod tests {
         .unwrap();
         let key_path = project.join("secrets/registry-client-key");
         fs::write(&key_path, b"different-private-key-canary").unwrap();
-        provider.calls.clear();
-        let error = configure(args(root.path(), &project), false, &mut |a| {
-            provider.invoke(a)
-        })
-        .unwrap_err();
-        assert!(error.to_string().contains("choose a fresh --connection"));
-        assert!(!format!("{error:#}").contains("different-private-key-canary"));
-        assert!(provider
-            .calls
-            .iter()
-            .flatten()
-            .all(|argument| argument != "--apply"));
-        assert_eq!(fs::read(key_path).unwrap(), b"different-private-key-canary");
+        for dry_run in [false, true] {
+            provider.calls.clear();
+            let mut selected = args(root.path(), &project);
+            selected.dry_run = dry_run;
+            let error = configure(selected, false, &mut |a| provider.invoke(a)).unwrap_err();
+            assert!(error.to_string().contains("choose a fresh --connection"));
+            assert!(!format!("{error:#}").contains("different-private-key-canary"));
+            assert!(provider
+                .calls
+                .iter()
+                .flatten()
+                .all(|argument| argument != "--apply"));
+            assert_eq!(
+                fs::read(&key_path).unwrap(),
+                b"different-private-key-canary"
+            );
+        }
     }
 
     #[test]

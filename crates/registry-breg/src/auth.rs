@@ -392,7 +392,9 @@ fn valid_claim_name(value: &str) -> bool {
             .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
 }
 
-fn valid_authority_claim_name(value: &str) -> bool {
+/// Whether a direct authority claim name is valid and does not shadow a registered JWT claim.
+/// Authoring preflight shares the same rule as runtime authority configuration.
+pub fn valid_authority_claim_name(value: &str) -> bool {
     valid_claim_name(value) && !REGISTERED_CLAIMS.contains(&value)
 }
 

@@ -91,6 +91,7 @@ fn scalar(field: &Value) -> bool {
                 | "date"
                 | "timestamp"
                 | "uuid"
+                | "reference"
                 | "vocabulary-code"
         )
     )
@@ -107,20 +108,8 @@ fn row_claim_name(claim: &str) -> bool {
         && claim
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
-        && ![
-            "iss",
-            "aud",
-            "exp",
-            "iat",
-            "nbf",
-            "jti",
-            "client_id",
-            "sub",
-            "scope",
-            "registry_principal",
-            "registry_purpose",
-        ]
-        .contains(&claim)
+        && registry_breg::auth::valid_authority_claim_name(claim)
+        && !["scope", "registry_principal", "registry_purpose"].contains(&claim)
 }
 fn identifier(entity: &Value, field: &Value) -> bool {
     scalar(field)
@@ -381,6 +370,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
                     serde_json::to_string(&failure).unwrap_or_default()
                 )
             })?;
+        registry_breg::authority::authority_inventory(&compiled).map_err(|error| {
+            anyhow::anyhow!("selected source authority is incompatible: {error}")
+        })?;
         registry_breg::evidence_source::export_evidence_source(
             &compiled,
             &registry_breg::evidence_source::EvidenceSourceOptions {
@@ -1017,14 +1009,32 @@ mod tests {
         )
         .unwrap();
         let value_file = root.join("row-value.json");
-        for (claim, field, value) in [
-            ("aud", "label", json!("allowed")),
-            ("bad claim", "label", json!("allowed")),
-            ("row_label", "label", json!(true)),
-            ("row_label", "label", json!("x".repeat(513))),
-            ("row_label", "label", json!("x".repeat(101))),
-            ("row_status", "status", json!("unlisted-value-canary")),
-        ] {
+        let registered_claims = [
+            "iss",
+            "aud",
+            "exp",
+            "iat",
+            "nbf",
+            "sub",
+            "client_id",
+            "azp",
+            "jti",
+            "cnf",
+        ];
+        let cases = registered_claims
+            .into_iter()
+            .map(|claim| (claim, "label", json!("allowed")))
+            .chain([
+                ("scope", "label", json!("allowed")),
+                ("registry_principal", "label", json!("allowed")),
+                ("registry_purpose", "label", json!("allowed")),
+                ("bad claim", "label", json!("allowed")),
+                ("row_label", "label", json!(true)),
+                ("row_label", "label", json!("x".repeat(513))),
+                ("row_label", "label", json!("x".repeat(101))),
+                ("row_status", "status", json!("unlisted-value-canary")),
+            ]);
+        for (claim, field, value) in cases {
             private::replace(&value_file, &serde_json::to_vec(&value).unwrap()).unwrap();
             let mut selected = args(&state);
             selected.apply = true;
@@ -1052,6 +1062,176 @@ mod tests {
             assert!(!root.join("source-transition.json").exists());
             assert!(!root.join("credentials/source-reader").exists());
         }
+    }
+
+    #[test]
+    fn conflicting_existing_claim_shapes_are_refused_before_preparing_authority() {
+        for (field, operator) in [("code", "equals"), ("label", "in")] {
+            let (_temporary, mut state) = source_fixture();
+            let root = state.root();
+            let path = state.project.join("registry.yaml");
+            let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
+            model["accessProfiles"][0]["grants"][0]["rowBoundaries"] =
+                json!([{"field":field,"claim":"existing_row","operator":operator}]);
+            let model = serde_norway::to_string(&model).unwrap().into_bytes();
+            fs::write(&path, &model).unwrap();
+            private::replace(&root.join("project/registry.yaml"), &model).unwrap();
+            let clients = fs::read(&state.clients_file).unwrap();
+            state.source_digest = capture(&state.project, &clients).unwrap().digest;
+            state.save().unwrap();
+            let compiled = crate::compile(
+                &state.project,
+                crate::ProfileArg::Production,
+                "prepare-source",
+            )
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+            registry_breg::authority::authority_inventory(&compiled).unwrap();
+            let retained = private::read(&root.join("state.json"), MAX_BYTES).unwrap();
+            let key_path = root.join("credentials/operator/assertion-key.jwk");
+            let key = private::read(&key_path, MAX_BYTES).unwrap();
+            let row_value = root.join("row-value.json");
+            private::create(&row_value, b"\"allowed\"").unwrap();
+            let mut selected = args(&state);
+            selected.apply = true;
+            selected.all_records = false;
+            selected.row_field = Some("label".into());
+            selected.row_claim = Some("existing_row".into());
+            selected.row_value_file = Some(row_value);
+            assert!(run(selected)
+                .unwrap_err()
+                .to_string()
+                .contains("different value shapes"));
+            assert_eq!(fs::read(&path).unwrap(), model);
+            assert_eq!(fs::read(&state.clients_file).unwrap(), clients);
+            assert_eq!(
+                private::read(&root.join("state.json"), MAX_BYTES).unwrap(),
+                retained
+            );
+            assert_eq!(private::read(&key_path, MAX_BYTES).unwrap(), key);
+            assert!(!root.join("source-transition.json").exists());
+            assert!(!root.join("credentials/source-reader").exists());
+        }
+    }
+
+    #[test]
+    fn required_unique_references_are_offered_prepared_and_exported_without_row_scope_expansion() {
+        let (_temporary, mut state) = source_fixture();
+        let path = state.project.join("registry.yaml");
+        let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let mut target = model["entities"][0].clone();
+        target["id"] = json!("organization");
+        target["route"] = json!("organizations");
+        model["entities"].as_array_mut().unwrap().push(target);
+        let mut target_grant = model["accessProfiles"][0]["grants"][0].clone();
+        target_grant["entity"] = json!("organization");
+        model["accessProfiles"][0]["grants"]
+            .as_array_mut()
+            .unwrap()
+            .push(target_grant);
+        model["entities"][0]["fields"].as_array_mut().unwrap().push(json!({"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"}));
+        model["entities"][0]["constraints"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"kind":"unique","fields":["organization"]}));
+        for key in ["readableFields", "writableFields"] {
+            model["accessProfiles"][0]["grants"][0][key]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("organization"));
+        }
+        let before = serde_norway::to_string(&model).unwrap().into_bytes();
+        fs::write(&path, &before).unwrap();
+        private::replace(&state.root().join("project/registry.yaml"), &before).unwrap();
+        state.source_digest = capture(&state.project, &fs::read(&state.clients_file).unwrap())
+            .unwrap()
+            .digest;
+        state.save().unwrap();
+        let mut inspect = args(&state);
+        inspect.entity = None;
+        inspect.selector_field = None;
+        inspect.readable_fields.clear();
+        inspect.all_records = false;
+        let inspection = run(inspect).unwrap();
+        let record = inspection["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entity| entity["id"] == "record")
+            .unwrap();
+        for key in ["selectorFields", "readableFields"] {
+            assert!(record[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field["id"] == "organization" && field["type"] == "reference"));
+        }
+        assert!(!record["rowFields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field["id"] == "organization"));
+        let selected = || {
+            let mut selected = args(&state);
+            selected.selector_field = Some("organization".into());
+            selected.selector_profile = "by-organization".into();
+            selected.readable_fields = vec!["organization".into(), "label".into()];
+            selected
+        };
+        let preview = run(selected()).unwrap();
+        assert_eq!(
+            preview["changeSet"]["migrationPlan"]["statements"],
+            json!([])
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let root = state.root();
+        private::directory(&root.join("build")).unwrap();
+        private::directory(&root.join("build/package")).unwrap();
+        let clients: Clients =
+            serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
+                .unwrap();
+        config::runtime(
+            &root,
+            &state,
+            &clients,
+            state.package_revision.as_deref().unwrap(),
+            false,
+        )
+        .unwrap();
+        let mut apply = selected();
+        apply.apply = true;
+        assert_eq!(run(apply).unwrap()["status"], "prepared");
+        let compiled = crate::compile(
+            &state.project,
+            crate::ProfileArg::Production,
+            "prepare-source",
+        )
+        .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        let export = registry_breg::evidence_source::export_evidence_source(
+            &compiled,
+            &registry_breg::evidence_source::EvidenceSourceOptions {
+                access_profile: "source-reader".into(),
+                entity: "record".into(),
+                selectors: vec!["by-organization".into()],
+                fields: vec!["organization".into(), "label".into()],
+                source_id: "registry".into(),
+                connection: "registry".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            export.identity_fields["by-organization"],
+            Vec::<String>::new()
+        );
+        let facts = export
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.path == "schemas/registry-facts.yaml")
+            .unwrap();
+        let facts: Value = serde_json::from_slice(&facts.bytes).unwrap();
+        assert_eq!(
+            facts["properties"]["organization"],
+            json!({"type":"string","minLength":36,"maxLength":36})
+        );
     }
 
     #[test]
