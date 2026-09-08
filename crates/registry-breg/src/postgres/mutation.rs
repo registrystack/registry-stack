@@ -61,8 +61,9 @@ impl PostgresRecordMutationService {
             _ => crate::mutation::FaultControl::Disabled,
         };
         let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
-        match tokio::time::timeout(
-            self.action_timeout,
+        let deadline = tokio::time::Instant::now() + self.action_timeout;
+        match tokio::time::timeout_at(
+            deadline,
             self.coordinator.execute_immediate_action(
                 guard.client(),
                 &self.registry,
@@ -70,6 +71,7 @@ impl PostgresRecordMutationService {
                 &claims,
                 &target_authority,
                 fault,
+                deadline,
             ),
         )
         .await

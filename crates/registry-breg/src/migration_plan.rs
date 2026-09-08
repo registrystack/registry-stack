@@ -1109,7 +1109,7 @@ fn validate_operator(expression: &pg_query::protobuf::AExpr) -> Result<(), Revie
     if names.len() != 1
         || !matches!(
             names[0].as_str(),
-            "=" | "<>" | "<" | ">" | "<=" | ">=" | "+" | "-" | "*" | "/"
+            "=" | "<>" | "<" | ">" | "<=" | ">=" | "+" | "-" | "*" | "/" | "~"
         )
     {
         return Err(ReviewedMigrationError::Sql);
@@ -1122,7 +1122,11 @@ fn boolean_result_expression(node: &PgNode) -> Result<bool, ReviewedMigrationErr
     Ok(match node {
         PgNode::AExpr(expression) => {
             let names = node_strings(&expression.name)?;
-            names.len() == 1 && matches!(names[0].as_str(), "=" | "<>" | "<" | ">" | "<=" | ">=")
+            names.len() == 1
+                && matches!(
+                    names[0].as_str(),
+                    "=" | "<>" | "<" | ">" | "<=" | ">=" | "~"
+                )
         }
         PgNode::BoolExpr(_) | PgNode::BooleanTest(_) | PgNode::NullTest(_) => true,
         PgNode::SubLink(link) => {
@@ -1371,6 +1375,10 @@ fn alter_table_objects(
             member_name,
         ));
     }
+    // One ALTER may atomically drop and replace the same managed constraint.
+    // Coverage describes its unique object footprint, not the number of clauses.
+    objects.sort();
+    objects.dedup();
     finish_objects(objects)
 }
 
@@ -1547,6 +1555,7 @@ fn object_cover(
         .filter(|cover| {
             cover.target == target
                 || reference_target_cover_matches_implicit_constraint(cover, object)
+                || pattern_cover_matches_implicit_constraint(cover, object)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1569,6 +1578,25 @@ fn reference_target_cover_matches_implicit_constraint(
             .member_id
             .as_deref()
             .and_then(|member| member.strip_prefix("reference:"))
+            == cover.target.member_id.as_deref()
+}
+
+#[cfg(feature = "tooling")]
+fn pattern_cover_matches_implicit_constraint(
+    cover: &ReviewedChangeCover,
+    object: &ReviewedMigrationObject,
+) -> bool {
+    matches!(
+        cover.code,
+        CompiledRegistryChangeCode::FieldPatternChanged
+            | CompiledRegistryChangeCode::FieldPatternRemoved
+    ) && object.kind == ReviewedMigrationObjectKind::Constraint
+        && cover.target.kind == CompiledRegistryChangeTargetKind::Field
+        && cover.target.entity_id.as_deref() == Some(object.entity_id.as_str())
+        && object
+            .member_id
+            .as_deref()
+            .and_then(|member| member.strip_prefix("pattern:"))
             == cover.target.member_id.as_deref()
 }
 

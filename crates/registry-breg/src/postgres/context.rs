@@ -3015,6 +3015,7 @@ mod tests {
                 change_request: None,
                 fields: vec![
                     FieldSource {
+                        pattern: None,
                         id: "tenant".to_owned(),
                         api_name: None,
                         field_type: FieldTypeSource::String {
@@ -3026,6 +3027,7 @@ mod tests {
                         valid_time_role: None,
                     },
                     FieldSource {
+                        pattern: None,
                         id: "region".to_owned(),
                         api_name: None,
                         field_type: FieldTypeSource::String {
@@ -3053,6 +3055,7 @@ mod tests {
                     required_scopes: BTreeSet::new(),
                     required_purposes: BTreeSet::from(["operations".to_owned()]),
                     grants: vec![AccessGrantSource {
+                        membership_boundaries: Vec::new(),
                         entity: "entry".to_owned(),
                         action: None,
                         operations: operations.clone(),
@@ -3095,6 +3098,7 @@ mod tests {
                     required_scopes: BTreeSet::new(),
                     required_purposes: BTreeSet::new(),
                     grants: vec![AccessGrantSource {
+                        membership_boundaries: Vec::new(),
                         entity: "entry".to_owned(),
                         action: None,
                         operations,

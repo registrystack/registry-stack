@@ -2,6 +2,9 @@
 
 #![cfg(feature = "runtime")]
 
+#[path = "support/action_requirements.rs"]
+mod action_source;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -185,7 +188,15 @@ struct Harness {
 
 impl Harness {
     async fn new() -> Self {
-        Self::with_registry(compiled_registry()).await
+        Self::with_source(PROJECT).await
+    }
+
+    async fn with_source(source: &str) -> Self {
+        let project = parse_project_yaml(source.as_bytes()).expect("project parses");
+        let registry = Arc::new(
+            compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
+        );
+        Self::with_registry(registry).await
     }
 
     async fn with_registry(registry: Arc<CompiledRegistry>) -> Self {
@@ -316,6 +327,138 @@ async fn verified_direct_authority_reaches_the_protected_record_service() {
             .expect("tenant boundary")
             .values(),
         &BTreeSet::from([TENANT.to_owned()])
+    );
+}
+
+#[tokio::test]
+async fn verified_principal_can_supply_the_exact_scalar_ownership_boundary() {
+    for field_type in ["string", "text"] {
+        let source = PROJECT
+            .replace(
+                "field: tenant, claim: tenant, operator: equals",
+                "field: tenant, claim: registry_principal, operator: equals",
+            )
+            .replace(
+                "id: tenant, type: string",
+                &format!("id: tenant, type: {field_type}"),
+            );
+        let harness = Harness::with_source(&source).await;
+        let mut claims = valid_claims();
+        claims.as_object_mut().unwrap().remove("tenant");
+        claims["sub"] = json!("different-subject-must-not-be-used");
+        let token = harness.idp.mint_token(claims);
+        let response = harness
+            .send(
+                "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
+                &[bearer(&token)],
+                None,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = harness.records.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let context = &requests[0].context;
+        assert_eq!(context.principal(), Some(PRINCIPAL));
+        assert_eq!(
+            context
+                .row_boundaries()
+                .iter()
+                .find(|boundary| boundary.field() == "tenant")
+                .unwrap()
+                .values(),
+            &BTreeSet::from([PRINCIPAL.to_owned()])
+        );
+    }
+}
+
+#[tokio::test]
+async fn reused_principal_still_refuses_missing_malformed_and_out_of_bounds_values() {
+    let source = PROJECT.replace(
+        "field: tenant, claim: tenant, operator: equals",
+        "field: tenant, claim: registry_principal, operator: equals",
+    );
+    let harness = Harness::with_source(&source).await;
+    for value in [
+        Value::Null,
+        json!([PRINCIPAL]),
+        json!({"value": PRINCIPAL}),
+        json!(42),
+        json!("x".repeat(101)),
+    ] {
+        let mut claims = valid_claims();
+        claims["registry_principal"] = value;
+        claims["sub"] = json!(PRINCIPAL);
+        let token = harness.idp.mint_token(claims);
+        assert_refused_without_record_call(&harness, &token).await;
+    }
+    let mut claims = valid_claims();
+    claims.as_object_mut().unwrap().remove("registry_principal");
+    claims["sub"] = json!(PRINCIPAL);
+    let token = harness.idp.mint_token(claims);
+    assert_refused_without_record_call(&harness, &token).await;
+}
+
+#[tokio::test]
+async fn principal_reuse_refuses_incompatible_or_colliding_authority_mappings() {
+    let idp = MockIdp::start().await;
+    for (claim, operator, field_type, expected) in [
+        (
+            "registry_principal",
+            "in",
+            "string",
+            AuthenticationConfigError::ConflictingClaimExpectation,
+        ),
+        (
+            "registry_principal",
+            "equals",
+            "int64",
+            AuthenticationConfigError::ConflictingClaimExpectation,
+        ),
+        (
+            "purpose",
+            "equals",
+            "string",
+            AuthenticationConfigError::InvalidClaimMapping,
+        ),
+        (
+            "scope",
+            "equals",
+            "string",
+            AuthenticationConfigError::InvalidClaimMapping,
+        ),
+    ] {
+        let mut source = PROJECT.replace(
+            "field: tenant, claim: tenant, operator: equals",
+            &format!("field: tenant, claim: {claim}, operator: {operator}"),
+        );
+        if field_type != "string" {
+            source = source.replace(
+                "id: tenant, type: string, required: true, maxLength: 100",
+                &format!("id: tenant, type: {field_type}, required: true"),
+            );
+        }
+        let project = parse_project_yaml(source.as_bytes()).unwrap();
+        let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+        assert_eq!(
+            authenticator(&registry, &idp, authority_claims()).unwrap_err(),
+            expected
+        );
+    }
+    let source = PROJECT
+        .replace(
+            "field: jurisdiction, claim: jurisdictions, operator: in",
+            "field: jurisdiction, claim: registry_principal, operator: equals",
+        )
+        .replace(
+            "field: tenant, claim: tenant, operator: equals",
+            "field: tenant, claim: registry_principal, operator: equals",
+        )
+        .replace("id: tenant, type: string", "id: tenant, type: text");
+    let project = parse_project_yaml(source.as_bytes()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    assert_eq!(
+        authenticator(&registry, &idp, authority_claims()).unwrap_err(),
+        AuthenticationConfigError::ConflictingClaimExpectation
     );
 }
 
@@ -700,6 +843,119 @@ async fn refusals_and_debug_output_are_value_free() {
     }
 }
 
+fn action_only_claim_source() -> Value {
+    let mut source = action_source::project();
+    source["accessProfiles"][0]["requiredPurposes"] = json!([PURPOSE]);
+    source["accessProfiles"][0]["grants"][0]["targets"][0]["rowBoundaries"][0] =
+        json!({"field": "zone", "claim": "allowed_owners", "operator": "in"});
+    source
+}
+
+fn compile_action_claim_source(source: &Value) -> CompiledRegistry {
+    let project =
+        registry_breg::contract::parse_project_json(&serde_json::to_vec(source).unwrap()).unwrap();
+    compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+}
+
+#[tokio::test]
+async fn action_only_target_claims_are_mapped_without_crud_grants() {
+    let registry = compile_action_claim_source(&action_only_claim_source());
+    assert!(registry
+        .entities()
+        .values()
+        .all(|entity| entity.access_profiles.is_empty()));
+    let idp = MockIdp::start().await;
+    let authenticator = authenticator(&registry, &idp, authority_claims()).unwrap();
+    let mut token_claims = valid_claims();
+    token_claims["scope"] = json!("registry:register registry:parent:process");
+    token_claims["allowed_owners"] = json!(["zone-a", "zone-b", "zone-a"]);
+    let token = idp.mint_token(token_claims.clone());
+    let expected = |direct| {
+        VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            PRINCIPAL,
+            BTreeSet::from([
+                "registry:register".to_owned(),
+                "registry:parent:process".to_owned(),
+            ]),
+            Some(PURPOSE.to_owned()),
+            direct,
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        authenticator.authenticate(&token).await.unwrap(),
+        expected(BTreeMap::from([(
+            "allowed_owners".to_owned(),
+            VerifiedClaimValue::direct_string_set(BTreeSet::from([
+                "zone-a".to_owned(),
+                "zone-b".to_owned()
+            ]))
+            .unwrap()
+        )]))
+    );
+    for value in [
+        Value::Null,
+        json!("zone-a"),
+        json!([]),
+        json!([42]),
+        json!({"values": ["zone-a"]}),
+    ] {
+        token_claims["allowed_owners"] = value;
+        let token = idp.mint_token(token_claims.clone());
+        assert_eq!(
+            authenticator.authenticate(&token).await.unwrap_err(),
+            AuthenticationError::InvalidClaims
+        );
+    }
+    token_claims
+        .as_object_mut()
+        .unwrap()
+        .remove("allowed_owners");
+    let token = idp.mint_token(token_claims);
+    // Claims are mapped globally but required by the selected route. Absence
+    // supplies no target authority; it cannot be filled from another claim.
+    assert_eq!(
+        authenticator.authenticate(&token).await.unwrap(),
+        expected(BTreeMap::new())
+    );
+}
+
+#[tokio::test]
+async fn action_only_principal_purpose_and_claim_shape_conflicts_are_checked() {
+    let idp = MockIdp::start().await;
+    let source = action_only_claim_source();
+    let registry = compile_action_claim_source(&source);
+    assert_eq!(
+        authenticator(
+            &registry,
+            &idp,
+            AuthorityClaimConfig::new("wrong_principal", Some("purpose".to_owned()))
+        )
+        .unwrap_err(),
+        AuthenticationConfigError::PrincipalClaimMismatch
+    );
+    assert_eq!(
+        authenticator(
+            &registry,
+            &idp,
+            AuthorityClaimConfig::new("registry_principal", None)
+        )
+        .unwrap_err(),
+        AuthenticationConfigError::PurposeClaimMismatch
+    );
+    let mut conflicting = source;
+    conflicting["accessProfiles"].as_array_mut().unwrap().push(json!({
+        "id": "reader", "principalClaim": "registry_principal", "requiredScopes": ["registry:parent:process"],
+        "grants": [{"entity": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]
+    }));
+    let registry = compile_action_claim_source(&conflicting);
+    assert_eq!(
+        authenticator(&registry, &idp, authority_claims()).unwrap_err(),
+        AuthenticationConfigError::ConflictingClaimExpectation
+    );
+}
+
 #[tokio::test]
 async fn constructor_rejects_empty_duplicate_reserved_and_incomplete_mappings() {
     let harness = Harness::new().await;
@@ -921,11 +1177,6 @@ fn valid_claims() -> Value {
         "jurisdictions": [JURISDICTION],
         "tenant": TENANT,
     })
-}
-
-fn compiled_registry() -> Arc<CompiledRegistry> {
-    let project = parse_project_yaml(PROJECT.as_bytes()).expect("project parses");
-    Arc::new(compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"))
 }
 
 fn bearer(token: &str) -> HeaderValue {

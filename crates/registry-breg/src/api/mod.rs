@@ -5071,6 +5071,26 @@ fn mutation_problem(error: MutationError) -> Response {
             "service.unavailable",
             "The Registry mutation service is unavailable.",
         ),
+        MutationError::ActionRefusal(refusal) => {
+            crate::correlation::action_refusal_response(refusal)
+        }
+        MutationError::ActionHandlerFailure(error) => match error {
+            crate::action_handler::ActionHandlerError::Input => invalid_request(),
+            crate::action_handler::ActionHandlerError::Deadline => fixed_problem(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "service.unavailable",
+                "The Registry mutation service is unavailable.",
+            ),
+            _ => fixed_problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "action.handler_failed",
+                "The action handler could not produce an accepted result.",
+            ),
+        },
+        MutationError::FieldPatternViolation {
+            entity_id,
+            field_id,
+        } => crate::correlation::field_pattern_response(entity_id, field_id),
         MutationError::PlannerFailure(error) => {
             let (status, code, detail) = planner_failure_problem(error);
             fixed_problem(status, code, detail)

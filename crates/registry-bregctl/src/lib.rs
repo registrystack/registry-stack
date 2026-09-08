@@ -37,6 +37,7 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+mod action_handler_test;
 mod apply_lifecycle;
 mod audit_lifecycle;
 mod data_lifecycle;
@@ -208,7 +209,7 @@ enum ProjectCommand {
     Lock(ProjectLockArgs),
     /// Migrate the retired singular Manifest projection to the plural resource model.
     Migrate(ProjectMigrateArgs),
-    /// Run one captured Rhai request planner with bounded synthetic JSON.
+    /// Test a Rhai request planner or action handler with bounded synthetic JSON.
     PlannerTest(ProjectPlannerTestArgs),
 }
 
@@ -235,18 +236,36 @@ struct ProjectMigrateArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(ArgGroup::new("script_target").required(true).args(["entity", "action"])))]
 struct ProjectPlannerTestArgs {
     /// Base Registry Engine project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
 
-    /// Compiled change-request entity whose Rhai planner will run.
-    #[arg(long, value_name = "ENTITY")]
-    entity: String,
+    /// Compiled change-request entity whose Rhai planner will run; pair with --request.
+    #[arg(
+        long,
+        value_name = "ENTITY",
+        conflicts_with = "action",
+        requires = "request"
+    )]
+    entity: Option<String>,
 
-    /// Bounded strict JSON object containing synthetic request fields.
-    #[arg(long, value_name = "JSON_FILE")]
-    request: PathBuf,
+    /// Bounded strict JSON object containing synthetic request fields; requires --entity.
+    #[arg(long, value_name = "JSON_FILE", requires = "entity", conflicts_with_all = ["action", "input", "expect"])]
+    request: Option<PathBuf>,
+
+    /// Compiled immediate action whose Rhai handler will run; pair with --input.
+    #[arg(long, value_name = "ACTION", requires = "input")]
+    action: Option<String>,
+
+    /// Bounded strict JSON object using authored action input IDs, without an HTTP envelope; requires --action.
+    #[arg(long, value_name = "JSON_FILE", requires = "action", conflicts_with_all = ["entity", "request"])]
+    input: Option<PathBuf>,
+
+    /// With --action and --input, assert exact synthetic effects or a declared refusal without printing values.
+    #[arg(long, value_name = "JSON_FILE", requires = "action", conflicts_with_all = ["entity", "request"])]
+    expect: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -912,9 +931,20 @@ struct PlannerTestSuccessReport {
     ok: bool,
     command: &'static str,
     compiled_revision: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     request_entity: String,
-    planner: PlannerTestIdentityReport,
-    disposition: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assertions_passed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    planner: Option<PlannerTestIdentityReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handler: Option<PlannerTestIdentityReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disposition: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     queue_reason: Option<PlannerTestQueueReasonReport>,
     effects: Vec<PlannerTestEffectReport>,
@@ -1060,6 +1090,8 @@ enum SuggestedAction {
     PrepareHistoryRebaselineRequest,
     ReviewRetainedHistory,
     CorrectPlannerTestInput,
+    CorrectActionHandler,
+    RunSchemaTest,
 }
 
 #[derive(Serialize)]
@@ -3000,6 +3032,21 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
 
 fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
     let error = match error {
+        TestLifecycleError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        } => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic("field.pattern.syntax_invalid", &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                        "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test"),
+                    DiagnosticArtifact::SchemaTestCandidate,
+                    SuggestedAction::CorrectSchemaTestCandidate,
+                )],
+            };
+        }
         TestLifecycleError::CandidateBinding { path } => {
             return candidate_failure(
                 "test",
@@ -3091,6 +3138,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::CorrectPackageBuild,
         ),
+        TestLifecycleError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
         TestLifecycleError::Database => (
             "test.database.unavailable",
             "database",
@@ -3206,6 +3254,36 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             SuggestedAction::VerifyMigrationAuthority,
         ),
         ApplyLifecycleError::Apply(error) => match error {
+            registry_breg::migration::MigrationError::FieldPatternSyntax {
+                entity_id,
+                field_id,
+            } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "field.pattern.syntax_invalid",
+                        &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                        "PostgreSQL rejected the native pattern syntax. The exact target remains pinned in maintenance; restore the pre-activation backup before correcting the PostgreSQL ARE syntax, schema-testing, and packaging the correction. Do not retry changed package bytes as the pinned target.",
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::ReconcileFailedMigration,
+                );
+            }
+            registry_breg::migration::MigrationError::FieldPatternExistingRows {
+                entity_id,
+                field_id,
+            } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "field.pattern.existing_rows_invalid",
+                        &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                        "Existing stored values do not satisfy the native pattern. The exact target remains pinned in maintenance; repair the violating values through operator recovery and retry the exact pinned target.",
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::ReconcileFailedMigration,
+                );
+            }
             registry_breg::migration::MigrationError::PackageBinding
             | registry_breg::migration::MigrationError::EmptyPlan => (
                 "apply.package.refused",
@@ -3812,12 +3890,25 @@ fn init_next_steps(destination: &Path) -> Vec<String> {
 
 fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, FailureReport> {
     let compiled = compile(project_path, profile, "check")?;
+    let mut findings = compiler_findings(&compiled);
+    findings.extend(compiled.entities().values().flat_map(|entity| {
+        entity.fields.values().filter_map(move |field| {
+            field.pattern.as_ref().map(|_| ToolDiagnostic {
+                severity: DiagnosticSeverity::Finding,
+                code: "field.pattern.unverified_offline".to_owned(),
+                artifact: DiagnosticArtifact::RegistryProject,
+                path: format!("entities[{}].fields[{}].pattern", entity.id, field.id),
+                message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
+                suggested_action: SuggestedAction::RunSchemaTest,
+            })
+        })
+    }));
     Ok(SuccessReport {
         ok: true,
         command: "check",
         profile,
         revision: compiled.revision().to_owned(),
-        findings: compiler_findings(&compiled),
+        findings,
         artifacts: Vec::new(),
         explanation: None,
         next_steps: Vec::new(),
@@ -4244,7 +4335,24 @@ fn generate(
 fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessReport, FailureReport> {
     const COMMAND: &str = "project planner-test";
     let compiled = compile(&args.project, ProfileArg::Authoring, COMMAND)?;
-    let entity = compiled.entities().get(&args.entity).ok_or_else(|| {
+    if args.action.is_some() {
+        return action_handler_test::run(args, &compiled);
+    }
+    let entity_id = args.entity.as_deref().ok_or_else(|| {
+        planner_test_failure(
+            "planner_test.entity.required",
+            "entity",
+            "select a request entity or action",
+        )
+    })?;
+    let request_path = args.request.as_ref().ok_or_else(|| {
+        planner_test_failure(
+            "planner_test.request.required",
+            "request",
+            "provide a synthetic request file",
+        )
+    })?;
+    let entity = compiled.entities().get(entity_id).ok_or_else(|| {
         planner_test_failure(
             "planner_test.entity.not_found",
             "entity",
@@ -4267,7 +4375,7 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
     })?;
 
     let input_bytes = read_bounded_regular_file(
-        &args.request,
+        request_path,
         "planner_test.request.unavailable",
         MAX_PLANNER_TEST_REQUEST_BYTES,
     )
@@ -4417,12 +4525,16 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
         command: COMMAND,
         compiled_revision: compiled.revision().to_owned(),
         request_entity: entity.id.clone(),
-        planner: PlannerTestIdentityReport {
+        action: None,
+        refusal: None,
+        assertions_passed: None,
+        planner: Some(PlannerTestIdentityReport {
             kind: "rhai",
             abi: planner.abi.clone(),
             script_sha256: planner.script_sha256.clone(),
-        },
-        disposition,
+        }),
+        handler: None,
+        disposition: Some(disposition),
         queue_reason,
         counts: PlannerTestCountReport {
             effects: effects.len(),
@@ -4924,10 +5036,23 @@ fn load_project_planner_asset_files(
                 .change_request
                 .as_ref()
                 .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.clone())
+                .map(|planner| {
+                    (
+                        planner.script.clone(),
+                        format!("entities[{}].changeRequest.planner.script", entity.id),
+                    )
+                })
         })
-        .collect::<BTreeSet<_>>();
-    load_planner_asset_files(project_directory, "registry.yaml", paths)
+        .chain(project.actions.iter().filter_map(|action| {
+            action.handler.as_ref().map(|handler| {
+                (
+                    handler.script.clone(),
+                    format!("actions[{}].handler.script", action.id),
+                )
+            })
+        }))
+        .collect::<BTreeMap<_, _>>();
+    load_planner_asset_files(project_directory, paths)
 }
 
 /// Read a module's declared assets through the module directory descriptor the
@@ -5006,21 +5131,41 @@ fn load_module_asset_files(
                 .change_request
                 .as_ref()
                 .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.clone())
+                .map(|planner| {
+                    (
+                        planner.script.clone(),
+                        format!(
+                            "modules[{module_id}].entities[{}].changeRequest.planner.script",
+                            entity.id
+                        ),
+                    )
+                })
         })
         .chain(module.extend_entities.iter().filter_map(|extension| {
             extension
                 .change_request
                 .as_ref()
                 .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.clone())
+                .map(|planner| {
+                    (
+                        planner.script.clone(),
+                        format!(
+                            "modules[{module_id}].extendEntities[{}].changeRequest.planner.script",
+                            extension.entity
+                        ),
+                    )
+                })
         }))
-        .collect::<BTreeSet<_>>();
-    assets.extend(load_planner_asset_files(
-        module_directory,
-        &format!("modules/{module_id}/module.yaml"),
-        planner_paths,
-    )?);
+        .chain(module.actions.iter().filter_map(|action| {
+            action.handler.as_ref().map(|handler| {
+                (
+                    handler.script.clone(),
+                    format!("modules[{module_id}].actions[{}].handler.script", action.id),
+                )
+            })
+        }))
+        .collect::<BTreeMap<_, _>>();
+    assets.extend(load_planner_asset_files(module_directory, planner_paths)?);
     assets.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(assets)
 }
@@ -5030,38 +5175,47 @@ fn load_module_asset_files(
 /// from the tree the declaring file came from.
 fn load_planner_asset_files(
     origin: &SafeDir,
-    declaring_path: &str,
-    paths: BTreeSet<String>,
+    paths: BTreeMap<String, String>,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
     paths
         .into_iter()
-        .map(|path| {
-            validate_rhai_planner_asset_path(declaring_path, &path)?;
+        .map(|(path, declaring_path)| {
+            validate_rhai_planner_asset_path(&declaring_path, &path)?;
             let entry = open_asset_entry(
                 origin,
                 &path,
-                || planner_asset_path_diagnostic(declaring_path),
+                || planner_asset_path_diagnostic(&declaring_path),
                 |error| {
-                    path_diagnostic(
+                    let mut diagnostic = path_diagnostic(
                         error,
                         "source.planner_asset.missing",
-                        "project",
+                        &declaring_path,
                         "the required authoring source is not available",
                         "authoring sources must be regular files and must not be symbolic links",
-                    )
+                    );
+                    diagnostic.message.push_str(&format!(
+                        "; referenced Rhai script: {path:?}, relative to its declaring project or module"
+                    ));
+                    diagnostic
                 },
             )?;
             let bytes = read_bounded_source_entry(
                 &entry,
                 "source.planner_asset.missing",
-                "project",
+                &declaring_path,
                 MAX_RHAI_PLANNER_SOURCE_BYTES,
-            )?;
+            )
+            .map_err(|mut error| {
+                error.message.push_str(&format!(
+                    "; referenced Rhai script: {path:?}, relative to its declaring project or module"
+                ));
+                error
+            })?;
             if bytes.is_empty() {
                 return Err(diagnostic(
                     "source.planner_asset.bounds",
-                    declaring_path,
-                    "Rhai planner scripts must be non-empty bounded regular files",
+                    &declaring_path,
+                    &format!("referenced Rhai script {path:?} must be a non-empty bounded regular file"),
                 ));
             }
             Ok(CapturedModuleAssetSource { path, bytes })
@@ -6767,7 +6921,7 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     })
                 })
                 .collect::<Vec<_>>();
-            json!({
+            let mut summary = json!({
                 "id": action.id,
                 "sourceModule": action.source_module,
                 "contractFingerprint": action.contract_fingerprint,
@@ -6784,6 +6938,7 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                                 "kind": "set",
                                 "target": field_summary_optional(target_entity, field),
                                 "value": match value {
+                                    registry_breg::model::CompiledActionValue::Literal { .. } => json!({"kind": "computed"}),
                                     registry_breg::model::CompiledActionValue::FromInput { input } => {
                                         json!({"kind": "from_input", "input": action_input_identity(action, input)})
                                     }
@@ -6852,7 +7007,37 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "maximumFieldMutations": action.maximum_field_mutations,
                     "maximumSnapshotBytes": action.maximum_snapshot_bytes,
                 }
-            })
+            });
+            if let Some(handler) = &action.handler {
+                summary["handler"] = json!({
+                    "kind": "rhai", "abi": handler.abi,
+                    "entrypoint": "handle", "context": "ctx.inputs", "inputKeys": "authored_ids",
+                    "scriptSha256": handler.script_sha256, "rhaiVersion": handler.rhai_version,
+                    "limits": handler.limits,
+                    "possibleWrites": handler.writes,
+                    "refusals": handler.refusals.iter().map(|(code,label)| json!({"code":code,"label":label})).collect::<Vec<_>>(),
+                    "outcomes": ["effects", "refusal"],
+                    "omittedSlots": "no_write_or_result; all_declared_existing_targets_still_require_admission_and_conditions",
+                    "evaluation": "after_locked_receipt_recovery_before_target_locks",
+                    "reads": "supplied_inputs_only",
+                    "replay": "recover_committed_result_without_handler_evaluation",
+                });
+            }
+            if !action.requires.is_empty() {
+                summary["requires"] = json!(action.requires.iter().map(|requirement| {
+                    json!({
+                        "input": action_input_identity(action, &requirement.input),
+                        "entity": requirement.entity_id,
+                        "field": field_summary_optional(
+                            compiled.entities().get(&requirement.entity_id),
+                            &requirement.field,
+                        ),
+                        "equals": requirement.equals,
+                        "evaluated": "before_effects_under_target_lock",
+                    })
+                }).collect::<Vec<_>>());
+            }
+            summary
         })
         .collect::<Vec<_>>();
     serde_json::to_value(json!({ "actions": actions }))
@@ -8049,50 +8234,102 @@ fn write_planner_test_success(
             .and_then(|bytes| stdout.write_all(&bytes))
             .and_then(|()| writeln!(stdout))
     } else {
-        let mut lines = report::Lines::new();
-        lines.lead(&format!(
-            "Ran the planner. Disposition {}, {}.",
-            report.disposition,
-            report::counted(report.effects.len(), "effect")
-        ));
-        let mut pairs = vec![
-            ("compiled revision", report.compiled_revision.clone()),
-            ("request entity", report.request_entity.clone()),
-            ("planner kind", report.planner.kind.to_owned()),
-            ("planner ABI", report.planner.abi.clone()),
-            (
-                "planner script SHA-256",
-                report.planner.script_sha256.clone(),
-            ),
-            ("disposition", report.disposition.to_owned()),
-        ];
-        if let Some(reason) = &report.queue_reason {
-            pairs.push((
-                "queue reason",
-                format!("{} ({})", reason.code, reason.label),
-            ));
-        }
-        pairs.push(("effects", report.counts.effects.to_string()));
-        pairs.push(("field mutations", report.counts.field_mutations.to_string()));
-        pairs.push(("dependencies", report.counts.dependencies.to_string()));
-        lines.pairs(&pairs);
+        let script = report
+            .handler
+            .as_ref()
+            .map(|identity| {
+                (
+                    "handler kind",
+                    "handler ABI",
+                    "handler script SHA-256",
+                    identity,
+                )
+            })
+            .or_else(|| {
+                report.planner.as_ref().map(|identity| {
+                    (
+                        "planner kind",
+                        "planner ABI",
+                        "planner script SHA-256",
+                        identity,
+                    )
+                })
+            });
+        script
+            .ok_or_else(|| io::Error::other("missing compiled script identity"))
+            .and_then(|(kind_label, abi_label, digest_label, identity)| {
+                let mut lines = report::Lines::new();
+                if let Some(disposition) = report.disposition {
+                    lines.lead(&format!(
+                        "Ran the planner. Disposition {}, {}.",
+                        disposition,
+                        report::counted(report.effects.len(), "effect")
+                    ));
+                } else if report.refusal.is_some() {
+                    lines.lead("Ran the handler. Returned a declared refusal.");
+                } else {
+                    lines.lead(&format!(
+                        "Ran the handler. Returned {}.",
+                        report::counted(report.effects.len(), "effect")
+                    ));
+                }
+                let mut pairs = vec![("compiled revision", report.compiled_revision.clone())];
+                match &report.action {
+                    Some(action) => pairs.push(("action", action.clone())),
+                    None => pairs.push(("request entity", report.request_entity.clone())),
+                }
+                pairs.extend([
+                    (kind_label, identity.kind.to_owned()),
+                    (abi_label, identity.abi.clone()),
+                    (digest_label, identity.script_sha256.clone()),
+                ]);
+                if report.assertions_passed == Some(true) {
+                    pairs.push(("exact assertions", "passed".to_owned()));
+                }
+                if let Some(disposition) = report.disposition {
+                    pairs.push(("disposition", disposition.to_owned()));
+                }
+                if let Some(refusal) = &report.refusal {
+                    pairs.push((
+                        "refusal",
+                        format!(
+                            "{} ({})",
+                            refusal["code"].as_str().unwrap_or(""),
+                            refusal["label"].as_str().unwrap_or("")
+                        ),
+                    ));
+                    if let Some(field) = refusal.get("field").and_then(Value::as_str) {
+                        pairs.push(("refusal input", field.to_owned()));
+                    }
+                }
+                if let Some(reason) = &report.queue_reason {
+                    pairs.push((
+                        "queue reason",
+                        format!("{} ({})", reason.code, reason.label),
+                    ));
+                }
+                pairs.push(("effects", report.counts.effects.to_string()));
+                pairs.push(("field mutations", report.counts.field_mutations.to_string()));
+                pairs.push(("dependencies", report.counts.dependencies.to_string()));
+                lines.pairs(&pairs);
 
-        // One block per effect, so the fields and dependencies an effect
-        // carries are named once instead of on every effect line.
-        for effect in &report.effects {
-            lines.blank();
-            lines.item(&format!("effect {}", effect.id));
-            lines.pairs_at(
-                2,
-                &[
-                    ("target", effect.target_kind.to_owned()),
-                    ("operation", effect.operation.to_owned()),
-                    ("fields", list_or_none(&effect.fields)),
-                    ("dependencies", list_or_none(&effect.depends_on)),
-                ],
-            );
-        }
-        stdout.write_all(lines.finish().as_bytes())
+                // One block per effect, so the fields and dependencies an effect
+                // carries are named once instead of on every effect line.
+                for effect in &report.effects {
+                    lines.blank();
+                    lines.item(&format!("effect {}", effect.id));
+                    lines.pairs_at(
+                        2,
+                        &[
+                            ("target", effect.target_kind.to_owned()),
+                            ("operation", effect.operation.to_owned()),
+                            ("fields", list_or_none(&effect.fields)),
+                            ("dependencies", list_or_none(&effect.depends_on)),
+                        ],
+                    );
+                }
+                stdout.write_all(lines.finish().as_bytes())
+            })
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -8180,6 +8417,9 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
             .unwrap_or("none (anonymous)")
             .to_owned(),
     )];
+    let membership_restricted = profile["membershipBoundaries"]
+        .as_array()
+        .is_some_and(|boundaries| !boundaries.is_empty());
     for (field, label, empty) in [
         ("operations", "operations", "none"),
         ("requiredScopes", "required scopes (all)", "none required"),
@@ -8194,11 +8434,21 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
     ] {
         let value = &profile[field];
         let rendered = if value.is_null() || value.as_array().is_some_and(Vec::is_empty) {
-            empty.to_owned()
+            if field == "rowBoundaries" && membership_restricted {
+                "governed membership required".to_owned()
+            } else {
+                empty.to_owned()
+            }
         } else {
             value.to_string()
         };
         fields.push((label, rendered));
+    }
+    if membership_restricted {
+        fields.push((
+            "membership restrictions (all)",
+            profile["membershipBoundaries"].to_string(),
+        ));
     }
     for field in [
         "anonymous",
@@ -9485,8 +9735,10 @@ mod tests {
         let origin = SafeDir::resolve(&directory.path).expect("the test directory resolves");
         let captured = load_planner_asset_files(
             &origin,
-            "registry.yaml",
-            BTreeSet::from(["planners/request.rhai".to_owned()]),
+            BTreeMap::from([(
+                "planners/request.rhai".to_owned(),
+                "registry.yaml".to_owned(),
+            )]),
         )
         .expect("safe project-relative planner is captured");
         assert_eq!(captured[0].path, "planners/request.rhai");
@@ -9513,8 +9765,10 @@ mod tests {
         .unwrap();
         let oversized = load_planner_asset_files(
             &origin,
-            "registry.yaml",
-            BTreeSet::from(["planners/oversized.rhai".to_owned()]),
+            BTreeMap::from([(
+                "planners/oversized.rhai".to_owned(),
+                "registry.yaml".to_owned(),
+            )]),
         )
         .unwrap_err();
         assert_eq!(oversized.code, "source.file.bounds");
@@ -9578,8 +9832,8 @@ mod tests {
             panic!("planner-test command parsed");
         };
         assert_eq!(args.project, PathBuf::from("project"));
-        assert_eq!(args.entity, "request");
-        assert_eq!(args.request, PathBuf::from("request.json"));
+        assert_eq!(args.entity.as_deref(), Some("request"));
+        assert_eq!(args.request, Some(PathBuf::from("request.json")));
         assert!(Cli::try_parse_from([
             "bregctl",
             "project",
@@ -9752,8 +10006,11 @@ mod tests {
         .unwrap();
         let dynamic = match planner_test(&ProjectPlannerTestArgs {
             project: dynamic_project,
-            entity: "person-name-change-request".to_owned(),
-            request: request_path,
+            entity: Some("person-name-change-request".to_owned()),
+            request: Some(request_path),
+            action: None,
+            input: None,
+            expect: None,
         }) {
             Ok(report) => report,
             Err(failure) => panic!(
@@ -9837,8 +10094,11 @@ mod tests {
     ) {
         let failure = planner_test(&ProjectPlannerTestArgs {
             project: project.to_owned(),
-            entity: entity.to_owned(),
-            request: request.to_owned(),
+            entity: Some(entity.to_owned()),
+            request: Some(request.to_owned()),
+            action: None,
+            input: None,
+            expect: None,
         })
         .expect_err("planner test is refused");
         assert_eq!(failure.diagnostics.len(), 1);
@@ -10716,8 +10976,8 @@ accessProfiles:
             assert_eq!(fs::read(&named).unwrap(), b"decoy\n");
         }
 
-        /// A module that declares one derived SQL asset and one Rhai planner
-        /// script, so both asset readers are exercised by one capture.
+        /// A module that declares derived SQL and both Rhai entry points, so
+        /// each declared asset stays bound to the module's directory descriptor.
         const MODULE_WITH_ASSETS: &[u8] = br#"id: persons
 version: 0.1.0
 extendEntities:
@@ -10732,25 +10992,40 @@ extendEntities:
         script: planners/person.rhai
         abi: registry.change-request-plan/v1
       review: {}
+actions:
+  - id: normalize-person
+    handler:
+      kind: rhai
+      script: handlers/person.rhai
+      abi: registry.action-handler/v1
+      writes: []
 "#;
 
-        fn plant_module_with_assets(root: &Path, sql: &[u8], planner: &[u8]) {
+        fn plant_module_with_assets(root: &Path, sql: &[u8], planner: &[u8], handler: &[u8]) {
             fs::create_dir_all(root.join("modules/persons/sql")).unwrap();
             fs::create_dir_all(root.join("modules/persons/planners")).unwrap();
+            fs::create_dir_all(root.join("modules/persons/handlers")).unwrap();
             fs::write(root.join("modules/persons/module.yaml"), MODULE_WITH_ASSETS).unwrap();
             fs::write(root.join("modules/persons/sql/summary.sql"), sql).unwrap();
             fs::write(root.join("modules/persons/planners/person.rhai"), planner).unwrap();
+            fs::write(root.join("modules/persons/handlers/person.rhai"), handler).unwrap();
         }
 
         #[test]
         fn module_assets_read_after_an_ancestor_swap_carry_the_listed_module_bytes() {
             let tree = race_tree();
             let project = tree.named_directory();
-            plant_module_with_assets(&project, b"genuine sql\n", b"genuine planner\n");
+            plant_module_with_assets(
+                &project,
+                b"genuine sql\n",
+                b"genuine planner\n",
+                b"genuine handler\n",
+            );
             plant_module_with_assets(
                 &tree.outside_directory(),
                 b"decoy sql\n",
                 b"decoy planner\n",
+                b"decoy handler\n",
             );
 
             let sources = read_module_yaml_files(read_module_directory_names(&project).unwrap())
@@ -10770,6 +11045,7 @@ extendEntities:
             assert_eq!(
                 captured,
                 vec![
+                    ("handlers/person.rhai", b"genuine handler\n".as_slice()),
                     ("planners/person.rhai", b"genuine planner\n".as_slice()),
                     ("sql/summary.sql", b"genuine sql\n".as_slice()),
                 ]
@@ -10782,6 +11058,10 @@ extendEntities:
             assert_eq!(
                 fs::read(project.join("modules/persons/planners/person.rhai")).unwrap(),
                 b"decoy planner\n"
+            );
+            assert_eq!(
+                fs::read(project.join("modules/persons/handlers/person.rhai")).unwrap(),
+                b"decoy handler\n"
             );
         }
 
@@ -11008,4 +11288,67 @@ extendEntities:
                 .expect("the entry that was stat'ed is read");
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recovery() {
+    use registry_breg::migration::MigrationError;
+    for (error, code, repair) in [
+        (
+            MigrationError::FieldPatternSyntax {
+                entity_id: "person".to_owned(),
+                field_id: "identifier".to_owned(),
+            },
+            "field.pattern.syntax_invalid",
+            "restore the pre-activation backup",
+        ),
+        (
+            MigrationError::FieldPatternExistingRows {
+                entity_id: "person".to_owned(),
+                field_id: "identifier".to_owned(),
+            },
+            "field.pattern.existing_rows_invalid",
+            "retry the exact pinned target",
+        ),
+    ] {
+        let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(error));
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(
+            diagnostic.path,
+            "entities[person].fields[identifier].pattern"
+        );
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::ReconcileFailedMigration
+        );
+        assert!(diagnostic.message.contains("pinned in maintenance"));
+        assert!(diagnostic.message.contains(repair));
+        assert!(!diagnostic.message.contains("registry_data"));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn native_pattern_schema_test_diagnostic_identifies_only_the_authored_field() {
+    let report = test_lifecycle_failure(TestLifecycleError::FieldPatternSyntax {
+        entity_id: "person".to_owned(),
+        field_id: "identifier".to_owned(),
+    });
+    assert_eq!(report.diagnostics.len(), 1);
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "field.pattern.syntax_invalid");
+    assert_eq!(
+        diagnostic.path,
+        "entities[person].fields[identifier].pattern"
+    );
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::SchemaTestCandidate);
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::CorrectSchemaTestCandidate
+    );
+    assert!(!diagnostic.message.contains("registry_data"));
+    assert!(diagnostic.message.contains("PostgreSQL ARE syntax"));
 }

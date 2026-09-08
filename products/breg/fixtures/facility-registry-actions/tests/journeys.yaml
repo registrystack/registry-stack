@@ -1,0 +1,146 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: register-and-transfer-facility
+    steps:
+      - id: create-operator
+        entity: operator
+        accessProfile: operator-administrator
+        claims:
+          principal: synthetic-operator-administrator
+          scopes: [registry:operator:manage]
+          purpose: facility-administration
+        request:
+          operation: create
+          data: {operatorCode: OP-001, status: active}
+        expect: {outcome: success, status: 201}
+        capture: operator
+      - id: register-facility-and-assignment
+        action: register-facility
+        accessProfile: facility-registrar
+        claims: &registrar
+          principal: owner-a
+          scopes: [registry:facility:register]
+          purpose: facility-administration
+          directClaims: {registry_principal: owner-a}
+        request:
+          operation: invoke
+          idempotencyKey: register-facility-001
+          input: &registration
+            facilityCode: FAC-001
+            label: Synthetic facility
+            owner: owner-a
+            operatorId: {recordRef: operator}
+        expect: {outcome: success, status: 200}
+        capture: registration
+        captureResults:
+          facility: facility
+          initial-assignment: initial-assignment
+      - id: recover-registration-response
+        action: register-facility
+        accessProfile: facility-registrar
+        claims: *registrar
+        request:
+          operation: invoke
+          idempotencyKey: register-facility-001
+          input: *registration
+        expect: {outcome: success, status: 200}
+      - id: read-as-current-owner
+        entity: facility
+        accessProfile: facility-owner
+        claims: &owner
+          principal: owner-a
+          scopes: [registry:facility:read]
+          purpose: facility-administration
+          directClaims: {registry_principal: owner-a}
+        request: {operation: get, recordRef: facility}
+        expect:
+          outcome: success
+          status: 200
+          fields: {facilityCode: FAC-001, owner: owner-a}
+      - id: create-inactive-operator
+        entity: operator
+        accessProfile: operator-administrator
+        claims:
+          principal: synthetic-operator-administrator
+          scopes: [registry:operator:manage]
+          purpose: facility-administration
+        request:
+          operation: create
+          data: {operatorCode: OP-002, status: inactive}
+        expect: {outcome: success, status: 201}
+        capture: inactive-operator
+      - id: refuse-inactive-operator
+        action: register-facility
+        accessProfile: facility-registrar
+        claims: *registrar
+        request:
+          operation: invoke
+          idempotencyKey: inactive-operator-refused
+          input:
+            facilityCode: FAC-002
+            label: Another synthetic facility
+            owner: owner-a
+            operatorId: {recordRef: inactive-operator}
+        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
+      - id: obtain-transfer-condition
+        action: transfer-facility
+        accessProfile: facility-transfer
+        claims: &broker
+          principal: synthetic-transfer-broker
+          scopes: [registry:facility:transfer]
+          purpose: facility-administration
+          directClaims:
+            allowed_owners: [owner-a, owner-b]
+        request:
+          operation: target_conditions
+          input:
+            facilityId: {recordRef: facility}
+        expect: {outcome: success, status: 200}
+        capture: transfer-condition
+      - id: refuse-ungranted-destination
+        action: transfer-facility
+        accessProfile: facility-transfer
+        claims: *broker
+        request:
+          operation: invoke
+          idempotencyKey: transfer-refused
+          input:
+            facilityId: {recordRef: facility}
+            owner: owner-c
+          preconditions:
+            facilityId: {conditionRef: transfer-condition}
+        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
+      - id: transfer-facility-owner
+        action: transfer-facility
+        accessProfile: facility-transfer
+        claims: *broker
+        request:
+          operation: invoke
+          idempotencyKey: transfer-facility-001
+          input:
+            facilityId: {recordRef: facility}
+            owner: owner-b
+          preconditions:
+            facilityId: {conditionRef: transfer-condition}
+        expect: {outcome: success, status: 200}
+        captureResults:
+          facility: transferred-facility
+      - id: former-owner-is-concealed
+        entity: facility
+        accessProfile: facility-owner
+        claims: *owner
+        request: {operation: get, recordRef: facility}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: destination-owner-can-read
+        entity: facility
+        accessProfile: facility-owner
+        claims:
+          principal: owner-b
+          scopes: [registry:facility:read]
+          purpose: facility-administration
+          directClaims: {registry_principal: owner-b}
+        request: {operation: get, recordRef: transferred-facility}
+        expect:
+          outcome: success
+          status: 200
+          fields: {facilityCode: FAC-001, owner: owner-b}

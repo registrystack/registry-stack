@@ -4407,7 +4407,11 @@ fn long_logical_id_registry() -> registry_breg::CompiledRegistry {
 }
 
 fn registration_registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(
+    registration_registry_with_pattern(None)
+}
+
+fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::CompiledRegistry {
+    let mut project = parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
@@ -4517,6 +4521,38 @@ fn registration_registry() -> registry_breg::CompiledRegistry {
         }"#,
     )
     .expect("registration change-request fixture parses");
+    project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == "membership")
+        .unwrap()
+        .fields
+        .iter_mut()
+        .find(|field| field.id == "tenant")
+        .unwrap()
+        .pattern = pattern.map(str::to_owned);
+    if pattern.is_some() {
+        let mut applier = project
+            .access_profiles
+            .iter()
+            .find(|profile| profile.id == "operator")
+            .unwrap()
+            .clone();
+        applier.id = "blind-applier".to_owned();
+        applier.default = false;
+        applier
+            .grants
+            .retain(|grant| grant.entity == "registration-request");
+        let grant = &mut applier.grants[0];
+        grant.operations = BTreeSet::from([
+            registry_breg::contract::Operation::Get,
+            registry_breg::contract::Operation::ApplyRequest,
+        ]);
+        grant.writable_fields.clear();
+        grant.revision_access = false;
+        grant.review_stages.clear();
+        project.access_profiles.push(applier);
+    }
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("registration change-request fixture compiles")
 }
@@ -4757,4 +4793,150 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
     .expect("change-request HTTP fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("change-request HTTP fixture compiles")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reviewed_native_pattern_failure_rolls_back_prior_effect_and_preserves_frozen_approval() {
+    let database = TestDatabase::create(4).await;
+    let registry = Arc::new(registration_registry_with_pattern(Some("^other-tenant$")));
+    let identity =
+        install_registry(&database, &registry, "registration-change-request", false).await;
+    let app = change_request_router(
+        &database,
+        registry.clone(),
+        identity,
+        "registration-change-request",
+        None,
+    );
+    let operator = claims("operator", "pattern-operator", None);
+    let approved = create_approved_registration(
+        &app,
+        claims("steward", "pattern-steward", None),
+        operator.clone(),
+        "pattern-frozen",
+    )
+    .await;
+    let uri = format!(
+        "/v1/records/registration-requests/{}?accessProfile=operator",
+        approved.request_id
+    );
+    let before = get_record(&app, &uri, operator.clone()).await;
+    let revisions: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_revisions",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let response = send_registration_apply(
+        &app,
+        &approved.request_id,
+        operator.clone(),
+        "pattern-refused-apply",
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::CONFLICT);
+    assert_eq!(response.body["code"], "mutation.conflict");
+    assert!(response.body.get("entityId").is_none());
+    assert!(response.body.get("fieldId").is_none());
+    assert!(!response.body.to_string().contains("other-tenant"));
+    assert!(!response
+        .body
+        .to_string()
+        .contains(&registry.entities()["membership"].physical_table));
+    let blind_applier = claims("blind-applier", "application-only-actor", None);
+    assert!(!registry.entities()["membership"]
+        .access_profiles
+        .contains_key("blind-applier"));
+    assert!(registry.entities()["registration-request"]
+        .change_request
+        .as_ref()
+        .unwrap()
+        .review_grants
+        .iter()
+        .all(|grant| grant.profile_id != "blind-applier"));
+    let blind_request = get_record(
+        &app,
+        &format!(
+            "/v1/records/registration-requests/{}?accessProfile=blind-applier",
+            approved.request_id
+        ),
+        blind_applier.clone(),
+    )
+    .await;
+    let apply = action(&blind_request.body, "apply_request", None);
+    let blind_response = send_action(
+        &app,
+        &apply,
+        "pattern-blind-apply",
+        blind_applier,
+        json!({"proposalVersion": apply.proposal_version, "effectDigest": apply.effect_digest}),
+    )
+    .await;
+    assert_eq!(blind_response.status, StatusCode::CONFLICT);
+    assert_eq!(blind_response.body["code"], "mutation.conflict");
+    for hidden in ["entityId", "fieldId"] {
+        assert!(blind_response.body.get(hidden).is_none());
+    }
+    for hidden in [
+        "membership",
+        "tenant",
+        "other-tenant",
+        "registry_data",
+        "breg_pattern_",
+    ] {
+        assert!(!blind_response.body.to_string().contains(hidden));
+    }
+    assert_not_found(
+        &app,
+        &format!(
+            "/v1/records/people/{}?accessProfile=operator",
+            approved.person_id
+        ),
+        operator.clone(),
+    )
+    .await;
+    assert_not_found(
+        &app,
+        &format!(
+            "/v1/records/memberships/{}?accessProfile=operator",
+            approved.membership_id
+        ),
+        operator.clone(),
+    )
+    .await;
+    let after = get_record(&app, &uri, operator.clone()).await;
+    assert_eq!(
+        after.body["request"], before.body["request"],
+        "failed application preserves frozen proposal and approved state"
+    );
+    assert_eq!(after.body["revision"], before.body["revision"]);
+    let after_revisions: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_revisions",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        after_revisions, revisions,
+        "later pattern failure rolls back the earlier create revision"
+    );
+    assert_eq!(application_result_count(&database).await, 0);
+    let household = get_record(
+        &app,
+        &format!(
+            "/v1/records/households/{}?accessProfile=operator",
+            approved.household_id
+        ),
+        operator,
+    )
+    .await;
+    assert_eq!(household.body["revision"], 1);
+    assert_eq!(household.body["data"]["contactPerson"], Value::Null);
+    database.cleanup().await;
 }

@@ -41,7 +41,8 @@ use super::{
     },
     schema::{
         execute_compiled_ddl_statement, is_spatial_candidate_view_drop_sql,
-        is_spatial_candidate_view_sql, reconcile_compiled_runtime_acl,
+        is_spatial_candidate_view_sql, map_pattern_database_error, pattern_field_for_constraint,
+        reconcile_compiled_runtime_acl,
     },
     verify_btree_gist, verify_migration_role, verify_postgis, ConnectionConfig,
     ExpectedRegistryIdentity, PostgresKernelError, Result, SqlIdentifier,
@@ -98,6 +99,7 @@ pub(crate) struct PackageDdlStatement<'a> {
     pub sql: &'a str,
     pub checksum: &'a str,
     pub kind: DdlStatementKind,
+    pub pattern_field: Option<(&'a str, &'a str)>,
     pub ordinal: i32,
 }
 
@@ -295,17 +297,17 @@ impl DedicatedApplyConnection {
         set_local_statement_timeout(&transaction, statement_timeout).await?;
         for statement in statements {
             validate_statement_checksum(statement)?;
-            if execute_compiled_ddl_statement(
+            if let Err(error) = execute_compiled_ddl_statement(
                 &transaction,
                 statement.sql,
                 statement.kind,
+                statement.pattern_field,
                 runtime_role,
             )
             .await
-            .is_err()
             {
                 transaction.rollback().await?;
-                return Err(PostgresKernelError::Connection);
+                return Err(error);
             }
         }
         transaction.commit().await?;
@@ -562,10 +564,10 @@ impl DedicatedApplyConnection {
                 &transaction,
                 statement.sql,
                 statement.kind,
+                statement.pattern_field,
                 runtime_role,
             )
-            .await
-            .map_err(|_| PostgresKernelError::Connection)?;
+            .await?;
             if !complete {
                 record_step_complete(&transaction, ledger, ledger_step, 0).await?;
             }
@@ -645,6 +647,29 @@ impl DedicatedApplyConnection {
             return Ok(());
         }
 
+        let objects = match &step.descriptor {
+            ReviewedMigrationStepDescriptor::TransactionalSql { objects, .. }
+            | ReviewedMigrationStepDescriptor::ChunkedBackfill { objects, .. } => objects,
+        };
+        for object in objects {
+            let Some((entity_id, field_id)) =
+                pattern_field_for_constraint(registry, &object.physical_name)
+            else {
+                continue;
+            };
+            if let Some(pattern) = &registry.entities()[entity_id].fields[field_id].pattern {
+                // A reviewed replacement also validates native syntax when
+                // the target table is empty. PostgreSQL evaluates the exact
+                // candidate expression, as in the compiler installer.
+                transaction
+                    .query_one("SELECT '' ~ $1::text", &[pattern])
+                    .await
+                    .map_err(|error| {
+                        map_pattern_database_error(error, Some((entity_id, field_id)))
+                    })?;
+            }
+        }
+
         let affected = if let Some(bounds) = affected_bounds {
             let tables = step_tables(step)?;
             set_force_row_security(&transaction, &tables, false).await?;
@@ -655,7 +680,7 @@ impl DedicatedApplyConnection {
             let affected = transaction
                 .execute(&step.sql, &[])
                 .await
-                .map_err(|_| PostgresKernelError::Connection)?;
+                .map_err(|error| map_reviewed_pattern_error(error, registry, step))?;
             if affected < bounds.min || affected > bounds.max {
                 return Err(PostgresKernelError::RegistryUnavailable);
             }
@@ -673,7 +698,7 @@ impl DedicatedApplyConnection {
             transaction
                 .batch_execute(&step.sql)
                 .await
-                .map_err(|_| PostgresKernelError::Connection)?;
+                .map_err(|error| map_reviewed_pattern_error(error, registry, step))?;
             0
         };
         record_step_complete(&transaction, ledger, ledger_step, affected).await?;
@@ -819,31 +844,31 @@ impl DedicatedApplyConnection {
                 spatial_candidate_view_statements.push(statement);
                 continue;
             }
-            if execute_compiled_ddl_statement(
+            if let Err(error) = execute_compiled_ddl_statement(
                 &transaction,
                 statement.sql,
                 statement.kind,
+                statement.pattern_field,
                 runtime_role,
             )
             .await
-            .is_err()
             {
                 transaction.rollback().await?;
-                return Err(PostgresKernelError::Connection);
+                return Err(error);
             }
         }
         for statement in spatial_candidate_view_statements {
-            if execute_compiled_ddl_statement(
+            if let Err(error) = execute_compiled_ddl_statement(
                 &transaction,
                 statement.sql,
                 statement.kind,
+                statement.pattern_field,
                 runtime_role,
             )
             .await
-            .is_err()
             {
                 transaction.rollback().await?;
-                return Err(PostgresKernelError::Connection);
+                return Err(error);
             }
         }
         reconcile_compiled_runtime_acl(&transaction, registry, runtime_role).await?;
@@ -1719,6 +1744,34 @@ fn ledger_step(
     Ok(matches[0])
 }
 
+fn map_reviewed_pattern_error(
+    error: tokio_postgres::Error,
+    registry: &CompiledRegistry,
+    step: &ValidatedReviewedMigrationStep,
+) -> PostgresKernelError {
+    let field = error
+        .as_db_error()
+        .and_then(|error| error.constraint())
+        .and_then(|constraint| pattern_field_for_constraint(registry, constraint))
+        .or_else(|| {
+            if error.code() != Some(&tokio_postgres::error::SqlState::INVALID_REGULAR_EXPRESSION) {
+                return None;
+            }
+            let objects = match &step.descriptor {
+                ReviewedMigrationStepDescriptor::TransactionalSql { objects, .. }
+                | ReviewedMigrationStepDescriptor::ChunkedBackfill { objects, .. } => objects,
+            };
+            let mut fields = objects
+                .iter()
+                .filter_map(|object| pattern_field_for_constraint(registry, &object.physical_name));
+            let field = fields.next()?;
+            // A PostgreSQL syntax error has no constraint name. Keep a field
+            // address only when the reviewed step binds one unambiguous rule.
+            fields.all(|other| other == field).then_some(field)
+        });
+    map_pattern_database_error(error, field)
+}
+
 fn step_tables(step: &ValidatedReviewedMigrationStep) -> Result<Vec<String>> {
     let objects = match &step.descriptor {
         ReviewedMigrationStepDescriptor::TransactionalSql { objects, .. }
@@ -2143,6 +2196,7 @@ mod tests {
             sql,
             checksum: "",
             kind,
+            pattern_field: None,
             ordinal: 0,
         };
         assert!(compiler_statement_runs_after_reviewed_steps(&statement(

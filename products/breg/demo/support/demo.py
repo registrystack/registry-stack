@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import stat
 import sys
 import time
@@ -1435,6 +1436,85 @@ def _verify_webhook_request(
     return event_uuid, generation, attempt, idempotency_key
 
 
+class WebhookInbox:
+    """Receiver-owned durable acceptance, not a registry delivery or worker API."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            if not path.is_file() or path.is_symlink() or path.stat().st_mode & 0o077:
+                raise DemoError("the webhook inbox must be an owner-only regular file")
+        else:
+            os.close(descriptor)
+        connection = sqlite3.connect(path)
+        try:
+            with connection:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS accepted_events ("
+                    "source TEXT NOT NULL, event_id TEXT NOT NULL, metadata TEXT NOT NULL, "
+                    "body BLOB NOT NULL, PRIMARY KEY (source, event_id))"
+                )
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS accepted_deliveries ("
+                    "idempotency_key TEXT PRIMARY KEY, source TEXT NOT NULL, "
+                    "event_id TEXT NOT NULL, generation TEXT NOT NULL)"
+                )
+        finally:
+            connection.close()
+
+    def accept(self, headers: dict[str, str], body: bytes) -> None:
+        # Call only after request verification. Attempt/time/signature change on
+        # retry; generation also changes on operator replay. The event identity
+        # must still denote one work item if earlier acknowledgements were lost.
+        metadata = json.dumps(
+            {
+                name: headers[name]
+                for name in (
+                    "ce-specversion", "ce-id", "ce-source", "ce-type", "ce-time",
+                    "ce-dataschema",
+                )
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        connection = sqlite3.connect(self.path)
+        try:
+            with connection:
+                connection.execute("PRAGMA synchronous = FULL")
+                connection.execute(
+                    "INSERT INTO accepted_events (source, event_id, metadata, body) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT (source, event_id) DO NOTHING",
+                    (headers["ce-source"], headers["ce-id"], metadata, body),
+                )
+                retained = connection.execute(
+                    "SELECT metadata, body FROM accepted_events WHERE source = ? AND event_id = ?",
+                    (headers["ce-source"], headers["ce-id"]),
+                ).fetchone()
+                if retained != (metadata, body):
+                    raise DemoError("the receiver refused conflicting duplicate content")
+                binding = (
+                    headers["ce-source"], headers["ce-id"],
+                    headers["x-registry-event-generation"],
+                )
+                connection.execute(
+                    "INSERT INTO accepted_deliveries (idempotency_key, source, event_id, generation) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING",
+                    (headers["idempotency-key"], *binding),
+                )
+                retained_binding = connection.execute(
+                    "SELECT source, event_id, generation FROM accepted_deliveries "
+                    "WHERE idempotency_key = ?",
+                    (headers["idempotency-key"],),
+                ).fetchone()
+                if retained_binding != binding:
+                    raise DemoError("the receiver refused conflicting delivery identity")
+            # The commit completes before the HTTP receiver can acknowledge.
+        finally:
+            connection.close()
+
+
 class WebhookReceiver(http.server.BaseHTTPRequestHandler):
     server_version = "RegistryDemoReceiver/1"
     sys_version = ""
@@ -1492,6 +1572,17 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
             or (slot == 2 and attempt > 1)
             or (slot == 3 and generation > 1)
         )
+        if accepted:
+            try:
+                self.server.webhook_inbox.accept(headers, body)  # type: ignore[attr-defined]
+            except DemoError:
+                self.send_response(409)
+                self.end_headers()
+                return
+            except (OSError, sqlite3.Error):
+                self.send_response(503)
+                self.end_headers()
+                return
         event["attempts"].append(
             {"generation": generation, "attempt": attempt, "accepted": accepted}
         )
@@ -1514,11 +1605,16 @@ def serve_webhook_receiver(root: Path) -> None:
     if len(key) < 32:
         raise DemoError("the webhook key is too short")
     state_path = root / "webhook-receiver-state.json"
-    _write_json(state_path, {"verificationFailures": 0, "events": {}}, 0o600)
+    if not state_path.exists():
+        _write_json(state_path, {"verificationFailures": 0, "events": {}}, 0o600)
+    elif not state_path.is_file() or state_path.is_symlink() or state_path.stat().st_mode & 0o077:
+        raise DemoError("the webhook report must be an owner-only regular file")
+    inbox = WebhookInbox(root / "webhook-inbox.sqlite3")
     server = http.server.HTTPServer(("127.0.0.1", origin.port), WebhookReceiver)
     server.state_path = state_path  # type: ignore[attr-defined]
     server.webhook_key = key  # type: ignore[attr-defined]
     server.fixture_kind = fixture_kind  # type: ignore[attr-defined]
+    server.webhook_inbox = inbox  # type: ignore[attr-defined]
     server.serve_forever(poll_interval=0.1)
 
 

@@ -20,9 +20,9 @@ use crate::logical_names::{default_api_name, reserved_logical_name, valid_api_na
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionAccessEntry, CompiledActionEffect,
     CompiledActionGrant, CompiledActionInput, CompiledActionInventory, CompiledActionMutation,
-    CompiledActionRoute, CompiledActionTarget, CompiledActionTargetBinding,
-    CompiledActionTargetGrant, CompiledActionTargetUse, CompiledActionTargetUseSource,
-    CompiledActionValue, CompiledEntity, HttpMethod,
+    CompiledActionRequirement, CompiledActionRoute, CompiledActionTarget,
+    CompiledActionTargetBinding, CompiledActionTargetGrant, CompiledActionTargetUse,
+    CompiledActionTargetUseSource, CompiledActionValue, CompiledEntity, HttpMethod,
 };
 
 type CompiledEffectSet = (
@@ -41,6 +41,7 @@ pub(crate) fn compile_immediate_actions(
     actions: &BTreeMap<String, CollectedActionSource>,
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
+    assets: &[crate::contract::ModuleAssetSource],
 ) -> Result<CompiledActionInventory, Vec<Diagnostic>> {
     let mut errors = Vec::new();
     validate_action_grant_sources(actions, profiles, &mut errors);
@@ -48,7 +49,8 @@ pub(crate) fn compile_immediate_actions(
     let mut routes = Vec::new();
     let mut access = Vec::new();
     for collected in actions.values() {
-        if let Some(compiled) = compile_action(collected, entities, profiles, &mut errors) {
+        let diagnostics_start = errors.len();
+        if let Some(compiled) = compile_action(collected, entities, profiles, assets, &mut errors) {
             let action_routes = compile_action_routes(&compiled, profiles, &mut errors);
             let action_access = action_routes
                 .iter()
@@ -63,6 +65,13 @@ pub(crate) fn compile_immediate_actions(
             routes.extend(action_routes);
             access.extend(action_access);
             compiled_actions.push(compiled);
+        }
+        for diagnostic in &mut errors[diagnostics_start..] {
+            diagnostic.path = diagnostic.path.replacen(
+                "actions[]",
+                &format!("actions[{}]", collected.source.id),
+                1,
+            );
         }
     }
     routes.sort_by(|left, right| {
@@ -85,6 +94,7 @@ fn compile_action(
     collected: &CollectedActionSource,
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
+    assets: &[crate::contract::ModuleAssetSource],
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledAction> {
     let action = &collected.source;
@@ -96,11 +106,11 @@ fn compile_action(
             "an immediate action must declare at least one typed input",
         ));
     }
-    if action.effects.is_empty() {
+    if action.effects.is_empty() == action.handler.is_none() {
         errors.push(Diagnostic::error(
-            "action.effects.empty",
-            "actions[].effects",
-            "an immediate action must declare at least one fixed effect",
+            "action.implementation.exclusive",
+            "actions[]",
+            "an immediate action requires exactly one fixed effects list or handler",
         ));
     }
     let inputs = compile_inputs(action, entities, errors);
@@ -108,9 +118,26 @@ fn compile_action(
         .iter()
         .map(|input| (input.id.as_str(), input))
         .collect::<BTreeMap<_, _>>();
-    let (effects, target_uses, result_effects) =
-        compile_effects(action, &input_map, entities, errors)?;
-    validate_plan_bounds(&inputs, entities, &effects, &target_uses, errors);
+    let (handler, (effects, target_uses, result_effects)) = if action.handler.is_some() {
+        let (handler, effects) = compile_handler(collected, &input_map, entities, assets, errors)?;
+        (Some(handler), effects)
+    } else {
+        (None, compile_effects(action, &input_map, entities, errors)?)
+    };
+    let requires = compile_requirements(action, &input_map, entities, &target_uses, errors);
+    let writes_path = if handler.is_some() {
+        "actions[].handler.writes"
+    } else {
+        "actions[].effects"
+    };
+    validate_plan_bounds(
+        writes_path,
+        &inputs,
+        entities,
+        &effects,
+        &target_uses,
+        errors,
+    );
     let grants = compile_grants(
         action,
         entities,
@@ -135,9 +162,18 @@ fn compile_action(
         source_module: collected.source_module.clone(),
         route: format!("/v1/actions/{}", action.id),
         condition_route,
-        contract_fingerprint: contract_fingerprint(action, entities, &inputs, &effects, &grants),
+        contract_fingerprint: contract_fingerprint(
+            action,
+            entities,
+            &inputs,
+            (&effects, handler.as_ref()),
+            &requires,
+            &grants,
+        ),
+        handler,
         inputs,
         effects,
+        requires,
         target_uses,
         grants,
         result_effects,
@@ -145,6 +181,494 @@ fn compile_action(
         maximum_field_mutations: MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
         maximum_snapshot_bytes: MAX_CHANGE_REQUEST_SNAPSHOT_BYTES,
     })
+}
+
+fn compile_handler(
+    collected: &CollectedActionSource,
+    inputs: &BTreeMap<&str, &CompiledActionInput>,
+    entities: &BTreeMap<String, CompiledEntity>,
+    assets: &[crate::contract::ModuleAssetSource],
+    errors: &mut Vec<Diagnostic>,
+) -> Option<(crate::model::CompiledActionHandler, CompiledEffectSet)> {
+    use crate::model::{
+        CompiledActionHandler, CompiledActionHandlerWrite, CompiledChangeRequestPlannerKind,
+        CompiledChangeRequestPlannerLimits, CompiledChangeRequestPlannerWrite,
+        CompiledChangeRequestReferenceSources,
+    };
+    let source = collected.source.handler.as_ref()?;
+    let path = format!("actions[{}].handler", collected.source.id);
+    if source.abi != crate::contract::ACTION_HANDLER_ABI_V1 {
+        errors.push(Diagnostic::error(
+            "action.handler.abi_invalid",
+            format!("{path}.abi"),
+            "the action handler ABI is not supported",
+        ));
+    }
+    if !crate::change_request::valid_planner_path(&source.script) {
+        errors.push(Diagnostic::error(
+            "action.handler.source_invalid",
+            format!("{path}.script"),
+            "the handler script must be a bounded relative .rhai path",
+        ));
+        return None;
+    }
+    if source.writes.is_empty() {
+        errors.push(Diagnostic::error(
+            "action.handler.writes_empty",
+            format!("{path}.writes"),
+            "a handler requires at least one single-use write slot",
+        ));
+    }
+    if inputs.len() > crate::rhai_planner::MAXIMUM_MAP_ENTRIES {
+        errors.push(Diagnostic::error(
+            "action.handler.inputs_bound",
+            format!("actions[{}].inputs", collected.source.id),
+            "handler input count exceeds the engine map bound",
+        ));
+    }
+    for input in inputs.values() {
+        let input_path = format!("actions[{}].inputs[{}]", collected.source.id, input.id);
+        match &input.field_type {
+            FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length }
+                if u64::from(*max_length) * 4
+                    > crate::rhai_planner::MAXIMUM_STRING_BYTES as u64 =>
+            {
+                errors.push(Diagnostic::error(
+                    "action.handler.input.string_bound",
+                    format!("{input_path}.maxLength"),
+                    &format!(
+                        "registry.action-handler/v1 input strings support at most {} UTF-8 bytes; set maxLength to {} or less so every Unicode value fits",
+                        crate::rhai_planner::MAXIMUM_STRING_BYTES,
+                        crate::rhai_planner::MAXIMUM_STRING_BYTES / 4,
+                    ),
+                ));
+            }
+            FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+                errors.push(Diagnostic::error(
+                    "action.handler.input.type_unsupported",
+                    format!("{input_path}.type"),
+                    "registry.action-handler/v1 accepts scalar inputs; use scalar fields or fixed effects for crs84-point and structured values",
+                ));
+            }
+            _ => {}
+        }
+    }
+    if source.writes.len() > usize::from(MAX_CHANGE_REQUEST_TARGETS) {
+        errors.push(Diagnostic::error(
+            "action.handler.slots_bound",
+            format!("{path}.writes"),
+            "handler slot count exceeds the target ceiling",
+        ));
+    }
+    let input_classification = inputs.values().map(|input| input.classification).max();
+    let create_entities = source
+        .writes
+        .iter()
+        .filter(|write| write.operation == Operation::Create)
+        .filter_map(|write| write.target.entity.clone())
+        .collect::<BTreeSet<_>>();
+    let mut ids = BTreeSet::new();
+    let mut writes = Vec::new();
+    let mut effects = Vec::new();
+    let mut target_uses = BTreeMap::new();
+    let mut written = BTreeMap::new();
+    for slot in &source.writes {
+        let slot_path = format!("{path}.writes[slot={}]", slot.id);
+        validate_id(&slot.id, &format!("{slot_path}.id"), errors);
+        if !ids.insert(slot.id.clone()) {
+            errors.push(Diagnostic::error(
+                "action.handler.slot_duplicate",
+                &slot_path,
+                "handler slot identifiers must be unique",
+            ));
+        }
+        let synthetic = ActionEffectSource {
+            id: Some(slot.id.clone()),
+            target: slot.target.clone(),
+            operation: slot.operation,
+            set: BTreeMap::new(),
+            clear: BTreeSet::new(),
+        };
+        let diagnostics_start = errors.len();
+        let target = compile_target(inputs, entities, &slot.id, &synthetic, errors);
+        for diagnostic in &mut errors[diagnostics_start..] {
+            diagnostic.path = diagnostic
+                .path
+                .replacen("actions[].effects[]", &slot_path, 1);
+        }
+        let Some(target) = target else { continue };
+        if let CompiledActionTargetBinding::Existing { input } = &target.binding {
+            if !inputs
+                .get(input.as_str())
+                .is_some_and(|input| input.required)
+            {
+                errors.push(Diagnostic::error(
+                    "action.handler.target_required",
+                    &slot_path,
+                    "a patch slot requires a required reference input",
+                ));
+            }
+        }
+        let target_entity = &entities[&target.entity_id];
+        let mut fields = BTreeSet::new();
+        let mut field_types = BTreeMap::new();
+        let mut required_fields = BTreeSet::new();
+        let mut reference_sources = BTreeMap::new();
+        let mut mutations = Vec::new();
+        if slot.fields.is_empty() {
+            errors.push(Diagnostic::error(
+                "action.handler.fields_empty",
+                &slot_path,
+                "a write slot must declare at least one stored field",
+            ));
+        }
+        for field_id in &slot.fields {
+            let field_path = format!("{slot_path}.fields[field={field_id}]");
+            if !fields.insert(field_id.clone()) {
+                errors.push(Diagnostic::error(
+                    "action.handler.field_duplicate",
+                    &field_path,
+                    "slot fields must be unique",
+                ));
+            }
+            let Some(field) = target_entity.fields.get(field_id) else {
+                errors.push(Diagnostic::error(
+                    "action.handler.field_unknown",
+                    &field_path,
+                    "a slot field must name a stored target field",
+                ));
+                continue;
+            };
+            if input_classification
+                .is_some_and(|classification| classification > field.classification)
+            {
+                errors.push(Diagnostic::error(
+                    "action.handler.classification_ceiling",
+                    &field_path,
+                    "handler inputs cannot flow to a less classified target field",
+                ));
+            }
+            field_types.insert(field_id.clone(), field.field_type.clone());
+            if field.required {
+                required_fields.insert(field_id.clone());
+            }
+            if let FieldTypeSource::Reference {
+                target: reference_target,
+                ..
+            } = &field.field_type
+            {
+                let request_fields = inputs.values().filter(|input| matches!(&input.field_type, FieldTypeSource::Reference { target, .. } if target == reference_target)).map(|input| input.id.clone()).collect::<BTreeSet<_>>();
+                let allowed_creates = create_entities
+                    .iter()
+                    .filter(|entity| *entity == reference_target)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                if request_fields.is_empty() && allowed_creates.is_empty() {
+                    errors.push(Diagnostic::error(
+                        "action.handler.reference_source_missing",
+                        &field_path,
+                        "a reference write requires a compatible declared input or create slot",
+                    ));
+                }
+                for input in &request_fields {
+                    if !inputs[input.as_str()].required {
+                        errors.push(Diagnostic::error(
+                            "action.handler.reference_required",
+                            format!("actions[{}].inputs[{input}]", collected.source.id),
+                            "reference sources admitted by a handler must be required inputs",
+                        ));
+                    }
+                    remember_link_reference_use(input, inputs, &mut target_uses);
+                }
+                reference_sources.insert(
+                    field_id.clone(),
+                    CompiledChangeRequestReferenceSources {
+                        request_fields,
+                        create_entities: allowed_creates,
+                    },
+                );
+            }
+            mutations.push(CompiledActionMutation::Set {
+                field: field_id.clone(),
+                value: CompiledActionValue::Literal {
+                    value: serde_json::Value::Null,
+                },
+            });
+            remember_write(
+                &mut written,
+                &target,
+                field_id,
+                &slot.id,
+                &field_path,
+                errors,
+            );
+        }
+        if slot.operation == Operation::Create {
+            required_fields = target_entity
+                .fields
+                .values()
+                .filter(|field| field.required)
+                .map(|field| field.id.clone())
+                .collect();
+            if !required_fields.is_subset(&fields) {
+                errors.push(Diagnostic::error(
+                    "action.handler.create_fields_incomplete",
+                    &slot_path,
+                    "a create slot must include every required stored field",
+                ));
+            }
+        }
+        remember_effect_use(
+            &slot.id,
+            slot.operation,
+            &target,
+            &mutations,
+            &mut target_uses,
+        );
+        writes.push(CompiledActionHandlerWrite {
+            id: slot.id.clone(),
+            ceiling: CompiledChangeRequestPlannerWrite {
+                target_entity_id: target.entity_id.clone(),
+                target_from_field: slot.target.from_field.clone(),
+                operation: slot.operation,
+                fields,
+                field_types,
+                required_fields,
+                reference_sources,
+            },
+        });
+        effects.push(CompiledActionEffect {
+            id: slot.id.clone(),
+            target,
+            operation: slot.operation,
+            mutations,
+            depends_on: BTreeSet::new(),
+        });
+    }
+    let mut refusals = BTreeMap::new();
+    for refusal in &source.refusals {
+        if !valid_code(&refusal.code)
+            || refusal.label.trim().is_empty()
+            || refusal.label.len() > 256
+            || refusal.label.chars().any(char::is_control)
+            || refusals
+                .insert(refusal.code.clone(), refusal.label.clone())
+                .is_some()
+        {
+            errors.push(Diagnostic::error("action.handler.refusal_invalid", format!("{path}.refusals"), "refusals require unique bounded codes and non-empty static labels of at most 256 bytes without control characters"));
+        }
+    }
+    if refusals.len() > crate::rhai_planner::MAXIMUM_MAP_ENTRIES {
+        errors.push(Diagnostic::error(
+            "action.handler.refusal_bound",
+            format!("{path}.refusals"),
+            "the refusal catalogue exceeds its fixed bound",
+        ));
+    }
+    let Some(asset) = assets
+        .iter()
+        .find(|asset| asset.module == collected.source_module && asset.path == source.script)
+    else {
+        errors.push(Diagnostic::error(
+            "action.handler.source_missing",
+            format!("{path}.script"),
+            &format!(
+                "supply the action's owned handler asset at {}",
+                source.script
+            ),
+        ));
+        return None;
+    };
+    if asset.bytes.is_empty() || asset.bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
+        errors.push(Diagnostic::error(
+            "action.handler.source_bound",
+            format!("{path}.script"),
+            "the handler source must be non-empty and within its fixed byte bound",
+        ));
+        return None;
+    }
+    let Ok(script) = std::str::from_utf8(&asset.bytes) else {
+        errors.push(Diagnostic::error(
+            "action.handler.source_encoding",
+            format!("{path}.script"),
+            "the handler source must be UTF-8",
+        ));
+        return None;
+    };
+    if let Err(error) = crate::rhai_planner::compile_entrypoint_detailed(script, "handle") {
+        use crate::rhai_planner::EntrypointCompileError;
+        let (code, message) = match error {
+            EntrypointCompileError::SourceBound => (
+                "action.handler.source_bound",
+                "the handler source exceeds its fixed byte bound".to_owned(),
+            ),
+            EntrypointCompileError::Parse(position) => {
+                let location = match (position.line(), position.position()) {
+                    (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
+                    (Some(line), None) => format!(" at line {line}"),
+                    _ => String::new(),
+                };
+                (
+                    "action.handler.parse",
+                    format!("correct the Rhai syntax or unsupported construct{location}"),
+                )
+            }
+            EntrypointCompileError::Entrypoint => (
+                "action.handler.entrypoint",
+                "declare exactly one public fn handle(ctx) entry point and do not overload functions".to_owned(),
+            ),
+        };
+        errors.push(Diagnostic::error(code, format!("{path}.script"), &message));
+        return None;
+    }
+    writes.sort_by(|left, right| left.id.cmp(&right.id));
+    effects.sort_by(|left, right| left.id.cmp(&right.id));
+    let conditioned = target_uses
+        .values()
+        .filter(|use_| use_.condition_required)
+        .filter_map(|use_| match &use_.source {
+            CompiledActionTargetUseSource::Input { input } => {
+                Some((use_.entity_id.clone(), input.clone()))
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let target_uses = target_uses
+        .into_values()
+        .filter(|use_| {
+            use_.condition_required
+                || match &use_.source {
+                    CompiledActionTargetUseSource::Input { input } => {
+                        !conditioned.contains(&(use_.entity_id.clone(), input.clone()))
+                    }
+                    _ => true,
+                }
+        })
+        .collect();
+    Some((
+        CompiledActionHandler {
+            kind: CompiledChangeRequestPlannerKind::Rhai,
+            source_module: collected.source_module.clone(),
+            script_path: source.script.clone(),
+            abi: source.abi.clone(),
+            rhai_version: crate::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION.to_owned(),
+            script_sha256: format!("sha256:{}", hex_lower(&Sha256::digest(&asset.bytes))),
+            script_bytes: asset.bytes.clone(),
+            limits: CompiledChangeRequestPlannerLimits {
+                maximum_source_bytes: crate::rhai_planner::MAXIMUM_SOURCE_BYTES as u32,
+                maximum_operations: crate::rhai_planner::MAXIMUM_OPERATIONS,
+                maximum_call_depth: crate::rhai_planner::MAXIMUM_CALL_DEPTH as u16,
+                maximum_expression_depth: crate::rhai_planner::MAXIMUM_EXPRESSION_DEPTH as u16,
+                maximum_string_bytes: crate::rhai_planner::MAXIMUM_STRING_BYTES as u32,
+                maximum_array_items: crate::rhai_planner::MAXIMUM_ARRAY_ITEMS as u16,
+                maximum_map_entries: crate::rhai_planner::MAXIMUM_MAP_ENTRIES as u16,
+                maximum_modules: 0,
+            },
+            writes,
+            refusals,
+        },
+        (effects, target_uses, ids),
+    ))
+}
+
+fn compile_requirements(
+    action: &ActionSource,
+    inputs: &BTreeMap<&str, &CompiledActionInput>,
+    entities: &BTreeMap<String, CompiledEntity>,
+    target_uses: &[CompiledActionTargetUse],
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<CompiledActionRequirement> {
+    if action.requires.len() > usize::from(MAX_CHANGE_REQUEST_FIELD_MUTATIONS)
+        || serde_json::to_vec(&action.requires).map_or(true, |bytes| {
+            bytes.len() > MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize
+        })
+    {
+        errors.push(Diagnostic::error(
+            "action.requires.bounds",
+            "actions[].requires",
+            "action requirements exceed the supported count or byte ceiling",
+        ));
+        return Vec::new();
+    }
+    let mut compiled = Vec::new();
+    let mut seen = BTreeSet::new();
+    for requirement in &action.requires {
+        if !seen.insert((&requirement.input, &requirement.field)) {
+            errors.push(Diagnostic::error(
+                "action.requires.duplicate",
+                "actions[].requires",
+                "an action can require a target field only once per reference input",
+            ));
+            continue;
+        }
+        let Some(input) = inputs.get(requirement.input.as_str()) else {
+            errors.push(Diagnostic::error(
+                "action.requires.input_unknown",
+                "actions[].requires[].input",
+                "an action requirement must name a declared reference input",
+            ));
+            continue;
+        };
+        let FieldTypeSource::Reference { target, .. } = &input.field_type else {
+            errors.push(Diagnostic::error(
+                "action.requires.reference_required",
+                "actions[].requires[].input",
+                "an action requirement must name a required reference input used by its effects",
+            ));
+            continue;
+        };
+        if !input.required || !target_uses.iter().any(|target_use| {
+            target_use.entity_id == *target
+                && matches!(&target_use.source, CompiledActionTargetUseSource::Input { input } if input == &requirement.input)
+        }) {
+            errors.push(Diagnostic::error(
+                "action.requires.reference_required",
+                "actions[].requires[].input",
+                "an action requirement must name a required reference input used by its effects",
+            ));
+            continue;
+        }
+        let Some(field) = entities
+            .get(target)
+            .and_then(|entity| entity.fields.get(&requirement.field))
+        else {
+            errors.push(Diagnostic::error(
+                "action.requires.field_unknown",
+                "actions[].requires[].field",
+                "an action requirement must name a stored field of its reference target",
+            ));
+            continue;
+        };
+        if matches!(
+            field.field_type,
+            FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
+        ) || requirement.equals.is_array()
+            || requirement.equals.is_object()
+            || if requirement.equals.is_null() {
+                field.required
+            } else {
+                !crate::data::validate_field_value(
+                    crate::data::FieldValue::Json(&requirement.equals),
+                    &field.field_type,
+                )
+            }
+        {
+            errors.push(Diagnostic::error(
+                "action.requires.value_invalid",
+                "actions[].requires[].equals",
+                "an action requirement must use a scalar value valid for its target field",
+            ));
+            continue;
+        }
+        compiled.push(CompiledActionRequirement {
+            input: requirement.input.clone(),
+            entity_id: target.clone(),
+            field: requirement.field.clone(),
+            equals: requirement.equals.clone(),
+        });
+    }
+    compiled.sort_by(|left, right| (&left.input, &left.field).cmp(&(&right.input, &right.field)));
+    compiled
 }
 
 fn compile_inputs(
@@ -290,7 +814,14 @@ fn compile_effects(
                     field: field.clone(),
                     value: compiled,
                 });
-                remember_write(&mut writes, &target, field, &id, errors);
+                remember_write(
+                    &mut writes,
+                    &target,
+                    field,
+                    &id,
+                    &format!("actions[].effects[effect={id}].set.{field}"),
+                    errors,
+                );
             }
         }
         for field in &effect.clear {
@@ -319,7 +850,14 @@ fn compile_effects(
             mutations.push(CompiledActionMutation::Clear {
                 field: field.clone(),
             });
-            remember_write(&mut writes, &target, field, &id, errors);
+            remember_write(
+                &mut writes,
+                &target,
+                field,
+                &id,
+                &format!("actions[].effects[effect={id}].clear"),
+                errors,
+            );
         }
         remember_effect_use(&id, effect.operation, &target, &mutations, &mut target_uses);
         compiled_by_id.insert(
@@ -673,6 +1211,7 @@ fn remember_write(
     target: &CompiledActionTarget,
     field: &str,
     effect_id: &str,
+    path: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
     let key = (
@@ -683,13 +1222,13 @@ fn remember_write(
         if existing != effect_id {
             errors.push(Diagnostic::error(
                 "action.effect.overlapping_write",
-                "actions[].effects[]",
+                path,
                 "immediate-action effects cannot write the same target field more than once",
             ));
         } else {
             errors.push(Diagnostic::error(
                 "action.effect.overlapping_write",
-                "actions[].effects[]",
+                path,
                 "an immediate-action effect cannot both set and clear the same target field",
             ));
         }
@@ -755,6 +1294,7 @@ enum VisitState {
 }
 
 fn validate_plan_bounds(
+    path: &str,
     inputs: &[CompiledActionInput],
     entities: &BTreeMap<String, CompiledEntity>,
     effects: &[CompiledActionEffect],
@@ -776,7 +1316,7 @@ fn validate_plan_bounds(
     if target_count > usize::from(MAX_CHANGE_REQUEST_TARGETS) {
         errors.push(Diagnostic::error(
             "action.bounds.targets",
-            "actions[].effects",
+            path,
             "an immediate-action plan exceeds the supported target-record ceiling",
         ));
     }
@@ -784,7 +1324,7 @@ fn validate_plan_bounds(
     if mutation_count > usize::from(MAX_CHANGE_REQUEST_FIELD_MUTATIONS) {
         errors.push(Diagnostic::error(
             "action.bounds.field_mutations",
-            "actions[].effects",
+            path,
             "an immediate-action plan exceeds the supported field-mutation ceiling",
         ));
     }
@@ -792,12 +1332,12 @@ fn validate_plan_bounds(
         Some(bytes) if bytes <= u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES) => {}
         Some(_) => errors.push(Diagnostic::error(
             "action.bounds.snapshot_bytes",
-            "actions[].effects",
+            path,
             "an immediate-action plan exceeds the supported snapshot-size ceiling",
         )),
         None => errors.push(Diagnostic::error(
             "action.bounds.snapshot_unknown",
-            "actions[].effects",
+            path,
             "an immediate-action plan contains a field whose snapshot size cannot be bounded",
         )),
     }
@@ -1082,6 +1622,7 @@ fn validate_grant_access_requirements(
             sortable_fields: BTreeSet::new(),
             spatial_queries: None,
             row_boundaries: row_boundaries.to_vec(),
+            membership_boundaries: Vec::new(),
             request_visibility: None,
             lookups: Vec::new(),
             read_paths: Vec::new(),
@@ -1179,6 +1720,7 @@ fn entity_grant_fields_empty(grant: &crate::contract::AccessGrantSource) -> bool
         && grant.filterable_fields.is_empty()
         && grant.sortable_fields.is_empty()
         && grant.row_boundaries.is_empty()
+        && grant.membership_boundaries.is_empty()
         && grant.lookups.is_empty()
         && grant.read_paths.is_empty()
         && grant.review_stages.is_empty()
@@ -1193,12 +1735,21 @@ fn contract_fingerprint(
     action: &ActionSource,
     entities: &BTreeMap<String, CompiledEntity>,
     inputs: &[CompiledActionInput],
-    effects: &[CompiledActionEffect],
+    (effects, handler): (
+        &[CompiledActionEffect],
+        Option<&crate::model::CompiledActionHandler>,
+    ),
+    requires: &[CompiledActionRequirement],
     grants: &[CompiledActionGrant],
 ) -> String {
     let target_entities = effects
         .iter()
         .map(|effect| effect.target.entity_id.as_str())
+        .chain(
+            requires
+                .iter()
+                .map(|requirement| requirement.entity_id.as_str()),
+        )
         .collect::<BTreeSet<_>>();
     let target_contracts = target_entities
         .iter()
@@ -1208,7 +1759,7 @@ fn contract_fingerprint(
                 .map(|entity| ((*entity_id).to_owned(), entity_contract_payload(entity)))
         })
         .collect::<BTreeMap<_, _>>();
-    let payload = json!({
+    let mut payload = json!({
         "version": 1,
         "id": action.id,
         "inputs": inputs,
@@ -1221,6 +1772,13 @@ fn contract_fingerprint(
             "maximumSnapshotBytes": MAX_CHANGE_REQUEST_SNAPSHOT_BYTES
         }
     });
+    if let Some(handler) = handler {
+        payload["handler"] = json!(handler);
+    }
+    // Preserve existing action identities when no acceptance requirement is added.
+    if !requires.is_empty() {
+        payload["requires"] = json!(requires);
+    }
     let bytes = canonicalize_json(&payload).expect("compiled immediate action canonicalizes");
     let digest = Sha256::digest(bytes);
     format!("sha256:{}", hex_lower(&digest))
@@ -1231,15 +1789,18 @@ fn entity_contract_payload(entity: &CompiledEntity) -> serde_json::Value {
         .fields
         .iter()
         .map(|(field_id, field)| {
-            (
-                field_id.clone(),
-                json!({
+            (field_id.clone(), {
+                let mut payload = json!({
                     "type": field.field_type,
                     "required": field.required,
                     "classification": field.classification,
                     "validTimeRole": field.valid_time_role,
-                }),
-            )
+                });
+                if let Some(pattern) = &field.pattern {
+                    payload["postgresPattern"] = json!(pattern);
+                }
+                payload
+            })
         })
         .collect::<BTreeMap<_, _>>();
     json!({

@@ -1933,7 +1933,7 @@ pub(crate) fn strong_record_etag_for_representation(
     Ok(format!("\"breg-{digest}\""))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum MutationError {
     #[error("mutation request is invalid")]
     InvalidRequest,
@@ -1952,6 +1952,12 @@ pub enum MutationError {
     /// planner's closed vocabulary, never by script text or request values.
     #[error("change-request planner produced no plan")]
     PlannerFailure(crate::rhai_planner::ChangeRequestPlannerError),
+    #[error("action handler produced no effects")]
+    ActionHandlerFailure(crate::action_handler::ActionHandlerError),
+    #[error("action was refused by its declared handler")]
+    ActionRefusal(crate::action_handler::ActionHandlerRefusal),
+    #[error("field does not conform to its declared storage pattern")]
+    FieldPatternViolation { entity_id: String, field_id: String },
 }
 
 #[cfg(feature = "postgres-test")]
@@ -2168,14 +2174,47 @@ async fn apply_create_row(
     let MutationBody::Create(data) = &request.body else {
         return Err(MutationError::InvalidRequest);
     };
-    let submitted_fields = request
-        .plan
-        .entity
+    // The parent writer retains its create-return authority context.
+    transaction
+        .execute(
+            "SELECT set_config('registry.created_entity_id', $1, true),
+                    set_config('registry.created_record_id', $2, true)",
+            &[&request.plan.entity.id, &record_id],
+        )
+        .await
+        .map_err(map_database_error)?;
+    insert_current_row(transaction, &request.plan.entity, record_id, data).await
+}
+
+async fn apply_patch_row(
+    transaction: &Transaction<'_>,
+    request: &MutationRequest<'_>,
+    expected_revision: i64,
+    data: Map<String, Value>,
+) -> Result<CurrentRow, MutationError> {
+    let record_id = request.record_id.ok_or(MutationError::InvalidRequest)?;
+    update_current_row(
+        transaction,
+        &request.plan.entity,
+        record_id,
+        expected_revision,
+        data,
+    )
+    .await
+}
+
+async fn insert_current_row(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    record_id: &str,
+    data: &Map<String, Value>,
+) -> Result<CurrentRow, MutationError> {
+    let submitted_fields = entity
         .fields
         .values()
         .filter(|field| data.contains_key(&field.id))
         .collect::<Vec<_>>();
-    let mut values = Vec::<Option<String>>::with_capacity(submitted_fields.len() + 2);
+    let mut values = Vec::<Option<String>>::with_capacity(submitted_fields.len() + 1);
     values.push(Some(record_id.to_owned()));
     for field in &submitted_fields {
         values.push(sql_value(&data[&field.id], &field.field_type)?);
@@ -2184,7 +2223,7 @@ async fn apply_create_row(
         .iter()
         .map(|value| value as &(dyn ToSql + Sync))
         .collect::<Vec<_>>();
-    let table = quote_identifier(&request.plan.entity.physical_table);
+    let table = quote_identifier(&entity.physical_table);
     let field_columns = submitted_fields
         .iter()
         .map(|field| quote_identifier(&field.physical_name))
@@ -2194,8 +2233,7 @@ async fn apply_create_row(
         .enumerate()
         .map(|(index, field)| typed_parameter(index + 2, &field.field_type))
         .collect::<Vec<_>>();
-    let returning = returning_projection(&request.plan.entity);
-
+    let returning = returning_projection(entity);
     let mut columns = vec![
         "record_id".to_owned(),
         "record_revision".to_owned(),
@@ -2213,33 +2251,21 @@ async fn apply_create_row(
         columns.join(", "),
         placeholders.join(", ")
     );
-    // A create grant may return the exact newly reserved row without granting
-    // general record reads. These identifiers are chosen by the coordinator.
-    transaction
-        .execute(
-            "SELECT set_config('registry.created_entity_id', $1, true),
-                    set_config('registry.created_record_id', $2, true)",
-            &[&request.plan.entity.id, &record_id],
-        )
-        .await
-        .map_err(map_database_error)?;
     let row = transaction
         .query_one(&sql, &parameters)
         .await
-        .map_err(map_database_error)?;
-    row_to_current(&request.plan.entity, &row)
+        .map_err(|error| map_field_database_error(error, entity))?;
+    row_to_current(entity, &row)
 }
 
-async fn apply_patch_row(
+async fn update_current_row(
     transaction: &Transaction<'_>,
-    request: &MutationRequest<'_>,
+    entity: &CompiledEntity,
+    record_id: &str,
     expected_revision: i64,
     data: Map<String, Value>,
 ) -> Result<CurrentRow, MutationError> {
-    let record_id = request.record_id.ok_or(MutationError::InvalidRequest)?;
-    let submitted_fields = request
-        .plan
-        .entity
+    let submitted_fields = entity
         .fields
         .values()
         .filter(|field| data.contains_key(&field.id))
@@ -2257,7 +2283,7 @@ async fn apply_patch_row(
         .iter()
         .map(|value| value as &(dyn ToSql + Sync))
         .collect::<Vec<_>>();
-    let table = quote_identifier(&request.plan.entity.physical_table);
+    let table = quote_identifier(&entity.physical_table);
     let assignments = submitted_fields
         .iter()
         .enumerate()
@@ -2270,7 +2296,7 @@ async fn apply_patch_row(
         })
         .collect::<Vec<_>>();
     let expected_parameter = values.len();
-    let returning = returning_projection(&request.plan.entity);
+    let returning = returning_projection(entity);
     let sql = format!(
         "UPDATE registry_data.{table}
          SET record_revision = record_revision + 1,
@@ -2286,9 +2312,9 @@ async fn apply_patch_row(
     let row = transaction
         .query_opt(&sql, &parameters)
         .await
-        .map_err(map_database_error)?
+        .map_err(|error| map_field_database_error(error, entity))?
         .ok_or(MutationError::PreconditionFailed)?;
-    row_to_current(&request.plan.entity, &row)
+    row_to_current(entity, &row)
 }
 
 async fn apply_tombstone_row(
@@ -3257,6 +3283,30 @@ fn method_name(method: HttpMethod) -> &'static str {
         HttpMethod::Patch => "PATCH",
         HttpMethod::Post => "POST",
     }
+}
+
+fn map_field_database_error(
+    error: tokio_postgres::Error,
+    entity: &CompiledEntity,
+) -> MutationError {
+    if error.code() == Some(&SqlState::CHECK_VIOLATION) {
+        if let Some(constraint) = error.as_db_error().and_then(|error| error.constraint()) {
+            for field in entity.fields.values() {
+                if field.pattern.is_some()
+                    && constraint
+                        == crate::generated_ddl::field_pattern_constraint_name(
+                            &entity.id, &field.id,
+                        )
+                {
+                    return MutationError::FieldPatternViolation {
+                        entity_id: entity.id.clone(),
+                        field_id: field.id.clone(),
+                    };
+                }
+            }
+        }
+    }
+    map_database_error(error)
 }
 
 fn map_database_error(error: tokio_postgres::Error) -> MutationError {

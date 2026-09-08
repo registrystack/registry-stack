@@ -482,9 +482,12 @@ pub struct ChangeRequestPlannerSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ChangeRequestPlannerKindSource {
+pub enum RhaiScriptKindSource {
     Rhai,
 }
+
+/// Retained Rust name for the reviewed change-request authoring contract.
+pub type ChangeRequestPlannerKindSource = RhaiScriptKindSource;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -592,10 +595,65 @@ pub struct ChangeRequestValueSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionSource {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handler: Option<ActionHandlerSource>,
     #[serde(default)]
     pub inputs: Vec<ActionInputSource>,
     #[serde(default)]
     pub effects: Vec<ActionEffectSource>,
+    /// Acceptance-time checks over exact existing reference inputs, combined with AND.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<ActionRequirementSource>,
+}
+
+pub const ACTION_HANDLER_ABI_V1: &str = "registry.action-handler/v1";
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionHandlerSource {
+    pub kind: RhaiScriptKindSource,
+    pub script: String,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "action_handler_abi_schema")
+    )]
+    pub abi: String,
+    pub writes: Vec<ActionHandlerWriteSource>,
+    #[serde(default)]
+    pub refusals: Vec<ActionHandlerRefusalSource>,
+}
+
+#[cfg(feature = "schema")]
+fn action_handler_abi_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": "string", "enum": [ACTION_HANDLER_ABI_V1]})
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionHandlerWriteSource {
+    pub id: String,
+    pub target: ActionTargetSource,
+    pub operation: Operation,
+    pub fields: Vec<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionHandlerRefusalSource {
+    pub code: String,
+    pub label: String,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ActionRequirementSource {
+    pub input: String,
+    pub field: String,
+    pub equals: Value,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -618,9 +676,9 @@ impl<'de> Deserialize<'de> for ActionInputSource {
         D: Deserializer<'de>,
     {
         let raw = RawFieldSource::deserialize(deserializer)?;
-        if raw.valid_time_role.is_some() {
+        if raw.valid_time_role.is_some() || raw.pattern.is_some() {
             return Err(D::Error::custom(
-                "action inputs cannot declare validTimeRole",
+                "action inputs cannot declare validTimeRole or pattern",
             ));
         }
         let field_type = parse_field_type::<D::Error>(&raw)?;
@@ -725,6 +783,9 @@ pub struct FieldSource {
     pub field_type: FieldTypeSource,
     #[serde(default)]
     pub required: bool,
+    /// Native PostgreSQL ARE expression for a persisted string/text value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
     pub classification: Classification,
     #[serde(default)]
     pub valid_time_role: Option<ValidTimeRole>,
@@ -799,6 +860,8 @@ struct StringFieldSourceSchema {
     #[serde(default)]
     min_length: u32,
     max_length: u32,
+    #[serde(default)]
+    pattern: Option<String>,
 }
 
 #[cfg(feature = "schema")]
@@ -817,6 +880,8 @@ struct TextFieldSourceSchema {
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
     max_length: u32,
+    #[serde(default)]
+    pattern: Option<String>,
 }
 
 #[cfg(feature = "schema")]
@@ -1092,11 +1157,22 @@ impl<'de> Deserialize<'de> for FieldSource {
     {
         let raw = RawFieldSource::deserialize(deserializer)?;
         let field_type = parse_field_type::<D::Error>(&raw)?;
+        if raw.pattern.is_some()
+            && !matches!(
+                field_type,
+                FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
+            )
+        {
+            return Err(D::Error::custom(
+                "pattern requires a persisted string or text field",
+            ));
+        }
         Ok(Self {
             id: raw.id,
             api_name: raw.api_name,
             field_type,
             required: raw.required,
+            pattern: raw.pattern,
             classification: raw.classification,
             valid_time_role: raw.valid_time_role,
         })
@@ -1121,9 +1197,9 @@ impl<'de> Deserialize<'de> for DerivedFieldSource {
         D: Deserializer<'de>,
     {
         let raw = RawFieldSource::deserialize(deserializer)?;
-        if raw.required || raw.valid_time_role.is_some() {
+        if raw.required || raw.valid_time_role.is_some() || raw.pattern.is_some() {
             return Err(D::Error::custom(
-                "derived fields cannot declare required or validTimeRole",
+                "derived fields cannot declare required, validTimeRole or pattern",
             ));
         }
         let field_type = parse_field_type::<D::Error>(&raw)?;
@@ -1272,6 +1348,8 @@ struct RawFieldSource {
     target: Option<String>,
     #[serde(default)]
     on_delete: Option<ReferenceDelete>,
+    #[serde(default)]
+    pattern: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1876,6 +1954,9 @@ pub struct AccessProfileSource {
     pub spatial_queries: Option<SpatialQueryGrantSource>,
     /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
+    /// Current active membership required for each stored reference key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub membership_boundaries: Vec<MembershipBoundarySource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_visibility: Option<RequestVisibilitySource>,
@@ -1939,6 +2020,20 @@ pub struct RowBoundarySource {
     pub field: String,
     pub claim: String,
     pub operator: BoundaryOperator,
+}
+
+/// A one-hop current membership requirement, combined with every other row boundary.
+/// The root field and membership key must reference the same entity. The active
+/// field is Boolean, and principalField matches the profile's verified principal.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MembershipBoundarySource {
+    pub field: String,
+    pub membership_entity: String,
+    pub membership_key_field: String,
+    pub principal_field: String,
+    pub active_field: String,
 }
 
 /// Compile-time requirements, not grants. Profiles must explicitly satisfy them.
@@ -2098,6 +2193,9 @@ pub struct AccessGrantSource {
     pub spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
+    /// Current active membership required for each stored reference key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub membership_boundaries: Vec<MembershipBoundarySource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_visibility: Option<RequestVisibilitySource>,
@@ -2145,6 +2243,8 @@ struct RawAccessGrantSource {
     spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     row_boundaries: Option<Vec<RowBoundarySource>>,
+    #[serde(default)]
+    membership_boundaries: Vec<MembershipBoundarySource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     request_visibility: Option<RequestVisibilitySource>,
@@ -2195,6 +2295,7 @@ impl<'de> Deserialize<'de> for AccessGrantSource {
             sortable_fields: raw.sortable_fields,
             spatial_queries: raw.spatial_queries,
             row_boundaries: raw.row_boundaries.unwrap_or_default(),
+            membership_boundaries: raw.membership_boundaries,
             request_visibility: raw.request_visibility,
             lookups: raw.lookups,
             read_paths: raw.read_paths,
@@ -2253,6 +2354,9 @@ struct EntityAccessGrantSourceSchema {
     #[serde(default)]
     spatial_queries: Option<SpatialQueryGrantSource>,
     row_boundaries: Vec<RowBoundarySource>,
+    /// Current active membership required for each stored reference key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    membership_boundaries: Vec<MembershipBoundarySource>,
     #[serde(default)]
     request_visibility: Option<RequestVisibilitySource>,
     #[serde(default)]

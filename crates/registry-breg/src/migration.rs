@@ -33,9 +33,9 @@ use crate::postgres::{
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
-/// Value-free apply failures. Neither SQL nor database or package values cross
-/// this boundary.
-#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
+/// Value-free apply failures. Only authored identifiers cross this boundary;
+/// SQL, stored values, and physical database names do not.
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum MigrationError {
     #[error("the verified package is not a valid activation successor")]
     PackageBinding,
@@ -43,6 +43,10 @@ pub enum MigrationError {
     EmptyPlan,
     #[error("the Registry package apply failed")]
     ApplyFailed,
+    #[error("a persisted field pattern has invalid PostgreSQL syntax")]
+    FieldPatternSyntax { entity_id: String, field_id: String },
+    #[error("existing rows do not conform to a persisted field pattern")]
+    FieldPatternExistingRows { entity_id: String, field_id: String },
     #[error("active request proposals require rebase or cancellation before this package can be activated")]
     ActiveRequestProposals,
     #[error("destructive backup evidence is invalid")]
@@ -388,6 +392,10 @@ pub async fn apply_verified_package(
                 sql: &statement.sql,
                 checksum,
                 kind: statement.kind,
+                pattern_field: crate::postgres::compiled_pattern_field(
+                    request.package.registry(),
+                    &statement.id,
+                ),
                 ordinal: i32::try_from(ordinal).map_err(|_| MigrationError::PackageBinding)?,
             })
         })
@@ -525,7 +533,9 @@ pub async fn apply_verified_package(
                 let _ = connection.release().await;
                 return Err(MigrationError::ApplyFailed);
             }
-            Err(_) => return fail_and_release(connection, &target, &ledger).await,
+            Err(error) => {
+                return fail_with_error_and_release(connection, &target, &ledger, error).await;
+            }
         }
         if connection
             .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
@@ -603,8 +613,8 @@ pub async fn apply_verified_package(
             )
             .await
     };
-    if ddl_result.is_err() {
-        return fail_and_release(connection, &target, &ledger).await;
+    if let Err(error) = ddl_result {
+        return fail_with_error_and_release(connection, &target, &ledger, error).await;
     }
     let acl_result = connection
         .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
@@ -647,6 +657,32 @@ async fn fail_and_release(
     let released = connection.release().await.is_ok();
     let _ = (marked_failed, released);
     Err(MigrationError::ApplyFailed)
+}
+
+async fn fail_with_error_and_release(
+    connection: VerifiedPackageApplyConnection,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    error: crate::postgres::PostgresKernelError,
+) -> Result<ExpectedRegistryIdentity> {
+    let _ = fail_and_release(connection, target, ledger).await;
+    Err(match error {
+        crate::postgres::PostgresKernelError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        } => MigrationError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        },
+        crate::postgres::PostgresKernelError::FieldPatternExistingRows {
+            entity_id,
+            field_id,
+        } => MigrationError::FieldPatternExistingRows {
+            entity_id,
+            field_id,
+        },
+        _ => MigrationError::ApplyFailed,
+    })
 }
 
 fn reviewed_ledger(

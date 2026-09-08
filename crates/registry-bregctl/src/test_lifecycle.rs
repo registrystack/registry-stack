@@ -66,6 +66,7 @@ pub(crate) enum TestLifecycleError {
     JourneyStep { path: String, message: String },
     Credentials { path: String, message: String },
     Database,
+    FieldPatternSyntax { entity_id: String, field_id: String },
     Execution,
     OutputPreflight,
     OutputCommit,
@@ -180,7 +181,7 @@ pub(crate) fn run(
     let schema_fingerprint = runtime.block_on(async {
         startup::rehearse_schema_fingerprint(&config, request.candidate.registry())
             .await
-            .map_err(|_| TestLifecycleError::Database)
+            .map_err(schema_preparation_error)
     })?;
     if request
         .candidate
@@ -199,7 +200,7 @@ pub(crate) fn run(
     let receipt = runtime.block_on(async {
         let database = startup::prepare_schema_test_database(&config, &prepared)
             .await
-            .map_err(|_| TestLifecycleError::Database)?;
+            .map_err(schema_preparation_error)?;
         execute_schema_test(database, &config, &prepared, &suite, credentials)
             .await
             .map_err(execution_error)
@@ -456,6 +457,19 @@ fn read_credentials(path: &Path) -> Result<Vec<u8>, TestLifecycleError> {
         return Err(changed());
     }
     Ok(bytes)
+}
+
+fn schema_preparation_error(error: startup::StartupError) -> TestLifecycleError {
+    match error {
+        startup::StartupError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        } => TestLifecycleError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        },
+        _ => TestLifecycleError::Database,
+    }
 }
 
 fn execution_error(error: FixtureError) -> TestLifecycleError {

@@ -3,7 +3,9 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 repository_root=$(cd -- "$script_dir/../../.." && pwd -P)
-bregctl="$repository_root/target/debug/bregctl"
+bregctl=""
+breg=""
+cargo_target_dir=""
 temporary_root=""
 created_databases=()
 created_roles=()
@@ -18,11 +20,14 @@ usage() {
 usage: products/breg/scripts/test-change-request-examples.sh [--installed] [--env FILE] [--asset-project DIR] [--household-project DIR] [--rhai-project DIR] [--mode change-request|immediate-actions]
 
 Runs the Base Registry Engine change-request example fixtures through bregctl test.
-Use --mode immediate-actions to run the immediate-action fixtures through the same closed harness.
+Use --mode immediate-actions to run the fixed actions and the person-registration Rhai handler,
+including its signed-package activation and live HTTP checks.
+Both modes run their Rhai fixture by default; --rhai-project DIR selects an edited copy.
 Set BREG_TEST_DATABASE_URL and BREG_TEST_TLS_CA_PEM_PATH, or pass --env FILE.
 Requires Python 3 with PyYAML. Use a project override to run a disposable edited copy instead of the committed fixture.
 With --installed, the runner uses the breg and bregctl found on PATH instead of building them,
 which is how a released install runs it.
+Source builds honor CARGO_TARGET_DIR; relative paths resolve from the repository root.
 USAGE
 }
 
@@ -105,23 +110,18 @@ case "$mode" in
     default_rhai_project="$repository_root/products/breg/acceptance/person-name-change-rhai"
     ;;
   immediate-actions)
-    if [[ -n "$rhai_project" ]]; then
-      usage
-      exit 2
-    fi
     run_label="immediate-action"
     temp_slug="ia"
     role_slug="ia"
     default_asset_project="$repository_root/products/breg/fixtures/asset-registration-actions"
     default_household_project="$repository_root/products/breg/fixtures/household-contact-actions"
+    default_rhai_project="$repository_root/products/breg/acceptance/person-registration-rhai"
     ;;
 esac
 
 asset_project="${asset_project:-$default_asset_project}"
 household_project="${household_project:-$default_household_project}"
-if [[ "$mode" == "change-request" ]]; then
-  rhai_project="${rhai_project:-$default_rhai_project}"
-fi
+rhai_project="${rhai_project:-$default_rhai_project}"
 
 if [[ -n "${env_file:-}" ]]; then
   if [[ ! -f "$env_file" || -L "$env_file" ]]; then
@@ -129,6 +129,15 @@ if [[ -n "${env_file:-}" ]]; then
     exit 1
   fi
   source "$env_file"
+fi
+
+if [[ "$installed" != true ]]; then
+  cargo_target_dir="${CARGO_TARGET_DIR:-$repository_root/target}"
+  if [[ "$cargo_target_dir" != /* ]]; then
+    cargo_target_dir="$repository_root/$cargo_target_dir"
+  fi
+  bregctl="$cargo_target_dir/debug/bregctl"
+  breg="$cargo_target_dir/debug/breg"
 fi
 
 if [[ -z "${BREG_TEST_DATABASE_URL:-}" ]]; then
@@ -661,6 +670,28 @@ run_fixture() {
   render_runtime_config "$temporary_root/$fixture_name-runtime-test.yaml" \
     "$database_id" "$package_environment" "secret:file/$runtime_secret" "secret:file/$migration_secret" \
     "$source_revision" "$instance_id" "$migration_role" "$runtime_role" "$trust_anchor"
+  if [[ "$mode" == "immediate-actions" && "$fixture_name" == "person-registration-rhai" ]]; then
+    # Schema tests capture committed events; delivery to a real receiver is separate.
+    printf '%s' '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' >"$temporary_root/secrets/person-events-key"
+    python3 - "$temporary_root/$fixture_name-runtime-test.yaml" <<'PY_EVENTS'
+import sys
+from pathlib import Path
+import yaml
+path = Path(sys.argv[1])
+config = yaml.safe_load(path.read_text(encoding="utf-8"))
+config["eventDestinations"] = {"person-events": {
+    "origin": "https://person-events.example.invalid/",
+    "path": "/events",
+    "networkProfile": "productionHttps",
+    "dnsFamily": "dualStackStrict",
+    "allowedPrivateCidrs": [],
+    "hmacSha256KeyRef": "secret:file/person-events-key",
+    "classificationCeiling": "internal",
+    "deliveryCeilings": {"attemptTimeoutMilliseconds": 1000, "maximumAttempts": 2},
+}}
+path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+PY_EVENTS
+  fi
 
   printf 'running %s fixture: %s\n' "$run_label" "$fixture_name"
   "$bregctl" check "$project_path" >/dev/null
@@ -685,6 +716,30 @@ for expected in sys.argv[2].split(","):
         raise SystemExit(f"{expected} was not reported as successful")
 PY
   printf '%s fixture passed: %s\n' "$run_label" "$fixture_name"
+  if [[ "$mode" == "immediate-actions" && "$fixture_name" == "person-registration-rhai" ]]; then
+    local live_database="${database}_live"
+    local live_runtime="$temporary_root/$fixture_name-runtime-live.yaml"
+    provision_database "$live_database" "$migration_role" "$runtime_role"
+    urls=$(derive_urls "$live_database" "$migration_role" "$runtime_role" "$role_password_file")
+    migration_url=$(printf '%s\n' "$urls" | sed -n '1p')
+    runtime_url=$(printf '%s\n' "$urls" | sed -n '2p')
+    printf '%s' "$runtime_url" >"$temporary_root/secrets/$runtime_secret-live"
+    printf '%s' "$migration_url" >"$temporary_root/secrets/$migration_secret-live"
+    python3 - "$temporary_root/$fixture_name-runtime-test.yaml" "$live_runtime" "$runtime_secret" "$migration_secret" <<'PY_LIVE'
+import sys
+from pathlib import Path
+import yaml
+config = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+config["database"]["runtimeUrlRef"] = f"secret:file/{sys.argv[3]}-live"
+config["database"]["migrationUrlRef"] = f"secret:file/{sys.argv[4]}-live"
+Path(sys.argv[2]).write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+PY_LIVE
+    python3 "$repository_root/products/breg/acceptance/person-registration-rhai/tests/live_registration.py" \
+      --project "$project_path" --report "$report" --receipt "$receipt" \
+      --runtime "$live_runtime" --credentials "$credentials" --bregctl "$bregctl" --breg "$breg" \
+      --signer "$temporary_root/package-signer.pem" --secrets "$temporary_root/secrets" \
+      --output "$temporary_root/$fixture_name-live"
+  fi
 }
 
 if [[ "$installed" == true ]]; then
@@ -701,7 +756,7 @@ require_tool psql
 require_tool python3
 asset_project=$(normalize_project asset "$asset_project")
 household_project=$(normalize_project household "$household_project")
-if [[ "$mode" == "change-request" ]]; then
+if [[ -n "$rhai_project" ]]; then
   rhai_project=$(normalize_project rhai "$rhai_project")
 fi
 
@@ -840,11 +895,27 @@ case "$mode" in
       household-maintainer=household-maintainer-token \
       contact-registrar=contact-registrar-token \
       link-only-target-authority-is-still-enforced.create-south-service-center=household-operator-south-token
+    if [[ -n "$rhai_project" ]]; then
+      write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-person-registrar" "person-registration" "registry:person:register" "$temporary_root/secrets/person-registrar-token"
+      write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-person-reader" "person-registration-audit" "registry:person:read" "$temporary_root/secrets/person-reader-token"
+      write_jwt "$temporary_root/oidc-signer.pem" "change-request-example-oidc-key" "synthetic-person-administrator" "person-maintenance" "registry:person:manage" "$temporary_root/secrets/person-administrator-token"
+      rhai_fixture_name=person-registration-rhai
+      rhai_database="breg_ia_rhai_$suffix"
+      rhai_database_id=person-registration-rhai-local-db
+      rhai_runtime_secret=rhai-action-runtime-url
+      rhai_migration_secret=rhai-action-migration-url
+      rhai_expected_journeys=person-registration-and-native-integrity,coordinated-registration-and-omission
+      rhai_credentials="$temporary_root/person-registration-rhai-credentials.yaml"
+      write_credentials_from_project "$rhai_project" "$rhai_credentials" \
+        person-registrar=person-registrar-token \
+        person-reader=person-reader-token \
+        person-administrator=person-administrator-token
+    fi
     ;;
 esac
 asset_package_identity=$(read_project_package_identity "$asset_project")
 household_package_identity=$(read_project_package_identity "$household_project")
-if [[ "$mode" == "change-request" ]]; then
+if [[ -n "$rhai_project" ]]; then
   rhai_package_identity=$(read_project_package_identity "$rhai_project")
 fi
 asset_package_environment=$(printf '%s\n' "$asset_package_identity" | sed -n '1p')
@@ -854,7 +925,7 @@ household_package_environment=$(printf '%s\n' "$household_package_identity" | se
 household_instance_id=$(printf '%s\n' "$household_package_identity" | sed -n '2p')
 household_source_revision=$(printf '%s\n' "$household_package_identity" | sed -n '3p')
 chmod 600 "$asset_credentials" "$household_credentials"
-if [[ "$mode" == "change-request" ]]; then
+if [[ -n "$rhai_project" ]]; then
   rhai_package_environment=$(printf '%s\n' "$rhai_package_identity" | sed -n '1p')
   rhai_instance_id=$(printf '%s\n' "$rhai_package_identity" | sed -n '2p')
   rhai_source_revision=$(printf '%s\n' "$rhai_package_identity" | sed -n '3p')
@@ -862,7 +933,7 @@ if [[ "$mode" == "change-request" ]]; then
 fi
 
 if [[ "$installed" != true ]]; then
-  cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
+  cargo build --manifest-path "$repository_root/Cargo.toml" --target-dir "$cargo_target_dir" --locked \
     -p registry-bregctl \
     -p registry-breg \
     --features registry-breg/runtime >/dev/null
@@ -894,7 +965,7 @@ run_fixture \
   "$household_credentials" \
   "$household_expected_journeys"
 
-if [[ "$mode" == "change-request" ]]; then
+if [[ -n "$rhai_project" ]]; then
   run_fixture \
     "$rhai_fixture_name" \
     "$rhai_project" \

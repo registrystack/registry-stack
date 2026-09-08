@@ -1631,7 +1631,7 @@ impl MutationCoordinator {
             correlation: input.correlation.clone(),
         };
         let mut current = match target.expected_revision {
-            None => apply_create_row(transaction, &request, &id).await?,
+            None => apply_create_row(transaction, &request, &id).await,
             Some(revision) => {
                 // Even no-op effects write only the approved field ceiling.
                 let changed = approved_fields
@@ -1647,9 +1647,15 @@ impl MutationCoordinator {
                         ))
                     })
                     .collect::<Result<Map<_, _>, MutationError>>()?;
-                apply_patch_row(transaction, &request, revision, changed).await?
+                apply_patch_row(transaction, &request, revision, changed).await
             }
-        };
+        }
+        .map_err(|error| match error {
+            // Apply authority does not grant target field disclosure. Keep
+            // the same public conflict for every frozen target pattern failure.
+            MutationError::FieldPatternViolation { .. } => MutationError::Conflict,
+            other => other,
+        })?;
         current.predecessor_revision = target.expected_revision;
         current.before_data = target.before.clone();
         let reference =

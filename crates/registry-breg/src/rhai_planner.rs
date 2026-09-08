@@ -195,31 +195,56 @@ pub struct ChangeRequestPlannerRuntime;
 
 impl ChangeRequestPlannerRuntime {
     pub fn compile_source(source: &str) -> Result<AST, ChangeRequestPlannerError> {
-        if source.len() > MAXIMUM_SOURCE_BYTES {
-            return Err(ChangeRequestPlannerError::Source);
-        }
-        let engine = engine(None);
-        let ast = engine
-            .compile(source)
-            .map_err(|_| ChangeRequestPlannerError::Source)?;
-        let mut names = BTreeSet::new();
-        let mut entrypoints = 0usize;
-        for function in ast.iter_functions() {
-            if !names.insert(function.name) {
-                return Err(ChangeRequestPlannerError::Entrypoint);
-            }
-            if function.name == "plan" {
-                if function.params.len() != 1 || function.access != rhai::FnAccess::Public {
-                    return Err(ChangeRequestPlannerError::Entrypoint);
-                }
-                entrypoints += 1;
-            }
-        }
-        if entrypoints != 1 {
-            return Err(ChangeRequestPlannerError::Entrypoint);
-        }
-        Ok(ast)
+        compile_entrypoint(source, "plan")
     }
+}
+
+pub(crate) fn compile_entrypoint(
+    source: &str,
+    entrypoint: &str,
+) -> Result<AST, ChangeRequestPlannerError> {
+    compile_entrypoint_detailed(source, entrypoint).map_err(|error| match error {
+        EntrypointCompileError::SourceBound | EntrypointCompileError::Parse(_) => {
+            ChangeRequestPlannerError::Source
+        }
+        EntrypointCompileError::Entrypoint => ChangeRequestPlannerError::Entrypoint,
+    })
+}
+
+pub(crate) enum EntrypointCompileError {
+    SourceBound,
+    Parse(rhai::Position),
+    Entrypoint,
+}
+
+pub(crate) fn compile_entrypoint_detailed(
+    source: &str,
+    entrypoint: &str,
+) -> Result<AST, EntrypointCompileError> {
+    if source.len() > MAXIMUM_SOURCE_BYTES {
+        return Err(EntrypointCompileError::SourceBound);
+    }
+    let engine = engine(None);
+    let ast = engine
+        .compile(source)
+        .map_err(|error| EntrypointCompileError::Parse(error.position()))?;
+    let mut names = BTreeSet::new();
+    let mut entrypoints = 0usize;
+    for function in ast.iter_functions() {
+        if !names.insert(function.name) {
+            return Err(EntrypointCompileError::Entrypoint);
+        }
+        if function.name == entrypoint {
+            if function.params.len() != 1 || function.access != rhai::FnAccess::Public {
+                return Err(EntrypointCompileError::Entrypoint);
+            }
+            entrypoints += 1;
+        }
+    }
+    if entrypoints != 1 {
+        return Err(EntrypointCompileError::Entrypoint);
+    }
+    Ok(ast)
 }
 
 pub fn plan_change_request_effects(
@@ -350,7 +375,7 @@ fn declarative_candidate(
     })
 }
 
-fn engine(deadline: Option<Instant>) -> Engine {
+pub(crate) fn engine(deadline: Option<Instant>) -> Engine {
     let mut engine = Engine::new();
     engine.set_module_resolver(DummyModuleResolver::new());
     engine.on_print(|_| {});
@@ -421,7 +446,10 @@ fn planner_context(
     Ok(Dynamic::from(ctx))
 }
 
-fn json_to_dynamic(value: &Value, depth: usize) -> Result<Dynamic, ChangeRequestPlannerError> {
+pub(crate) fn json_to_dynamic(
+    value: &Value,
+    depth: usize,
+) -> Result<Dynamic, ChangeRequestPlannerError> {
     if depth > MAXIMUM_VALUE_DEPTH {
         return Err(ChangeRequestPlannerError::Resource);
     }
@@ -571,7 +599,7 @@ fn decode_plan(
     })
 }
 
-fn order_candidates(
+pub(crate) fn order_candidates(
     effects: Vec<CandidateChangeRequestEffect>,
 ) -> Result<Vec<CandidateChangeRequestEffect>, ChangeRequestPlannerError> {
     fn visit(
@@ -683,44 +711,7 @@ fn decode_effect(
     if operation == Operation::Create && !map.contains_key("id") {
         return Err(ChangeRequestPlannerError::Result);
     }
-    let mut mutations = Vec::new();
-    let mut touched = BTreeSet::new();
-    if let Some(set) = map.get("set") {
-        let set = set
-            .read_lock::<Map>()
-            .ok_or(ChangeRequestPlannerError::Result)?;
-        for (field, value) in set.iter() {
-            if !write.fields.contains(field.as_str()) || !touched.insert(field.to_string()) {
-                return Err(ChangeRequestPlannerError::Ceiling);
-            }
-            mutations.push(CandidateChangeRequestMutation::Set {
-                field: field.to_string(),
-                value: decode_set_value(write, field, value.clone())?,
-            });
-        }
-    }
-    if let Some(clear) = map.get("clear") {
-        let clear = clear
-            .read_lock::<Array>()
-            .ok_or(ChangeRequestPlannerError::Result)?;
-        for field in clear.iter() {
-            let field = dynamic_string(field)?;
-            if operation == Operation::Create
-                || write.required_fields.contains(&field)
-                || !write.fields.contains(&field)
-                || !touched.insert(field.clone())
-            {
-                return Err(ChangeRequestPlannerError::Ceiling);
-            }
-            mutations.push(CandidateChangeRequestMutation::Clear { field });
-        }
-    }
-    if mutations.is_empty() {
-        return Err(ChangeRequestPlannerError::Result);
-    }
-    if operation == Operation::Create && !write.required_fields.is_subset(&touched) {
-        return Err(ChangeRequestPlannerError::Ceiling);
-    }
+    let mutations = decode_write_mutations(write, &map)?;
     let depends_on = mutations
         .iter()
         .filter_map(|mutation| match mutation {
@@ -741,6 +732,137 @@ fn decode_effect(
         mutations,
         depends_on,
     })
+}
+
+pub(crate) fn decode_write_mutations(
+    write: &CompiledChangeRequestPlannerWrite,
+    map: &Map,
+) -> Result<Vec<CandidateChangeRequestMutation>, ChangeRequestPlannerError> {
+    decode_write_mutations_detailed(write, map).map_err(|diagnostic| diagnostic.kind)
+}
+
+pub(crate) struct WriteMutationDiagnostic {
+    pub kind: ChangeRequestPlannerError,
+    pub field: Option<String>,
+    pub message: &'static str,
+}
+
+impl WriteMutationDiagnostic {
+    fn new(kind: ChangeRequestPlannerError, message: &'static str) -> Self {
+        Self {
+            kind,
+            field: None,
+            message,
+        }
+    }
+
+    fn at_field(
+        write: &CompiledChangeRequestPlannerWrite,
+        field: &str,
+        kind: ChangeRequestPlannerError,
+        message: &'static str,
+    ) -> Self {
+        // Locations come from the compiled ceiling, never an unknown script key.
+        Self {
+            kind,
+            field: write.fields.get(field).cloned(),
+            message,
+        }
+    }
+}
+
+pub(crate) fn decode_write_mutations_detailed(
+    write: &CompiledChangeRequestPlannerWrite,
+    map: &Map,
+) -> Result<Vec<CandidateChangeRequestMutation>, WriteMutationDiagnostic> {
+    let operation = write.operation;
+    let mut mutations = Vec::new();
+    let mut touched = BTreeSet::new();
+    if let Some(set) = map.get("set") {
+        let set = set.read_lock::<Map>().ok_or_else(|| {
+            WriteMutationDiagnostic::new(
+                ChangeRequestPlannerError::Result,
+                "Return set as a map of declared fields to values.",
+            )
+        })?;
+        for (field, value) in set.iter() {
+            if !write.fields.contains(field.as_str()) {
+                return Err(WriteMutationDiagnostic::at_field(
+                    write,
+                    field,
+                    ChangeRequestPlannerError::Ceiling,
+                    "Set only fields declared by this slot.",
+                ));
+            }
+            touched.insert(field.to_string());
+            mutations.push(CandidateChangeRequestMutation::Set {
+                field: field.to_string(),
+                value: decode_set_value(write, field, value.clone()).map_err(|kind| {
+                    let message = if value.is_unit() {
+                        "Set a non-null value; use clear only for optional patch fields."
+                    } else if matches!(
+                        write.field_types.get(field.as_str()),
+                        Some(FieldTypeSource::Reference { .. })
+                    ) {
+                        "Use a declared fromField or an emitted compatible fromEffect reference."
+                    } else {
+                        "Use a value matching the declared field type and bounds."
+                    };
+                    WriteMutationDiagnostic::at_field(write, field, kind, message)
+                })?,
+            });
+        }
+    }
+    if let Some(clear) = map.get("clear") {
+        let clear = clear.read_lock::<Array>().ok_or_else(|| {
+            WriteMutationDiagnostic::new(
+                ChangeRequestPlannerError::Result,
+                "Return clear as a list of optional patch field names.",
+            )
+        })?;
+        for field in clear.iter() {
+            let field = dynamic_string(field).map_err(|kind| {
+                WriteMutationDiagnostic::new(kind, "Use declared field names in clear.")
+            })?;
+            let message = if !write.fields.contains(&field) {
+                Some("Clear only fields declared by this slot.")
+            } else if operation == Operation::Create {
+                Some("Create effects cannot clear fields; omit optional fields or set a value.")
+            } else if write.required_fields.contains(&field) {
+                Some("Set a value for this required field; it cannot be cleared.")
+            } else if !touched.insert(field.clone()) {
+                Some("Write each field once, using either set or clear.")
+            } else {
+                None
+            };
+            if let Some(message) = message {
+                return Err(WriteMutationDiagnostic::at_field(
+                    write,
+                    &field,
+                    ChangeRequestPlannerError::Ceiling,
+                    message,
+                ));
+            }
+            mutations.push(CandidateChangeRequestMutation::Clear { field });
+        }
+    }
+    if mutations.is_empty() {
+        return Err(WriteMutationDiagnostic::new(
+            ChangeRequestPlannerError::Result,
+            "Return at least one set or clear mutation for the slot.",
+        ));
+    }
+    if operation == Operation::Create {
+        if let Some(field) = write.required_fields.difference(&touched).next() {
+            return Err(WriteMutationDiagnostic::at_field(
+                write,
+                field,
+                ChangeRequestPlannerError::Ceiling,
+                "Set this required field when creating a record.",
+            ));
+        }
+    }
+    Ok(mutations)
 }
 
 fn decode_set_value(
@@ -844,7 +966,7 @@ fn dynamic_to_json(value: Dynamic, depth: usize) -> Result<Value, ChangeRequestP
     Err(ChangeRequestPlannerError::Result)
 }
 
-fn dynamic_string(value: &Dynamic) -> Result<String, ChangeRequestPlannerError> {
+pub(crate) fn dynamic_string(value: &Dynamic) -> Result<String, ChangeRequestPlannerError> {
     value
         .clone()
         .try_cast::<ImmutableString>()
@@ -853,7 +975,7 @@ fn dynamic_string(value: &Dynamic) -> Result<String, ChangeRequestPlannerError> 
         .ok_or(ChangeRequestPlannerError::Result)
 }
 
-fn exact_keys(
+pub(crate) fn exact_keys(
     map: &Map,
     required: &[&str],
     optional: &[&str],

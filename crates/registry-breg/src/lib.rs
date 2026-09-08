@@ -7,6 +7,7 @@ pub mod access;
 pub mod access_preview;
 pub mod authority;
 
+pub mod action_handler;
 #[cfg(feature = "runtime")]
 pub mod api;
 pub mod artifacts;
@@ -55,6 +56,7 @@ pub mod idempotency;
 pub mod immediate_actions;
 pub mod logical_names;
 pub mod manifest_adapter;
+pub(crate) mod membership;
 #[cfg(feature = "runtime")]
 pub mod metrics;
 #[cfg(feature = "runtime")]

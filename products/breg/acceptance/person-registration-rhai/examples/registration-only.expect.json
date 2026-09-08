@@ -1,0 +1,23 @@
+{
+  "effects": [
+    {
+      "id": "person",
+      "set": {
+        "identifier": "0123456789013",
+        "display-name": "Mina Example"
+      }
+    },
+    {
+      "id": "registration",
+      "set": {
+        "registration-code": "SYNTH-REG-001",
+        "person": {
+          "fromEffect": "person"
+        },
+        "register": {
+          "fromField": "register"
+        }
+      }
+    }
+  ]
+}

@@ -50,6 +50,17 @@ pub(crate) fn run(runtime_config: &Path) -> Result<(), Diagnostic> {
 }
 
 fn startup_diagnostic(error: StartupError) -> Diagnostic {
+    if let StartupError::FieldPatternSyntax {
+        entity_id,
+        field_id,
+    } = error
+    {
+        return diagnostic(
+            "field.pattern.syntax_invalid",
+            &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+            "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test before packaging; a failed activation requires restoration of the pre-activation backup before changing the pinned target",
+        );
+    }
     // The runtime configuration carries its own closed-vocabulary cause; name
     // it the way `bregctl verify` already names it instead of collapsing every
     // configuration mistake into one generic refusal.
@@ -75,6 +86,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database connection was refused",
         ),
+        StartupError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
         StartupError::DatabaseUnready => (
             "startup.database.unready",
             "database",
@@ -217,6 +229,29 @@ mod tests {
                 "duplicate entry in CHECKED_DEPENDENCIES: {dependency}"
             );
         }
+    }
+
+    #[test]
+    fn native_pattern_failure_preserves_the_authored_address_and_recovery_guidance() {
+        let diagnostic = startup_diagnostic(StartupError::FieldPatternSyntax {
+            entity_id: "entry".to_owned(),
+            field_id: "identifier".to_owned(),
+        });
+        assert_eq!(diagnostic.code, "field.pattern.syntax_invalid");
+        assert_eq!(
+            diagnostic.path,
+            "entities[entry].fields[identifier].pattern"
+        );
+        for repair in [
+            "correct the expression",
+            "schema-test",
+            "backup",
+            "pinned target",
+        ] {
+            assert!(diagnostic.message.contains(repair));
+        }
+        assert!(!diagnostic.message.contains("registry_data"));
+        assert!(!diagnostic.message.contains("breg_pattern_"));
     }
 
     #[test]

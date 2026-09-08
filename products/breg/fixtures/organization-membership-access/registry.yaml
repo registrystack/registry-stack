@@ -1,0 +1,147 @@
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: membership-example
+  version: '1'
+  defaultLanguage: en
+  canonicalBaseIri: https://membership.example.test
+entities:
+- id: organization
+  primaryDataset: test-dataset
+  route: organizations
+  mutationMode: mutable
+  classification: internal
+  fields:
+  - id: name
+    type: string
+    maxLength: 80
+    classification: internal
+- id: membership
+  primaryDataset: test-dataset
+  route: memberships
+  mutationMode: mutable
+  classification: restricted
+  fields:
+  - id: organization
+    type: reference
+    target: organization
+    required: true
+    classification: internal
+  - id: principal
+    type: string
+    maxLength: 80
+    required: true
+    classification: restricted
+  - id: active
+    type: boolean
+    required: true
+    classification: internal
+  - id: private-note
+    type: string
+    maxLength: 80
+    classification: restricted
+  indexes:
+  - id: membership-principal-key
+    fields:
+    - principal
+    - organization
+    - active
+  accessRequirements:
+    requiredScopes:
+    - membership:use
+- id: facility
+  primaryDataset: test-dataset
+  route: facilities
+  mutationMode: mutable
+  classification: internal
+  fields:
+  - id: organization
+    type: reference
+    target: organization
+    required: true
+    classification: internal
+  - id: label
+    type: string
+    maxLength: 80
+    required: true
+    classification: internal
+  selectorProfiles:
+  - id: label
+    fields:
+    - label
+accessProfiles:
+- id: member
+  default: true
+  principalClaim: principal
+  requiredScopes:
+  - records:read
+  - membership:use
+  grants:
+  - entity: facility
+    rowBoundaries: []
+    operations:
+    - get
+    - list
+    - lookup
+    - snapshot
+    - revisions
+    readableFields:
+    - label
+    filterableFields:
+    - label
+    sortableFields:
+    - label
+    allowCount: true
+    revisionAccess: true
+    lookups:
+    - selector: label
+      valueOrigin: request
+    membershipBoundaries:
+    - field: organization
+      membershipEntity: membership
+      membershipKeyField: organization
+      principalField: principal
+      activeField: active
+- id: steward
+  principalClaim: principal
+  requiredScopes:
+  - records:manage
+  - membership:use
+  grants:
+  - entity: organization
+    rowBoundaries: []
+    operations:
+    - create
+    - get
+    readableFields:
+    - name
+    writableFields:
+    - name
+  - entity: membership
+    rowBoundaries: []
+    operations:
+    - create
+    - get
+    - patch
+    readableFields:
+    - organization
+    - principal
+    - active
+    writableFields:
+    - organization
+    - principal
+    - active
+    - private-note
+  - entity: facility
+    rowBoundaries: []
+    operations:
+    - create
+    - get
+    - patch
+    readableFields:
+    - organization
+    - label
+    writableFields:
+    - organization
+    - label

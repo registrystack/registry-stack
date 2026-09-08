@@ -503,6 +503,22 @@ fn revision_sql(
             ApiRowBoundaryOperator::Equals => return Err(ReadServiceError::Unavailable),
         }
     }
+    for (index, boundary) in
+        crate::membership::boundaries(entity, request.context.selected_profile())
+            .iter()
+            .enumerate()
+    {
+        parameters.push(Box::new(boundary.field.clone()));
+        predicates.push(format!(
+            "registry_context.{}((convert_from(snapshot, 'UTF8')::jsonb ->> ${}::text)::uuid)",
+            crate::generated_ddl::quote_identifier(&crate::membership::function_name(
+                &entity.id,
+                request.context.selected_profile(),
+                index
+            )),
+            parameters.len()
+        ));
+    }
     let limit =
         i64::try_from(request.maximum_records).map_err(|_| ReadServiceError::Unavailable)?;
     parameters.push(Box::new(limit));
@@ -750,11 +766,15 @@ async fn revision_from_row(
     let descriptor = descriptor_for_package(transaction, descriptors, &package_revision)
         .await?
         .clone();
-    let row_authorization_fields = context
+    let mut row_authorization_fields = context
         .row_boundaries()
         .iter()
         .map(|boundary| boundary.field().to_owned())
         .collect::<Vec<_>>();
+    row_authorization_fields.extend(crate::membership::fields(
+        entity,
+        context.selected_profile(),
+    ));
     let required_fields = HistorySchemaDescriptor::required_history_fields(
         selected_fields,
         row_authorization_fields.iter(),
@@ -767,7 +787,9 @@ async fn revision_from_row(
     let decoded = descriptor
         .decode_snapshot_for_fields(&compatibility, &snapshot, Some(&record_id.to_string()))
         .map_err(history_schema_error)?;
-    if !row_authorized(&decoded, context, entity)? {
+    if !row_authorized(&decoded, context, entity)?
+        || !membership_authorized(transaction, &decoded, context, entity).await?
+    {
         return Ok(None);
     }
     let mut data = Map::new();
@@ -814,6 +836,45 @@ async fn revision_from_row(
         data,
         change_context,
     }))
+}
+
+async fn membership_authorized(
+    transaction: &tokio_postgres::Transaction<'_>,
+    decoded: &DecodedHistorySnapshot,
+    context: &AuthorizedRequestContext,
+    entity: &CompiledEntity,
+) -> Result<bool, ReadServiceError> {
+    for (index, boundary) in crate::membership::boundaries(entity, context.selected_profile())
+        .iter()
+        .enumerate()
+    {
+        let Some(value) = decoded
+            .by_field_id
+            .get(&boundary.field)
+            .and_then(Value::as_str)
+        else {
+            return Ok(false);
+        };
+        let key = Uuid::parse_str(value).map_err(|_| ReadServiceError::Unavailable)?;
+        let row = transaction
+            .query_one(
+                &format!(
+                    "SELECT registry_context.{}($1::uuid)",
+                    crate::generated_ddl::quote_identifier(&crate::membership::function_name(
+                        &entity.id,
+                        context.selected_profile(),
+                        index
+                    ))
+                ),
+                &[&key],
+            )
+            .await
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        if !row.get::<_, bool>(0) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn row_authorized(
@@ -946,11 +1007,15 @@ async fn commit_context_visible(
                 Ok(descriptor) => descriptor.clone(),
                 Err(_) => return Ok(false),
             };
-        let row_authorization_fields = context
+        let mut row_authorization_fields = context
             .row_boundaries()
             .iter()
             .map(|boundary| boundary.field().to_owned())
             .collect::<Vec<_>>();
+        row_authorization_fields.extend(crate::membership::fields(
+            entity,
+            context.selected_profile(),
+        ));
         let required_fields = HistorySchemaDescriptor::required_history_fields(
             std::iter::empty::<&String>(),
             row_authorization_fields.iter(),
@@ -973,7 +1038,9 @@ async fn commit_context_visible(
             Ok(decoded) => decoded,
             Err(_) => return Ok(false),
         };
-        if !row_authorized(&decoded, context, entity)? {
+        if !row_authorized(&decoded, context, entity)?
+            || !membership_authorized(transaction, &decoded, context, entity).await?
+        {
             return Ok(false);
         }
     }

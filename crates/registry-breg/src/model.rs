@@ -28,6 +28,8 @@ pub struct CompiledField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_time_role: Option<ValidTimeRole>,
     pub physical_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -369,6 +371,8 @@ impl CompiledActionInventory {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledAction {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handler: Option<CompiledActionHandler>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_module: Option<String>,
     pub route: String,
@@ -377,12 +381,48 @@ pub struct CompiledAction {
     pub contract_fingerprint: String,
     pub inputs: Vec<CompiledActionInput>,
     pub effects: Vec<CompiledActionEffect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<CompiledActionRequirement>,
     pub target_uses: Vec<CompiledActionTargetUse>,
     pub grants: Vec<CompiledActionGrant>,
     pub result_effects: BTreeSet<String>,
     pub maximum_targets: u16,
     pub maximum_field_mutations: u16,
     pub maximum_snapshot_bytes: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionRequirement {
+    pub input: String,
+    pub entity_id: String,
+    pub field: String,
+    pub equals: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionHandler {
+    pub kind: CompiledChangeRequestPlannerKind,
+    pub source_module: Option<String>,
+    #[serde(skip)]
+    pub script_path: String,
+    pub abi: String,
+    pub rhai_version: String,
+    pub script_sha256: String,
+    #[serde(skip)]
+    pub script_bytes: Vec<u8>,
+    pub limits: CompiledChangeRequestPlannerLimits,
+    pub writes: Vec<CompiledActionHandlerWrite>,
+    pub refusals: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionHandlerWrite {
+    pub id: String,
+    #[serde(flatten)]
+    pub ceiling: CompiledChangeRequestPlannerWrite,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -434,6 +474,9 @@ pub enum CompiledActionMutation {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
 pub enum CompiledActionValue {
+    Literal {
+        value: serde_json::Value,
+    },
     FromInput {
         input: String,
     },
@@ -513,6 +556,18 @@ pub enum CompiledActionTargetUseSource {
     Input { input: String },
 }
 
+/// Resolved stored-column inputs for one current membership predicate.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledMembershipBoundary {
+    pub field: String,
+    pub membership_entity: String,
+    pub membership_table: String,
+    pub membership_key_column: String,
+    pub principal_column: String,
+    pub active_column: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEntity {
@@ -547,6 +602,8 @@ pub struct CompiledEntity {
     pub constraints: BTreeMap<String, ConstraintSource>,
     pub indexes: BTreeMap<String, Vec<String>>,
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub membership_boundaries: BTreeMap<String, Vec<CompiledMembershipBoundary>>,
     pub events: BTreeMap<String, EventSource>,
 }
 

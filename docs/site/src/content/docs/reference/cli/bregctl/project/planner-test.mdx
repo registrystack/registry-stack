@@ -14,17 +14,33 @@ standards_referenced: []
 
 {/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
 
-Run one captured Rhai request planner with bounded synthetic JSON.
+Test a Rhai request planner or action handler with bounded synthetic JSON.
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.27.0` and catalog SHA-256 `cabab6200b08ba2b0379337db5e25a502bc7dfecfb98cf76a06d478eddcf5bb8`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.27.0` and catalog SHA-256 `af9d183c51aabc1b574d2b133e5bfc8e7b76f5320ffd8a482acbae1d24d127ee`. Hidden implementation commands are omitted.
 
 ## Usage
 
 ```text
-bregctl project planner-test [OPTIONS] --entity <ENTITY> --request <JSON_FILE> <PROJECT>
+bregctl project planner-test [OPTIONS] <--entity <ENTITY>|--action <ACTION>> <PROJECT>
 ```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| Command invocation | Exactly one of `--entity <ENTITY>`, `--action <ACTION>` is required. |
+| `<PROJECT>` is present | `--request <JSON_FILE>` is required. |
+| `--entity <ENTITY>` is present | `--request <JSON_FILE>` is required. |
+| `--action <ACTION>` is present | `--input <JSON_FILE>` is required. |
+| `--format <FORMAT>` is present | `--request <JSON_FILE>` is required. |
+| Command invocation | `--action <ACTION>` and `--entity <ENTITY>` cannot be used together. |
+| Command invocation | `--action <ACTION>` and `--request <JSON_FILE>` cannot be used together. |
+| Command invocation | `--entity <ENTITY>` and `--expect <JSON_FILE>` cannot be used together. |
+| Command invocation | `--entity <ENTITY>` and `--input <JSON_FILE>` cannot be used together. |
+| Command invocation | `--expect <JSON_FILE>` and `--request <JSON_FILE>` cannot be used together. |
+| Command invocation | `--input <JSON_FILE>` and `--request <JSON_FILE>` cannot be used together. |
 
 ## Arguments
 
@@ -36,8 +52,11 @@ bregctl project planner-test [OPTIONS] --entity <ENTITY> --request <JSON_FILE> <
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
-| `--entity <ENTITY>` | Yes | n/a | n/a | n/a | Compiled change-request entity whose Rhai planner will run |
-| `--request <JSON_FILE>` | Yes | n/a | n/a | n/a | Bounded strict JSON object containing synthetic request fields. A symbolic link at any component of this path is refused. |
+| `--entity <ENTITY>` | No | n/a | n/a | n/a | Compiled change-request entity whose Rhai planner will run; pair with --request |
+| `--request <JSON_FILE>` | No | n/a | n/a | n/a | Bounded strict JSON object containing synthetic request fields; requires --entity. A symbolic link at any component of this path is refused. |
+| `--action <ACTION>` | No | n/a | n/a | n/a | Compiled immediate action whose Rhai handler will run; pair with --input |
+| `--input <JSON_FILE>` | No | n/a | n/a | n/a | Bounded strict JSON object using authored action input IDs, without an HTTP envelope; requires --action. A symbolic link at any component of this path is refused. |
+| `--expect <JSON_FILE>` | No | n/a | n/a | n/a | With --action and --input, assert exact synthetic effects or a declared refusal without printing values. A symbolic link at any component of this path is refused. |
 | `--format <FORMAT>` | No | `human` | `human`, `json` | n/a | Emit the selected command's report in this format |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 
