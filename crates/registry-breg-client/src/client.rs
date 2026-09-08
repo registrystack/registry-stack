@@ -203,6 +203,30 @@ impl BaseRegistryClient {
         decode_breg_single(wire, format, self.deployment_prefix())
     }
 
+    /// Retrieve one bounded first page of record revisions as inert JSON bytes.
+    /// This does not decode revision semantics or follow a continuation. The
+    /// caller explicitly selects the history profile and owns presentation.
+    pub async fn record_revisions(
+        &self,
+        entity_route: &str,
+        record_identifier: &str,
+        access_profile: Option<&str>,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        validate_entity_route(entity_route)?;
+        validate_record_uuid(record_identifier)?;
+        self.raw_document(
+            &[
+                "v1",
+                "records",
+                entity_route,
+                record_identifier,
+                "revisions",
+            ],
+            access_profile,
+        )
+        .await
+    }
+
     /// Execute one metadata-bound direct Create without automatic retry.
     pub async fn create_record(
         &self,
@@ -366,7 +390,7 @@ impl BaseRegistryClient {
         })
     }
 
-    fn validate_create_binding(
+    pub(crate) fn validate_create_binding(
         &self,
         operation: &BRegCreateBinding,
         request: &BRegCreateRequest,
@@ -411,7 +435,7 @@ impl BaseRegistryClient {
             })
     }
 
-    fn source_binding(&self) -> String {
+    pub(crate) fn source_binding(&self) -> String {
         self.transport.base_url.as_url().as_str().to_owned()
     }
 

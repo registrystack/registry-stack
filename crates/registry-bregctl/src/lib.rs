@@ -129,6 +129,8 @@ enum Command {
     Generate(GenerateArgs),
     /// Start or stop this project's retained local development services.
     Dev(dev::DevArgs),
+    /// List or explicitly run retained local teaching examples.
+    Examples(dev::examples::ExamplesArgs),
     #[command(name = "__dev-supervisor", hide = true)]
     DevSupervisor(dev::SupervisorArgs),
     /// Explain compiled model, access, route, or event inventories.
@@ -1587,6 +1589,22 @@ where
 
     let format = cli.format;
     let result = match cli.command {
+        Command::Examples(args) => {
+            return match dev::examples::run(args) {
+                Ok(report) => write_examples_success(&report, format, stdout, stderr),
+                Err(error) => write_failure(
+                    &source_failure(
+                        "examples",
+                        diagnostic("examples.failed", "examples", &format!("{error:#}")),
+                        DiagnosticArtifact::CommandArguments,
+                        SuggestedAction::CorrectCommandUsage,
+                    ),
+                    format,
+                    stdout,
+                    stderr,
+                ),
+            };
+        }
         Command::Dev(args) => {
             return match dev::run(args) {
                 Ok(report) => write_dev_success(&report, format, stdout, stderr),
@@ -8586,6 +8604,97 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
     lines.pairs_at(depth + 1, &fields);
 }
 
+fn write_examples_success(
+    report: &Value,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    if format == OutputFormat::Json {
+        let result = serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout));
+        return write_result(result, stderr);
+    }
+    let mut lines = report::Lines::new();
+    lines.lead(&format!(
+        "bregctl {} succeeded.",
+        report["command"].as_str().unwrap_or("examples")
+    ));
+    let fields = ["project", "scenario", "attempt"]
+        .into_iter()
+        .filter_map(|key| report[key].as_str().map(|v| (key, v.to_owned())))
+        .collect::<Vec<_>>();
+    lines.pairs(&fields);
+    for scenario in report["scenarios"].as_array().into_iter().flatten() {
+        lines.blank();
+        lines.item(scenario["id"].as_str().unwrap_or_default());
+        lines.prose(2, scenario["description"].as_str().unwrap_or_default());
+        lines.pairs_at(
+            2,
+            &[(
+                "input",
+                scenario["input"].as_str().unwrap_or_default().to_owned(),
+            )],
+        );
+        for step in scenario["steps"].as_array().into_iter().flatten() {
+            lines.prose(
+                2,
+                &format!(
+                    "{}: {} {} as {}/{}",
+                    step["id"].as_str().unwrap_or_default(),
+                    step["operation"].as_str().unwrap_or_default(),
+                    step["entity"].as_str().unwrap_or_default(),
+                    step["client"].as_str().unwrap_or_default(),
+                    step["accessProfile"].as_str().unwrap_or_default()
+                ),
+            );
+        }
+    }
+    for attempt in report["attempts"].as_array().into_iter().flatten() {
+        lines.blank();
+        lines.item(&format!(
+            "{} attempt {}",
+            attempt["scenario"].as_str().unwrap_or_default(),
+            attempt["attempt"].as_str().unwrap_or_default()
+        ));
+        if let Some(step) = attempt["pendingStep"].as_str() {
+            lines.prose(
+                2,
+                &format!("Pending original step: {step}. Resume this attempt."),
+            );
+        }
+    }
+    if let Some(message) = report["message"].as_str() {
+        lines.blank();
+        lines.prose(0, message);
+    }
+    if let Some(captures) = report["captures"].as_object() {
+        for (alias, capture) in captures {
+            lines.pairs(&[(
+                alias.as_str(),
+                format!(
+                    "{} ({})",
+                    capture["id"].as_str().unwrap_or_default(),
+                    capture["entity"].as_str().unwrap_or_default()
+                ),
+            )]);
+        }
+    }
+    if let Some(results) = report.get("results") {
+        lines.blank();
+        lines.item("Observed results");
+        // JSON encoding escapes user-authored control characters and preserves
+        // the actual native record/history shapes for the teaching exercise.
+        lines.raw(serde_json::to_string_pretty(results).unwrap_or_default());
+    }
+    if let Some(next) = report["nextCommand"].as_str() {
+        lines.blank();
+        lines.pairs(&[("next command", next.to_owned())]);
+    }
+    write_result(stdout.write_all(lines.finish().as_bytes()), stderr)
+}
+
 fn write_dev_success(
     report: &Value,
     format: OutputFormat,
@@ -10545,6 +10654,7 @@ mod tests {
                 "project",
                 "generate",
                 "dev",
+                "examples",
                 "explain",
                 "diff",
                 "package",
@@ -10561,6 +10671,29 @@ mod tests {
                 "audit"
             ]
         );
+    }
+
+    #[test]
+    fn example_reports_show_native_results_and_next_command_in_both_formats() {
+        let report = json!({"ok":true,"command":"examples run","project":"/local/project","scenario":"first-record","attempt":"attempt-id","captures":{"first-record":{"id":"returned-id","entity":"entry"}},"results":{"get":{"data":{"name":"Synthetic record"}}},"nextCommand":"bregctl examples run reviewed-change . --step submit"});
+        let mut human = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_examples_success(&report, OutputFormat::Human, &mut human, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("bregctl examples run succeeded."));
+        assert!(human.contains("returned-id"));
+        assert!(human.contains("Synthetic record"));
+        assert!(human.contains("--step submit"));
+        let mut json = Vec::new();
+        assert_eq!(
+            write_examples_success(&report, OutputFormat::Json, &mut json, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(serde_json::from_slice::<Value>(&json).unwrap(), report);
+        assert!(stderr.is_empty());
     }
 
     #[test]

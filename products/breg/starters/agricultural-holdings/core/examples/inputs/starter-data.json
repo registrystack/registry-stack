@@ -1,0 +1,66 @@
+{
+  "river": {
+    "localIdentifier": "SYNTHETIC-RIVER",
+    "name": "River Holding"
+  },
+  "landless": {
+    "localIdentifier": "SYNTHETIC-LANDLESS",
+    "name": "Landless Cooperative Holding"
+  },
+  "collective": {
+    "localIdentifier": "SYNTHETIC-COLLECTIVE",
+    "name": "Hill Collective Holding"
+  },
+  "ana": {
+    "localIdentifier": "SYNTHETIC-ANA",
+    "name": "Ana Example"
+  },
+  "bo": {
+    "localIdentifier": "SYNTHETIC-BO",
+    "name": "Bo Example"
+  },
+  "cooperative": {
+    "localIdentifier": "SYNTHETIC-COOPERATIVE",
+    "name": "Example Agricultural Cooperative"
+  },
+  "group": {
+    "localIdentifier": "SYNTHETIC-GROUP",
+    "name": "Hill Growers Group"
+  },
+  "ana-role": {
+    "operatedHolding": {
+      "recordRef": "river"
+    },
+    "holdingOperatorPerson": {
+      "recordRef": "ana"
+    },
+    "startDate": "2026-01-01"
+  },
+  "bo-role": {
+    "operatedHolding": {
+      "recordRef": "river"
+    },
+    "holdingOperatorPerson": {
+      "recordRef": "bo"
+    },
+    "startDate": "2026-01-01"
+  },
+  "cooperative-role": {
+    "operatedHolding": {
+      "recordRef": "landless"
+    },
+    "holdingOperatorOrganization": {
+      "recordRef": "cooperative"
+    },
+    "startDate": "2026-01-01"
+  },
+  "group-role": {
+    "operatedHolding": {
+      "recordRef": "collective"
+    },
+    "holdingOperatorGroup": {
+      "recordRef": "group"
+    },
+    "startDate": "2026-01-01"
+  }
+}

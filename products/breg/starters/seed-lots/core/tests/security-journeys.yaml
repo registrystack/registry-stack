@@ -1,0 +1,708 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-journeys/v1",
+  "journeys": [
+    {
+      "id": "starter-model-policy",
+      "steps": [
+        {
+          "id": "seed-variety-a",
+          "entity": "plant-variety",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-VARIETY-A",
+              "varietyDenomination": "Example Amber"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "variety-a"
+        },
+        {
+          "id": "seed-variety-b",
+          "entity": "plant-variety",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-VARIETY-B",
+              "varietyDenomination": "Example Blue"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "variety-b"
+        },
+        {
+          "id": "seed-source",
+          "entity": "seed-lot",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-LOT-SOURCE",
+              "lotNumber": "SYN-2026-001",
+              "quantityKg": "100.000",
+              "producedOn": "2026-01-15",
+              "variety": {
+                "recordRef": "variety-a"
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "source"
+        },
+        {
+          "id": "seed-derived",
+          "entity": "seed-lot",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-LOT-DERIVED",
+              "lotNumber": "SYN-2026-002",
+              "quantityKg": "25.000",
+              "producedOn": "2026-01-20",
+              "variety": {
+                "recordRef": "variety-a"
+              },
+              "sourceLot": {
+                "recordRef": "source"
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "derived"
+        },
+        {
+          "id": "seed-other",
+          "entity": "seed-lot",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "SYNTHETIC-LOT-OTHER",
+              "lotNumber": "SYN-2026-003",
+              "quantityKg": "50.000",
+              "variety": {
+                "recordRef": "variety-b"
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "other"
+        },
+        {
+          "id": "first-record",
+          "entity": "seed-lot",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "lotNumber": "LOT-2026-010",
+              "quantityKg": "25.000"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "first-record"
+        },
+        {
+          "id": "unscoped-caller-cannot-create",
+          "entity": "seed-lot",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "DENIED-001",
+              "lotNumber": "LOT-DENIED",
+              "quantityKg": "25.000"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 404,
+            "problemCode": "resource.not_found"
+          }
+        },
+        {
+          "id": "missing-scope-cannot-read",
+          "entity": "seed-lot",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 404,
+            "problemCode": "resource.not_found"
+          }
+        },
+        {
+          "id": "draft-correction",
+          "entity": "lot-number-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "first-record"
+              },
+              "reason": "Synthetic spelling correction",
+              "supportingReference": "SYNTHETIC-SUPPORT-001",
+              "lotNumber": "LOT-2026-100"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "draft"
+        },
+        {
+          "id": "unscoped-caller-cannot-read-review-material",
+          "entity": "lot-number-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 404,
+            "problemCode": "resource.not_found"
+          }
+        },
+        {
+          "id": "before-submit",
+          "entity": "lot-number-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-submit"
+        },
+        {
+          "id": "submit-correction",
+          "entity": "lot-number-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "submit_request",
+            "etagRef": "before-submit",
+            "recordRef": "before-submit"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "review",
+          "entity": "lot-number-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "review"
+        },
+        {
+          "id": "foreign-reviewer-precondition-refused",
+          "entity": "lot-number-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "approve_request",
+            "etagRef": "review",
+            "proposalVersionRef": "review",
+            "effectDigestRef": "review",
+            "stage": "review",
+            "recordRef": "review"
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 412,
+            "problemCode": "precondition.failed"
+          }
+        },
+        {
+          "id": "approve-correction",
+          "entity": "lot-number-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "approve_request",
+            "etagRef": "review",
+            "proposalVersionRef": "review",
+            "effectDigestRef": "review",
+            "stage": "review",
+            "recordRef": "review"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "approval-does-not-apply",
+          "entity": "seed-lot",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "lotNumber": "LOT-2026-010"
+            }
+          },
+          "capture": "approval-does-not-apply"
+        },
+        {
+          "id": "before-apply",
+          "entity": "lot-number-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "before-apply"
+        },
+        {
+          "id": "apply-correction",
+          "entity": "lot-number-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "apply_request",
+            "etagRef": "before-apply",
+            "proposalVersionRef": "before-apply",
+            "effectDigestRef": "before-apply",
+            "recordRef": "before-apply"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "corrected-record",
+          "entity": "seed-lot",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "lotNumber": "LOT-2026-100"
+            }
+          },
+          "capture": "corrected-record"
+        },
+        {
+          "id": "rejected-draft",
+          "entity": "lot-number-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "first-record"
+              },
+              "reason": "Synthetic rejection exercise",
+              "supportingReference": "SYNTHETIC-SUPPORT-002",
+              "lotNumber": "LOT-REJECTED"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "reject-draft"
+        },
+        {
+          "id": "reject-before-submit",
+          "entity": "lot-number-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "reject-draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "reject-before-submit"
+        },
+        {
+          "id": "submit-rejected",
+          "entity": "lot-number-correction",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "submit_request",
+            "etagRef": "reject-before-submit",
+            "recordRef": "reject-before-submit"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "reject-before-decision",
+          "entity": "lot-number-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "reject-draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          },
+          "capture": "reject-before-decision"
+        },
+        {
+          "id": "reject-correction",
+          "entity": "lot-number-correction",
+          "accessProfile": "reviewer",
+          "claims": {
+            "principal": "synthetic-reviewer",
+            "scopes": [
+              "starter:reviewer"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "reject_request",
+            "etagRef": "reject-before-decision",
+            "proposalVersionRef": "reject-before-decision",
+            "effectDigestRef": "reject-before-decision",
+            "stage": "review",
+            "recordRef": "reject-before-decision"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200
+          }
+        },
+        {
+          "id": "rejection-preserves-record",
+          "entity": "seed-lot",
+          "accessProfile": "reader",
+          "claims": {
+            "principal": "synthetic-reader",
+            "scopes": [
+              "starter:reader"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "first-record"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "localIdentifier": "JOURNEY-FIRST-001",
+              "lotNumber": "LOT-2026-100"
+            }
+          },
+          "capture": "rejection-preserves-record"
+        },
+        {
+          "id": "zero-declared-quantity",
+          "entity": "seed-lot",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "ZERO-001",
+              "lotNumber": "LOT-ZERO",
+              "quantityKg": "0.000"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201
+          },
+          "capture": "zero"
+        },
+        {
+          "id": "negative-quantity-refused",
+          "entity": "seed-lot",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "NEGATIVE-001",
+              "lotNumber": "LOT-NEGATIVE",
+              "quantityKg": "-0.001"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "invalid-production-date-refused",
+          "entity": "seed-lot",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "DATE-001",
+              "lotNumber": "LOT-DATE",
+              "quantityKg": "1.000",
+              "producedOn": "2026-02-30"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "duplicate-lot-number-refused",
+          "entity": "seed-lot",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "DUPLICATE-001",
+              "lotNumber": "SYN-2026-001",
+              "quantityKg": "1.000"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 409,
+            "problemCode": "mutation.conflict"
+          }
+        }
+      ]
+    }
+  ]
+}

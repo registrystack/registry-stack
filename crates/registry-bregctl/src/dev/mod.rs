@@ -6,6 +6,7 @@
 //! Docker ID match its private journal. There is intentionally no reset.
 
 mod config;
+pub mod examples;
 mod private;
 #[cfg(test)]
 mod tests;

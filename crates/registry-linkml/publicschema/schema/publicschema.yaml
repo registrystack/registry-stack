@@ -78,3 +78,15 @@ imports:
 - external/semic-core-location
 - external/semic-core-person
 - external/wg_es
+- registry
+- work
+- agriculture
+- government
+- agriculture_biology
+- agriculture_operations
+- assets
+- service_capacity
+- government_relationships
+- public_services
+annotations:
+  domains_json: '{"sp": {"label": {"en": "Social protection", "fr": "Protection sociale", "es": "Protección social"}, "description": {"en": "Benefit programmes, participation and public-service delivery relationships."}}, "crvs": {"label": {"en": "Civil registration", "fr": "État civil", "es": "Registro civil"}, "description": {"en": "Civil registration of vital events and the associated roles and records."}}, "agri": {"label": {"en": "Agriculture", "fr": "Agriculture", "es": "Agricultura"}, "description": {"en": "Agricultural and fisheries production, holdings, cultivation and production-specific roles, facilities, inputs and assertions."}}, "land": {"label": {"en": "Land administration", "fr": "Administration foncière", "es": "Administración de tierras"}, "description": {"en": "Land administration, spatial/property units, tenure and boundary assertions."}}, "environment": {"label": {"en": "Environment", "fr": "Environnement", "es": "Medio ambiente"}, "description": {"en": "Environmental activities, releases and natural-resource regulation."}}, "transport": {"label": {"en": "Transport", "fr": "Transports", "es": "Transporte"}, "description": {"en": "Transport networks, vehicles, vessel attributes and transport permissions/restrictions."}}, "edu": {"label": {"en": "Education", "fr": "Éducation", "es": "Educación"}, "description": {"en": "Education provision, programmes, delivery sites and educational facility types."}}, "health": {"label": {"en": "Health", "fr": "Santé", "es": "Salud"}, "description": {"en": "Healthcare facility discovery and integration with selected external FHIR resources/profiles; no replacement medical ontology."}}, "tax": {"label": {"en": "Tax administration", "fr": "Administration fiscale", "es": "Administración tributaria"}, "description": {"en": "Tax administrative registration and scheme-specific assertions."}}, "elections": {"label": {"en": "Elections", "fr": "Élections", "es": "Elecciones"}, "description": {"en": "Electoral administration and voter registration."}}}'

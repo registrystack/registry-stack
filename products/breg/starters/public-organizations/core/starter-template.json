@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "starterId": "public-organizations",
+  "variantId": "core",
+  "templateVersion": "0.1.0",
+  "title": "Public organization directory",
+  "description": "Maintain a small authenticated directory of public organizations and dated institutional links.",
+  "firstRecordEntity": "public-organization",
+  "publicSchema": {
+    "repository": "https://github.com/PublicSchema/publicschema.org",
+    "commit": "1ea9ce333918693b29aec31068fac412e02cb8dc",
+    "status": "draft",
+    "license": "CC-BY-4.0"
+  },
+  "review": {
+    "entity": "name-correction",
+    "field": "name",
+    "submitter": "editor",
+    "reviewer": "reviewer",
+    "applier": "reviewer",
+    "description": "A distinct reviewer approves a fixed name correction. Approval leaves the record unchanged until the reviewer applies the frozen effect."
+  },
+  "scopeNotes": [
+    "Authenticated directory for one custodian, with dated reports-to links from offices to departments.",
+    "Corrections update directory records; they do not create, abolish or legally reorganize institutions."
+  ]
+}

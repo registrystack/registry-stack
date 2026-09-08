@@ -7840,7 +7840,7 @@ enums:
         du Cadre de Sendai avec des extensions pour les chocs sociaux et économiques.
       bibliography_refs: '["oasis-cap-v1-2"]'
   HealthFacilityLevel:
-    enum_uri: publicschema:HealthFacilityLevel
+    enum_uri: publicschema:health/HealthFacilityLevel
     title: Health Facility Level
     description: The tier of care delivered by a health facility in a national or WHO health-system classification
       (primary, secondary, tertiary, quaternary), reflecting the scope of services and the referral position
@@ -7848,7 +7848,7 @@ enums:
     status: bibo:draft
     permissible_values:
       primary:
-        meaning: publicschema:HealthFacilityLevel/primary
+        meaning: publicschema:health/HealthFacilityLevel/primary
         title: Primary
         description: First-level contact for primary care, typically health posts, health centers, and
           dispensaries providing basic curative, preventive, and promotive services.
@@ -7862,7 +7862,7 @@ enums:
             de santé, centres de santé et dispensaires fournissant des services curatifs, préventifs et
             promotionnels de base.
       secondary:
-        meaning: publicschema:HealthFacilityLevel/secondary
+        meaning: publicschema:health/HealthFacilityLevel/secondary
         title: Secondary
         description: District-level referral care, typically general or district hospitals with inpatient
           wards, surgery, and basic specialty services.
@@ -7874,7 +7874,7 @@ enums:
           description_fr: Soins de référence au niveau du district, généralement des hôpitaux généraux
             ou de district avec des services d'hospitalisation, de chirurgie et de spécialités de base.
       tertiary:
-        meaning: publicschema:HealthFacilityLevel/tertiary
+        meaning: publicschema:health/HealthFacilityLevel/tertiary
         title: Tertiary
         description: Specialized referral care at regional or national level, including regional hospitals,
           teaching hospitals, and specialty hospitals.
@@ -7886,7 +7886,7 @@ enums:
           description_fr: Soins de référence spécialisés au niveau régional ou national, y compris les
             hôpitaux régionaux, les hôpitaux universitaires et les hôpitaux spécialisés.
       quaternary:
-        meaning: publicschema:HealthFacilityLevel/quaternary
+        meaning: publicschema:health/HealthFacilityLevel/quaternary
         title: Quaternary
         description: Highly specialized care, typically a national referral center, research hospital,
           or supraregional center providing advanced sub-specialty services.
@@ -7900,7 +7900,7 @@ enums:
             hôpital de recherche ou un centre suprarégional fournissant des services de sous-spécialité
             avancés.
       unknown:
-        meaning: publicschema:HealthFacilityLevel/unknown
+        meaning: publicschema:health/HealthFacilityLevel/unknown
         title: Unknown
         description: Facility tier not known or not classified in the source system.
         annotations:
@@ -7909,6 +7909,7 @@ enums:
           description_es: Nivel del establecimiento desconocido o no clasificado en el sistema de origen.
           description_fr: Niveau de l'établissement inconnu ou non classé dans le système source.
     annotations:
+      source_domain: health
       label_es: Nivel de establecimiento de salud
       label_fr: Niveau d'établissement de santé
       description_es: El nivel de atención prestado por un establecimiento de salud en una clasificación
@@ -7924,7 +7925,7 @@ enums:
         with local naming.", "uri": "https://www.who.int/health-topics/health-systems-strengthening"}'
       bibliography_refs: '["who-health-systems"]'
   HealthFacilityType:
-    enum_uri: publicschema:HealthFacilityType
+    enum_uri: publicschema:health/HealthFacilityType
     title: Health Facility Type
     description: The functional category of a health facility, such as hospital, health center, health
       post, dispensary, clinic, pharmacy, or laboratory. Codes follow the WHO Service Availability and
@@ -7933,7 +7934,7 @@ enums:
     status: bibo:draft
     permissible_values:
       hospital:
-        meaning: publicschema:HealthFacilityType/hospital
+        meaning: publicschema:health/HealthFacilityType/hospital
         title: Hospital
         description: Facility providing inpatient care, surgical services, and a range of specialized
           services; typically includes emergency care and diagnostic imaging.
@@ -7946,7 +7947,7 @@ enums:
             et une gamme de services spécialisés; comprend généralement les soins d'urgence et l'imagerie
             diagnostique.
       health_center:
-        meaning: publicschema:HealthFacilityType/health_center
+        meaning: publicschema:health/HealthFacilityType/health_center
         title: Health center
         description: Facility offering a range of primary care services, often with limited inpatient
           capacity for maternity or short-stay observation.
@@ -7958,7 +7959,7 @@ enums:
           description_fr: Établissement offrant une gamme de services de soins primaires, souvent avec
             une capacité d'hospitalisation limitée pour la maternité ou l'observation de courte durée.
       health_post:
-        meaning: publicschema:HealthFacilityType/health_post
+        meaning: publicschema:health/HealthFacilityType/health_post
         title: Health post
         description: Small primary-care facility, typically the first point of access at community level
           and often staffed by nurses or community health workers.
@@ -7970,7 +7971,7 @@ enums:
           description_fr: Petit établissement de soins primaires, généralement le premier point d'accès
             au niveau communautaire et souvent dirigé par des infirmières ou des agents de santé communautaires.
       dispensary:
-        meaning: publicschema:HealthFacilityType/dispensary
+        meaning: publicschema:health/HealthFacilityType/dispensary
         title: Dispensary
         description: Outpatient-only facility providing basic curative care and dispensing medicines,
           without inpatient beds.
@@ -7982,7 +7983,7 @@ enums:
           description_fr: Établissement exclusivement ambulatoire fournissant des soins curatifs de base
             et distribuant des médicaments, sans lits d'hospitalisation.
       clinic:
-        meaning: publicschema:HealthFacilityType/clinic
+        meaning: publicschema:health/HealthFacilityType/clinic
         title: Clinic
         description: Outpatient specialized clinic focused on a specific service area (maternity, maternal
           and child health, sexually transmitted infections, eye, dental, etc.).
@@ -7996,7 +7997,7 @@ enums:
             santé maternelle et infantile, infections sexuellement transmissibles, ophtalmologie, dentaire,
             etc.).
       pharmacy:
-        meaning: publicschema:HealthFacilityType/pharmacy
+        meaning: publicschema:health/HealthFacilityType/pharmacy
         title: Pharmacy
         description: Licensed retail or public pharmacy dispensing prescription and over-the-counter medicines.
         annotations:
@@ -8007,7 +8008,7 @@ enums:
           description_fr: Pharmacie agréée, commerciale ou publique, délivrant des médicaments sur ordonnance
             et en vente libre.
       laboratory:
-        meaning: publicschema:HealthFacilityType/laboratory
+        meaning: publicschema:health/HealthFacilityType/laboratory
         title: Laboratory
         description: Standalone diagnostic laboratory providing clinical, microbiological, or public-health
           testing services.
@@ -8019,7 +8020,7 @@ enums:
           description_fr: Laboratoire de diagnostic autonome fournissant des services d'analyses cliniques,
             microbiologiques ou de santé publique.
       mobile_clinic:
-        meaning: publicschema:HealthFacilityType/mobile_clinic
+        meaning: publicschema:health/HealthFacilityType/mobile_clinic
         title: Mobile clinic
         description: Mobile or outreach facility without a fixed physical structure, bringing clinical
           services to communities on a scheduled or emergency basis.
@@ -8031,7 +8032,7 @@ enums:
           description_fr: Établissement mobile ou de proximité sans structure physique fixe, apportant
             des services cliniques aux communautés de manière programmée ou d'urgence.
       other:
-        meaning: publicschema:HealthFacilityType/other
+        meaning: publicschema:health/HealthFacilityType/other
         title: Other
         description: A health facility type not covered by the other categories.
         annotations:
@@ -8040,6 +8041,7 @@ enums:
           description_es: Un tipo de establecimiento de salud no cubierto por las otras categorías.
           description_fr: Un type d'établissement de santé non couvert par les autres catégories.
     annotations:
+      source_domain: health
       label_es: Tipo de establecimiento de salud
       label_fr: Type d'établissement de santé
       description_es: La categoría funcional de un establecimiento de salud, como hospital, centro de
@@ -9290,14 +9292,14 @@ enums:
         un code local aux côtés des codes publiés.
       bibliography_refs: '["fao-fies", "washington-group-cfm", "washington-group-es", "washington-group-ss"]'
   LandTenure:
-    enum_uri: publicschema:LandTenure
+    enum_uri: publicschema:land/LandTenure
     title: Land Tenure
     description: The legal or customary arrangement under which land is held, classified according to
       FAO Voluntary Guidelines on the Responsible Governance of Tenure (VGGT) categories.
     status: bibo:draft
     permissible_values:
       owned_with_title:
-        meaning: publicschema:LandTenure/owned_with_title
+        meaning: publicschema:land/LandTenure/owned_with_title
         title: Owned with title
         description: Land held with a formal, legally recognized title deed or certificate of ownership.
         annotations:
@@ -9308,7 +9310,7 @@ enums:
           description_fr: Terre détenue avec un titre de propriété ou un certificat de propriété formellement
             reconnu par la loi.
       owned_without_title:
-        meaning: publicschema:LandTenure/owned_without_title
+        meaning: publicschema:land/LandTenure/owned_without_title
         title: Owned without title
         description: Land held through customary or informal ownership without a formal title document.
         annotations:
@@ -9319,7 +9321,7 @@ enums:
           description_fr: Terre détenue par possession coutumière ou informelle sans document de titre
             formel.
       rented:
-        meaning: publicschema:LandTenure/rented
+        meaning: publicschema:land/LandTenure/rented
         title: Rented
         description: Land used under a rental or lease agreement with a landowner for a fixed payment.
         annotations:
@@ -9330,7 +9332,7 @@ enums:
           description_fr: Terre utilisée dans le cadre d'un contrat de location ou de bail avec un propriétaire
             foncier moyennant un paiement fixe.
       sharecropped:
-        meaning: publicschema:LandTenure/sharecropped
+        meaning: publicschema:land/LandTenure/sharecropped
         title: Sharecropped
         description: Land cultivated under an arrangement where the tenant pays the landowner a share
           of the harvest or proceeds.
@@ -9342,7 +9344,7 @@ enums:
           description_fr: Terre cultivée dans le cadre d'un arrangement où le locataire verse au propriétaire
             une part de la récolte ou des revenus.
       communal:
-        meaning: publicschema:LandTenure/communal
+        meaning: publicschema:land/LandTenure/communal
         title: Communal
         description: Land held collectively by a community, clan, or group under customary or statutory
           communal tenure.
@@ -9354,7 +9356,7 @@ enums:
           description_fr: Terre détenue collectivement par une communauté, un clan ou un groupe sous régime
             foncier communautaire coutumier ou légal.
       state_allocated:
-        meaning: publicschema:LandTenure/state_allocated
+        meaning: publicschema:land/LandTenure/state_allocated
         title: State-allocated
         description: Land allocated by the state or government authority for use, often without transfer
           of ownership.
@@ -9366,7 +9368,7 @@ enums:
           description_fr: Terre attribuée par l'État ou une autorité gouvernementale pour usage, souvent
             sans transfert de propriété.
       informal:
-        meaning: publicschema:LandTenure/informal
+        meaning: publicschema:land/LandTenure/informal
         title: Informal/squatting
         description: Land occupied and used without any formal or customary legal basis.
         annotations:
@@ -9375,7 +9377,7 @@ enums:
           description_es: Tierra ocupada y utilizada sin ninguna base legal formal o consuetudinaria.
           description_fr: Terre occupée et utilisée sans aucune base juridique formelle ou coutumière.
       borrowed:
-        meaning: publicschema:LandTenure/borrowed
+        meaning: publicschema:land/LandTenure/borrowed
         title: Borrowed
         description: Land used temporarily without payment, typically lent by a relative, friend, or community
           member.
@@ -9387,7 +9389,7 @@ enums:
           description_fr: Terre utilisée temporairement sans paiement, généralement prêtée par un parent,
             un ami ou un membre de la communauté.
       other:
-        meaning: publicschema:LandTenure/other
+        meaning: publicschema:land/LandTenure/other
         title: Other
         description: A tenure arrangement not covered by the other categories.
         annotations:
@@ -9396,6 +9398,7 @@ enums:
           description_es: Un régimen de tenencia no cubierto por las otras categorías.
           description_fr: Un régime foncier non couvert par les autres catégories.
     annotations:
+      source_domain: land
       label_es: Tenencia de la tierra
       label_fr: Régime foncier
       description_es: El régimen legal o consuetudinario bajo el cual se mantiene la tierra, clasificado
@@ -50575,14 +50578,14 @@ enums:
         Rev.3", "notes": "Para 2.202: binary classification of literacy.", "uri": "https://unstats.un.org/unsd/demographic-social/Standards-and-Methods/files/Principles_and_Recommendations/Population-and-Housing-Censuses/Series_M67rev3-E.pdf"}'
       bibliography_refs: '["dhs-recode7", "mics6", "un-census-rev3"]'
   LivestockType:
-    enum_uri: publicschema:LivestockType
+    enum_uri: publicschema:agri/LivestockType
     title: Livestock Type
     description: Types of livestock kept by the agricultural holding, classified according to the FAO
       World Programme for the Census of Agriculture.
     status: bibo:draft
     permissible_values:
       cattle:
-        meaning: publicschema:LivestockType/cattle
+        meaning: publicschema:agri/LivestockType/cattle
         title: Cattle
         description: Domesticated bovines including cows, bulls, oxen, and calves.
         annotations:
@@ -50591,7 +50594,7 @@ enums:
           description_es: Bovinos domesticados, incluidas vacas, toros, bueyes y terneros.
           description_fr: Bovins domestiqués, y compris vaches, taureaux, bœufs et veaux.
       sheep:
-        meaning: publicschema:LivestockType/sheep
+        meaning: publicschema:agri/LivestockType/sheep
         title: Sheep
         description: Domesticated sheep of all ages.
         annotations:
@@ -50600,7 +50603,7 @@ enums:
           description_es: Ovejas domesticadas de todas las edades.
           description_fr: Ovins domestiqués de tous âges.
       goats:
-        meaning: publicschema:LivestockType/goats
+        meaning: publicschema:agri/LivestockType/goats
         title: Goats
         description: Domesticated goats of all ages.
         annotations:
@@ -50609,7 +50612,7 @@ enums:
           description_es: Cabras domesticadas de todas las edades.
           description_fr: Caprins domestiqués de tous âges.
       pigs:
-        meaning: publicschema:LivestockType/pigs
+        meaning: publicschema:agri/LivestockType/pigs
         title: Pigs
         description: Domesticated pigs and swine of all ages.
         annotations:
@@ -50618,7 +50621,7 @@ enums:
           description_es: Cerdos domesticados de todas las edades.
           description_fr: Porcins domestiqués de tous âges.
       chickens:
-        meaning: publicschema:LivestockType/chickens
+        meaning: publicschema:agri/LivestockType/chickens
         title: Chickens
         description: Domesticated chickens, hens, roosters, and chicks.
         annotations:
@@ -50627,7 +50630,7 @@ enums:
           description_es: Pollos, gallinas, gallos y pollitos domesticados.
           description_fr: Poulets, poules, coqs et poussins domestiqués.
       other_poultry:
-        meaning: publicschema:LivestockType/other_poultry
+        meaning: publicschema:agri/LivestockType/other_poultry
         title: Other poultry
         description: Domesticated birds other than chickens, including ducks, turkeys, guinea fowl, and
           geese.
@@ -50639,7 +50642,7 @@ enums:
           description_fr: Oiseaux domestiqués autres que les poulets, notamment les canards, dindes, pintades
             et oies.
       horses:
-        meaning: publicschema:LivestockType/horses
+        meaning: publicschema:agri/LivestockType/horses
         title: Horses
         description: Domesticated horses of all ages.
         annotations:
@@ -50648,7 +50651,7 @@ enums:
           description_es: Caballos domesticados de todas las edades.
           description_fr: Chevaux domestiqués de tous âges.
       donkeys_mules:
-        meaning: publicschema:LivestockType/donkeys_mules
+        meaning: publicschema:agri/LivestockType/donkeys_mules
         title: Donkeys/mules
         description: Domesticated donkeys, mules, and hinnies.
         annotations:
@@ -50657,7 +50660,7 @@ enums:
           description_es: Asnos, mulas y burdéganos domesticados.
           description_fr: Ânes, mulets et bardots domestiqués.
       camels:
-        meaning: publicschema:LivestockType/camels
+        meaning: publicschema:agri/LivestockType/camels
         title: Camels
         description: Domesticated camels (dromedary and Bactrian).
         annotations:
@@ -50666,7 +50669,7 @@ enums:
           description_es: Camellos domesticados (dromedarios y camellos bactrianos).
           description_fr: Chameaux domestiqués (dromadaires et chameaux de Bactriane).
       rabbits:
-        meaning: publicschema:LivestockType/rabbits
+        meaning: publicschema:agri/LivestockType/rabbits
         title: Rabbits
         description: Domesticated rabbits raised for meat, fur, or other products.
         annotations:
@@ -50675,7 +50678,7 @@ enums:
           description_es: Conejos domesticados criados para carne, piel u otros productos.
           description_fr: Lapins domestiqués élevés pour la viande, la fourrure ou d'autres produits.
       beehives:
-        meaning: publicschema:LivestockType/beehives
+        meaning: publicschema:agri/LivestockType/beehives
         title: Beehives
         description: Bee colonies maintained in hives for honey production.
         annotations:
@@ -50684,7 +50687,7 @@ enums:
           description_es: Colonias de abejas mantenidas en colmenas para la producción de miel.
           description_fr: Colonies d'abeilles maintenues dans des ruches pour la production de miel.
       other_livestock:
-        meaning: publicschema:LivestockType/other_livestock
+        meaning: publicschema:agri/LivestockType/other_livestock
         title: Other livestock
         description: Livestock species not covered by the other categories.
         annotations:
@@ -50693,6 +50696,7 @@ enums:
           description_es: Especies de ganado no cubiertas por las otras categorías.
           description_fr: Espèces de bétail non couvertes par les autres catégories.
     annotations:
+      source_domain: agri
       label_es: Tipo de ganado
       label_fr: Type de bétail
       description_es: Tipos de ganado criados por la explotación agrícola, clasificados según el Programa
@@ -58479,7 +58483,7 @@ enums:
         type and sharing status, not directly observed.", "uri": "https://washdata.org/monitoring/sanitation"}'
       bibliography_refs: '["who-unicef-jmp"]'
   SchoolLevel:
-    enum_uri: publicschema:SchoolLevel
+    enum_uri: publicschema:edu/SchoolLevel
     title: School Level
     description: The ISCED 2011 level of education served by a school, covering early childhood through
       post-secondary non-tertiary education. This is a subset of the full ISCED 2011 level range (0-8);
@@ -58488,7 +58492,7 @@ enums:
     status: bibo:draft
     permissible_values:
       isced_0:
-        meaning: publicschema:SchoolLevel/isced_0
+        meaning: publicschema:edu/SchoolLevel/isced_0
         title: Early childhood education (ISCED 0)
         description: Programs providing holistic early childhood development and education for children
           below the age of entry into primary education, typically ages 0-5. Includes crèches, nurseries,
@@ -58503,7 +58507,7 @@ enums:
             de l'âge d'entrée à l'école primaire, généralement de 0 à 5 ans. Comprend les crèches, pouponnières,
             jardins d'enfants et pré-écoles.
       isced_1:
-        meaning: publicschema:SchoolLevel/isced_1
+        meaning: publicschema:edu/SchoolLevel/isced_1
         title: Primary education (ISCED 1)
         description: Programs designed to give students a sound basic education in reading, writing, and
           mathematics, along with an elementary understanding of other subjects. Typically ages 6-11,
@@ -58518,7 +58522,7 @@ enums:
             écriture et mathématiques, ainsi qu'une compréhension élémentaire d'autres matières. Généralement
             de 6 à 11 ans, d'une durée de 4 à 6 ans.
       isced_2:
-        meaning: publicschema:SchoolLevel/isced_2
+        meaning: publicschema:edu/SchoolLevel/isced_2
         title: Lower secondary education (ISCED 2)
         description: Programs completing the lower phase of secondary education, building on primary education
           and preparing for upper secondary or vocational pathways. Typically ages 12-14.
@@ -58532,7 +58536,7 @@ enums:
             sur l'enseignement primaire et préparant aux voies secondaires supérieures ou professionnelles.
             Généralement de 12 à 14 ans.
       isced_3:
-        meaning: publicschema:SchoolLevel/isced_3
+        meaning: publicschema:edu/SchoolLevel/isced_3
         title: Upper secondary education (ISCED 3)
         description: Programs providing more subject- or skill-specific instruction than lower secondary,
           often leading to tertiary education or direct entry to employment. Typically ages 15-17.
@@ -58546,7 +58550,7 @@ enums:
             que le secondaire inférieur, menant souvent à l'enseignement tertiaire ou à l'insertion directe
             dans l'emploi. Généralement de 15 à 17 ans.
       isced_4:
-        meaning: publicschema:SchoolLevel/isced_4
+        meaning: publicschema:edu/SchoolLevel/isced_4
         title: Post-secondary non-tertiary education (ISCED 4)
         description: Programs positioned between upper secondary and tertiary education, providing knowledge
           and skills below degree level. Includes vocational preparation programs and bridging courses.
@@ -58564,6 +58568,7 @@ enums:
             dispensés dans des collèges techniques ou des centres de formation professionnelle plutôt
             qu'à l'université.
     annotations:
+      source_domain: edu
       label_es: Nivel escolar
       label_fr: Niveau scolaire
       description_es: El nivel educativo ISCED 2011 atendido por una escuela, cubriendo desde la educación
@@ -58583,7 +58588,7 @@ enums:
         levels 5-8 are outside the scope of this vocabulary.", "uri": "https://uis.unesco.org/en/topic/international-standard-classification-education-isced"}'
       bibliography_refs: '["isced-2011"]'
   SchoolType:
-    enum_uri: publicschema:SchoolType
+    enum_uri: publicschema:edu/SchoolType
     title: School Type
     description: The management and funding classification of a school, distinguishing public schools
       managed by government authorities from private, faith-based, and community-managed institutions.
@@ -58591,7 +58596,7 @@ enums:
     status: bibo:draft
     permissible_values:
       public:
-        meaning: publicschema:SchoolType/public
+        meaning: publicschema:edu/SchoolType/public
         title: Public school
         description: School managed and primarily funded by a government authority (national, regional,
           or local). Follows public education curricula and standards.
@@ -58603,7 +58608,7 @@ enums:
           description_fr: École gérée et principalement financée par une autorité gouvernementale (nationale,
             régionale ou locale). Suit les programmes et normes de l'éducation publique.
       private:
-        meaning: publicschema:SchoolType/private
+        meaning: publicschema:edu/SchoolType/private
         title: Private school
         description: School managed by a non-government body (individual owner, company, or non-profit
           foundation), operating independently of direct government management. May receive partial government
@@ -58618,7 +58623,7 @@ enums:
             ou fondation à but non lucratif), fonctionnant indépendamment de la gestion directe du gouvernement.
             Peut recevoir un financement partiel du gouvernement.
       faith_based:
-        meaning: publicschema:SchoolType/faith_based
+        meaning: publicschema:edu/SchoolType/faith_based
         title: Faith-based school
         description: School established and operated by a religious organization (church, mosque, temple,
           or similar body), which may also deliver religious instruction as part of its curriculum.
@@ -58632,7 +58637,7 @@ enums:
             ou organisme similaire), qui peut également dispenser un enseignement religieux dans le cadre
             de son programme.
       community:
-        meaning: publicschema:SchoolType/community
+        meaning: publicschema:edu/SchoolType/community
         title: Community school
         description: School established and managed by a local community or parent group, typically in
           areas where government or private provision is absent or insufficient. Common in humanitarian
@@ -58647,7 +58652,7 @@ enums:
             dans des zones où l'offre publique ou privée est absente ou insuffisante. Fréquente dans les
             contextes humanitaires et d'États fragiles.
       other:
-        meaning: publicschema:SchoolType/other
+        meaning: publicschema:edu/SchoolType/other
         title: Other
         description: A school management type not covered by the other categories, such as international
           schools or joint government-private partnership schools.
@@ -58659,6 +58664,7 @@ enums:
           description_fr: Un type de gestion d'école non couvert par les autres catégories, tel que les
             écoles internationales ou les écoles en partenariat public-privé.
     annotations:
+      source_domain: edu
       label_es: Tipo de escuela
       label_fr: Type d'école
       description_es: La clasificación de gestión y financiamiento de una escuela, que distingue las escuelas

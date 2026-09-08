@@ -229,7 +229,7 @@ classes:
     class_uri: publicschema:Group
     title: Group
     description: 'An abstract collection of persons that serves as the base for concrete group types such
-      as Household, Family, and Farm. Groups are linked to their members via membership links. In native
+      as Household and Family. Groups are linked to their members via membership links. In native
       PublicSchema modeling, the concrete subtype carries the authoritative semantics; group_type is kept
       as an interoperability classifier for systems that exchange groups through a flatter category field.
 
@@ -247,12 +247,12 @@ classes:
       label_es: Grupo
       label_fr: Groupe
       description_es: Una colección abstracta de personas que sirve como base para tipos de grupos concretos
-        como Hogar, Familia y Explotación Agrícola. Los grupos se vinculan a sus miembros a través de
+        como Hogar y Familia. Los grupos se vinculan a sus miembros a través de
         relaciones de pertenencia. En el modelado nativo de PublicSchema, el subtipo concreto lleva la
         semántica autorizada; group_type se conserva como clasificador de interoperabilidad para sistemas
         que intercambian grupos mediante un campo de categoría más plano.
       description_fr: Un regroupement abstrait de personnes qui sert de base aux types de groupes concrets
-        tels que Ménage, Famille et Exploitation agricole. Les groupes sont liés à leurs membres via des
+        tels que Ménage et Famille. Les groupes sont liés à leurs membres via des
         liens d'appartenance. Dans la modélisation native de PublicSchema, le sous-type concret porte
         la sémantique faisant autorité; group_type est conservé comme classificateur d'interopérabilité
         pour les systèmes qui échangent les groupes au moyen d'un champ de catégorie plus plat.
@@ -264,8 +264,23 @@ classes:
       convergence_json: '{"system_count": 5, "total_systems": 6}'
       bibliography_refs: '["spdci-common-standards"]'
     abstract: true
+  InformalGroup:
+    class_uri: publicschema:InformalGroup
+    title: Informal Group
+    description: A collection of persons identified together for a shared activity or purpose, without
+      asserting a separate institutional body, common residence or kinship. The group can be identified
+      even when its individual members are not enumerated. Use Household or Family when their more specific
+      meanings apply, and Organization when the subject is an institutional body. Joint agricultural holders
+      are one example.
+    slots: []
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/4/i4913e/i4913e.pdf
+    annotations:
+      bibliography_refs: '["fao-wca-2020-vol1"]'
+    is_a: Group
   HealthFacility:
-    class_uri: publicschema:HealthFacility
+    class_uri: publicschema:health/HealthFacility
     title: Health Facility
     description: 'A service point where clinical or preventive health services are delivered, such as
       a hospital, health center, health post, dispensary, specialty clinic, pharmacy, or diagnostic laboratory.
@@ -286,6 +301,7 @@ classes:
     close_mappings:
     - schema:MedicalOrganization
     annotations:
+      source_domain: health
       label_es: Establecimiento de salud
       label_fr: Établissement de santé
       description_es: 'Un punto de servicio donde se prestan servicios de salud clínicos o preventivos,
@@ -608,7 +624,7 @@ classes:
         "relationship_type"]}, {"category": "administrative", "properties": ["start_date", "end_date"]}]'
       bibliography_refs: '["fhir-v3-role-code", "spdci-common-standards"]'
   School:
-    class_uri: publicschema:School
+    class_uri: publicschema:edu/School
     title: School
     description: 'A service point where formal or non-formal education is delivered, such as a primary
       school, secondary school, vocational training center, or early childhood education center. School
@@ -627,6 +643,7 @@ classes:
     close_mappings:
     - schema:School
     annotations:
+      source_domain: edu
       label_es: Escuela
       label_fr: École
       description_es: Un punto de servicio donde se imparte educación formal o no formal, como una escuela
@@ -1311,7 +1328,7 @@ slots:
         does not include an ethnicity field.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
         "opencrvs"}]'
   facility_level:
-    slot_uri: publicschema:facility_level
+    slot_uri: publicschema:health/facility_level
     title: Facility level
     description: The tier of care provided per national/WHO classification (primary, secondary, tertiary,
       quaternary).
@@ -1319,6 +1336,7 @@ slots:
     multivalued: false
     status: bibo:draft
     annotations:
+      source_domain: health
       label_es: Nivel de establecimiento
       label_fr: Niveau d'établissement
       description_es: El nivel de atención proporcionado según la clasificación nacional/OMS (primario,
@@ -1328,7 +1346,7 @@ slots:
       category: classification
       bibliography_refs: '["who-health-systems"]'
   facility_type:
-    slot_uri: publicschema:facility_type
+    slot_uri: publicschema:health/facility_type
     title: Facility type
     description: The functional category of a health facility per WHO SARA/HHFA (hospital, health center,
       health post, etc.).
@@ -1336,6 +1354,7 @@ slots:
     multivalued: false
     status: bibo:draft
     annotations:
+      source_domain: health
       label_es: Tipo de establecimiento
       label_fr: Type d'établissement
       description_es: La categoría funcional de un establecimiento de salud según SARA/HHFA de la OMS
@@ -2396,7 +2415,7 @@ slots:
       valid_instruments_json: '["jmp_core_hh"]'
       bibliography_refs: '["who-unicef-jmp"]'
   school_level_served:
-    slot_uri: publicschema:school_level_served
+    slot_uri: publicschema:edu/school_level_served
     title: School level served
     description: The ISCED 2011 education level(s) served by this school. A school covering multiple levels
       (e.g., combined primary and lower secondary) should list all applicable levels.
@@ -2404,6 +2423,7 @@ slots:
     multivalued: true
     status: bibo:draft
     annotations:
+      source_domain: edu
       label_es: Nivel escolar atendido
       label_fr: Niveau scolaire desservi
       description_es: El o los niveles educativos ISCED 2011 atendidos por esta escuela. Una escuela que
@@ -2414,7 +2434,7 @@ slots:
         niveaux applicables.
       category: classification
   school_type:
-    slot_uri: publicschema:school_type
+    slot_uri: publicschema:edu/school_type
     title: School type
     description: The management and funding classification of a school (public, private, faith-based,
       or community), per UNESCO UIS categories.
@@ -2422,6 +2442,7 @@ slots:
     multivalued: false
     status: bibo:draft
     annotations:
+      source_domain: edu
       label_es: Tipo de escuela
       label_fr: Type d'école
       description_es: La clasificación de gestión y financiamiento de una escuela (pública, privada, confesional

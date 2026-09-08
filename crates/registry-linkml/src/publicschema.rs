@@ -26,6 +26,50 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../publicschema/schema/publicschema.yaml"),
     ),
     (
+        "schema/agriculture.yaml",
+        include_str!("../publicschema/schema/agriculture.yaml"),
+    ),
+    (
+        "schema/farm_operators.yaml",
+        include_str!("../publicschema/schema/farm_operators.yaml"),
+    ),
+    (
+        "schema/government.yaml",
+        include_str!("../publicschema/schema/government.yaml"),
+    ),
+    (
+        "schema/registry.yaml",
+        include_str!("../publicschema/schema/registry.yaml"),
+    ),
+    (
+        "schema/work.yaml",
+        include_str!("../publicschema/schema/work.yaml"),
+    ),
+    (
+        "schema/agriculture_biology.yaml",
+        include_str!("../publicschema/schema/agriculture_biology.yaml"),
+    ),
+    (
+        "schema/agriculture_operations.yaml",
+        include_str!("../publicschema/schema/agriculture_operations.yaml"),
+    ),
+    (
+        "schema/assets.yaml",
+        include_str!("../publicschema/schema/assets.yaml"),
+    ),
+    (
+        "schema/service_capacity.yaml",
+        include_str!("../publicschema/schema/service_capacity.yaml"),
+    ),
+    (
+        "schema/government_relationships.yaml",
+        include_str!("../publicschema/schema/government_relationships.yaml"),
+    ),
+    (
+        "schema/public_services.yaml",
+        include_str!("../publicschema/schema/public_services.yaml"),
+    ),
+    (
         "schema/assessment.yaml",
         include_str!("../publicschema/schema/assessment.yaml"),
     ),

@@ -1,0 +1,218 @@
+id: https://publicschema.org/linkml/government-relationships
+name: publicschema-government-relationships
+title: Qualified government relationships
+description: Draft relationships preserving qualified ownership, education offerings and installation
+  attribution. Completeness, evidence evaluation and legal decisions belong to consuming profiles.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- publicschema-extensions
+- common
+- identity
+- registry
+- government
+classes:
+  LegalArrangement:
+    class_uri: publicschema:LegalArrangement
+    title: Legal Arrangement
+    description: An identified legal mechanism through which persons or organizations associate to
+      exercise ownership or control without the mechanism itself being a separate institutional body.
+      A trust with separate legal personality is a LegalEntity instead. Identifying an arrangement does
+      not establish the identity, rights or beneficial ownership of its participants.
+    slots:
+    - name
+    - identifiers
+    - arrangement_type
+    status: bibo:draft
+    annotations:
+      bibliography_refs: '["gov-bods-04"]'
+  OwnershipChainAssertion:
+    class_uri: publicschema:OwnershipChainAssertion
+    title: Ownership Chain Assertion
+    description: An assertion identifying component interests that describe a route of indirect
+      ownership or control. Components are an unordered set of separately identified interests, each
+      with its own endpoints and period. Their inclusion does not verify the route, calculate an
+      effective percentage or determine a beneficial owner. Evidence and recording time belong to
+      the RegistryEntry describing this assertion.
+    slots:
+    - indirect_interest
+    - component_interests
+    status: bibo:draft
+    annotations:
+      bibliography_refs: '["gov-bods-04"]'
+  EducationOffering:
+    class_uri: publicschema:edu/EducationOffering
+    title: Education Offering
+    description: A provider's offering of an identified education programme at specified physical or
+      virtual provider sites over a period. Separate offerings distinguish campuses, intakes or
+      delivery modes without creating different programme identities. An offering is neither an
+      individual enrolment nor evidence that the programme or site is accredited.
+    slots:
+    - name
+    - identifiers
+    - offering_programme
+    - offering_provider
+    - offering_sites
+    - offering_mode
+    - offering_award
+    - start_date
+    - end_date
+    status: bibo:draft
+    annotations:
+      source_domain: edu
+      bibliography_refs: '["gov-schema-course"]'
+slots:
+  arrangement_type:
+    slot_uri: publicschema:arrangement_type
+    title: Arrangement type
+    description: A scheme-qualified kind of legal arrangement, such as a trust or nomination agreement.
+      Its legal treatment depends on the applicable jurisdiction.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: classification
+      domain_override: 'null'
+  indirect_interest:
+    slot_uri: publicschema:indirect_interest
+    title: Indirect interest
+    description: The separately asserted indirect interest whose route is described by these component
+      interests. Several chain assertions may describe different routes for the same interest.
+    range: OwnershipInterest
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+      domain_override: 'null'
+  component_interests:
+    slot_uri: publicschema:component_interests
+    title: Component interests
+    description: Separately identified interests offered as components of the asserted indirect route.
+      Array position carries no meaning. Reference resolution, connected endpoints and compatible
+      periods require profile checks; inclusion never makes a source assertion true.
+    range: OwnershipInterest
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: governance
+      domain_override: 'null'
+  interest_minimum_percentage:
+    slot_uri: publicschema:interest_minimum_percentage
+    title: Interest minimum percentage
+    description: An inclusive lower percentage bound for an asserted interest on a zero-to-one-hundred
+      scale. This is a bound, not an exact value; omit when unknown. An example profile distinguishes
+      bounds from interest_percentage and from an exclusive bound on the same side.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+      domain_override: 'null'
+  interest_exclusive_minimum_percentage:
+    slot_uri: publicschema:interest_exclusive_minimum_percentage
+    title: Interest exclusive minimum percentage
+    description: A percentage strictly below the asserted interest, on a zero-to-one-hundred scale.
+      An interest exceeding twenty-five percent may use 25 here without inventing an exact amount.
+      This is alternative to an inclusive lower bound.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+      domain_override: 'null'
+  interest_maximum_percentage:
+    slot_uri: publicschema:interest_maximum_percentage
+    title: Interest maximum percentage
+    description: An inclusive upper percentage bound for an asserted interest on a zero-to-one-hundred
+      scale. Omission means that this upper bound was not supplied; it does not imply an exact amount.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+      domain_override: 'null'
+  interest_exclusive_maximum_percentage:
+    slot_uri: publicschema:interest_exclusive_maximum_percentage
+    title: Interest exclusive maximum percentage
+    description: A percentage strictly above the asserted interest, on a zero-to-one-hundred scale.
+      This is alternative to an inclusive upper bound and never an exact percentage.
+    range: decimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+      domain_override: 'null'
+  offering_programme:
+    slot_uri: publicschema:edu/offering_programme
+    title: Offering programme
+    description: The education programme delivered through this offering. A different offering need
+      not imply a different programme.
+    range: EducationProgramme
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: classification
+      domain_override: edu
+  offering_provider:
+    slot_uri: publicschema:edu/offering_provider
+    title: Offering provider
+    description: The institutional education provider responsible for this offering.
+    range: EducationProvider
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: governance
+      domain_override: edu
+  offering_sites:
+    slot_uri: publicschema:edu/offering_sites
+    title: Offering sites
+    description: Physical or virtual provider sites through which this offering is delivered. A shared
+      programme list on the provider does not imply that every site delivers every programme.
+    range: ProviderSite
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: location
+      domain_override: edu
+  offering_mode:
+    slot_uri: publicschema:edu/offering_mode
+    title: Offering mode
+    description: A scheme-qualified delivery or study mode of this offering, such as online or part-time.
+      A mode does not identify a delivery site or imply that a learner attended.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      category: classification
+      domain_override: edu
+  offering_award:
+    slot_uri: publicschema:edu/offering_award
+    title: Offering award
+    description: The URI of the qualification or award definition normally obtained on successful
+      completion of this offering. It identifies an expected award kind in its source catalog, never
+      a qualification already awarded to an individual. No award is inferred when it is omitted.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: classification
+      domain_override: edu
+  release_installation:
+    slot_uri: publicschema:environment/release_installation
+    title: Release installation
+    description: The identified technical installation from which this release is reported, when the
+      source distinguishes it. A facility-level total must not be assigned to an invented installation.
+      If release_facility is also given, the consuming profile checks consistent facility attribution.
+      An undated containment link does not establish historical membership for the release period.
+    range: InstallationUnit
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      category: location
+      domain_override: environment
+      bibliography_refs: '["gov-eu-industrial-emissions-portal"]'

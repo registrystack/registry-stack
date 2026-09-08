@@ -651,8 +651,8 @@ slots:
     slot_uri: publicschema:subject
     title: Subject
     description: 'The person or group that the profile or scoring event is about. Ranged at Party (not
-      Agent) because Profiles observe receivers: persons and organised groups of persons (Household, Family,
-      Farm). Institutional actors (Organizations) are described through their own Organization records,
+      Agent) because Profiles observe receivers: persons and organised groups of persons (Household and
+      Family). Institutional actors (Organizations) are described through their own Organization records,
       not as subjects of a Profile.'
     range: Party
     multivalued: false
@@ -662,10 +662,10 @@ slots:
       label_fr: Sujet
       description_es: 'La persona o grupo sobre el que trata el perfil o evento de puntuación. Tipado
         como Party (no Agent) porque los Profile observan receptores: personas y grupos organizados de
-        personas (Household, Family, Farm). Los actores institucionales (Organizations) se describen mediante
+        personas (Household, Family). Los actores institucionales (Organizations) se describen mediante
         sus propios registros Organization, no como sujetos de un Profile.'
       description_fr: 'La personne ou le groupe sur lequel porte le profil ou l''événement de notation.
         Typé sur Party (et non Agent) parce que les Profiles observent des bénéficiaires : personnes et
-        groupes organisés de personnes (Household, Family, Farm). Les acteurs institutionnels (Organizations)
+        groupes organisés de personnes (Household, Family). Les acteurs institutionnels (Organizations)
         sont décrits par leurs propres enregistrements Organization, non comme sujets d''un Profile.'
       convergence_json: '{"system_count": 2, "total_systems": 3}'
