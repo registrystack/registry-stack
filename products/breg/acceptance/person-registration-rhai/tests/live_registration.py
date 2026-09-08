@@ -117,6 +117,7 @@ def main() -> None:
                         if ready.status == 200:
                             break
                 except (urllib.error.URLError, TimeoutError):
+                    # Startup can briefly refuse connections; retry below until the readiness deadline.
                     pass
                 if time.monotonic() >= deadline:
                     raise SystemExit("person registration server readiness deadline exceeded")
