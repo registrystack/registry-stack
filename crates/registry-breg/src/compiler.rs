@@ -67,8 +67,8 @@ pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
 /// Maximum canonical event body accepted by the governed webhook transport.
 ///
 /// This intentionally matches the platform event-destination body ceiling.
-/// Keeping it in the pure compiler avoids pulling an HTTP client into the
-/// default no-I/O authoring graph; the runtime integration pins the equality.
+/// The compiler uses this bound without constructing a transport; the runtime
+/// integration pins the equality.
 pub const MAX_WEBHOOK_PAYLOAD_BYTES: u32 = 1_048_576;
 pub const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
 
@@ -104,6 +104,18 @@ pub fn compile_project_with_assets(
 ) -> Result<CompiledRegistry, CompileFailure> {
     let mut diagnostics = Vec::new();
     let mut findings = Vec::new();
+    if modules
+        .iter()
+        .flat_map(|module| &module.actions)
+        .any(|action| !action.evidence.is_empty())
+    {
+        diagnostics.push(Diagnostic::error(
+            "action.evidence.module.unsupported",
+            "modules[].actions[].evidence",
+            "the trial declares Evidence capabilities in project actions",
+        ));
+    }
+
     validate_project_header(project, profile, &mut diagnostics, &mut findings);
     let module_closure = validate_module_locks(
         project,
@@ -138,15 +150,27 @@ pub fn compile_project_with_assets(
 
     let (mut entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
     crate::change_request::compile_change_requests(
+        &action_sources
+            .values()
+            .filter_map(|action| {
+                action
+                    .source
+                    .handler
+                    .as_ref()
+                    .map(|handler| (action.source_module.clone(), handler.script.clone()))
+            })
+            .collect(),
         &sources,
         &change_request_origins,
         assets,
         &mut entities,
     )
     .map_err(CompileFailure::from_errors)?;
-    let action_inventory =
-        compile_immediate_actions(&action_sources, &entities, &project.access_profiles)
+    let mut action_inventory =
+        compile_immediate_actions(&action_sources, &entities, &project.access_profiles, assets)
             .map_err(CompileFailure::from_errors)?;
+    crate::action_evidence_contracts::compile_evidence(project, assets, &mut action_inventory)
+        .map_err(CompileFailure::from_errors)?;
     findings.extend(crate::access::compiled_access_findings(
         &entities,
         &action_inventory,
@@ -1829,6 +1853,22 @@ fn validate_entity_fields(
                 "entities[].fields[].id",
                 "a field identifier is duplicated",
             ));
+        }
+        if let Some(pattern) = &field.pattern {
+            let path = format!("entities[{}].fields[{}].pattern", entity.id, field.id);
+            if !matches!(
+                field.field_type,
+                FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
+            ) {
+                errors.push(Diagnostic::error(
+                    "field.pattern.type_unsupported",
+                    &path,
+                    "pattern requires a persisted string or text field",
+                ));
+            } else if pattern.len() > 4096 || pattern.contains('\0') {
+                errors.push(Diagnostic::error("field.pattern.bounds_invalid", &path,
+                    "PostgreSQL pattern must be at most 4096 UTF-8 bytes and contain no NUL; syntax is validated by PostgreSQL schema-test"));
+            }
         }
         match &field.field_type {
             FieldTypeSource::String {
@@ -4057,14 +4097,16 @@ fn asset_map<'a>(
     let mut map = BTreeMap::new();
     for asset in assets {
         if asset.module.as_deref().is_some_and(str::is_empty)
-            || !valid_relative_asset_path(&asset.path)
+            || !(valid_relative_asset_path(&asset.path)
+                || (asset.module.is_none()
+                    && crate::action_evidence_contracts::valid_contract_path(&asset.path)))
             || asset.bytes.is_empty()
             || asset.bytes.len() > usize::try_from(MAX_STRUCTURED_VALUE_BYTES).unwrap_or(usize::MAX)
         {
             errors.push(Diagnostic::error(
                 "module.asset.invalid",
                 "modules[].assets[]",
-                "module assets must be bounded relative SQL or Rhai files",
+                "assets must be bounded relative SQL, Rhai, or project Evidence contract files",
             ));
             continue;
         }
@@ -4154,6 +4196,7 @@ fn compile_entities(
                 CompiledField {
                     id: field.id,
                     field_type: field.field_type,
+                    pattern: field.pattern,
                     required: field.required,
                     classification: field.classification,
                     valid_time_role: field.valid_time_role,
@@ -4263,6 +4306,12 @@ fn compile_entities(
             constraints.insert(id, normalized_constraint(constraint));
         }
         for field in &source.fields {
+            if field.pattern.is_some() {
+                constraint_names.insert(
+                    format!("pattern:{}", field.id),
+                    crate::generated_ddl::field_pattern_constraint_name(&source.id, &field.id),
+                );
+            }
             if matches!(field.field_type, FieldTypeSource::Reference { .. }) {
                 let id = format!("reference:{}", field.id);
                 let physical = builder

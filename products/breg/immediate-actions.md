@@ -5,7 +5,7 @@ authenticated mutation. They are useful when an application needs one button to
 create or patch several records, while the server still owns the effect graph,
 authorization, concurrency checks, idempotency, audit, events, and receipt.
 
-The two fixtures in this directory are intentionally small:
+The fixed-effect fixtures are intentionally small:
 
 - `fixtures/asset-registration-actions` creates an asset and its initial
   inspection in one action. The grant returns only the `asset` effect in the
@@ -27,7 +27,8 @@ separate direct-action fixture, not a shortcut around
 
 Actions live in project or module configuration under `actions`. Inputs use the
 same field-type grammar as entity fields, but they are not persisted and cannot
-declare `validTimeRole`. Effects are inline and fixed. This complete create-only
+declare `validTimeRole`. Each action selects fixed `effects` or a Rhai `handler`;
+the two forms are exclusive. This complete fixed-effect create-only
 action from `fixtures/asset-registration-actions` creates an asset, creates the
 initial inspection, and links the inspection with the reserved asset identity:
 
@@ -109,6 +110,147 @@ and service centers, while `household-maintainer` can patch only
 `household-name`. The action patch of `contact-person` is governed by the
 `contact-registrar` action grant and its target row boundaries.
 
+## Input-only Rhai handlers
+
+Use an action `handler` when typed input calculation or branching is clearer in
+ordinary code. The complete [person registration project](acceptance/person-registration-rhai/README.md)
+provides a single-create name computation, a coordinated person and registration
+create, optional existing-target patch, synthetic expectation files, and an
+executable PostgreSQL journey.
+
+```yaml
+handler:
+  kind: rhai
+  script: scripts/register-person.rhai
+  abi: registry.action-handler/v1
+  refusals:
+    - {code: blank-name, label: At least one name part is required.}
+  writes:
+    - id: person
+      target: {entity: person}
+      operation: create
+      fields: [identifier, display-name]
+```
+
+`fn handle(ctx)` receives admitted input values in `ctx.inputs`, keyed by logical
+input IDs. HTTP aliases are resolved by BREG. Optional absent inputs stay absent;
+explicit JSON `null` is a present key with Rhai's unit value `()`. A required
+input rejects either omission or null before evaluation. For an optional string,
+guard both cases before calling a string method:
+
+```rust
+let family = if "family-name" in ctx.inputs && ctx.inputs["family-name"] != () {
+    ctx.inputs["family-name"]
+} else { "" };
+family.trim();
+```
+
+Use `in` to distinguish absence from an explicitly supplied value. The example
+name policy treats omission, null and blank strings as empty name parts.
+Rhai has no database query, stored-record snapshot, clock, filesystem or network
+API. The script returns exactly one of `effects` or `refusal`:
+
+```rust
+// Success, with typed computed values:
+#{effects: [#{id: "person", set: #{
+    identifier: ctx.inputs.identifier,
+    "display-name": display_name
+}}]}
+
+// Declared business refusal, with an optional logical input ID:
+#{refusal: #{code: "blank-name", field: "given-name"}}
+```
+
+A slot can be emitted once or omitted. Its target, operation and field ceiling
+come from `writes`, not the script output. Values must meet the destination field
+type. References use `{fromField: "input-id"}` or `{fromEffect: "create-slot-id"}`
+with Rhai map syntax; the host reserves new identities. Raw reference-ID
+literals, undeclared or duplicate slots, unknown fields or keys, dangling or
+cyclic dependencies, missing required create fields, null sets, overlapping
+`set`/`clear`, empty effects/plans, create clears and required-field clears are
+refused. `clear` applies only to optional patch fields.
+
+Omission suppresses writes and result entries only. Every declared existing
+reference still needs admission and compiled target authority. Every compiled
+patch target still requires its condition token and ordered lock, even when the
+handler omits its slot. Action `requires` checks remain unconditional for a new
+invocation. Use the target-condition endpoint and preserve the form's saved
+condition exactly as for fixed actions.
+
+A declared business refusal returns `422 action.refused`, its closed catalogue
+`refusalCode`, the static catalogue label as `detail`, and an optional
+`fieldPath` using the public input name. Dynamic messages and unknown codes are
+not accepted. Refusal commits no effect, successful receipt or event. It is not
+a retained successful idempotency result. Correct the indicated input and retry;
+the refused attempt has not consumed a successful idempotency result.
+Unexpected handler failure and invalid output return `500 action.handler_failed`.
+An operator uses the bounded diagnostic to repair the declared action, slot or
+field, tests the corrected project, and activates its new package. Execution
+deadlines retain `503 service.unavailable`.
+
+Receipt recovery precedes handler execution. A new invocation computes and
+verifies its candidate before target locks, then uses the ordinary atomic action
+transaction. Confirmed internal transaction retries reuse the candidate,
+reserved identities and original deadline. Concurrent requests can independently
+compute candidates; successful receipt replay does not rerun the handler.
+
+Use the existing `bregctl project planner-test --action ... --input ... --expect ...`
+to assert synthetic effects/refusal without a database. Local input and expected
+files use authored IDs; HTTP bodies use public aliases. Reports omit input and
+computed values and give mismatch paths without value dumps. PostgreSQL-backed
+schema tests remain necessary for native patterns, authorization, conditions and
+transaction behavior. The handler script, ABI, inputs, refusals and slots are
+part of the governed action contract.
+
+These handlers are the immediate-action Rhai entry point. Existing
+change-request planners retain their separate `ctx.request`, frozen-proposal
+and review lifecycle. Existing webhooks run after commit; they do not execute
+an action handler or change its response.
+
+## Acceptance-time target requirements
+
+An action can check a stored field of an existing reference target before it
+applies its effects. For example, an assignment can require an active operator
+at registration time:
+
+```yaml
+# Inside an action with a required operator reference input used by its effects:
+requires:
+  - {input: operator, field: status, equals: active}
+```
+
+`input` is the logical action input ID; `field` is a stored field ID on its
+reference target. Each input must be required and already used by the action's
+effects. Requirements use typed scalar equality and are combined with AND.
+Null is permitted only for an optional target field. Structured values and
+points are not supported. The compiler rejects unknown inputs, fields,
+incompatible values, duplicate checks, and requirements above the existing
+128-field or 2 MiB bounds.
+
+The selected action grant must explicitly include the target entity and meet
+its mandatory scopes, purposes, and row boundaries. That grant admits the
+reviewed action's exact required processing, including checking a field that
+the caller cannot retrieve. It does not grant ordinary reads or expose the
+checked value. Anonymous action invocation remains forbidden. The compiled
+action inventory and fingerprint include the requirement and the referenced
+entity contract, so a changed check is a governed authority change.
+
+The runtime checks the authorized target while holding its existing row lock
+until commit. A concurrent update therefore either completes before the check
+or waits until the action commits. A failed check returns the existing
+value-free `412 precondition.failed` response and commits none of the action's
+effects, revisions, events, or receipt. Link-only checks need no caller condition
+token or additional HTTP request. Patch targets retain their existing condition
+token requirement.
+
+Requirements describe acceptance-time state. Later inactivation does not undo
+an accepted assignment, and replay of the same committed idempotency key
+recovers its original receipt subject to the existing current-authority checks.
+Use an entity constraint for a rule that must remain true after every write.
+Requirements do not bypass reviewed change control. The
+[person-registration acceptance project](acceptance/person-registration-rhai/registry.yaml)
+combines a handler with acceptance-time requirements.
+
 ## Local Checks
 
 Run checks from the repository root. These commands validate the authoring
@@ -172,19 +314,30 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   --output "$artifact_dir/sql"
 ```
 
-Project directories must also use canonical, non-symlink paths. On macOS, prefer
+Project directories and local `--input`/`--expect` files must also use canonical,
+non-symlink paths. On macOS, prefer
 `/private/tmp/...` over `/tmp/...` for disposable project copies, or keep the
 copy under the repository and use `pwd -P` before invoking the CLI.
 
 ## Runnable Schema-Test Journey
 
-Run both immediate-action schema-test suites with the local runner. It expects
-the same isolated TLS PostgreSQL environment used by the existing
-[change-request examples](CHANGE_REQUEST_EXAMPLES.md). The runner creates unique
+Run the two fixed-action fixtures and the
+[person registration Rhai fixture](acceptance/person-registration-rhai/README.md)
+with the local runner. It expects the same isolated TLS PostgreSQL environment
+used by the existing [change-request examples](CHANGE_REQUEST_EXAMPLES.md).
+Prerequisites are a disposable PostgreSQL 18 cluster with TLS, its CA PEM, an
+administrator credential able to create roles and databases and install
+`btree_gist`, `psql`, OpenSSL with Ed25519 signing support, and Python 3 with
+PyYAML. Building from source also requires the repository's Rust toolchain.
+
+The runner creates unique
 synthetic databases and roles, writes owner-only runtime configuration, JWTs,
 token references, schema-test credentials, reports, and receipts under a
-repository temporary directory, calls the real `bregctl test`, and
-then removes the resources it created.
+repository temporary directory, and calls the real `bregctl test`. For the Rhai
+fixture it also signs the tested candidate externally, applies and verifies it
+in a separate fresh database, then starts `breg` and checks the HTTP computation,
+authorized GET, omitted and null inputs, receipt replay, and business-refusal
+recovery. It then removes the resources it created.
 
 With `BREG_TEST_DATABASE_URL` and
 `BREG_TEST_TLS_CA_PEM_PATH` exported by that PostgreSQL setup, run:
@@ -193,13 +346,20 @@ With `BREG_TEST_DATABASE_URL` and
 products/breg/scripts/test-immediate-action-examples.sh
 ```
 
+Run from the monorepo root. Add `--installed` to use matching `breg` and `bregctl`
+binaries on `PATH`; otherwise the runner builds them from this checkout.
+Source builds use `CARGO_TARGET_DIR` when set, resolving a relative value from
+the monorepo root.
+
 If your setup keeps these exports in an existing owner-only shell file, pass
 `--env /absolute/physical/path/to/test.env`. Only source a file you trust; the
 runner executes its shell contents. Do not serialize secret values into shell
 code or include credentials in command history.
 
-For edited fixture copies, pass `--asset-project /private/tmp/path/to/copy` or
-`--household-project /private/tmp/path/to/copy`. The runner reads
+For edited fixture copies, pass `--asset-project /private/tmp/path/to/copy`,
+`--household-project /private/tmp/path/to/copy`, or
+`--rhai-project /private/tmp/path/to/copy`. All three fixtures run by default.
+The runner reads
 `package.environment`, `package.instanceId`, and `package.sourceRevision` from
 each selected `registry.yaml`, so the runtime binding matches the candidate
 under test.
@@ -214,6 +374,9 @@ verified claims satisfy the selected profile:
 | `household-operator` | `registry_principal` | `registry:household:operate` | `household-administration` | `district` equals create and read row boundaries |
 | `household-maintainer` | `registry_principal` | `registry:household:maintain` | `household-maintenance` | `district` equals the patched household row boundary |
 | `contact-registrar` | `registry_principal` | `registry:contact:register` | `contact-registration` | `district` equals every action target row boundary |
+| `person-registrar` | `registry_principal` | `registry:person:register` | `person-registration` | None |
+| `person-reader` | `registry_principal` | `registry:person:read` | `person-registration-audit` | None |
+| `person-administrator` | `registry_principal` | `registry:person:manage` | `person-maintenance` | None |
 
 To serve a packaged fixture for manual HTTP calls, use the normal Registry
 BReg lifecycle from the [quickstart](quickstart/README.md),
@@ -438,6 +601,7 @@ use the same concealment behavior as the rest of the protected API.
 | `400 request.invalid` | Correct the body. For admitted action bodies, `fieldPath` identifies a declared input or condition member, such as `/input/contactName` or `/preconditions/householdId/ifMatch`. Unknown names point to their enclosing object and are not echoed. |
 | `404 resource.not_found` | The action or condition target is unavailable under the caller's authority. Do not infer whether a hidden target exists. |
 | `412 precondition.failed` | Keep the form inputs. Recheck the selected targets, their current conditions and permitted boundaries before resubmitting. |
+| `422 action.refused` | Correct the input using the declared `refusalCode`, static detail and optional input `fieldPath`. No effects were committed. |
 | `409` | Inspect the problem code: `idempotency.conflict` is a consumed-key binding mismatch; `mutation.conflict` is a state or configured constraint conflict. |
 | `503 service.unavailable` or a lost response | Retry the identical request with the same key to recover a possible committed receipt. Do not generate a fresh key automatically. |
 
@@ -445,3 +609,90 @@ The compiler bounds an action to 16 target roles, 128 field mutations and a
 2 MiB maximum snapshot. Multiple non-overlapping effects that resolve to the
 same record share one committed revision and configured event. Each granted
 effect still has its own result reference in the receipt.
+
+## Trial: conditional Evidence in Rhai
+
+The `registry.action-handler/v2` trial lets a project-level action call
+`evidence::resolve(capability_id, subjects)` within `handle(ctx)`. The
+[farmer landholding acceptance project](acceptance/farmer-landholding-evidence/README.md)
+is the complete offline example, including exact synthetic call expectations.
+This ABI remains a trial. Version 1 input-only actions keep their current path.
+
+Declare `evidenceProviders` in the project with an `id`, a reviewed client
+`contracts` JSON file and `subjectResolution: trusted-provider-exact-selector`.
+Each action's `evidence` entries select a local `id`, provider, exact requirement
+URI, subject role/profile, output handles and `maximumObservationAgeSeconds`.
+Provider IDs and capability aliases use the action ID grammar: 1–64 ASCII
+characters, starting with a lowercase letter and continuing with lowercase
+letters, digits, hyphens or underscores.
+The imported contract becomes part of the signed package closure. Compilation
+and explanation require no network. Runtime discovery and live contract
+substitution cannot change reviewed authority.
+
+The helper supports request-origin selectors and selected scalar outputs from
+an audience-scoped signed JWS contract. Computed identifiers remain request
+values and cannot become authenticated claims or grants. Rhai may trim and
+concatenate values, refuse before a call, and conditionally call another declared
+capability. Use `value.trim();` because Rhai trims strings in place. Declared
+capabilities are optional; declared local targets still require admission even
+if the handler omits their write slots. The action grant covers all declared
+processing, so a caller input selecting optional disclosure adds no authority.
+
+Each capability permits one call, with at most two per action. Effective defaults
+are eight concurrent evaluations, 256 KiB per response, 1 MiB retained Evidence
+per action, 24-hour retention, a 300-second assertion lifetime, zero clock skew,
+and one 10-second action deadline. Observation age is declared per capability,
+with a 300-second ceiling. Offline action explanation reports these limits.
+
+Runtime configuration binds the same provider ID separately from the signed
+logical contract:
+
+```yaml
+evidenceProviders:
+  farmer-registry:
+    baseUrl: https://evidence.example.gov
+    trustBindingId: farmer-provider-reviewed-2026
+    tokenRef: secret:env/FARMER_EVIDENCE_TOKEN
+    trustedJwksRef: secret:env/FARMER_EVIDENCE_JWKS
+    revokedKeyIds: []
+```
+
+`caBundleRef` optionally supplies a private CA bundle through the same secret
+reference mechanism. The token, trusted JWKS and endpoint are operator bindings;
+the script cannot replace them. Review exact selector resolution and first-use
+subject binding with the provider. Two calls describe separate observations.
+Neither signed assertions nor continuity bindings independently prove that a
+provider resolved the correct source record.
+
+The host admits the action and existing targets before external work, then
+releases the PostgreSQL connection and evaluates Rhai once. A failed helper
+poisons the invocation even if Rhai catches its error. Successful effects and
+acquisitions are frozen before finalization. Finalization rechecks authority,
+conditions, constraints and evidence acceptance, then commits writes, audit,
+receipt and protected evidence-use material atomically. SQL retries reuse the
+frozen result; successful receipt replay calls no helper. Concurrent admitted
+attempts can each call the provider but only one application commits.
+
+A failed Evidence dependency returns the existing static HTTP 503 problem code
+and detail. When the failure identifies a known compiled capability, optional
+`fieldPath` names `/evidence/{alias}`. Unknown aliases omit that location. The
+location never contains selector values or provider response details.
+
+The operator command `bregctl evidence-retention erase-expired --runtime-config
+/absolute/runtime.yaml --before 2026-01-01T00:00:00Z` erases expired protected
+assertions and verification context using the configured migration role. The
+cutoff cannot be in the future. It reports only a count and keeps receipts
+replayable; runtime database credentials cannot delete retained evidence.
+Ordinary history erasure does not cover this separate retention scope.
+
+Eligibility remains an operation-level rule. Configure grants so CRUD, other
+actions and reviewed changes cannot bypass the intended registration procedure.
+Native database constraints still protect local stored invariants. Synthetic
+`evidenceCalls` mocks verify control flow, selectors, typed results and exact
+effects/refusals; real Evidence verification and PostgreSQL behavior require the
+separate integration checks.
+
+Invoke trial actions over `POST /v1/actions/{action}` with the existing `input`
+envelope and `Idempotency-Key`. The current Rust, Node and Python clients do not
+yet expose immediate-action invocation or typed governed-refusal handling; this
+trial does not add that SDK convenience surface.

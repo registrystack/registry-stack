@@ -441,6 +441,8 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let output = writer.text();
+    assert!(!output.contains("pattern-private-entity"));
+    assert!(!output.contains("pattern-private-field"));
     assert_forbidden_values_absent(&output);
     assert!(!output.contains("operational-log-token-canary"));
     assert!(!output.contains("/health"));
@@ -479,7 +481,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     .expect("request_id is a UUID");
 }
 
-fn startup_errors() -> [StartupError; 12] {
+fn startup_errors() -> [StartupError; 13] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -488,6 +490,10 @@ fn startup_errors() -> [StartupError; 12] {
         StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
+        StartupError::FieldPatternSyntax {
+            entity_id: "pattern-private-entity".to_owned(),
+            field_id: "pattern-private-field".to_owned(),
+        },
         StartupError::Audit,
         StartupError::Cursor,
         StartupError::Oidc,
@@ -560,6 +566,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::PackageRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection => "the Registry database connection was refused",
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
+        StartupError::FieldPatternSyntax { .. } => {
+            "a persisted field pattern has invalid PostgreSQL syntax"
+        }
         StartupError::Audit => "the Registry audit profile was refused",
         StartupError::Cursor => "the Registry cursor profile was refused",
         StartupError::Oidc => "the Registry OIDC key source was refused",
@@ -626,6 +635,8 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     });
 
     let output = writer.text();
+    assert!(!output.contains("pattern-private-entity"));
+    assert!(!output.contains("pattern-private-field"));
     assert_forbidden_values_absent(&output);
     let rendered = output
         .lines()

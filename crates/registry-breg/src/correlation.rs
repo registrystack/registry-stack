@@ -69,6 +69,8 @@ pub(crate) struct PublicProblem {
     detail: &'static str,
     code: &'static str,
     field_path: Option<String>,
+    declared_refusal: Option<(String, String)>,
+    declared_field: Option<(String, String)>,
 }
 
 /// Build one value-free public problem. The boundary replaces this provisional
@@ -90,6 +92,8 @@ pub(crate) fn problem_response(
         detail,
         code,
         field_path: None,
+        declared_refusal: None,
+        declared_field: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
         .detail(detail)
@@ -119,6 +123,8 @@ pub(crate) fn problem_response_with_field_path(
         detail,
         code,
         field_path: Some(field_path.clone()),
+        declared_refusal: None,
+        declared_field: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
         .detail(detail)
@@ -126,6 +132,59 @@ pub(crate) fn problem_response_with_field_path(
         .with_extra("fieldPath", Value::String(field_path))
         .into_response();
     response.extensions_mut().insert(problem);
+    response
+}
+
+/// Dependency locations come only from a matched compiled capability. Unknown
+/// aliases never enter this field, and JSON Pointer escaping preserves one segment.
+pub(crate) fn action_evidence_failure_response(capability: Option<String>) -> Response {
+    let status = StatusCode::SERVICE_UNAVAILABLE;
+    let code = "action.evidence_failed";
+    let detail = "The declared Evidence dependency could not be accepted.";
+    let path = capability
+        .map(|id| format!("/evidence/{}", id.replace('~', "~0").replace('/', "~1")))
+        .filter(|path| path.len() <= 256);
+    if let Some(path) = path {
+        problem_response_with_field_path(status, "Service Unavailable", detail, code, path)
+    } else {
+        problem_response(status, "Service Unavailable", detail, code)
+    }
+}
+
+/// Render only a verified, package-declared refusal. Script-supplied strings
+/// never reach this boundary; the evaluator resolves labels from the catalogue.
+pub(crate) fn action_refusal_response(
+    refusal: crate::action_handler::ActionHandlerRefusal,
+) -> Response {
+    let mut response = problem_response(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "Unprocessable Entity",
+        "The action was refused.",
+        "action.refused",
+    );
+    let problem = response
+        .extensions_mut()
+        .get_mut::<PublicProblem>()
+        .expect("problem response carries public metadata");
+    problem.field_path = refusal
+        .field
+        .map(|field| format!("/input/{}", field.replace('~', "~0").replace('/', "~1")));
+    problem.declared_refusal = Some((refusal.code, refusal.label));
+    response
+}
+
+pub(crate) fn field_pattern_response(entity: String, field: String) -> Response {
+    let mut response = problem_response(
+        StatusCode::CONFLICT,
+        "Conflict",
+        "The field does not conform to its declared storage pattern.",
+        "mutation.conflict",
+    );
+    response
+        .extensions_mut()
+        .get_mut::<PublicProblem>()
+        .expect("problem response carries public metadata")
+        .declared_field = Some((entity, field));
     response
 }
 
@@ -174,18 +233,23 @@ pub(crate) fn finish_response(
             code: problem.code,
             trace_id: correlation.trace_id().clone(),
         };
-        let body = match &problem.field_path {
-            Some(field_path) => {
-                let mut value =
-                    serde_json::to_value(&body).expect("ProblemBody serialization is infallible");
-                value
-                    .as_object_mut()
-                    .expect("ProblemBody serializes as an object")
-                    .insert("fieldPath".to_owned(), Value::String(field_path.clone()));
-                serde_json::to_vec(&value).expect("ProblemBody serialization is infallible")
-            }
-            None => serde_json::to_vec(&body).expect("ProblemBody serialization is infallible"),
-        };
+        let mut value =
+            serde_json::to_value(&body).expect("ProblemBody serialization is infallible");
+        let object = value
+            .as_object_mut()
+            .expect("ProblemBody serializes as an object");
+        if let Some(field_path) = &problem.field_path {
+            object.insert("fieldPath".to_owned(), Value::String(field_path.clone()));
+        }
+        if let Some((code, label)) = &problem.declared_refusal {
+            object.insert("refusalCode".to_owned(), Value::String(code.clone()));
+            object.insert("detail".to_owned(), Value::String(label.clone()));
+        }
+        if let Some((entity, field)) = &problem.declared_field {
+            object.insert("entityId".to_owned(), Value::String(entity.clone()));
+            object.insert("fieldId".to_owned(), Value::String(field.clone()));
+        }
+        let body = serde_json::to_vec(&value).expect("ProblemBody serialization is infallible");
         parts.headers.remove(CONTENT_LENGTH);
         parts.headers.insert(
             CONTENT_TYPE,

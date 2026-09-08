@@ -864,8 +864,11 @@ def classify(
         or bool(affected & RELAY_V2_PACKAGES)
         or any(path in RELAY_TUTORIAL_INPUTS for path in paths),
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
+        # The PostgreSQL lane starts the real Evidence service. This is an
+        # integration test edge, not a production runtime Cargo dependency.
         "breg_contracts": registry_record_cross_product
-        or bool(affected & BREG_PACKAGES),
+        or bool(affected & BREG_PACKAGES)
+        or "registry-evidence" in affected,
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

@@ -9,6 +9,7 @@ fixtures=(
   acceptance/asset-site-placement-change-requests
   acceptance/publicschema-household-change-requests
   acceptance/person-name-change-rhai
+  acceptance/person-registration-rhai
   fixtures/asset-registration-actions
   fixtures/household-contact-actions
 )
@@ -56,7 +57,7 @@ mkdir "$runtime_candidate"
     mkdir "$candidate"
     fixture="$repository_root/products/breg/$fixture_path"
     selectors=(openapi schemas manifest metadata sql)
-    if [[ "$fixture_path" == fixtures/* ]]; then
+    if [[ "$fixture_path" == fixtures/* || "$fixture_name" == person-registration-rhai ]]; then
       selectors+=(actions)
     fi
     for selector in "${selectors[@]}"; do

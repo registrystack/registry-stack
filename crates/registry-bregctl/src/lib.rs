@@ -37,6 +37,7 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+mod action_handler_test;
 mod apply_lifecycle;
 mod audit_lifecycle;
 mod data_lifecycle;
@@ -154,8 +155,32 @@ enum Command {
     Webhook(WebhookArgs),
     /// Inspect and erase eligible change-request retention detail.
     RequestRetention(RequestRetentionArgs),
+    /// Erase expired protected action Evidence using configured migration authority.
+    EvidenceRetention(EvidenceRetentionArgs),
     /// Verify, export, and prune the chained audit journal.
     Audit(AuditArgs),
+}
+
+#[derive(Debug, Args)]
+struct EvidenceRetentionArgs {
+    #[command(subcommand)]
+    command: EvidenceRetentionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum EvidenceRetentionCommand {
+    /// Delete expired assertion bytes and verification context; receipts remain replayable.
+    EraseExpired(EvidenceRetentionEraseArgs),
+}
+
+#[derive(Debug, Args)]
+struct EvidenceRetentionEraseArgs {
+    /// Absolute runtime configuration path containing the migration connection binding.
+    #[arg(long)]
+    runtime_config: PathBuf,
+    /// RFC 3339 expiry cutoff, no later than the current time.
+    #[arg(long)]
+    before: String,
 }
 
 #[derive(Debug, Args)]
@@ -208,7 +233,7 @@ enum ProjectCommand {
     Lock(ProjectLockArgs),
     /// Migrate the retired singular Manifest projection to the plural resource model.
     Migrate(ProjectMigrateArgs),
-    /// Run one captured Rhai request planner with bounded synthetic JSON.
+    /// Test a Rhai request planner or action handler with bounded synthetic JSON.
     PlannerTest(ProjectPlannerTestArgs),
 }
 
@@ -235,18 +260,36 @@ struct ProjectMigrateArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(ArgGroup::new("script_target").required(true).args(["entity", "action"])))]
 struct ProjectPlannerTestArgs {
     /// Base Registry Engine project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
 
-    /// Compiled change-request entity whose Rhai planner will run.
-    #[arg(long, value_name = "ENTITY")]
-    entity: String,
+    /// Compiled change-request entity whose Rhai planner will run; pair with --request.
+    #[arg(
+        long,
+        value_name = "ENTITY",
+        conflicts_with = "action",
+        requires = "request"
+    )]
+    entity: Option<String>,
 
-    /// Bounded strict JSON object containing synthetic request fields.
-    #[arg(long, value_name = "JSON_FILE")]
-    request: PathBuf,
+    /// Bounded strict JSON object containing synthetic request fields; requires --entity.
+    #[arg(long, value_name = "JSON_FILE", requires = "entity", conflicts_with_all = ["action", "input", "expect"])]
+    request: Option<PathBuf>,
+
+    /// Compiled immediate action whose Rhai handler will run; pair with --input.
+    #[arg(long, value_name = "ACTION", requires = "input")]
+    action: Option<String>,
+
+    /// Bounded strict JSON object using authored action input IDs, without an HTTP envelope; requires --action.
+    #[arg(long, value_name = "JSON_FILE", requires = "action", conflicts_with_all = ["entity", "request"])]
+    input: Option<PathBuf>,
+
+    /// With --action and --input, assert exact effects or refusal and optional ordered evidenceCalls mocks without printing values.
+    #[arg(long, value_name = "JSON_FILE", requires = "action", conflicts_with_all = ["entity", "request"])]
+    expect: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -912,9 +955,20 @@ struct PlannerTestSuccessReport {
     ok: bool,
     command: &'static str,
     compiled_revision: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     request_entity: String,
-    planner: PlannerTestIdentityReport,
-    disposition: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assertions_passed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    planner: Option<PlannerTestIdentityReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handler: Option<PlannerTestIdentityReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disposition: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     queue_reason: Option<PlannerTestQueueReasonReport>,
     effects: Vec<PlannerTestEffectReport>,
@@ -1060,6 +1114,8 @@ enum SuggestedAction {
     PrepareHistoryRebaselineRequest,
     ReviewRetainedHistory,
     CorrectPlannerTestInput,
+    CorrectActionHandler,
+    RunSchemaTest,
 }
 
 #[derive(Serialize)]
@@ -1721,6 +1777,35 @@ where
                     Ok(report) => write_webhook_replay_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
+            };
+        }
+        Command::EvidenceRetention(args) => {
+            let EvidenceRetentionCommand::EraseExpired(args) = args.command;
+            let outcome = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| ())
+                .and_then(|runtime| {
+                    runtime
+                        .block_on(registry_breg::action_evidence_maintenance::erase_expired(
+                            &args.runtime_config,
+                            &args.before,
+                        ))
+                        .map_err(|_| ())
+                });
+            return match outcome {
+                Ok(erased) => {
+                    let result = if format == OutputFormat::Json {
+                        serde_json::to_writer_pretty(&mut *stdout, &json!({"ok":true,"command":"evidence-retention erase-expired","erased":erased}))
+                            .map_err(io::Error::other).and_then(|()| writeln!(stdout))
+                    } else {
+                        render_report("Erased expired action Evidence.", &[("erased", erased.to_string())], stdout)
+                    };
+                    write_result(result, stderr)
+                }
+                Err(()) => write_failure(&source_failure("evidence-retention erase-expired",
+                    diagnostic("evidence_retention.unavailable", "evidenceRetention", "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff."),
+                    DiagnosticArtifact::RequestRetentionOperation, SuggestedAction::VerifyRequestRetentionOperation), format, stdout, stderr),
             };
         }
         Command::RequestRetention(args) => {
@@ -3000,6 +3085,21 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
 
 fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
     let error = match error {
+        TestLifecycleError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        } => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic("field.pattern.syntax_invalid", &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                        "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test"),
+                    DiagnosticArtifact::SchemaTestCandidate,
+                    SuggestedAction::CorrectSchemaTestCandidate,
+                )],
+            };
+        }
         TestLifecycleError::CandidateBinding { path } => {
             return candidate_failure(
                 "test",
@@ -3091,6 +3191,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::CorrectPackageBuild,
         ),
+        TestLifecycleError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
         TestLifecycleError::Database => (
             "test.database.unavailable",
             "database",
@@ -3206,6 +3307,36 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             SuggestedAction::VerifyMigrationAuthority,
         ),
         ApplyLifecycleError::Apply(error) => match error {
+            registry_breg::migration::MigrationError::FieldPatternSyntax {
+                entity_id,
+                field_id,
+            } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "field.pattern.syntax_invalid",
+                        &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                        "PostgreSQL rejected the native pattern syntax. The exact target remains pinned in maintenance; restore the pre-activation backup before correcting the PostgreSQL ARE syntax, schema-testing, and packaging the correction. Do not retry changed package bytes as the pinned target.",
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::ReconcileFailedMigration,
+                );
+            }
+            registry_breg::migration::MigrationError::FieldPatternExistingRows {
+                entity_id,
+                field_id,
+            } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "field.pattern.existing_rows_invalid",
+                        &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                        "Existing stored values do not satisfy the native pattern. The exact target remains pinned in maintenance; repair the violating values through operator recovery and retry the exact pinned target.",
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::ReconcileFailedMigration,
+                );
+            }
             registry_breg::migration::MigrationError::PackageBinding
             | registry_breg::migration::MigrationError::EmptyPlan => (
                 "apply.package.refused",
@@ -3812,12 +3943,25 @@ fn init_next_steps(destination: &Path) -> Vec<String> {
 
 fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, FailureReport> {
     let compiled = compile(project_path, profile, "check")?;
+    let mut findings = compiler_findings(&compiled);
+    findings.extend(compiled.entities().values().flat_map(|entity| {
+        entity.fields.values().filter_map(move |field| {
+            field.pattern.as_ref().map(|_| ToolDiagnostic {
+                severity: DiagnosticSeverity::Finding,
+                code: "field.pattern.unverified_offline".to_owned(),
+                artifact: DiagnosticArtifact::RegistryProject,
+                path: format!("entities[{}].fields[{}].pattern", entity.id, field.id),
+                message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
+                suggested_action: SuggestedAction::RunSchemaTest,
+            })
+        })
+    }));
     Ok(SuccessReport {
         ok: true,
         command: "check",
         profile,
         revision: compiled.revision().to_owned(),
-        findings: compiler_findings(&compiled),
+        findings,
         artifacts: Vec::new(),
         explanation: None,
         next_steps: Vec::new(),
@@ -4244,7 +4388,24 @@ fn generate(
 fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessReport, FailureReport> {
     const COMMAND: &str = "project planner-test";
     let compiled = compile(&args.project, ProfileArg::Authoring, COMMAND)?;
-    let entity = compiled.entities().get(&args.entity).ok_or_else(|| {
+    if args.action.is_some() {
+        return action_handler_test::run(args, &compiled);
+    }
+    let entity_id = args.entity.as_deref().ok_or_else(|| {
+        planner_test_failure(
+            "planner_test.entity.required",
+            "entity",
+            "select a request entity or action",
+        )
+    })?;
+    let request_path = args.request.as_ref().ok_or_else(|| {
+        planner_test_failure(
+            "planner_test.request.required",
+            "request",
+            "provide a synthetic request file",
+        )
+    })?;
+    let entity = compiled.entities().get(entity_id).ok_or_else(|| {
         planner_test_failure(
             "planner_test.entity.not_found",
             "entity",
@@ -4267,7 +4428,7 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
     })?;
 
     let input_bytes = read_bounded_regular_file(
-        &args.request,
+        request_path,
         "planner_test.request.unavailable",
         MAX_PLANNER_TEST_REQUEST_BYTES,
     )
@@ -4417,12 +4578,16 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
         command: COMMAND,
         compiled_revision: compiled.revision().to_owned(),
         request_entity: entity.id.clone(),
-        planner: PlannerTestIdentityReport {
+        action: None,
+        refusal: None,
+        assertions_passed: None,
+        planner: Some(PlannerTestIdentityReport {
             kind: "rhai",
             abi: planner.abi.clone(),
             script_sha256: planner.script_sha256.clone(),
-        },
-        disposition,
+        }),
+        handler: None,
+        disposition: Some(disposition),
         queue_reason,
         counts: PlannerTestCountReport {
             effects: effects.len(),
@@ -4924,10 +5089,67 @@ fn load_project_planner_asset_files(
                 .change_request
                 .as_ref()
                 .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.clone())
+                .map(|planner| {
+                    (
+                        planner.script.clone(),
+                        format!("entities[{}].changeRequest.planner.script", entity.id),
+                    )
+                })
         })
-        .collect::<BTreeSet<_>>();
-    load_planner_asset_files(project_directory, "registry.yaml", paths)
+        .chain(project.actions.iter().filter_map(|action| {
+            action.handler.as_ref().map(|handler| {
+                (
+                    handler.script.clone(),
+                    format!("actions[{}].handler.script", action.id),
+                )
+            })
+        }))
+        .collect::<BTreeMap<_, _>>();
+    let mut assets = load_planner_asset_files(project_directory, paths)?;
+    for provider in &project.evidence_providers {
+        let location = format!("evidenceProviders[{}].contracts", provider.id);
+        if !registry_breg::action_evidence_contracts::valid_contract_path(&provider.contracts) {
+            return Err(diagnostic(
+                "source.evidence_contract.path_unsafe",
+                &location,
+                "Evidence contracts require normalized project-relative JSON paths",
+            ));
+        }
+        let entry = open_asset_entry(
+            project_directory,
+            &provider.contracts,
+            || {
+                diagnostic(
+                    "source.evidence_contract.path_unsafe",
+                    &location,
+                    "Evidence contracts require normalized project-relative JSON paths",
+                )
+            },
+            |error| {
+                path_diagnostic(
+                    error,
+                    "source.evidence_contract.missing",
+                    &location,
+                    "the required Evidence contract is unavailable",
+                    "Evidence contracts must be regular files without symbolic links",
+                )
+            },
+        )?;
+        let bytes = read_bounded_source_entry(
+            &entry,
+            "source.evidence_contract.missing",
+            &location,
+            registry_breg::action_evidence_contracts::MAX_EVIDENCE_CONTRACT_BYTES as u64,
+        )?;
+        if !assets.iter().any(|asset| asset.path == provider.contracts) {
+            assets.push(CapturedModuleAssetSource {
+                path: provider.contracts.clone(),
+                bytes,
+            });
+        }
+    }
+    assets.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(assets)
 }
 
 /// Read a module's declared assets through the module directory descriptor the
@@ -5006,21 +5228,41 @@ fn load_module_asset_files(
                 .change_request
                 .as_ref()
                 .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.clone())
+                .map(|planner| {
+                    (
+                        planner.script.clone(),
+                        format!(
+                            "modules[{module_id}].entities[{}].changeRequest.planner.script",
+                            entity.id
+                        ),
+                    )
+                })
         })
         .chain(module.extend_entities.iter().filter_map(|extension| {
             extension
                 .change_request
                 .as_ref()
                 .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.clone())
+                .map(|planner| {
+                    (
+                        planner.script.clone(),
+                        format!(
+                            "modules[{module_id}].extendEntities[{}].changeRequest.planner.script",
+                            extension.entity
+                        ),
+                    )
+                })
         }))
-        .collect::<BTreeSet<_>>();
-    assets.extend(load_planner_asset_files(
-        module_directory,
-        &format!("modules/{module_id}/module.yaml"),
-        planner_paths,
-    )?);
+        .chain(module.actions.iter().filter_map(|action| {
+            action.handler.as_ref().map(|handler| {
+                (
+                    handler.script.clone(),
+                    format!("modules[{module_id}].actions[{}].handler.script", action.id),
+                )
+            })
+        }))
+        .collect::<BTreeMap<_, _>>();
+    assets.extend(load_planner_asset_files(module_directory, planner_paths)?);
     assets.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(assets)
 }
@@ -5030,38 +5272,49 @@ fn load_module_asset_files(
 /// from the tree the declaring file came from.
 fn load_planner_asset_files(
     origin: &SafeDir,
-    declaring_path: &str,
-    paths: BTreeSet<String>,
+    paths: BTreeMap<String, String>,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
     paths
         .into_iter()
-        .map(|path| {
-            validate_rhai_planner_asset_path(declaring_path, &path)?;
+        .map(|(path, declaring_path)| {
+            validate_rhai_planner_asset_path(&declaring_path, &path)?;
             let entry = open_asset_entry(
                 origin,
                 &path,
-                || planner_asset_path_diagnostic(declaring_path),
+                || planner_asset_path_diagnostic(&declaring_path),
                 |error| {
                     path_diagnostic(
                         error,
                         "source.planner_asset.missing",
-                        "project",
+                        &declaring_path,
                         "the required authoring source is not available",
                         "authoring sources must be regular files and must not be symbolic links",
                     )
                 },
-            )?;
+            )
+            .map_err(|mut error| {
+                error.message.push_str(&format!(
+                    "; referenced Rhai script: {path:?}, relative to its declaring project or module"
+                ));
+                error
+            })?;
             let bytes = read_bounded_source_entry(
                 &entry,
                 "source.planner_asset.missing",
-                "project",
+                &declaring_path,
                 MAX_RHAI_PLANNER_SOURCE_BYTES,
-            )?;
+            )
+            .map_err(|mut error| {
+                error.message.push_str(&format!(
+                    "; referenced Rhai script: {path:?}, relative to its declaring project or module"
+                ));
+                error
+            })?;
             if bytes.is_empty() {
                 return Err(diagnostic(
                     "source.planner_asset.bounds",
-                    declaring_path,
-                    "Rhai planner scripts must be non-empty bounded regular files",
+                    &declaring_path,
+                    &format!("referenced Rhai script {path:?} must be a non-empty bounded regular file"),
                 ));
             }
             Ok(CapturedModuleAssetSource { path, bytes })
@@ -6767,7 +7020,7 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     })
                 })
                 .collect::<Vec<_>>();
-            json!({
+            let mut summary = json!({
                 "id": action.id,
                 "sourceModule": action.source_module,
                 "contractFingerprint": action.contract_fingerprint,
@@ -6784,6 +7037,7 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                                 "kind": "set",
                                 "target": field_summary_optional(target_entity, field),
                                 "value": match value {
+                                    registry_breg::model::CompiledActionValue::Literal { .. } => json!({"kind": "computed"}),
                                     registry_breg::model::CompiledActionValue::FromInput { input } => {
                                         json!({"kind": "from_input", "input": action_input_identity(action, input)})
                                     }
@@ -6852,7 +7106,57 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "maximumFieldMutations": action.maximum_field_mutations,
                     "maximumSnapshotBytes": action.maximum_snapshot_bytes,
                 }
-            })
+            });
+            if let Some(handler) = &action.handler {
+                summary["handler"] = json!({
+                    "kind": "rhai", "abi": handler.abi,
+                    "entrypoint": "handle", "context": "ctx.inputs", "inputKeys": "authored_ids",
+                    "scriptSha256": handler.script_sha256, "rhaiVersion": handler.rhai_version,
+                    "limits": handler.limits,
+                    "possibleWrites": handler.writes,
+                    "refusals": handler.refusals.iter().map(|(code,label)| json!({"code":code,"label":label})).collect::<Vec<_>>(),
+                    "outcomes": ["effects", "refusal"],
+                    "omittedSlots": "no_write_or_result; all_declared_existing_targets_still_require_admission_and_conditions",
+                    "evaluation": "after_locked_receipt_recovery_before_target_locks",
+                    "reads": "supplied_inputs_only",
+                    "replay": "recover_committed_result_without_handler_evaluation",
+                });
+            }
+            if action.handler.as_ref().is_some_and(|handler| handler.abi == registry_breg::contract::ACTION_HANDLER_ABI_V2) {
+                summary["evidence"] = json!({
+                    "capabilities": action.evidence,
+                    "maximumCalls": action.evidence.len(),
+                    "maximumCallsPerCapability": 1,
+                    "maximumConcurrentEvaluations": 8,
+                    "maximumRetainedBytes": 1_048_576,
+                    "maximumResponseBytes": 262_144,
+                    "retentionSeconds": 86_400,
+                    "maximumAssertionLifetimeSeconds": 300,
+                    "clockSkewSeconds": 0,
+                    "maximumObservationAgeSeconds": 300,
+                    "defaultActionDeadlineMilliseconds": 10_000,
+                    "deadline": "bounded_by_operator_http_request_timeout_and_action_timeout",
+                    "invocation": "optional_explicit_helper_calls; omission_makes_no_remote_request",
+                    "disclosure": "remote_requirement_disclosure_is_not_reduced_by_output_selection",
+                    "lifecycle": "outside_postgres; frozen_transcript_reused_for_sql_retries; receipt_replay_has_zero_calls"
+                });
+                summary["handler"]["evaluation"] = json!("outside_postgres_after_admission_and_receipt_preflight");
+            }
+            if !action.requires.is_empty() {
+                summary["requires"] = json!(action.requires.iter().map(|requirement| {
+                    json!({
+                        "input": action_input_identity(action, &requirement.input),
+                        "entity": requirement.entity_id,
+                        "field": field_summary_optional(
+                            compiled.entities().get(&requirement.entity_id),
+                            &requirement.field,
+                        ),
+                        "equals": requirement.equals,
+                        "evaluated": "before_effects_under_target_lock",
+                    })
+                }).collect::<Vec<_>>());
+            }
+            summary
         })
         .collect::<Vec<_>>();
     serde_json::to_value(json!({ "actions": actions }))
@@ -8050,22 +8354,46 @@ fn write_planner_test_success(
             .and_then(|()| writeln!(stdout))
     } else {
         let mut lines = report::Lines::new();
-        lines.lead(&format!(
-            "Ran the planner. Disposition {}, {}.",
-            report.disposition,
-            report::counted(report.effects.len(), "effect")
-        ));
-        let mut pairs = vec![
-            ("compiled revision", report.compiled_revision.clone()),
-            ("request entity", report.request_entity.clone()),
-            ("planner kind", report.planner.kind.to_owned()),
-            ("planner ABI", report.planner.abi.clone()),
-            (
-                "planner script SHA-256",
-                report.planner.script_sha256.clone(),
-            ),
-            ("disposition", report.disposition.to_owned()),
-        ];
+        let mut pairs = vec![("compiled revision", report.compiled_revision.clone())];
+        if report.action.is_some() {
+            lines.lead(&format!(
+                "Ran the action handler, {}.",
+                report::counted(report.effects.len(), "effect")
+            ));
+        } else {
+            lines.lead(&format!(
+                "Ran the planner. Disposition {}, {}.",
+                report.disposition.unwrap_or("effects"),
+                report::counted(report.effects.len(), "effect")
+            ));
+            pairs.push(("request entity", report.request_entity.clone()));
+            if let Some(disposition) = report.disposition {
+                pairs.push(("disposition", disposition.to_owned()));
+            }
+        }
+        if let Some(identity) = report.handler.as_ref().or(report.planner.as_ref()) {
+            pairs.push(("script ABI", identity.abi.clone()));
+            pairs.push(("script SHA-256", identity.script_sha256.clone()));
+        }
+        if let Some(action) = &report.action {
+            pairs.push(("action", action.clone()));
+        }
+        if report.assertions_passed == Some(true) {
+            pairs.push(("exact assertions", "passed".into()));
+        }
+        if let Some(refusal) = &report.refusal {
+            pairs.push((
+                "refusal",
+                format!(
+                    "{} ({})",
+                    refusal["code"].as_str().unwrap_or(""),
+                    refusal["label"].as_str().unwrap_or("")
+                ),
+            ));
+            if let Some(field) = refusal.get("field").and_then(Value::as_str) {
+                pairs.push(("refusal input", field.to_owned()));
+            }
+        }
         if let Some(reason) = &report.queue_reason {
             pairs.push((
                 "queue reason",
@@ -9485,8 +9813,10 @@ mod tests {
         let origin = SafeDir::resolve(&directory.path).expect("the test directory resolves");
         let captured = load_planner_asset_files(
             &origin,
-            "registry.yaml",
-            BTreeSet::from(["planners/request.rhai".to_owned()]),
+            BTreeMap::from([(
+                "planners/request.rhai".to_owned(),
+                "registry.yaml".to_owned(),
+            )]),
         )
         .expect("safe project-relative planner is captured");
         assert_eq!(captured[0].path, "planners/request.rhai");
@@ -9513,8 +9843,10 @@ mod tests {
         .unwrap();
         let oversized = load_planner_asset_files(
             &origin,
-            "registry.yaml",
-            BTreeSet::from(["planners/oversized.rhai".to_owned()]),
+            BTreeMap::from([(
+                "planners/oversized.rhai".to_owned(),
+                "registry.yaml".to_owned(),
+            )]),
         )
         .unwrap_err();
         assert_eq!(oversized.code, "source.file.bounds");
@@ -9578,8 +9910,8 @@ mod tests {
             panic!("planner-test command parsed");
         };
         assert_eq!(args.project, PathBuf::from("project"));
-        assert_eq!(args.entity, "request");
-        assert_eq!(args.request, PathBuf::from("request.json"));
+        assert_eq!(args.entity.as_deref(), Some("request"));
+        assert_eq!(args.request, Some(PathBuf::from("request.json")));
         assert!(Cli::try_parse_from([
             "bregctl",
             "project",
@@ -9589,6 +9921,45 @@ mod tests {
             "request",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn v2_without_capabilities_explains_external_lifecycle_and_zero_call_ceiling() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/person-registration-rhai");
+        let mut project = registry_breg::contract::parse_project_yaml(
+            &fs::read(root.join("registry.yaml")).unwrap(),
+        )
+        .unwrap();
+        let assets = project
+            .actions
+            .iter_mut()
+            .map(|action| {
+                let handler = action.handler.as_mut().unwrap();
+                handler.abi = registry_breg::contract::ACTION_HANDLER_ABI_V2.to_owned();
+                registry_breg::contract::ModuleAssetSource {
+                    module: None,
+                    path: handler.script.clone(),
+                    bytes: fs::read(root.join(&handler.script)).unwrap(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let compiled = registry_breg::compiler::compile_project_with_assets(
+            &project,
+            &[],
+            &assets,
+            registry_breg::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let explanation = explain_actions(&compiled).unwrap();
+        for action in explanation["actions"].as_array().unwrap() {
+            assert_eq!(action["evidence"]["maximumCalls"], 0);
+            assert_eq!(action["evidence"]["maximumConcurrentEvaluations"], 8);
+            assert_eq!(
+                action["handler"]["evaluation"],
+                "outside_postgres_after_admission_and_receipt_preflight"
+            );
+        }
     }
 
     #[test]
@@ -9752,8 +10123,11 @@ mod tests {
         .unwrap();
         let dynamic = match planner_test(&ProjectPlannerTestArgs {
             project: dynamic_project,
-            entity: "person-name-change-request".to_owned(),
-            request: request_path,
+            entity: Some("person-name-change-request".to_owned()),
+            request: Some(request_path),
+            action: None,
+            input: None,
+            expect: None,
         }) {
             Ok(report) => report,
             Err(failure) => panic!(
@@ -9837,8 +10211,11 @@ mod tests {
     ) {
         let failure = planner_test(&ProjectPlannerTestArgs {
             project: project.to_owned(),
-            entity: entity.to_owned(),
-            request: request.to_owned(),
+            entity: Some(entity.to_owned()),
+            request: Some(request.to_owned()),
+            action: None,
+            input: None,
+            expect: None,
         })
         .expect_err("planner test is refused");
         assert_eq!(failure.diagnostics.len(), 1);
@@ -10133,6 +10510,7 @@ mod tests {
                 "data",
                 "webhook",
                 "request-retention",
+                "evidence-retention",
                 "audit"
             ]
         );
@@ -11008,4 +11386,67 @@ extendEntities:
                 .expect("the entry that was stat'ed is read");
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recovery() {
+    use registry_breg::migration::MigrationError;
+    for (error, code, repair) in [
+        (
+            MigrationError::FieldPatternSyntax {
+                entity_id: "person".to_owned(),
+                field_id: "identifier".to_owned(),
+            },
+            "field.pattern.syntax_invalid",
+            "restore the pre-activation backup",
+        ),
+        (
+            MigrationError::FieldPatternExistingRows {
+                entity_id: "person".to_owned(),
+                field_id: "identifier".to_owned(),
+            },
+            "field.pattern.existing_rows_invalid",
+            "retry the exact pinned target",
+        ),
+    ] {
+        let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(error));
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(
+            diagnostic.path,
+            "entities[person].fields[identifier].pattern"
+        );
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::ReconcileFailedMigration
+        );
+        assert!(diagnostic.message.contains("pinned in maintenance"));
+        assert!(diagnostic.message.contains(repair));
+        assert!(!diagnostic.message.contains("registry_data"));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn native_pattern_schema_test_diagnostic_identifies_only_the_authored_field() {
+    let report = test_lifecycle_failure(TestLifecycleError::FieldPatternSyntax {
+        entity_id: "person".to_owned(),
+        field_id: "identifier".to_owned(),
+    });
+    assert_eq!(report.diagnostics.len(), 1);
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "field.pattern.syntax_invalid");
+    assert_eq!(
+        diagnostic.path,
+        "entities[person].fields[identifier].pattern"
+    );
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::SchemaTestCandidate);
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::CorrectSchemaTestCandidate
+    );
+    assert!(!diagnostic.message.contains("registry_data"));
+    assert!(diagnostic.message.contains("PostgreSQL ARE syntax"));
 }

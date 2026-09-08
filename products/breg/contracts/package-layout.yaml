@@ -21,6 +21,7 @@ entries:
   - {path: manifest/registry-manifest.json, role: lossy-manifest-projection, required: false}
   - {path: manifest/dcat.jsonld, role: dcat-catalog-projection, required: false}
   - {path: source/modules/<module-id>/<relative-sql-path>, role: source-module-asset, required: false}
+  - {path: source/project/<relative-json-path>, role: source-project-evidence-contract, required: false}
   - {path: tests/journeys.yaml, role: fixture-journeys, required: true}
   - {path: signatures, role: package-signatures, required: false}
 

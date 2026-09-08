@@ -83,6 +83,8 @@ impl std::fmt::Display for BRegPlanRefusal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BRegProblemCode {
+    ActionEvidenceFailed,
+    ActionHandlerFailed,
     AuthenticationRefused,
     IdempotencyConflict,
     LookupUnresolved,
@@ -102,7 +104,9 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 24] = [
+        Self::ActionEvidenceFailed,
+        Self::ActionHandlerFailed,
         Self::AuthenticationRefused,
         Self::IdempotencyConflict,
         Self::LookupUnresolved,
@@ -130,6 +134,8 @@ impl BRegProblemCode {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
+            Self::ActionEvidenceFailed => "action.evidence_failed",
+            Self::ActionHandlerFailed => "action.handler_failed",
             Self::AuthenticationRefused => "authentication.refused",
             Self::IdempotencyConflict => "idempotency.conflict",
             Self::LookupUnresolved => "lookup.unresolved",
@@ -156,6 +162,8 @@ impl BRegProblemCode {
             | Self::QueryInvalid
             | Self::RequestInvalid
             | Self::RequestPlanRefused(_) => 400,
+            Self::ActionEvidenceFailed => 503,
+            Self::ActionHandlerFailed => 500,
             Self::AuthenticationRefused => 401,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::IdempotencyConflict | Self::MutationConflict => 409,
@@ -176,6 +184,7 @@ impl BRegProblemCode {
             412 => "Precondition Failed",
             415 => "Unsupported Media Type",
             428 => "Precondition Required",
+            500 => "Internal Server Error",
             503 => "Service Unavailable",
             504 => "Gateway Timeout",
             _ => "Request failed",
@@ -184,6 +193,8 @@ impl BRegProblemCode {
 
     pub(crate) const fn detail(self) -> &'static str {
         match self {
+            Self::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
+            Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",

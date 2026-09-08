@@ -8,6 +8,17 @@ pub mod access_preview;
 pub mod authority;
 
 #[cfg(feature = "runtime")]
+pub mod action_evidence;
+#[cfg(feature = "runtime")]
+pub mod action_evidence_client;
+#[cfg(feature = "runtime")]
+pub mod action_evidence_config;
+pub mod action_evidence_contracts;
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub mod action_evidence_maintenance;
+pub mod action_evidence_validation;
+pub mod action_handler;
+#[cfg(feature = "runtime")]
 pub mod api;
 pub mod artifacts;
 #[cfg(feature = "runtime")]

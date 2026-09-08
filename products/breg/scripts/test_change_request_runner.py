@@ -13,6 +13,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_DIR.parents[2]
 RUNNER = SCRIPT_DIR / "test-change-request-examples.sh"
+IMMEDIATE_RUNNER = SCRIPT_DIR / "test-immediate-action-examples.sh"
 
 _FAILING_STUB = """#!/usr/bin/env bash
 printf '%s\\n' "{tool} must not run in this test" >&2
@@ -79,11 +80,93 @@ class ChangeRequestRunnerInstalledModeTests(unittest.TestCase):
             self.assertNotIn(f"{tool} must not run in this test", result.stderr)
         self.assertEqual(before_temp_directories, after_temp_directories)
 
+    def test_immediate_mode_accepts_rhai_project_before_database_preflight(self) -> None:
+        environment = dict(os.environ)
+        environment.pop("BREG_TEST_DATABASE_URL", None)
+        environment.pop("BREG_TEST_TLS_CA_PEM_PATH", None)
+        result = subprocess.run(
+            ["bash", str(RUNNER), "--mode", "immediate-actions", "--rhai-project",
+             str(REPOSITORY_ROOT / "products/breg/acceptance/person-registration-rhai")],
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("BREG_TEST_DATABASE_URL is required.", result.stderr)
+        self.assertNotIn("usage:", result.stderr)
+
+    def test_rhai_fixture_defaults_and_override_reach_the_selected_runner(self) -> None:
+        # The trusted env hook runs after option parsing and fixture selection,
+        # before service preflight. Stop there to observe the selected fixture
+        # without starting PostgreSQL or creating runner resources.
+        cases = (
+            (RUNNER, [], "change-request", "acceptance/person-name-change-rhai"),
+            (IMMEDIATE_RUNNER, [], "immediate-actions", "acceptance/person-registration-rhai"),
+            (IMMEDIATE_RUNNER, ["--rhai-project", "/private/tmp/edited-person-project"],
+             "immediate-actions", None),
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            env_file = Path(work_dir) / "selected-fixtures.env"
+            env_file.write_text(
+                'printf "%s\\n" "$mode" "$rhai_project"\nexit 0\n',
+                encoding="utf-8",
+            )
+            for runner, arguments, expected_mode, fixture in cases:
+                with self.subTest(runner=runner.name, arguments=arguments):
+                    result = subprocess.run(
+                        ["bash", str(runner), *arguments, "--env", str(env_file)],
+                        cwd=work_dir,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    expected_project = (
+                        str(REPOSITORY_ROOT / "products/breg" / fixture)
+                        if fixture is not None else "/private/tmp/edited-person-project"
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), [expected_mode, expected_project])
+
     def test_usage_and_help_document_installed_mode(self) -> None:
         script = RUNNER.read_text(encoding="utf-8")
         self.assertIn("--installed", script)
         self.assertIn("breg-install.sh provides breg and bregctl", script)
         self.assertIn("== Using installed breg and bregctl from PATH", script)
+
+    def test_source_binaries_resolve_the_selected_cargo_target_directory(self) -> None:
+        cases = (
+            (None, REPOSITORY_ROOT / "target"),
+            ("/private/tmp/breg-test-target", Path("/private/tmp/breg-test-target")),
+            ("build/breg-target", REPOSITORY_ROOT / "build/breg-target"),
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            env_file = Path(work_dir) / "binary-selection.env"
+            env_file.write_text(
+                'trap \'printf "%s\\n" "$breg" "$bregctl"\' EXIT\n',
+                encoding="utf-8",
+            )
+            for configured, expected in cases:
+                with self.subTest(target_directory=configured):
+                    environment = dict(os.environ)
+                    environment.pop("BREG_TEST_DATABASE_URL", None)
+                    environment.pop("CARGO_TARGET_DIR", None)
+                    if configured is not None:
+                        environment["CARGO_TARGET_DIR"] = configured
+                    result = subprocess.run(
+                        ["bash", str(IMMEDIATE_RUNNER), "--env", str(env_file)],
+                        cwd=work_dir,
+                        env=environment,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("BREG_TEST_DATABASE_URL is required.", result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), [
+                        str(expected / "debug/breg"), str(expected / "debug/bregctl"),
+                    ])
 
 
 if __name__ == "__main__":

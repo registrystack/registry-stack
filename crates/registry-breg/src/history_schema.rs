@@ -682,6 +682,7 @@ mod tests {
                 (
                     field.logical.id.clone(),
                     crate::model::CompiledField {
+                        pattern: None,
                         id: field.logical.id.clone(),
                         field_type: field.logical.field_type.clone(),
                         required: field.required,
@@ -774,6 +775,7 @@ mod tests {
         entity.fields.insert(
             "note".to_owned(),
             crate::model::CompiledField {
+                pattern: None,
                 id: "note".to_owned(),
                 field_type: note.logical.field_type.clone(),
                 required: is_required,
@@ -844,6 +846,7 @@ mod tests {
         active.fields.insert(
             "note".to_owned(),
             crate::model::CompiledField {
+                pattern: None,
                 id: "note".to_owned(),
                 field_type: extra.logical.field_type.clone(),
                 required: false,

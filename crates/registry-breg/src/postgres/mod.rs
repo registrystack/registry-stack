@@ -64,6 +64,7 @@ pub use roles::{
     spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
     verify_runtime_role, SqlIdentifier,
 };
+pub(crate) use schema::compiled_pattern_field;
 pub use schema::install_compiled_schema;
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
@@ -170,6 +171,11 @@ pub(crate) mod stored_bytes_probe {
 pub enum PostgresKernelError {
     #[error("invalid PostgreSQL configuration: {0}")]
     Configuration(&'static str),
+    /// Only authored identifiers are retained; the expression and database error are discarded.
+    #[error("a persisted field pattern has invalid PostgreSQL syntax")]
+    FieldPatternSyntax { entity_id: String, field_id: String },
+    #[error("existing rows do not conform to a persisted field pattern")]
+    FieldPatternExistingRows { entity_id: String, field_id: String },
     #[error("PostgreSQL connection failed")]
     Connection,
     #[error("PostgreSQL pool operation failed")]

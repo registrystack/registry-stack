@@ -1,0 +1,18 @@
+{
+  "evidenceCalls": [
+    {
+      "capability": "farmer-status",
+      "selectors": {
+        "farmer": {
+          "farmer-number": "TH-00042"
+        }
+      },
+      "response": {
+        "active": false
+      }
+    }
+  ],
+  "refusal": {
+    "code": "farmer-inactive"
+  }
+}

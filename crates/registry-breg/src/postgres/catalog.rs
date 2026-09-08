@@ -165,6 +165,10 @@ impl ExpectedManagedCatalog {
                 &["INSERT", "SELECT"][..],
             ),
             (
+                "registry_internal.registry_action_evidence_uses",
+                &["INSERT"][..],
+            ),
+            (
                 "registry_internal.registry_immediate_action_applications",
                 &["INSERT", "SELECT"][..],
             ),

@@ -27,7 +27,7 @@ RUNNER = SCRIPT_DIR / "test-postgres.sh"
 
 
 class PostgresRunnerTests(unittest.TestCase):
-    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False):
+    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             log = root / "cargo.jsonl"
@@ -40,12 +40,36 @@ class PostgresRunnerTests(unittest.TestCase):
                 "sys.exit(17 if os.environ.get('BREG_RUNNER_TEST_FAIL') == '1' else 0)\n",
                 encoding="utf-8",
             )
+            cargo.write_text(cargo.read_text().replace(
+                "sys.exit(17 if", "if sys.argv[1] == 'build':\n"
+                "    if os.environ.get('BREG_RUNNER_TEST_FAIL_BUILD') == '1': sys.exit(19)\n"
+                "    print(json.dumps({'reason': 'compiler-artifact', 'target': {'name': 'evidence'}, 'executable': os.environ['BREG_RUNNER_TEST_BINARY']}))\n"
+                "if '--test' in sys.argv and 'postgres_action_evidence' in sys.argv:\n"
+                "    assert os.environ.get('BREG_TEST_EVIDENCE_BINARY') == os.environ['BREG_RUNNER_TEST_BINARY']\n"
+                "    assert os.environ.get('BREG_RUNNER_TEST_PYYAML') == '1'\n"
+                "sys.exit(17 if"
+            ))
             cargo.chmod(0o755)
+            evidence = root / "configured target with spaces" / "debug" / "evidence"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text("#!/bin/sh\nexit 0\n")
+            evidence.chmod(0o755)
+            uv = root / "uv"
+            uv.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os, sys\n"
+                "assert sys.argv[1:5] == ['run', '--no-project', '--with', 'PyYAML==6.0.2']\n"
+                "os.environ['BREG_RUNNER_TEST_PYYAML'] = '1'\n"
+                "os.execvp(sys.argv[5], sys.argv[5:])\n"
+            )
+            uv.chmod(0o755)
             environment = os.environ.copy()
             environment.update(
                 PATH=f"{root}{os.pathsep}{environment['PATH']}",
                 BREG_RUNNER_TEST_LOG=str(log),
+                BREG_RUNNER_TEST_BINARY=str(evidence),
                 BREG_RUNNER_TEST_FAIL="1" if fail else "0",
+                BREG_RUNNER_TEST_FAIL_BUILD="1" if fail_build else "0",
             )
             environment.pop("BREG_TEST_DATABASE_URL", None)
             if database:
@@ -60,6 +84,9 @@ class PostgresRunnerTests(unittest.TestCase):
     def inventory(self, calls):
         commands = []
         for call in calls:
+            if call[0] == "build":
+                self.assertEqual(["build", "--locked", "-p", "registry-evidence", "--bin", "evidence", "--message-format=json"], call)
+                continue
             self.assertEqual(["test", "--locked", "-p", "registry-breg", "--features"], call[:5])
             targets = call[6:]
             self.assertTrue(targets)
@@ -80,11 +107,29 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertEqual(default, explicit)
         self.assertEqual(expected, self.inventory(ordinary) + self.inventory(actions))
         self.assertFalse(self.inventory(ordinary) & self.inventory(actions))
-        self.assertEqual(4, len(ordinary))
-        self.assertEqual(5, len(default))
+        self.assertEqual(6, len(ordinary))
+        self.assertEqual(7, len(default))
         self.assertEqual([shlex.split(
             "test --locked -p registry-breg --features postgres-test --test postgres_immediate_actions"
         )], actions)
+
+    def test_real_evidence_build_precedes_proof_and_is_absent_from_action_lane(self):
+        result, calls = self.run_lane("--lane", "postgres")
+        self.assertEqual(0, result.returncode, result.stderr)
+        builds = [index for index, call in enumerate(calls) if call[0] == "build"]
+        self.assertEqual(1, len(builds))
+        proof = next(index for index, call in enumerate(calls) if "postgres_action_evidence" in call)
+        self.assertLess(builds[0], proof)
+        self.assertIn("postgres_action_evidence_targets", calls[proof])
+        result, calls = self.run_lane("--lane", "immediate-actions")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertFalse(any(call[0] == "build" for call in calls))
+
+    def test_evidence_build_failure_prevents_proof_instead_of_skipping_real_runtime(self):
+        result, calls = self.run_lane("--lane", "postgres", fail_build=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("build", calls[-1][0])
+        self.assertFalse(any("postgres_action_evidence" in call for call in calls))
 
     def test_invalid_selection_refuses_before_cargo(self):
         for arguments in (
@@ -144,6 +189,8 @@ class PostgresRunnerTests(unittest.TestCase):
         for command in contract_commands:
             self.assertEqual("matrix.lane == 'contracts'", runs[command]["if"])
         self.assertLess(list(runs).index(contract_commands[2]), list(runs).index(contract_commands[3]))
+        uv = next(step for step in job["steps"] if step.get("name") == "Install uv")
+        self.assertEqual("matrix.lane != 'immediate-actions'", uv["if"])
         postgres = runs['products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"']
         self.assertEqual("matrix.lane != 'contracts'", postgres["if"])
         self.assertEqual("${{ matrix.lane }}", postgres["env"]["BREG_POSTGRES_LANE"])

@@ -79,6 +79,8 @@ fn invocation_uses_public_names_and_a_closed_typed_envelope() {
     for refused in [
         br#"{"input":{"case-ref":"00000000-0000-4000-8000-000000000001","newLabel":"Changed"},"preconditions":{"caseId":{"ifMatch":"\"opaque\""}}}"#.as_slice(),
         br#"{"input":{"caseId":"00000000-0000-4000-8000-000000000001","newLabel":4},"preconditions":{"caseId":{"ifMatch":"\"opaque\""}}}"#,
+        br#"{"input":{"caseId":null,"newLabel":"Changed"},"preconditions":{"caseId":{"ifMatch":"\"opaque\""}}}"#,
+        br#"{"input":{"caseId":"00000000-0000-4000-8000-000000000001","newLabel":null},"preconditions":{"caseId":{"ifMatch":"\"opaque\""}}}"#,
         br#"{"input":{"caseId":"00000000-0000-4000-8000-000000000001","newLabel":"Changed"}}"#,
         br#"{"input":{"caseId":"00000000-0000-4000-8000-000000000001","newLabel":"Changed"},"preconditions":{"caseId":{"ifMatch":"\"opaque\"","revision":1}}}"#,
         br#"{"input":{"caseId":"00000000-0000-4000-8000-000000000001","newLabel":"Changed"},"preconditions":{"caseId":{"ifMatch":"*"}}}"#,
@@ -86,6 +88,42 @@ fn invocation_uses_public_names_and_a_closed_typed_envelope() {
         br#"{"input":{"caseId":"00000000-0000-4000-8000-000000000001","newLabel":"Changed","newLabel":"Duplicate"},"preconditions":{"caseId":{"ifMatch":"\"opaque\""}}}"#,
     ] {
         assert!(parse_body(action, ActionRouteKind::Invoke, refused).is_err());
+    }
+}
+
+#[test]
+fn a_fixed_patch_target_remains_required_when_its_input_is_declared_optional() {
+    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+    project.actions[0].inputs[0].required = false;
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let action = &registry.actions().actions[0];
+    assert!(
+        !action
+            .inputs
+            .iter()
+            .find(|input| input.id == "case-ref")
+            .unwrap()
+            .required
+    );
+    let complete = br#"{"input":{"caseId":"00000000-0000-4000-8000-000000000001","newLabel":"Changed"},"preconditions":{"caseId":{"ifMatch":"\"opaque\""}}}"#;
+    assert!(parse_body(action, ActionRouteKind::Invoke, complete).is_ok());
+    for refused in [
+        br#"{"input":{"newLabel":"Changed"},"preconditions":{"caseId":{"ifMatch":"\"opaque\""}}}"#.as_slice(),
+        br#"{"input":{"caseId":null,"newLabel":"Changed"},"preconditions":{"caseId":{"ifMatch":"\"opaque\""}}}"#,
+    ] {
+        assert_eq!(
+            parse_error_path(action, ActionRouteKind::Invoke, refused),
+            "/input/caseId"
+        );
+    }
+    for refused in [
+        br#"{"input":{}}"#.as_slice(),
+        br#"{"input":{"caseId":null}}"#,
+    ] {
+        assert_eq!(
+            parse_error_path(action, ActionRouteKind::TargetConditions, refused),
+            "/input/caseId"
+        );
     }
 }
 
@@ -506,4 +544,32 @@ fn action_without_default_requires_explicit_profile_even_when_token_has_authorit
             .selected_profile(),
         "registrar"
     );
+}
+
+#[tokio::test]
+async fn correlated_evidence_problem_exposes_only_a_safe_declared_capability_path() {
+    for capability in [Some("declared-status".to_owned()), None] {
+        let response = mutation_problem(MutationError::ActionEvidenceFailure {
+            capability: capability.clone(),
+        });
+        let correlation = crate::correlation::RequestCorrelation::breg_created();
+        let response =
+            crate::correlation::finish_response(response, &correlation, "POST", Instant::now());
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body = parse_json_strict(&bytes).unwrap();
+        assert_eq!(body["code"], "action.evidence_failed");
+        assert_eq!(
+            body["detail"],
+            "The declared Evidence dependency could not be accepted."
+        );
+        assert_eq!(body["traceId"], correlation.trace_id().as_str());
+        if capability.is_some() {
+            assert_eq!(body["fieldPath"], "/evidence/declared-status");
+        } else {
+            assert!(body.get("fieldPath").is_none());
+        }
+        assert!(body.get("selectors").is_none());
+        assert!(body.get("provider").is_none());
+    }
 }

@@ -40,29 +40,72 @@ pub struct PostgresRecordMutationService {
     lock_timeout: Duration,
     audit_profile: AuditProfile,
     action_timeout: Duration,
+    evidence_timeout: Duration,
+    evidence_evaluator: Option<Arc<crate::action_evidence::ActionEvidenceEvaluator>>,
     fault: MutationFaultControl,
 }
 
 impl PostgresRecordMutationService {
+    /// Bind operator-approved Evidence clients for v2 immediate action handlers.
+    #[must_use]
+    pub fn with_evidence_evaluator(
+        mut self,
+        evaluator: Arc<crate::action_evidence::ActionEvidenceEvaluator>,
+    ) -> Self {
+        self.evidence_evaluator = Some(evaluator);
+        self
+    }
+
+    /// Keep the evidence lifecycle within the outer HTTP request budget.
+    #[must_use]
+    pub(crate) fn with_evidence_timeout(mut self, timeout: Duration) -> Self {
+        self.evidence_timeout = timeout.min(self.action_timeout);
+        self
+    }
+
     pub async fn invoke_action(
         &self,
         input: ImmediateActionInput<'_>,
     ) -> Result<MutationOutcome, MutationError> {
+        // One deadline includes admission, every queue/pool wait, external
+        // processing and all SQL attempts. No phase can renew the budget.
+        let started = tokio::time::Instant::now();
         let claims = strict_action_context(input.context, input.action_id)?;
         let target_authority = strict_action_target_authority(input.context)?;
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|_| MutationError::Unavailable)?;
         let fault = match self.fault {
             #[cfg(feature = "postgres-test")]
             MutationFaultControl::At(point) => crate::mutation::FaultControl::At(point),
             _ => crate::mutation::FaultControl::Disabled,
         };
+        let is_evidence = self
+            .registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == input.action_id)
+            .and_then(|action| action.handler.as_ref())
+            .is_some_and(|handler| handler.abi == "registry.action-handler/v2");
+        let deadline = started
+            + if is_evidence {
+                self.evidence_timeout.min(self.action_timeout)
+            } else {
+                self.action_timeout
+            };
+        if is_evidence {
+            return tokio::time::timeout_at(
+                deadline,
+                self.invoke_evidence_action(input, &claims, &target_authority, fault, deadline),
+            )
+            .await
+            .unwrap_or(Err(MutationError::Unavailable));
+        }
+        let client = tokio::time::timeout_at(deadline, self.pool.get())
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .map_err(|_| MutationError::Unavailable)?;
         let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
-        match tokio::time::timeout(
-            self.action_timeout,
+        match tokio::time::timeout_at(
+            deadline,
             self.coordinator.execute_immediate_action(
                 guard.client(),
                 &self.registry,
@@ -70,6 +113,7 @@ impl PostgresRecordMutationService {
                 &claims,
                 &target_authority,
                 fault,
+                deadline,
             ),
         )
         .await
@@ -83,6 +127,92 @@ impl PostgresRecordMutationService {
                 Err(MutationError::Unavailable)
             }
         }
+    }
+
+    async fn invoke_evidence_action(
+        &self,
+        input: ImmediateActionInput<'_>,
+        claims: &ActionClaimContext,
+        target_authority: &std::collections::BTreeMap<String, Vec<RowBoundaryContext>>,
+        fault: crate::mutation::FaultControl,
+        deadline: tokio::time::Instant,
+    ) -> Result<MutationOutcome, MutationError> {
+        let evaluator = self
+            .evidence_evaluator
+            .as_ref()
+            .ok_or(MutationError::Unavailable)?;
+        let route_id = input.route_id;
+        let correlation = input.correlation;
+        let prepared = {
+            let client = self
+                .pool
+                .get()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+            let result = self
+                .coordinator
+                .preflight_evidence_action(
+                    guard.client(),
+                    &self.registry,
+                    input,
+                    claims,
+                    target_authority,
+                    deadline,
+                )
+                .await;
+            if result.is_err() && tokio::time::Instant::now() < deadline {
+                self.coordinator
+                    .record_action_boundary_audit(
+                        guard.client(),
+                        claims,
+                        route_id,
+                        correlation,
+                        crate::audit::PreIoAuditKind::Refusal,
+                    )
+                    .await?;
+            }
+            guard.disarm();
+            match result? {
+                Ok(prepared) => prepared,
+                Err(receipt) => return Ok(receipt),
+            }
+        }; // Drop the entire pooled connection before evaluation or acquisition.
+        let frozen = evaluator
+            .evaluate(
+                prepared.action.clone(),
+                prepared.inputs.clone(),
+                deadline.into_std(),
+            )
+            .await;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(MutationError::Unavailable);
+        }
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        // Receipt recovery is deliberately also performed for refusals and
+        // dependency failures. A concurrent committed application takes priority.
+        let result = self
+            .coordinator
+            .finalize_evidence_action(
+                guard.client(),
+                &self.registry,
+                &prepared,
+                &frozen,
+                claims,
+                target_authority,
+                route_id,
+                correlation,
+                fault,
+                deadline,
+            )
+            .await;
+        guard.disarm();
+        result
     }
 
     pub async fn action_target_conditions(
@@ -204,6 +334,8 @@ impl PostgresRecordMutationService {
             lock_timeout,
             audit_profile,
             action_timeout: REQUEST_ACTION_TIMEOUT,
+            evidence_timeout: REQUEST_ACTION_TIMEOUT,
+            evidence_evaluator: None,
             fault: MutationFaultControl::Disabled,
         }
     }

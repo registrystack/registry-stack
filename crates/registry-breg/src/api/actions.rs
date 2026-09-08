@@ -366,7 +366,12 @@ fn parse_body(
                 declared.api_name.as_str(),
             ])));
         }
-        if !validate_field_value(FieldValue::Json(value), &declared.field_type) {
+        let nullable = !declared.required
+            && kind == ActionRouteKind::Invoke
+            && !condition_inputs.contains(declared.id.as_str());
+        if !(nullable && value.is_null())
+            && !validate_field_value(FieldValue::Json(value), &declared.field_type)
+        {
             return Err(ParseActionError::at(json_pointer([
                 "input",
                 declared.api_name.as_str(),

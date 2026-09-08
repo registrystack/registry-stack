@@ -115,6 +115,126 @@
       ],
       "type": "object"
     },
+    "ActionEvidenceSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "maximumObservationAgeSeconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outputs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "requirement": {
+          "type": "string"
+        },
+        "subjects": {
+          "additionalProperties": {
+            "$ref": "#/$defs/EvidenceSubjectSource"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "requirement",
+        "subjects",
+        "outputs",
+        "maximumObservationAgeSeconds"
+      ],
+      "type": "object"
+    },
+    "ActionHandlerRefusalSource": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ActionHandlerSource": {
+      "additionalProperties": false,
+      "properties": {
+        "abi": {
+          "enum": [
+            "registry.action-handler/v1"
+          ],
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RhaiScriptKindSource"
+        },
+        "refusals": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActionHandlerRefusalSource"
+          },
+          "type": "array"
+        },
+        "script": {
+          "type": "string"
+        },
+        "writes": {
+          "items": {
+            "$ref": "#/$defs/ActionHandlerWriteSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "script",
+        "abi",
+        "writes"
+      ],
+      "type": "object"
+    },
+    "ActionHandlerWriteSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "target": {
+          "$ref": "#/$defs/ActionTargetSource"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "operation",
+        "fields"
+      ],
+      "type": "object"
+    },
     "ActionInputSource": {
       "oneOf": [
         {
@@ -375,6 +495,24 @@
       "type": "object",
       "unevaluatedProperties": false
     },
+    "ActionRequirementSource": {
+      "additionalProperties": false,
+      "properties": {
+        "equals": true,
+        "field": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "field",
+        "equals"
+      ],
+      "type": "object"
+    },
     "ActionSource": {
       "additionalProperties": false,
       "properties": {
@@ -385,6 +523,22 @@
           },
           "type": "array"
         },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/ActionEvidenceSource"
+          },
+          "type": "array"
+        },
+        "handler": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionHandlerSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -392,6 +546,13 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/ActionInputSource"
+          },
+          "type": "array"
+        },
+        "requires": {
+          "description": "Acceptance-time checks over exact existing reference inputs, combined with AND.",
+          "items": {
+            "$ref": "#/$defs/ActionRequirementSource"
           },
           "type": "array"
         }
@@ -642,12 +803,6 @@
       ],
       "type": "object"
     },
-    "ChangeRequestPlannerKindSource": {
-      "enum": [
-        "rhai"
-      ],
-      "type": "string"
-    },
     "ChangeRequestPlannerSource": {
       "additionalProperties": false,
       "properties": {
@@ -655,7 +810,7 @@
           "type": "string"
         },
         "kind": {
-          "$ref": "#/$defs/ChangeRequestPlannerKindSource"
+          "$ref": "#/$defs/RhaiScriptKindSource"
         },
         "requestFields": {
           "default": [],
@@ -2006,6 +2161,44 @@
       ],
       "type": "string"
     },
+    "EvidenceProviderSource": {
+      "additionalProperties": false,
+      "properties": {
+        "contracts": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "subjectResolution": {
+          "$ref": "#/$defs/EvidenceSubjectResolution"
+        }
+      },
+      "required": [
+        "id",
+        "contracts",
+        "subjectResolution"
+      ],
+      "type": "object"
+    },
+    "EvidenceSubjectResolution": {
+      "enum": [
+        "trusted-provider-exact-selector"
+      ],
+      "type": "string"
+    },
+    "EvidenceSubjectSource": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "type": "object"
+    },
     "FieldSource": {
       "anyOf": [
         {
@@ -3121,6 +3314,12 @@
       ],
       "type": "object"
     },
+    "RhaiScriptKindSource": {
+      "enum": [
+        "rhai"
+      ],
+      "type": "string"
+    },
     "RowBoundarySource": {
       "additionalProperties": false,
       "properties": {
@@ -3224,6 +3423,13 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "pattern": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "required": {
           "default": false,
@@ -3357,6 +3563,13 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "pattern": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "required": {
           "default": false,
@@ -3675,6 +3888,12 @@
       "default": [],
       "items": {
         "$ref": "#/$defs/EntitySource"
+      },
+      "type": "array"
+    },
+    "evidenceProviders": {
+      "items": {
+        "$ref": "#/$defs/EvidenceProviderSource"
       },
       "type": "array"
     },

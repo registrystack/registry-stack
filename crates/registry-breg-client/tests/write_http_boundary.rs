@@ -1060,6 +1060,7 @@ fn problem_title(status: u16) -> &'static str {
         412 => "Precondition Failed",
         415 => "Unsupported Media Type",
         428 => "Precondition Required",
+        500 => "Internal Server Error",
         503 => "Service Unavailable",
         504 => "Gateway Timeout",
         _ => panic!("unregistered problem status"),
@@ -1070,6 +1071,8 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
     use BRegProblemCode as Code;
 
     match code {
+        Code::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
+        Code::ActionHandlerFailed => "The action handler could not produce an accepted result.",
         Code::AuthenticationRefused => "The bearer credential is missing or refused.",
         Code::IdempotencyConflict => "The idempotency key is bound to another request.",
         Code::LookupUnresolved => "The lookup did not resolve exactly one record.",

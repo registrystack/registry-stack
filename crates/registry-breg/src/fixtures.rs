@@ -431,7 +431,31 @@ struct ClaimsSource {
     #[serde(default)]
     purpose: Option<String>,
     #[serde(default)]
-    direct_claims: BTreeMap<String, String>,
+    direct_claims: BTreeMap<String, DirectClaimSource>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(untagged)]
+enum DirectClaimSource {
+    String(String),
+    StringSet(Vec<String>),
+}
+
+impl DirectClaimSource {
+    fn verified_value(&self) -> Result<VerifiedClaimValue, FixtureError> {
+        let values = match self {
+            Self::String(value) => std::slice::from_ref(value),
+            Self::StringSet(values) => values.as_slice(),
+        };
+        if values.iter().any(|value| value.len() > MAX_BINDING_BYTES) {
+            return Err(FixtureError::AuthorityWideningRefused);
+        }
+        match self {
+            Self::String(value) => VerifiedClaimValue::direct_string(value.clone()),
+            Self::StringSet(values) => VerifiedClaimValue::direct_string_set(values.clone()),
+        }
+        .map_err(|_| FixtureError::AuthorityWideningRefused)
+    }
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
@@ -452,6 +476,8 @@ struct ExpectationSource {
     count: Option<usize>,
     #[serde(default)]
     problem_code: Option<String>,
+    #[serde(default)]
+    refusal_code: Option<String>,
 }
 
 /// A complete journey suite that has been resolved against one exact compiled
@@ -513,8 +539,17 @@ struct ValidatedStep {
     response_readable_fields: BTreeSet<String>,
     action: ActionSource,
     expect: ExpectationSource,
+    problem_bindings: FixtureProblemBindings,
     capture: Option<String>,
     capture_results: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Default)]
+struct FixtureProblemBindings {
+    refusal_label: Option<String>,
+    refusal_field_paths: BTreeSet<String>,
+    request_field_paths: BTreeSet<String>,
+    pattern_fields: BTreeSet<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -687,7 +722,14 @@ pub fn validate_fixture_journeys(
                         .ok_or(FixtureError::LogicalReferenceRefused)?;
                     let profile = action_profile_from_grant(grant);
                     validate_claims(&step.claims, &profile, step.expect.outcome)?;
-                    validate_immediate_action_fields(&step.request, action, &capture_sources)?;
+                    validate_immediate_action_fields(
+                        &step.request,
+                        action,
+                        &capture_sources,
+                        step.expect.outcome == ExpectedOutcome::Refusal
+                            && step.expect.status == 400
+                            && step.expect.problem_code.as_deref() == Some("request.invalid"),
+                    )?;
                     validate_expectation(
                         &step.expect,
                         operation,
@@ -814,6 +856,13 @@ pub fn validate_fixture_journeys(
                         },
                     );
                 }
+                let problem_bindings = compile_problem_bindings(
+                    &expect,
+                    &action,
+                    entity_id.as_deref(),
+                    action_id.as_deref(),
+                    registry,
+                )?;
                 Ok(ValidatedStep {
                     id: step.id,
                     entity: entity_id,
@@ -825,6 +874,7 @@ pub fn validate_fixture_journeys(
                     response_readable_fields,
                     action,
                     expect,
+                    problem_bindings,
                     capture,
                     capture_results: step.capture_results,
                 })
@@ -1117,9 +1167,7 @@ fn validate_claims(
         .map(|boundary| boundary.claim.as_str())
         .collect::<BTreeSet<_>>();
     if claims.direct_claims.iter().any(|(name, value)| {
-        !boundary_claims.contains(name.as_str())
-            || value.is_empty()
-            || value.len() > MAX_BINDING_BYTES
+        !boundary_claims.contains(name.as_str()) || value.verified_value().is_err()
     }) {
         return Err(FixtureError::AuthorityWideningRefused);
     }
@@ -1185,11 +1233,12 @@ fn validate_immediate_action_fields(
     request: &ActionSource,
     action: &CompiledAction,
     captures: &BTreeMap<String, CaptureSource>,
+    expects_invalid_request: bool,
 ) -> Result<(), FixtureError> {
     match request {
         ActionSource::TargetConditions { input } => {
             let required = condition_input_api_names(action);
-            validate_action_input_map(input, action, captures, Some(&required))?;
+            validate_action_input_map(input, action, captures, Some(&required), false)?;
             if input.keys().collect::<BTreeSet<_>>() != required.iter().collect::<BTreeSet<_>>() {
                 return Err(FixtureError::LogicalReferenceRefused);
             }
@@ -1199,7 +1248,7 @@ fn validate_immediate_action_fields(
             preconditions,
             idempotency_key,
         } => {
-            validate_action_input_map(input, action, captures, None)?;
+            validate_action_input_map(input, action, captures, None, expects_invalid_request)?;
             let condition_inputs = condition_input_api_names(action);
             for (name, condition) in preconditions {
                 if !condition_inputs.contains(name) {
@@ -1217,9 +1266,10 @@ fn validate_immediate_action_fields(
                     }
                 }
             }
-            if condition_inputs
-                .iter()
-                .any(|name| !preconditions.contains_key(name.as_str()))
+            if !expects_invalid_request
+                && condition_inputs
+                    .iter()
+                    .any(|name| !preconditions.contains_key(name.as_str()))
             {
                 return Err(FixtureError::LogicalReferenceRefused);
             }
@@ -1237,6 +1287,7 @@ fn validate_action_input_map(
     action: &CompiledAction,
     captures: &BTreeMap<String, CaptureSource>,
     accepted_names: Option<&BTreeSet<String>>,
+    expects_invalid_request: bool,
 ) -> Result<(), FixtureError> {
     let inputs_by_api_name = action
         .inputs
@@ -1253,12 +1304,22 @@ fn validate_action_input_map(
         let declared = inputs_by_api_name
             .get(name.as_str())
             .ok_or(FixtureError::LogicalReferenceRefused)?;
-        if !fixture_action_input_value_is_valid(value, declared, captures) {
+        let admitted_invalid_scalar = expects_invalid_request
+            && !value.is_object()
+            && !value.is_array()
+            && !matches!(
+                declared.field_type,
+                crate::contract::FieldTypeSource::Reference { .. }
+            );
+        if !admitted_invalid_scalar
+            && !fixture_action_input_value_is_valid(value, declared, captures)
+        {
             return Err(FixtureError::LogicalReferenceRefused);
         }
     }
     for declared in &action.inputs {
-        if declared.required
+        if !expects_invalid_request
+            && declared.required
             && accepted_names.is_none_or(|accepted| accepted.contains(&declared.api_name))
             && !input.contains_key(&declared.api_name)
         {
@@ -1972,6 +2033,7 @@ fn internalize_expectation(
         fields: internalize_data(response_entity, &expectation.fields)?,
         count: expectation.count,
         problem_code: expectation.problem_code.clone(),
+        refusal_code: expectation.refusal_code.clone(),
     })
 }
 
@@ -2209,6 +2271,7 @@ fn externalize_expectation(
         fields: externalize_data(response_entity, &expectation.fields)?,
         count: expectation.count,
         problem_code: expectation.problem_code.clone(),
+        refusal_code: expectation.refusal_code.clone(),
     })
 }
 
@@ -2219,6 +2282,12 @@ fn validate_expectation(
     captures: bool,
     captures_results: bool,
 ) -> Result<(), FixtureError> {
+    let declared_refusal = expectation.problem_code.as_deref() == Some("action.refused");
+    if declared_refusal != expectation.refusal_code.is_some()
+        || (declared_refusal && (operation != Operation::Invoke || captures_results))
+    {
+        return Err(FixtureError::JourneyShapeRefused);
+    }
     if captures_results && operation != Operation::Invoke {
         return Err(FixtureError::JourneyShapeRefused);
     }
@@ -2297,6 +2366,123 @@ fn validate_expectation(
         }
     }
     Ok(())
+}
+
+fn compile_problem_bindings(
+    expectation: &ExpectationSource,
+    request: &ActionSource,
+    entity_id: Option<&str>,
+    action_id: Option<&str>,
+    registry: &CompiledRegistry,
+) -> Result<FixtureProblemBindings, FixtureError> {
+    let mut bindings = FixtureProblemBindings::default();
+    let action = action_id.and_then(|id| {
+        registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == id)
+    });
+    if expectation.problem_code.as_deref() == Some("request.invalid") {
+        if let Some(action) = action {
+            bindings
+                .request_field_paths
+                .extend([String::new(), "/input".to_owned()]);
+            let condition_inputs = condition_input_api_names(action);
+            for input in &action.inputs {
+                let alias = input.api_name.replace('~', "~0").replace('/', "~1");
+                bindings
+                    .request_field_paths
+                    .insert(format!("/input/{alias}"));
+                if matches!(request, ActionSource::Invoke { .. }) {
+                    bindings
+                        .request_field_paths
+                        .insert(format!("/preconditions/{alias}"));
+                    if condition_inputs.contains(&input.api_name) {
+                        bindings
+                            .request_field_paths
+                            .insert(format!("/preconditions/{alias}/ifMatch"));
+                    }
+                }
+            }
+            if matches!(request, ActionSource::Invoke { .. }) {
+                bindings
+                    .request_field_paths
+                    .insert("/preconditions".to_owned());
+            }
+        }
+    }
+    if matches!(
+        expectation.problem_code.as_deref(),
+        Some("action.refused" | "action.handler_failed" | "action.evidence_failed")
+    ) {
+        let action = action.ok_or(FixtureError::LogicalReferenceRefused)?;
+        let handler = action
+            .handler
+            .as_ref()
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        if !matches!(request, ActionSource::Invoke { .. }) {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+        if let Some(code) = &expectation.refusal_code {
+            bindings.refusal_label = Some(
+                handler
+                    .refusals
+                    .get(code)
+                    .cloned()
+                    .ok_or(FixtureError::LogicalReferenceRefused)?,
+            );
+            bindings.refusal_field_paths = action
+                .inputs
+                .iter()
+                .map(|input| {
+                    format!(
+                        "/input/{}",
+                        input.api_name.replace('~', "~0").replace('/', "~1")
+                    )
+                })
+                .collect();
+        }
+    }
+    if expectation.problem_code.as_deref() == Some("mutation.conflict") {
+        let mut target_entities = BTreeSet::new();
+        if let Some(action) = action.filter(|_| matches!(request, ActionSource::Invoke { .. })) {
+            target_entities.extend(
+                action
+                    .effects
+                    .iter()
+                    .map(|effect| effect.target.entity_id.as_str()),
+            );
+        }
+        if let Some(entity) = entity_id.and_then(|id| registry.entities().get(id)) {
+            if matches!(
+                request.operation(),
+                Operation::Create | Operation::Patch | Operation::Batch
+            ) {
+                target_entities.insert(entity.id.as_str());
+            }
+            if matches!(
+                request.operation(),
+                Operation::SubmitRequest | Operation::ApproveRequest | Operation::ApplyRequest
+            ) {
+                if let Some(plan) = &entity.change_request {
+                    target_entities.extend(plan.target_entities.iter().map(String::as_str));
+                }
+            }
+        }
+        for entity_id in target_entities {
+            if let Some(entity) = registry.entities().get(entity_id) {
+                bindings.pattern_fields.extend(
+                    entity
+                        .fields
+                        .values()
+                        .filter(|field| field.pattern.is_some())
+                        .map(|field| (entity.id.clone(), field.id.clone())),
+                );
+            }
+        }
+    }
+    Ok(bindings)
 }
 
 fn canonical_size(value: &Value) -> Result<usize, FixtureError> {
@@ -2935,7 +3121,10 @@ impl SchemaTestRuntime {
             config.operational_timeouts().record_lock,
             audit_profile.clone(),
         ));
-        let mutations = Arc::new(PostgresRecordMutationService::new_with_event_destinations(
+        let evidence = config
+            .activate_evidence(&registry)
+            .map_err(|_| FixtureError::ExecutionRefused)?;
+        let mutations = PostgresRecordMutationService::new_with_event_destinations(
             pool.clone(),
             Arc::clone(&registry),
             expected,
@@ -2943,7 +3132,13 @@ impl SchemaTestRuntime {
             config.operational_timeouts().record_lock,
             audit_profile,
             Some(event_destinations),
-        ));
+        );
+        let mutations = Arc::new(match evidence {
+            Some(evaluator) => mutations
+                .with_evidence_evaluator(evaluator)
+                .with_evidence_timeout(config.operational_timeouts().http_request),
+            None => mutations,
+        });
         let service = Arc::new(
             HttpService::new(
                 registry,
@@ -2984,36 +3179,45 @@ impl SchemaTestRuntime {
             .authenticate(token)
             .await
             .map_err(|_| FixtureError::RequestConstructionRefused)?;
-        let scopes = verified.scopes.into_iter().collect::<BTreeSet<_>>();
-        if scopes != step.claims.scopes
-            || mapped.principal_claim() != step.profile.principal_claim.as_deref()
-            || mapped.principal() != step.claims.principal.as_deref()
-            || mapped.purpose() != step.claims.purpose.as_deref()
+        assert_exact_claims(
+            &step.claims,
+            &step.profile,
+            &mapped,
+            &verified.scopes.into_iter().collect(),
+        )
+    }
+}
+
+fn assert_exact_claims(
+    claims: &ClaimsSource,
+    profile: &AccessProfileSource,
+    mapped: &VerifiedRequestClaims,
+    scopes: &BTreeSet<String>,
+) -> Result<(), FixtureError> {
+    if scopes != &claims.scopes
+        || mapped.principal_claim() != profile.principal_claim.as_deref()
+        || mapped.principal() != claims.principal.as_deref()
+        || mapped.purpose() != claims.purpose.as_deref()
+    {
+        return Err(FixtureError::AuthorityWideningRefused);
+    }
+    for (name, expected) in &claims.direct_claims {
+        if mapped.direct_claim(name).map(VerifiedClaimValue::values)
+            != Some(expected.verified_value()?.values())
         {
             return Err(FixtureError::AuthorityWideningRefused);
         }
-        for (name, expected) in &step.claims.direct_claims {
-            if mapped
-                .direct_claim(name)
-                .map(VerifiedClaimValue::values)
-                .as_ref()
-                != Some(&BTreeSet::from([expected.clone()]))
-            {
-                return Err(FixtureError::AuthorityWideningRefused);
-            }
-        }
-        let actual_names = step
-            .profile
-            .row_boundaries
-            .iter()
-            .filter(|boundary| mapped.direct_claim(&boundary.claim).is_some())
-            .map(|boundary| boundary.claim.clone())
-            .collect::<BTreeSet<_>>();
-        if actual_names != step.claims.direct_claims.keys().cloned().collect() {
-            return Err(FixtureError::AuthorityWideningRefused);
-        }
-        Ok(())
     }
+    let actual_names = profile
+        .row_boundaries
+        .iter()
+        .filter(|boundary| mapped.direct_claim(&boundary.claim).is_some())
+        .map(|boundary| boundary.claim.clone())
+        .collect::<BTreeSet<_>>();
+    if actual_names != claims.direct_claims.keys().cloned().collect() {
+        return Err(FixtureError::AuthorityWideningRefused);
+    }
+    Ok(())
 }
 
 struct SchemaTestReadiness {
@@ -3630,7 +3834,8 @@ fn verified_claims(step: &ValidatedStep) -> Result<VerifiedRequestClaims, Fixtur
         .direct_claims
         .iter()
         .map(|(name, value)| {
-            VerifiedClaimValue::direct_string(value.clone())
+            value
+                .verified_value()
                 .map(|value| (name.clone(), value))
                 .map_err(|_| FixtureError::RequestConstructionRefused)
         })
@@ -3763,10 +3968,66 @@ fn assert_response(
                 .problem_code
                 .as_deref()
                 .ok_or(FixtureError::ResponseShapeRefused)?;
-            let object = exact_object(
-                document,
-                &["type", "title", "status", "detail", "code", "traceId"],
-            )?;
+            let mut keys = vec!["type", "title", "status", "detail", "code", "traceId"];
+            let expected_detail = if code == "action.refused" {
+                keys.push("refusalCode");
+                if document.get("fieldPath").is_some() {
+                    keys.push("fieldPath");
+                    if !document
+                        .get("fieldPath")
+                        .and_then(Value::as_str)
+                        .is_some_and(|path| {
+                            step.problem_bindings.refusal_field_paths.contains(path)
+                        })
+                    {
+                        return Err(FixtureError::ExpectationMismatch);
+                    }
+                }
+                if document.get("refusalCode").and_then(Value::as_str)
+                    != step.expect.refusal_code.as_deref()
+                {
+                    return Err(FixtureError::ExpectationMismatch);
+                }
+                Some(
+                    step.problem_bindings
+                        .refusal_label
+                        .as_deref()
+                        .ok_or(FixtureError::ResponseShapeRefused)?,
+                )
+            } else if code == "mutation.conflict"
+                && (document.get("entityId").is_some() || document.get("fieldId").is_some())
+            {
+                keys.extend(["entityId", "fieldId"]);
+                let entity = document
+                    .get("entityId")
+                    .and_then(Value::as_str)
+                    .ok_or(FixtureError::ResponseShapeRefused)?;
+                let field = document
+                    .get("fieldId")
+                    .and_then(Value::as_str)
+                    .ok_or(FixtureError::ResponseShapeRefused)?;
+                if !step
+                    .problem_bindings
+                    .pattern_fields
+                    .contains(&(entity.to_owned(), field.to_owned()))
+                {
+                    return Err(FixtureError::ExpectationMismatch);
+                }
+                Some("The field does not conform to its declared storage pattern.")
+            } else {
+                None
+            };
+            if code == "request.invalid" && document.get("fieldPath").is_some() {
+                keys.push("fieldPath");
+                if !document
+                    .get("fieldPath")
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| step.problem_bindings.request_field_paths.contains(path))
+                {
+                    return Err(FixtureError::ExpectationMismatch);
+                }
+            }
+            let object = exact_object(document, &keys)?;
             let trace_id = object
                 .get("traceId")
                 .and_then(Value::as_str)
@@ -3780,7 +4041,12 @@ fn assert_response(
                 || !object
                     .get("detail")
                     .and_then(Value::as_str)
-                    .is_some_and(|detail| details.contains(&detail))
+                    .is_some_and(|detail| {
+                        expected_detail.map_or_else(
+                            || details.contains(&detail),
+                            |expected| detail == expected,
+                        )
+                    })
                 || object.get("code").and_then(Value::as_str) != Some(code)
             {
                 return Err(FixtureError::ExpectationMismatch);
@@ -4469,9 +4735,11 @@ static PLAN_REFUSED_DETAILS: [&str; ChangeRequestPlannerError::PLAN_REFUSALS.len
     details
 };
 
-/// The title and the admissible details for one expectable problem. Every code
-/// but a refused plan carries exactly one detail; a refused plan carries one
-/// per closed planner kind.
+static HANDLER_FAILED_DETAILS: [&str; 1] =
+    ["The action handler could not produce an accepted result."];
+
+/// Static problem titles/details. Handler refusals resolve their exact label
+/// from the compiled catalogue; planner and handler faults use closed kinds.
 fn problem_contract(
     status: u16,
     code: Option<&str>,
@@ -4480,6 +4748,12 @@ fn problem_contract(
         (400, "query.invalid") => Some(("Bad Request", &["The query request is invalid."])),
         (400, "request.invalid") => Some(("Bad Request", &["The request is invalid."])),
         (400, "request.plan_refused") => Some(("Bad Request", &PLAN_REFUSED_DETAILS)),
+        (503, "action.evidence_failed") => Some((
+            "Service Unavailable",
+            &["The declared Evidence dependency could not be accepted."],
+        )),
+        (500, "action.handler_failed") => Some(("Internal Server Error", &HANDLER_FAILED_DETAILS)),
+        (422, "action.refused") => Some(("Unprocessable Entity", &[])),
         (404, "resource.not_found") => {
             Some(("Not Found", &["The requested resource was not found."]))
         }
@@ -4527,7 +4801,7 @@ pub struct FixtureSourceFile<'a> {
     pub bytes: &'a [u8],
 }
 
-/// One exact project-owned planner asset in declaring-origin-relative order.
+/// One exact project-owned planner or Evidence contract asset in declaring-origin-relative order.
 #[cfg(any(test, feature = "postgres-test"))]
 pub struct FixtureProjectAssetSource<'a> {
     pub path: &'a str,
@@ -5106,11 +5380,30 @@ fn validate_manifest_source_asset_inventory(
     let file_project_paths = manifest
         .files
         .iter()
-        .filter(|file| file.role == PackageFileRole::SourceProjectPlannerScript)
+        .filter(|file| {
+            matches!(
+                file.role,
+                PackageFileRole::SourceProjectPlannerScript
+                    | PackageFileRole::SourceProjectEvidenceContract
+            )
+        })
         .map(|file| file.path.clone())
         .collect::<BTreeSet<_>>();
     if project_paths != file_project_paths {
         return Err(FixtureError::CandidateBindingRefused);
+    }
+    for package_path in &manifest.sources.project_assets {
+        let source_path = source_project_asset_path(package_path)?;
+        let (role, _) = source_project_asset_policy(source_path)?;
+        if manifest
+            .files
+            .iter()
+            .filter(|file| &file.path == package_path && file.role == role)
+            .count()
+            != 1
+        {
+            return Err(FixtureError::CandidateBindingRefused);
+        }
     }
 
     let mut declared_paths = BTreeSet::new();
@@ -5173,15 +5466,11 @@ fn validate_source_project_assets(
         .zip(sources)
         .map(|(expected_package_path, source)| {
             let expected_source_path = source_project_asset_path(expected_package_path)?;
+            let (role, maximum_bytes) = source_project_asset_policy(expected_source_path)?;
             if source.path != expected_source_path
                 || source.bytes.is_empty()
-                || source.bytes.len() as u64 > MAX_RHAI_PLANNER_SOURCE_BYTES
-                || !manifest_file_matches(
-                    manifest,
-                    PackageFileRole::SourceProjectPlannerScript,
-                    expected_package_path,
-                    source.bytes,
-                )
+                || source.bytes.len() > maximum_bytes
+                || !manifest_file_matches(manifest, role, expected_package_path, source.bytes)
             {
                 return Err(FixtureError::CandidateBindingRefused);
             }
@@ -5235,17 +5524,13 @@ fn prepared_project_assets(
         .iter()
         .map(|package_path| {
             let source_path = source_project_asset_path(package_path)?;
+            let (role, maximum_bytes) = source_project_asset_policy(source_path)?;
             let bytes = files
                 .get(package_path)
                 .ok_or(FixtureError::CandidateBindingRefused)?;
             if bytes.is_empty()
-                || bytes.len() as u64 > MAX_RHAI_PLANNER_SOURCE_BYTES
-                || !manifest_file_matches(
-                    manifest,
-                    PackageFileRole::SourceProjectPlannerScript,
-                    package_path,
-                    bytes,
-                )
+                || bytes.len() > maximum_bytes
+                || !manifest_file_matches(manifest, role, package_path, bytes)
             {
                 return Err(FixtureError::CandidateBindingRefused);
             }
@@ -5326,6 +5611,24 @@ fn source_module_asset_policy(asset_path: &str) -> Result<(PackageFileRole, usiz
     }
 }
 
+fn source_project_asset_policy(
+    source_path: &str,
+) -> Result<(PackageFileRole, usize), FixtureError> {
+    if crate::action_evidence_contracts::valid_contract_path(source_path) {
+        Ok((
+            PackageFileRole::SourceProjectEvidenceContract,
+            crate::action_evidence_contracts::MAX_EVIDENCE_CONTRACT_BYTES,
+        ))
+    } else if source_path.ends_with(".rhai") {
+        Ok((
+            PackageFileRole::SourceProjectPlannerScript,
+            MAX_RHAI_PLANNER_SOURCE_BYTES as usize,
+        ))
+    } else {
+        Err(FixtureError::CandidateBindingRefused)
+    }
+}
+
 fn source_project_asset_path(package_path: &str) -> Result<&str, FixtureError> {
     let source_path = package_path
         .strip_prefix("source/project/")
@@ -5335,7 +5638,8 @@ fn source_project_asset_path(package_path: &str) -> Result<&str, FixtureError> {
         || source_path.contains('\\')
         || source_path.starts_with('/')
         || source_path.ends_with('/')
-        || !source_path.ends_with(".rhai")
+        || (!source_path.ends_with(".rhai")
+            && !crate::action_evidence_contracts::valid_contract_path(source_path))
     {
         return Err(FixtureError::CandidateBindingRefused);
     }
@@ -5541,6 +5845,94 @@ mod tests {
         PackageIntent, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
         PackageSourceFile, SignaturePolicy,
     };
+
+    #[test]
+    fn fixture_direct_claims_preserve_bounded_verified_claim_shapes() {
+        for value in [json!("owner-a"), json!(["owner-a", "owner-b"])] {
+            let source: DirectClaimSource = serde_json::from_value(value).unwrap();
+            assert!(source.verified_value().is_ok());
+        }
+        for value in [
+            json!(""),
+            json!([]),
+            json!([""]),
+            json!(["x".repeat(MAX_BINDING_BYTES + 1)]),
+        ] {
+            let source: DirectClaimSource = serde_json::from_value(value).unwrap();
+            assert!(source.verified_value().is_err());
+        }
+        for value in [json!(["owner-a", 1]), json!({"owner":"owner-a"})] {
+            assert!(serde_json::from_value::<DirectClaimSource>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn fixture_claim_sets_match_authenticated_values_exactly() {
+        let profile: AccessProfileSource = serde_json::from_value(json!({
+            "id": "registrar",
+            "principalClaim": "registry_principal",
+            "operations": ["get"],
+            "rowBoundaries": [
+                {"field": "owner", "claim": "allowed_owners", "operator": "in"},
+                {"field": "district", "claim": "district", "operator": "equals"}
+            ]
+        }))
+        .unwrap();
+        let claims: ClaimsSource = serde_json::from_value(json!({
+            "principal": "fixture-registrar",
+            "scopes": ["registry:read"],
+            "purpose": "case-management",
+            "directClaims": {"allowed_owners": ["owner-b", "owner-a"], "district": "north"}
+        }))
+        .unwrap();
+        let mapped = |owners: &[&str], include_district: bool| {
+            let mut direct = BTreeMap::from([(
+                "allowed_owners".to_owned(),
+                VerifiedClaimValue::direct_string_set(owners.iter().copied()).unwrap(),
+            )]);
+            if include_district {
+                direct.insert(
+                    "district".to_owned(),
+                    VerifiedClaimValue::direct_string("north").unwrap(),
+                );
+            }
+            VerifiedRequestClaims::authenticated(
+                "registry_principal",
+                "fixture-registrar",
+                claims.scopes.clone(),
+                claims.purpose.clone(),
+                direct,
+            )
+            .unwrap()
+        };
+        let exact = mapped(&["owner-a", "owner-b"], true);
+        assert_eq!(
+            assert_exact_claims(&claims, &profile, &exact, &claims.scopes),
+            Ok(())
+        );
+        for mismatched in [
+            mapped(&["owner-a"], true),
+            mapped(&["owner-a", "owner-b", "owner-c"], true),
+            mapped(&["owner-a", "owner-b"], false),
+        ] {
+            assert_eq!(
+                assert_exact_claims(&claims, &profile, &mismatched, &claims.scopes),
+                Err(FixtureError::AuthorityWideningRefused)
+            );
+        }
+        let mut undeclared = claims.clone();
+        undeclared.direct_claims.remove("district");
+        assert_eq!(
+            assert_exact_claims(&undeclared, &profile, &exact, &claims.scopes),
+            Err(FixtureError::AuthorityWideningRefused)
+        );
+        let widened_scopes =
+            BTreeSet::from(["registry:read".to_owned(), "registry:write".to_owned()]);
+        assert_eq!(
+            assert_exact_claims(&claims, &profile, &exact, &widened_scopes),
+            Err(FixtureError::AuthorityWideningRefused)
+        );
+    }
 
     const PROJECT_TEMPLATE: &[u8] =
         include_bytes!("../tests/fixtures/fixture-tooling/project.yaml");
@@ -5844,6 +6236,135 @@ journeys:
         };
         assert!(matches!(
             validate_schema_test_candidate(&package, &changed_sources, &execution, &suite),
+            Err(FixtureError::CandidateBindingRefused)
+        ));
+    }
+
+    #[test]
+    fn evidence_contract_assets_survive_prepared_and_verified_schema_test_rederivation() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/farmer-landholding-evidence");
+        let mut source = crate::contract::parse_project_yaml(
+            &std::fs::read(root.join("registry.yaml")).unwrap(),
+        )
+        .unwrap();
+        let identity = source.package.as_mut().unwrap();
+        identity.environment = "local".into();
+        identity.instance_id = "fixture-instance".into();
+        identity.source_revision = "fixture-project-source".into();
+        let project = serde_json::to_vec(&source).unwrap();
+        let assets = source
+            .evidence_providers
+            .iter()
+            .map(|provider| provider.contracts.clone())
+            .chain(source.actions.iter().filter_map(|action| {
+                action
+                    .handler
+                    .as_ref()
+                    .map(|handler| handler.script.clone())
+            }))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|path| PackageSourceFile {
+                bytes: std::fs::read(root.join(&path)).unwrap(),
+                path,
+            })
+            .collect::<Vec<_>>();
+        let journeys = std::fs::read(root.join("tests/journeys.yaml")).unwrap();
+        let prepared = prepare_package_with_project_assets(
+            PackageBuildRequest {
+                environment: "local".into(),
+                instance_id: "fixture-instance".into(),
+                database_id: DATABASE_ID.into(),
+                sequence: 1,
+                prior_revision: None,
+                compiler_source_revision: COMPILER_SOURCE_REVISION.into(),
+                schema_fingerprint: DIGEST_A.into(),
+                signature_policy: SignaturePolicy {
+                    threshold: 0,
+                    key_ids: Vec::new(),
+                },
+                project: PackageSourceFile {
+                    path: "source/registry.yaml".into(),
+                    bytes: project.clone(),
+                },
+                modules: Vec::new(),
+                fixture_journeys: PackageSourceFile {
+                    path: FIXTURE_JOURNEYS_PATH.into(),
+                    bytes: journeys.clone(),
+                },
+                migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+            },
+            assets.clone(),
+        )
+        .unwrap();
+        let suite = validate_fixture_journeys(&journeys, prepared.registry()).unwrap();
+        let (candidate, registry) =
+            derive_prepared_schema_test_candidate(&prepared, &suite, 16).unwrap();
+        assert_eq!(registry, *prepared.registry());
+        let migration_plan = prepared.file_bytes()["database/migration-plan.json"].clone();
+        let temp = tempfile::tempdir().unwrap();
+        let package_root = temp.path().canonicalize().unwrap().join("package");
+        prepared
+            .publish_to_directory(&package_root, Vec::new())
+            .unwrap();
+        let package = load_package(
+            &package_root,
+            &PackageLoadContext {
+                environment: "local",
+                instance_id: "fixture-instance",
+                database_id: DATABASE_ID,
+                database_initialization_environment: "local",
+                compiler_source_revision: COMPILER_SOURCE_REVISION,
+                trust_anchor: None,
+                intent: PackageIntent::InitialActivation,
+            },
+        )
+        .unwrap();
+        let captured = assets
+            .iter()
+            .map(|asset| FixtureProjectAssetSource {
+                path: &asset.path,
+                bytes: &asset.bytes,
+            })
+            .collect::<Vec<_>>();
+        let sources = SchemaTestSources {
+            project: FixtureSourceFile {
+                path: "source/registry.yaml",
+                bytes: &project,
+            },
+            project_assets: &captured,
+            modules: &[],
+            migration_plan: FixtureSourceFile {
+                path: "database/migration-plan.json",
+                bytes: &migration_plan,
+            },
+        };
+        let execution = execution_facts(&package, DIGEST_A, 16);
+        let verified =
+            validate_schema_test_candidate(&package, &sources, &execution, &suite).unwrap();
+        assert_eq!(
+            verified.source_closure_sha256,
+            candidate.source_closure_sha256
+        );
+        let mut changed = assets
+            .iter()
+            .map(|asset| FixtureProjectAssetSource {
+                path: &asset.path,
+                bytes: &asset.bytes,
+            })
+            .collect::<Vec<_>>();
+        let contract = changed
+            .iter_mut()
+            .find(|asset| asset.path.ends_with(".json"))
+            .unwrap();
+        contract.bytes = b"{}";
+        let substituted = SchemaTestSources {
+            project_assets: &changed,
+            ..sources
+        };
+        assert!(matches!(
+            validate_schema_test_candidate(&package, &substituted, &execution, &suite),
             Err(FixtureError::CandidateBindingRefused)
         ));
     }
@@ -6595,7 +7116,9 @@ journeys:
                 record_ref: "before-submit".to_owned(),
                 etag_ref: "before-submit".to_owned(),
             },
+            problem_bindings: FixtureProblemBindings::default(),
             expect: ExpectationSource {
+                refusal_code: None,
                 outcome: ExpectedOutcome::Success,
                 status: 200,
                 problem_code: None,
@@ -6791,7 +7314,9 @@ journeys:
                 record_ref: "before-submit".to_owned(),
                 etag_ref: "before-submit".to_owned(),
             },
+            problem_bindings: FixtureProblemBindings::default(),
             expect: ExpectationSource {
+                refusal_code: None,
                 outcome: ExpectedOutcome::Refusal,
                 status: 400,
                 problem_code: Some("request.plan_refused".to_owned()),

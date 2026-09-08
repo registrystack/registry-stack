@@ -389,9 +389,9 @@
             {
               "name": "planner-test",
               "invocation": "bregctl project planner-test",
-              "about": "Run one captured Rhai request planner with bounded synthetic JSON",
+              "about": "Test a Rhai request planner or action handler with bounded synthetic JSON",
               "long_about": null,
-              "usage": "bregctl project planner-test [OPTIONS] --entity <ENTITY> --request <JSON_FILE> <PROJECT>",
+              "usage": "bregctl project planner-test [OPTIONS] <--entity <ENTITY>|--action <ACTION>> <PROJECT>",
               "arguments": [
                 {
                   "display": "<PROJECT>",
@@ -406,8 +406,8 @@
               "options": [
                 {
                   "display": "--entity <ENTITY>",
-                  "description": "Compiled change-request entity whose Rhai planner will run",
-                  "always_required": true,
+                  "description": "Compiled change-request entity whose Rhai planner will run; pair with --request",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -415,8 +415,35 @@
                 },
                 {
                   "display": "--request <JSON_FILE>",
-                  "description": "Bounded strict JSON object containing synthetic request fields. A symbolic link at any component of this path is refused.",
-                  "always_required": true,
+                  "description": "Bounded strict JSON object containing synthetic request fields; requires --entity. A symbolic link at any component of this path is refused.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--action <ACTION>",
+                  "description": "Compiled immediate action whose Rhai handler will run; pair with --input",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--input <JSON_FILE>",
+                  "description": "Bounded strict JSON object using authored action input IDs, without an HTTP envelope; requires --action. A symbolic link at any component of this path is refused.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--expect <JSON_FILE>",
+                  "description": "With --action and --input, assert exact effects or refusal and optional ordered evidenceCalls mocks without printing values. A symbolic link at any component of this path is refused.",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -446,7 +473,92 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "required_exactly_one",
+                  "when": null,
+                  "arguments": [
+                    "--entity <ENTITY>",
+                    "--action <ACTION>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "<PROJECT>",
+                  "arguments": [
+                    "--request <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--entity <ENTITY>",
+                  "arguments": [
+                    "--request <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--action <ACTION>",
+                  "arguments": [
+                    "--input <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "requires_all",
+                  "when": "--format <FORMAT>",
+                  "arguments": [
+                    "--request <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--action <ACTION>",
+                    "--entity <ENTITY>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--action <ACTION>",
+                    "--request <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--entity <ENTITY>",
+                    "--expect <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--entity <ENTITY>",
+                    "--input <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--expect <JSON_FILE>",
+                    "--request <JSON_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--input <JSON_FILE>",
+                    "--request <JSON_FILE>"
+                  ]
+                }
+              ],
               "subcommands": []
             }
           ]
@@ -2469,6 +2581,95 @@
                 {
                   "display": "--proposal-version <VERSION>",
                   "description": "Exact proposal version to inspect or erase",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "evidence-retention",
+          "invocation": "bregctl evidence-retention",
+          "about": "Erase expired protected action Evidence using configured migration authority",
+          "long_about": null,
+          "usage": "bregctl evidence-retention [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "erase-expired",
+              "invocation": "bregctl evidence-retention erase-expired",
+              "about": "Delete expired assertion bytes and verification context; receipts remain replayable",
+              "long_about": null,
+              "usage": "bregctl evidence-retention erase-expired [OPTIONS] --runtime-config <RUNTIME_CONFIG> --before <BEFORE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <RUNTIME_CONFIG>",
+                  "description": "Absolute runtime configuration path containing the migration connection binding",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--before <BEFORE>",
+                  "description": "RFC 3339 expiry cutoff, no later than the current time",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],

@@ -1,0 +1,89 @@
+{
+  "schema": "registry.evidence-client-contracts/v1",
+  "assuranceProfile": "local",
+  "audience": "urn:example:landholding",
+  "issuedBy": "urn:example:farmer-authority",
+  "providedBy": "urn:example:farmer-registry",
+  "definitions": [
+    {
+      "handle": "farmer-status",
+      "requirement": "urn:example:farmer:status-v1",
+      "configurationRevision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "kind": "information-requirement",
+      "evidenceType": "urn:example:farmer:status-evidence",
+      "purpose": "land-registration",
+      "responseFormats": [
+        "signed-jws"
+      ],
+      "referenceFrameworks": [
+        "urn:example:farmer:framework"
+      ],
+      "subjects": [
+        {
+          "role": "farmer",
+          "cardinality": "one",
+          "selector": {
+            "profile": "farmer-number-v1",
+            "valueOrigin": "request",
+            "fields": [
+              {
+                "type": "string",
+                "name": "farmer-number",
+                "minimumBytes": 3,
+                "maximumBytes": 77
+              }
+            ]
+          }
+        }
+      ],
+      "concepts": [
+        {
+          "handle": "active",
+          "concept": "urn:example:farmer:active",
+          "required": true,
+          "form": "boolean"
+        }
+      ]
+    },
+    {
+      "handle": "farmer-category",
+      "requirement": "urn:example:farmer:category-v1",
+      "configurationRevision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "kind": "information-requirement",
+      "evidenceType": "urn:example:farmer:category-evidence",
+      "purpose": "land-registration",
+      "responseFormats": [
+        "signed-jws"
+      ],
+      "referenceFrameworks": [
+        "urn:example:farmer:framework"
+      ],
+      "subjects": [
+        {
+          "role": "farmer",
+          "cardinality": "one",
+          "selector": {
+            "profile": "farmer-number-v1",
+            "valueOrigin": "request",
+            "fields": [
+              {
+                "type": "string",
+                "name": "farmer-number",
+                "minimumBytes": 3,
+                "maximumBytes": 77
+              }
+            ]
+          }
+        }
+      ],
+      "concepts": [
+        {
+          "handle": "category",
+          "concept": "urn:example:farmer:category",
+          "required": true,
+          "form": "string"
+        }
+      ]
+    }
+  ]
+}

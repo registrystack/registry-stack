@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         planner_and_access_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 35)],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 47)],
             [invariant["negativeId"] for invariant in planner_and_access_rows],
         )
         for invariant in planner_and_access_rows:

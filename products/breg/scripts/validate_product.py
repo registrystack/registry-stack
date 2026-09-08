@@ -30,7 +30,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 20))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 35))
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 47))
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -64,6 +64,7 @@ PACKAGE_LAYOUT_ENTRIES = {
     ("manifest/registry-manifest.json", "lossy-manifest-projection", False),
     ("manifest/dcat.jsonld", "dcat-catalog-projection", False),
     ("source/modules/<module-id>/<relative-sql-path>", "source-module-asset", False),
+        ("source/project/<relative-json-path>", "source-project-evidence-contract", False),
     ("tests/journeys.yaml", "fixture-journeys", True),
     ("signatures", "package-signatures", False),
 }
@@ -105,6 +106,10 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_immediate_action_activation",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_webhook_outbox",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_webhook_delivery",
+    "cargo test --locked -p registry-breg --features postgres-test --test postgres_immediate_action_requirements",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_action_handlers",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_action_evidence",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_action_evidence_targets",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_temporal_corrections",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_batch",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_data_facility",
@@ -484,7 +489,11 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
     # to share an invocation and the complete action harness to run in a lane.
     cargo_commands: list[str] = []
     for line in source.replace("\\\n", " ").splitlines():
-        if not line.lstrip().startswith("cargo "):
+        prefix = "uv run --no-project --with PyYAML==6.0.2 "
+        line = line.lstrip()
+        if line.startswith(prefix):
+            line = line[len(prefix):]
+        if not line.startswith("cargo "):
             continue
         try:
             arguments = shlex.split(line)

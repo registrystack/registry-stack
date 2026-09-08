@@ -372,6 +372,8 @@ pub struct RuntimeConfig {
     audit: AuditConfig,
     cursor: CursorConfig,
     event_destinations: EventDestinationConfigs,
+    evidence_providers:
+        std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     event_delivery: EventDeliveryConfig,
     operational_timeouts: OperationalTimeouts,
     metrics_listener: Option<MetricsListenerConfig>,
@@ -414,10 +416,22 @@ impl RuntimeConfig {
             audit,
             cursor,
             event_destinations,
+            evidence_providers: raw.evidence_providers,
             event_delivery,
             operational_timeouts,
             metrics_listener,
         })
+    }
+
+    pub fn activate_evidence(
+        &self,
+        compiled: &CompiledRegistry,
+    ) -> Result<Option<Arc<crate::action_evidence::ActionEvidenceEvaluator>>> {
+        crate::action_evidence_config::activate(
+            compiled,
+            &self.evidence_providers,
+            &self.secret_resolver()?,
+        )
     }
 
     pub fn listener(&self) -> &ListenerConfig {
@@ -1736,6 +1750,9 @@ struct RawRuntimeConfig {
     cursor: RawCursorConfig,
     #[serde(default)]
     event_destinations: RawEventDestinationConfigs,
+    #[serde(default)]
+    evidence_providers:
+        std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     /// Optional event-delivery tuning. Defaults to the server's bounded retention policy.
     #[serde(default)]
     event_delivery: RawEventDeliveryConfig,

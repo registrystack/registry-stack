@@ -726,6 +726,18 @@ class CiChangesTest(unittest.TestCase):
             set(product_outputs["rust_packages"]) & BREG_PACKAGES,
         )
 
+    def test_evidence_runtime_changes_select_real_breg_composition_without_a_runtime_dependency(self) -> None:
+        outputs = classify(self.workspace, ("crates/registry-evidence/src/source.rs",))
+        self.assertTrue(outputs["breg_contracts"])
+        self.assertNotIn("registry-breg", outputs["rust_packages"])
+
+    def test_evidence_client_and_verifier_changes_select_breg_postgres_proof(self) -> None:
+        for package in ("registry-evidence-client", "registry-evidence-verifier"):
+            with self.subTest(package=package):
+                outputs = classify(self.workspace, (f"crates/{package}/src/lib.rs",))
+                self.assertTrue(outputs["breg_contracts"])
+                self.assertIn("registry-breg", outputs["rust_packages"])
+
     def test_manifest_core_changes_select_breg_through_linked_code(
         self,
     ) -> None:
@@ -1060,6 +1072,7 @@ class CiChangesTest(unittest.TestCase):
                 self.assertEqual(
                     {entry["name"] for entry in outputs["rust_matrix"]["include"]},
                     {
+                        "breg",
                         "discovery",
                         "evidence",
                         "mint",

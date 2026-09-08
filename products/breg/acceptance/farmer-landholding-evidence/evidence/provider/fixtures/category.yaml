@@ -1,0 +1,109 @@
+fixture: registry.evidence.reference.breg-farmer-category/v1
+synthetic_only: true
+common:
+  observed_at: '2026-09-08T00:00:00Z'
+  selectors:
+    farmer:
+      profile: farmer-number-v1
+      values:
+        farmer-number: TH-00042
+  expectedRequestParts:
+    query: []
+    body:
+      reference: TH-00042
+      fields:
+      - reference
+      - category
+      limit: 2
+  expectedTransport:
+    path: /v1/facts
+    fixedHeaders:
+    - name: Accept
+      value: application/json
+cases:
+- id: positive
+  response:
+    total: 1
+    reference: TH-00042
+    active: true
+    category: smallholder
+  expected:
+    lookup: match
+    derivationRuns: true
+    signed: true
+    value: smallholder
+- id: negative-inactive
+  response:
+    total: 1
+    reference: TH-00042
+    active: false
+    category: smallholder
+  expected:
+    lookup: match
+    derivationRuns: true
+    signed: true
+    value: smallholder
+- id: boundary-returned-identifier-mismatch
+  response:
+    total: 1
+    reference: TH-99999
+    active: true
+    category: smallholder
+  expected:
+    lookup: no_match
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+- id: missing-fact
+  response:
+    total: 1
+    reference: TH-00042
+  expected:
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+- id: no-match
+  response:
+    total: 0
+  expected:
+    lookup: no_match
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+- id: ambiguous
+  response:
+    total: 2
+  expected:
+    lookup: ambiguous
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+- id: source-failure
+  sourceFailure: timeout
+  expected:
+    publicProblem: source.unavailable
+    signed: false
+- id: anti-reconstruction
+  bundleMutation: duplicate-disclosure-family
+  expected:
+    bundle: rejected
+- id: unrequested-fact-absent
+  response:
+    total: 1
+    reference: TH-00042
+    category: smallholder
+  expected:
+    lookup: match
+    derivationRuns: true
+    signed: true
+    value: smallholder
+privacyExpectation:
+  evidenceContains:
+  - urn:example:farmer:category
+  evidenceExcludes:
+  - TH-00042
+  - TH-99999
+  - farmer-number-v1
+  diagnosticsExclude:
+  - TH-00042
+  - TH-99999

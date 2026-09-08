@@ -1,0 +1,154 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: person-registration-rhai
+  canonicalBaseIri: https://person-registration-rhai.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: person-registration-rhai-acceptance
+  sequence: 1
+  sourceRevision: person-registration-rhai-acceptance-0.1.0
+manifestProjection:
+  accessProfile: person-reader
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://person-registration-rhai.example.gov
+    title: Synthetic Person Registration Catalog
+    description: Input-only Rhai immediate actions with native stored identifier integrity.
+    publisher:
+      id: person-registration-authority
+      name: Synthetic Person Registration Authority
+      iri: https://person-registration-rhai.example.gov/authority
+  publicService: {id: person-registration-service, title: Synthetic Person Registration Service}
+  datasets:
+    - id: person-registration-rhai
+      title: Synthetic Person Registration Registry
+      description: Synthetic people, registrations and registration registers for action acceptance tests.
+      owner: Synthetic Person Registration Authority
+      status: active
+  dataServices:
+    - id: person-registration-data-service
+      title: Synthetic Person Registration Service
+      endpointUrl: https://person-registration-rhai.example.gov
+      servesDatasets: [person-registration-rhai]
+  distributions: []
+entities:
+  - id: person
+    primaryDataset: person-registration-rhai
+    route: people
+    mutationMode: mutable
+    fields:
+      - {id: identifier, type: string, required: true, maxLength: 13, pattern: '^[0-9]{13}$', classification: internal}
+      - {id: display-name, apiName: displayName, type: string, required: true, minLength: 1, maxLength: 200, classification: internal}
+    constraints:
+      - {kind: unique, fields: [identifier]}
+    events:
+      - id: person-registered-v1
+        trigger: created
+        projection: [identifier]
+        webhook: {destinationId: person-events}
+  - id: registration
+    primaryDataset: person-registration-rhai
+    route: registrations
+    mutationMode: create_only
+    fields:
+      - {id: registration-code, apiName: registrationCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: person, type: reference, target: person, required: true, classification: internal}
+      - {id: register, type: reference, target: register, required: true, classification: internal}
+    constraints:
+      - {kind: unique, fields: [registration-code]}
+    events:
+      - id: registration-recorded-v1
+        trigger: created
+        projection: [registration-code]
+        webhook: {destinationId: person-events}
+  - id: register
+    primaryDataset: person-registration-rhai
+    route: registers
+    mutationMode: mutable
+    fields:
+      - {id: register-code, apiName: registerCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: active, type: boolean, required: true, classification: internal}
+      - {id: last-person, apiName: lastPerson, type: reference, target: person, required: false, classification: internal}
+    constraints:
+      - {kind: unique, fields: [register-code]}
+actions:
+  - id: register-person
+    inputs:
+      - {id: identifier, type: string, required: true, maxLength: 13, classification: internal}
+      - {id: given-name, apiName: givenName, type: string, required: false, maxLength: 80, classification: internal}
+      - {id: family-name, apiName: familyName, type: string, required: false, maxLength: 80, classification: internal}
+    handler:
+      kind: rhai
+      script: scripts/register-person.rhai
+      abi: registry.action-handler/v1
+      refusals:
+        - {code: blank-name, label: At least one name part is required.}
+      writes:
+        - id: person
+          target: {entity: person}
+          operation: create
+          fields: [identifier, display-name]
+  - id: register-person-with-registration
+    inputs:
+      - {id: identifier, type: string, required: true, maxLength: 13, classification: internal}
+      - {id: given-name, apiName: givenName, type: string, required: false, maxLength: 80, classification: internal}
+      - {id: family-name, apiName: familyName, type: string, required: false, maxLength: 80, classification: internal}
+      - {id: register, apiName: registerId, type: reference, target: register, required: true, classification: internal}
+      - {id: registration-code, apiName: registrationCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: record-registration, apiName: recordRegistration, type: boolean, required: true, classification: internal}
+      - {id: update-register, apiName: updateRegister, type: boolean, required: true, classification: internal}
+    requires:
+      - {input: register, field: active, equals: true}
+    handler:
+      kind: rhai
+      script: scripts/register-person-with-registration.rhai
+      abi: registry.action-handler/v1
+      refusals:
+        - {code: blank-name, label: At least one name part is required.}
+      writes:
+        - id: person
+          target: {entity: person}
+          operation: create
+          fields: [identifier, display-name]
+        - id: registration
+          target: {entity: registration}
+          operation: create
+          fields: [registration-code, person, register]
+        - id: register
+          target: {fromField: register}
+          operation: patch
+          fields: [last-person]
+accessProfiles:
+  - id: person-registrar
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:person:register]
+    requiredPurposes: [person-registration]
+    grants:
+      - action: register-person
+        operations: [invoke]
+        targets: [{entity: person, rowBoundaries: []}]
+        results: [person]
+      - action: register-person-with-registration
+        operations: [invoke]
+        targets: [{entity: person, rowBoundaries: []}, {entity: registration, rowBoundaries: []}, {entity: register, rowBoundaries: []}]
+        results: [person, registration, register]
+  - id: person-reader
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:person:read]
+    requiredPurposes: [person-registration-audit]
+    grants:
+      - {entity: person, rowBoundaries: [], operations: [get], readableFields: [identifier, display-name]}
+      - {entity: registration, rowBoundaries: [], operations: [get], readableFields: [registration-code, person, register]}
+      - {entity: register, rowBoundaries: [], operations: [get], readableFields: [register-code, active, last-person]}
+  - id: person-administrator
+    principalClaim: registry_principal
+    requiredScopes: [registry:person:manage]
+    requiredPurposes: [person-maintenance]
+    grants:
+      - {entity: person, rowBoundaries: [], operations: [create, get, patch], readableFields: [identifier, display-name], writableFields: [identifier, display-name]}
+      - {entity: register, rowBoundaries: [], operations: [create, get, patch], readableFields: [register-code, active, last-person], writableFields: [register-code, active, last-person]}

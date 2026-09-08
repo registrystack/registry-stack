@@ -40,7 +40,7 @@ use crate::webhook::{WebhookDeliveryService, WebhookWorker};
 
 /// Value-free startup refusal. Package paths, database values, and physical
 /// catalog details are intentionally unavailable through Display and Debug.
-#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum StartupError {
     #[error("the Registry runtime configuration was refused")]
     RuntimeConfig(RuntimeConfigError),
@@ -50,6 +50,9 @@ pub enum StartupError {
     DatabaseConnection,
     #[error("the Registry database is not ready for this package")]
     DatabaseUnready,
+    /// Authored field address only, never the expression or database diagnostic.
+    #[error("a persisted field pattern has invalid PostgreSQL syntax")]
+    FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("the Registry audit profile was refused")]
     Audit,
     #[error("the Registry cursor profile was refused")]
@@ -160,7 +163,7 @@ impl OperationalLogRecord {
 /// The complete production operational-event vocabulary. Variants accept only
 /// closed errors or codes, so request, record, SQL, secret, path, destination,
 /// payload, upstream, and caller trace values cannot reach the renderer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OperationalEvent {
     StartupBegan,
     Listening,
@@ -172,7 +175,7 @@ pub enum OperationalEvent {
 
 impl OperationalEvent {
     #[must_use]
-    pub const fn record(self) -> OperationalLogRecord {
+    pub const fn record(&self) -> OperationalLogRecord {
         match self {
             Self::StartupBegan => OperationalLogRecord {
                 level: OperationalLogLevel::Info,
@@ -221,7 +224,7 @@ impl OperationalEvent {
 
     /// Emit one record through the production JSON tracing subscriber. This is
     /// the only production tracing entry point in Base Registry Engine.
-    pub fn emit(self) {
+    pub fn emit(&self) {
         let record = self.record();
         match self {
             Self::StartupBegan | Self::Listening => {
@@ -245,12 +248,15 @@ impl OperationalEvent {
 }
 
 impl StartupError {
-    const fn operational_message(self) -> &'static str {
+    const fn operational_message(&self) -> &'static str {
         match self {
             Self::RuntimeConfig(_) => "the Registry runtime configuration was refused",
             Self::PackageRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection => "the Registry database connection was refused",
             Self::DatabaseUnready => "the Registry database is not ready for this package",
+            Self::FieldPatternSyntax { .. } => {
+                "a persisted field pattern has invalid PostgreSQL syntax"
+            }
             Self::Audit => "the Registry audit profile was refused",
             Self::Cursor => "the Registry cursor profile was refused",
             Self::Oidc => "the Registry OIDC key source was refused",
@@ -444,7 +450,7 @@ async fn rehearse_schema_fingerprint_with_connection_config(
         registry,
     )
     .await
-    .map_err(|_| StartupError::DatabaseUnready)
+    .map_err(schema_preparation_error)
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling", feature = "postgres-test"))]
@@ -483,7 +489,21 @@ async fn prepare_schema_test_database_with_connection_configs(
         },
     )
     .await
-    .map_err(|_| StartupError::DatabaseUnready)
+    .map_err(schema_preparation_error)
+}
+
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+fn schema_preparation_error(error: crate::postgres::PostgresKernelError) -> StartupError {
+    match error {
+        crate::postgres::PostgresKernelError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        } => StartupError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        },
+        _ => StartupError::DatabaseUnready,
+    }
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -732,7 +752,10 @@ async fn finish_prepared_server(
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
     let webhook_worker = Some(WebhookWorker::new(webhook_delivery));
-    let mutations = Arc::new(PostgresRecordMutationService::new_with_event_destinations(
+    let evidence = config
+        .activate_evidence(&registry)
+        .map_err(StartupError::RuntimeConfig)?;
+    let mutations = PostgresRecordMutationService::new_with_event_destinations(
         pool,
         Arc::clone(&registry),
         expected,
@@ -740,7 +763,13 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit_profile,
         Some(event_destinations),
-    ));
+    );
+    let mutations = Arc::new(match evidence {
+        Some(evaluator) => mutations
+            .with_evidence_evaluator(evaluator)
+            .with_evidence_timeout(config.operational_timeouts().http_request),
+        None => mutations,
+    });
     let mut service = HttpService::new(registry, read_identity, records, readiness, cursor_codec)
         .with_postgres_revisions(revisions)
         .with_snapshots(snapshots)

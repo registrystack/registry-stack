@@ -262,6 +262,23 @@ pub(crate) fn generate_ddl_with_actions(
             });
         }
         for field in entity.fields.values() {
+            if let Some(pattern) = &field.pattern {
+                // Explicit escape strings preserve regex backslashes independently
+                // of the migration session's standard_conforming_strings setting.
+                let pattern = format!("E'{}'", pattern.replace('\\', "\\\\").replace('\'', "''"));
+                statements.push(DdlStatement {
+                    id: format!("entity.{}.field.{}.pattern", entity.id, field.id),
+                    kind: DdlStatementKind::Constraint,
+                    // Evaluate the native expression even when the table is empty.
+                    // No second regex engine participates in authoring or runtime.
+                    sql: format!(
+                        "SELECT '' ~ {pattern}; ALTER TABLE registry_data.{table} ADD CONSTRAINT {name} CHECK ({column} ~ {pattern})",
+                        table = quote_identifier(&entity.physical_table),
+                        name = quote_identifier(&field_pattern_constraint_name(&entity.id, &field.id)),
+                        column = quote_identifier(&field.physical_name),
+                    ),
+                });
+            }
             if let FieldTypeSource::Reference { target, .. } = &field.field_type {
                 let constraint_name = derived_reference_name(entity_names, &field.id);
                 statements.push(DdlStatement {
@@ -3406,6 +3423,12 @@ pub(crate) fn policy_sql(table: &str, policy: &DdlPolicy, role: Option<&str>) ->
     sql
 }
 
+/// Stable managed identity, independent of the expression being enforced.
+pub fn field_pattern_constraint_name(entity_id: &str, field_id: &str) -> String {
+    let digest = Sha256::digest(format!("breg/field-pattern/v1/{entity_id}/{field_id}").as_bytes());
+    format!("breg_pattern_{}", hex_prefix(&digest, 20))
+}
+
 fn derived_reference_name<'a>(
     names: &'a crate::physical_names::EntityPhysicalNames,
     field: &str,
@@ -3772,7 +3795,7 @@ pub(crate) fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-fn quote_literal(value: &str) -> String {
+pub(crate) fn quote_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 

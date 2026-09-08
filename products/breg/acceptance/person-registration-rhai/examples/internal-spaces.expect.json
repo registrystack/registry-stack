@@ -1,0 +1,11 @@
+{
+  "effects": [
+    {
+      "id": "person",
+      "set": {
+        "identifier": "0123456789012",
+        "display-name": "Mina  Rae Example"
+      }
+    }
+  ]
+}

@@ -298,6 +298,77 @@ fn project_migrate_preserves_module_source_and_refreshes_only_its_lock_digest() 
 }
 
 #[test]
+fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
+    let source = String::from_utf8(authoring_fixture().to_vec())
+        .unwrap()
+        .replace(
+            "        maxLength: 64",
+            "        maxLength: 64\n        pattern: '[native-pattern-expression-canary'",
+        );
+    let project = TestProject::from_registry_source(source.as_bytes());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let finding = report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["code"] == "field.pattern.unverified_offline")
+        .expect("offline success must identify native syntax as unverified");
+    assert_eq!(finding["path"], "entities[record].fields[code].pattern");
+    assert_eq!(finding["severity"], "finding");
+    assert_tool_diagnostic(finding, "registry_project", "run_schema_test");
+    assert!(finding["message"]
+        .as_str()
+        .unwrap()
+        .contains("bregctl test"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("native-pattern-expression-canary"));
+
+    let denied = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(project.path()),
+        "--deny-findings",
+    ]);
+    assert_eq!(denied.status.code(), Some(1));
+    assert!(json_stdout(&denied)["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["code"] == "field.pattern.unverified_offline"));
+}
+
+#[test]
+fn missing_action_script_identifies_action_and_safe_relative_path() {
+    let project = TestProject::from_registry_source(include_bytes!(
+        "../../../products/breg/acceptance/person-registration-rhai/registry.yaml"
+    ));
+    fs::create_dir(project.path().join("scripts")).unwrap();
+    fs::write(
+        project.path().join("scripts/register-person-with-registration.rhai"),
+        include_bytes!("../../../products/breg/acceptance/person-registration-rhai/scripts/register-person-with-registration.rhai"),
+    )
+    .unwrap();
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "source.planner_asset.missing");
+    assert_eq!(
+        diagnostic["path"],
+        "actions[register-person].handler.script"
+    );
+    assert!(diagnostic["message"]
+        .as_str()
+        .unwrap()
+        .contains("scripts/register-person.rhai"));
+    assert_tool_diagnostic(diagnostic, "registry_project", "correct_authoring_source");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(path(project.path())));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("fn handle"));
+}
+
+#[test]
 fn access_review_example_explains_simulates_and_refuses_footguns_without_live_data() {
     let project = TestProject::from_registry_source(include_bytes!(
         "../../../products/breg/examples/access-review/registry.yaml"
@@ -2779,6 +2850,39 @@ fn explain_actions_reports_compiled_effects_conditions_results_and_grants() {
         .expect("results are listed")
         .iter()
         .any(|result| result["effect"] == "household"));
+}
+
+#[test]
+fn explain_actions_reports_reference_acceptance_conditions() {
+    let project = fs::canonicalize(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/person-registration-rhai"),
+    )
+    .expect("authored person-registration fixture resolves");
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "actions",
+        project.to_str().expect("path is UTF-8"),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let action = report["explanation"]["actions"]
+        .as_array()
+        .expect("actions are listed")
+        .iter()
+        .find(|action| action["id"] == "register-person-with-registration")
+        .expect("registration action is explained");
+    let requirement = &action["requires"][0];
+    assert_eq!(requirement["input"]["apiName"], "registerId");
+    assert_eq!(requirement["entity"], "register");
+    assert_eq!(requirement["field"]["field"], "active");
+    assert_eq!(requirement["equals"], true);
+    assert_eq!(requirement["evaluated"], "before_effects_under_target_lock");
+    assert!(!String::from_utf8(output.stdout)
+        .expect("explanation is UTF-8")
+        .contains("registry_data"));
 }
 
 #[test]

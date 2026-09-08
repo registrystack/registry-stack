@@ -142,7 +142,7 @@ fn compile_application(
     }
 }
 
-fn valid_planner_path(path: &str) -> bool {
+pub(crate) fn valid_planner_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 256
         && path.ends_with(".rhai")
@@ -517,13 +517,14 @@ fn compile_planner(
 }
 
 pub(crate) fn compile_change_requests(
+    action_scripts: &BTreeSet<(Option<String>, String)>,
     sources: &BTreeMap<String, EntitySource>,
     origins: &BTreeMap<String, Option<String>>,
     assets: &[ModuleAssetSource],
     entities: &mut BTreeMap<String, CompiledEntity>,
 ) -> Result<(), Vec<Diagnostic>> {
     let mut errors = Vec::new();
-    validate_planner_assets(sources, origins, assets, &mut errors);
+    validate_planner_assets(sources, origins, assets, action_scripts, &mut errors);
     validate_change_controlled_direct_writes(entities, &mut errors);
     let request_entity_ids = sources
         .iter()
@@ -567,6 +568,7 @@ fn validate_planner_assets(
     sources: &BTreeMap<String, EntitySource>,
     origins: &BTreeMap<String, Option<String>>,
     assets: &[ModuleAssetSource],
+    action_scripts: &BTreeSet<(Option<String>, String)>,
     errors: &mut Vec<Diagnostic>,
 ) {
     let declared = sources
@@ -584,6 +586,7 @@ fn validate_planner_assets(
                     )
                 })
         })
+        .chain(action_scripts.iter().cloned())
         .collect::<BTreeSet<_>>();
     let supplied = assets
         .iter()
@@ -594,7 +597,7 @@ fn validate_planner_assets(
         errors.push(Diagnostic::error(
             "change_request.planner.asset_undeclared",
             "modules[].assets[]",
-            "a Rhai asset is not declared by a change-request planner at the same ownership origin",
+            "a Rhai asset is not declared by a change-request planner or action handler at the same ownership origin",
         ));
     }
 }
@@ -2031,15 +2034,16 @@ fn entity_contract_payload(entity: &CompiledEntity) -> serde_json::Value {
         .fields
         .iter()
         .map(|(field_id, field)| {
-            (
-                field_id.clone(),
-                json!({
-                    "type": field.field_type,
-                    "required": field.required,
-                    "classification": field.classification,
-                    "validTimeRole": field.valid_time_role,
-                }),
-            )
+            let mut payload = json!({
+                "type": field.field_type,
+                "required": field.required,
+                "classification": field.classification,
+                "validTimeRole": field.valid_time_role,
+            });
+            if let Some(pattern) = &field.pattern {
+                payload["postgresPattern"] = json!(pattern);
+            }
+            (field_id.clone(), payload)
         })
         .collect::<BTreeMap<_, _>>();
     json!({

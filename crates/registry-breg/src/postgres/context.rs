@@ -2987,6 +2987,7 @@ mod tests {
         let mut operations = BTreeSet::new();
         operations.insert(Operation::Get);
         let project = RegistryProject {
+            evidence_providers: Vec::new(),
             api_version: crate::compiler::AUTHORING_API_VERSION.to_owned(),
             kind: "RegistryProject".to_owned(),
             registry: crate::contract::RegistryIdentitySource {
@@ -3015,6 +3016,7 @@ mod tests {
                 change_request: None,
                 fields: vec![
                     FieldSource {
+                        pattern: None,
                         id: "tenant".to_owned(),
                         api_name: None,
                         field_type: FieldTypeSource::String {
@@ -3026,6 +3028,7 @@ mod tests {
                         valid_time_role: None,
                     },
                     FieldSource {
+                        pattern: None,
                         id: "region".to_owned(),
                         api_name: None,
                         field_type: FieldTypeSource::String {

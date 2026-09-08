@@ -821,8 +821,8 @@ pub(crate) fn openapi_action_response_schema_id(action_id: &str) -> String {
 }
 
 pub(crate) fn openapi_action_input_schema(action: &CompiledAction) -> Value {
-    let input_schema = action_input_properties_schema(action.inputs.iter());
     let condition_inputs = action_condition_inputs(action);
+    let input_schema = action_input_properties_schema(action.inputs.iter(), &condition_inputs);
     let mut properties = Map::from_iter([("input".to_owned(), input_schema)]);
     if !condition_inputs.is_empty() {
         properties.insert(
@@ -890,12 +890,20 @@ pub(crate) fn openapi_action_response_schema(
     let result_shapes = action_response_result_shapes(action, selected_result_effects);
     let results_schema = match result_shapes.as_slice() {
         [shape] => action_results_schema(action, shape),
-        shapes => json!({
-            "oneOf": shapes
-                .iter()
-                .map(|shape| action_results_schema(action, shape))
-                .collect::<Vec<_>>()
-        }),
+        shapes => Value::Object(Map::from_iter([(
+            if action.handler.is_some() {
+                "anyOf"
+            } else {
+                "oneOf"
+            }
+            .to_owned(),
+            Value::Array(
+                shapes
+                    .iter()
+                    .map(|shape| action_results_schema(action, shape))
+                    .collect(),
+            ),
+        )])),
     };
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -965,7 +973,11 @@ fn action_results_schema(action: &CompiledAction, effect_ids: &BTreeSet<String>)
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": effect_ids.iter().cloned().collect::<Vec<_>>(),
+        "required": if action.handler.is_some() {
+            Vec::<String>::new()
+        } else {
+            effect_ids.iter().cloned().collect()
+        },
         "properties": result_properties,
     })
 }
@@ -1187,15 +1199,24 @@ fn reference_input_metadata(input: &CompiledActionInput) -> Option<Value> {
 
 fn action_input_properties_schema<'a>(
     inputs: impl IntoIterator<Item = &'a CompiledActionInput>,
+    condition_inputs: &[&CompiledActionInput],
 ) -> Value {
     let inputs = inputs.into_iter().collect::<Vec<_>>();
+    let is_required = |input: &CompiledActionInput| {
+        input.required || condition_inputs.iter().any(|target| target.id == input.id)
+    };
     let properties = inputs
         .iter()
-        .map(|input| (input.api_name.clone(), field_schema(&input.field_type)))
+        .map(|input| {
+            (
+                input.api_name.clone(),
+                field_value_schema(&input.field_type, !is_required(input)),
+            )
+        })
         .collect::<Map<_, _>>();
     let required = inputs
         .iter()
-        .filter(|input| input.required)
+        .filter(|input| is_required(input))
         .map(|input| Value::String(input.api_name.clone()))
         .collect::<Vec<_>>();
     json!({
@@ -1347,8 +1368,8 @@ fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledActi
         ),
     };
     let mut responses = Map::from_iter([("200".to_owned(), success)]);
-    for (status, problems) in action_problem_responses(route.kind) {
-        let examples = problems
+    for (status, problems) in action_problem_responses(route.kind, action) {
+        let mut examples = problems
             .iter()
             .map(|problem| {
                 (
@@ -1357,6 +1378,19 @@ fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledActi
                 )
             })
             .collect::<Map<_, _>>();
+        if status == "422" {
+            examples = action
+                .handler
+                .as_ref()
+                .into_iter()
+                .flat_map(|handler| &handler.refusals)
+                .map(|(code, label)| {
+                    let mut example = problem_example(status, "action.refused", label);
+                    example["refusalCode"] = json!(code);
+                    (code.clone(), json!({"value": example}))
+                })
+                .collect();
+        }
         responses.insert(
             status.to_owned(),
             json!({
@@ -1377,7 +1411,10 @@ fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledActi
     Value::Object(responses)
 }
 
-fn action_problem_responses(kind: ActionRouteKind) -> BTreeMap<&'static str, Vec<ProblemExample>> {
+fn action_problem_responses(
+    kind: ActionRouteKind,
+    action: &CompiledAction,
+) -> BTreeMap<&'static str, Vec<ProblemExample>> {
     let mut responses = BTreeMap::from([
         (
             "400",
@@ -1423,6 +1460,24 @@ fn action_problem_responses(kind: ActionRouteKind) -> BTreeMap<&'static str, Vec
         ),
     ]);
     if kind == ActionRouteKind::Invoke {
+        if let Some(handler) = &action.handler {
+            if handler.abi == crate::contract::ACTION_HANDLER_ABI_V2 {
+                responses.entry("503").or_default().push(ProblemExample {
+                    code: "action.evidence_failed",
+                    detail: "The declared Evidence dependency could not be accepted.",
+                });
+            }
+            responses.insert(
+                "500",
+                vec![ProblemExample {
+                    code: "action.handler_failed",
+                    detail: "The action handler could not produce an accepted result.",
+                }],
+            );
+            if !handler.refusals.is_empty() {
+                responses.insert("422", Vec::new());
+            }
+        }
         responses.insert(
             "409",
             vec![
@@ -3697,6 +3752,9 @@ fn problem_schema() -> Value {
             "detail": {"type": "string", "maxLength": 256},
             "traceId": {"type": "string", "minLength": 32, "maxLength": 32, "pattern": "^[0-9a-f]{32}$"},
             "fieldPath": {"type": "string", "maxLength": 256},
+            "refusalCode": {"type": "string", "minLength": 1, "maxLength": 128},
+            "entityId": {"type": "string", "minLength": 1, "maxLength": 128},
+            "fieldId": {"type": "string", "minLength": 1, "maxLength": 128},
             "code": {
                 "type": "string",
                 "enum": crate::problem::ProblemCode::DOCUMENTED
@@ -3704,7 +3762,33 @@ fn problem_schema() -> Value {
                     .map(|code| code.code())
                     .collect::<Vec<_>>()
             }
-        }
+        },
+        "allOf": [
+            {
+                "if": {"properties": {"code": {"const": "action.refused"}}},
+                "then": {"required": ["refusalCode"], "properties": {"status": {"const": 422}}},
+                "else": {"not": {"required": ["refusalCode"]}}
+            },
+            {
+                "if": {"properties": {"code": {"const": "action.evidence_failed"}}},
+                "then": {"properties": {
+                    "status": {"const": 503},
+                    "detail": {"const": "The declared Evidence dependency could not be accepted."},
+                    "fieldPath": {"type": "string", "pattern": "^/evidence/[a-z][a-z0-9_-]{0,63}$"}
+                }}
+            },
+            {
+                "if": {"properties": {"code": {"const": "action.handler_failed"}}},
+                "then": {"properties": {"status": {"const": 500}}}
+            },
+            {
+                "if": {"anyOf": [{"required": ["entityId"]}, {"required": ["fieldId"]}]},
+                "then": {
+                    "required": ["entityId", "fieldId"],
+                    "properties": {"code": {"const": "mutation.conflict"}, "status": {"const": 409}}
+                }
+            }
+        ]
     })
 }
 
@@ -3718,7 +3802,9 @@ fn problem_example(status: &str, code: &str, detail: &str) -> Value {
             "409" => "Conflict",
             "412" => "Precondition Failed",
             "415" => "Unsupported Media Type",
+            "422" => "Unprocessable Entity",
             "428" => "Precondition Required",
+            "500" => "Internal Server Error",
             "503" => "Service Unavailable",
             "504" => "Gateway Timeout",
             _ => "Request failed",
@@ -4083,6 +4169,81 @@ fn canonicalization_error() -> Diagnostic {
         "artifacts",
         "the generated artifact could not be canonicalized",
     )
+}
+
+#[cfg(test)]
+mod problem_contract_tests {
+    use super::*;
+
+    #[test]
+    fn problem_contract_accepts_declared_refusals_and_server_faults() {
+        let schema = problem_schema();
+        let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+        let mut refusal = problem_example("422", "action.refused", "A name is required.");
+        assert!(
+            !validator.is_valid(&refusal),
+            "a refusal needs its declared code"
+        );
+        refusal["refusalCode"] = json!("blank-name");
+        refusal["fieldPath"] = json!("/input/givenName");
+        assert!(validator.is_valid(&refusal));
+        refusal["status"] = json!(400);
+        assert!(!validator.is_valid(&refusal));
+
+        let mut fault = problem_example(
+            "500",
+            "action.handler_failed",
+            "The action handler could not produce an accepted result.",
+        );
+        assert!(validator.is_valid(&fault));
+        fault["status"] = json!(400);
+        assert!(
+            !validator.is_valid(&fault),
+            "a package fault is not a caller error"
+        );
+    }
+
+    #[test]
+    fn evidence_dependency_problem_is_static_and_has_service_unavailable_status() {
+        let schema = problem_schema();
+        let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+        let mut problem = problem_example(
+            "503",
+            "action.evidence_failed",
+            "The declared Evidence dependency could not be accepted.",
+        );
+        assert!(validator.is_valid(&problem));
+        problem["fieldPath"] = json!("/evidence/status");
+        assert!(validator.is_valid(&problem));
+        problem["fieldPath"] = json!("/evidence/status/raw-selector");
+        assert!(!validator.is_valid(&problem));
+        problem["fieldPath"] = json!("/evidence/status");
+        problem["detail"] = json!("provider response or selector canary");
+        assert!(!validator.is_valid(&problem));
+        problem["detail"] = json!("The declared Evidence dependency could not be accepted.");
+        problem["status"] = json!(422);
+        assert!(!validator.is_valid(&problem));
+    }
+
+    #[test]
+    fn problem_contract_keeps_pattern_locations_paired_and_errors_closed() {
+        let schema = problem_schema();
+        let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+        let mut problem = problem_example("409", "mutation.conflict", "The write was refused.");
+        assert!(validator.is_valid(&problem));
+        problem["entityId"] = json!("person");
+        assert!(!validator.is_valid(&problem));
+        problem["fieldId"] = json!("identifier");
+        assert!(validator.is_valid(&problem));
+        problem["code"] = json!("resource.not_found");
+        assert!(!validator.is_valid(&problem));
+        problem["code"] = json!("mutation.conflict");
+        problem["refusalCode"] = json!("undeclared-refusal");
+        assert!(!validator.is_valid(&problem));
+        problem.as_object_mut().unwrap().remove("refusalCode");
+        problem["recordValue"] = json!("must-not-be-disclosed");
+        assert!(!validator.is_valid(&problem));
+    }
 }
 
 #[cfg(test)]

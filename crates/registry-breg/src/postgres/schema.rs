@@ -67,12 +67,24 @@ pub async fn install_compiled_schema(
             spatial_candidate_view_statements.push(statement);
             continue;
         }
-        execute_compiled_ddl_statement(migration, &statement.sql, statement.kind, runtime_role)
-            .await?;
+        execute_compiled_ddl_statement(
+            migration,
+            &statement.sql,
+            statement.kind,
+            compiled_pattern_field(registry, &statement.id),
+            runtime_role,
+        )
+        .await?;
     }
     for statement in spatial_candidate_view_statements {
-        execute_compiled_ddl_statement(migration, &statement.sql, statement.kind, runtime_role)
-            .await?;
+        execute_compiled_ddl_statement(
+            migration,
+            &statement.sql,
+            statement.kind,
+            None,
+            runtime_role,
+        )
+        .await?;
     }
 
     reconcile_compiled_runtime_acl(migration, registry, runtime_role).await
@@ -318,13 +330,78 @@ pub(crate) async fn execute_compiled_ddl_statement(
     client: &impl GenericClient,
     sql: &str,
     kind: DdlStatementKind,
+    pattern_field: Option<(&str, &str)>,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
     if kind == DdlStatementKind::View && is_spatial_candidate_view_sql(sql) {
         execute_spatial_candidate_view_ddl(client, sql, runtime_role).await
     } else {
-        client.batch_execute(sql).await?;
+        client
+            .batch_execute(sql)
+            .await
+            .map_err(|error| map_pattern_database_error(error, pattern_field))?;
         Ok(())
+    }
+}
+
+pub(crate) fn compiled_pattern_field<'a>(
+    registry: &'a CompiledRegistry,
+    statement_id: &str,
+) -> Option<(&'a str, &'a str)> {
+    registry
+        .physical_names()
+        .entities
+        .iter()
+        .find_map(|(entity, names)| {
+            names.constraints.keys().find_map(|member| {
+                let field = member.strip_prefix("pattern:")?;
+                (statement_id == format!("entity.{entity}.field.{field}.pattern"))
+                    .then_some((entity.as_str(), field))
+            })
+        })
+}
+
+pub(crate) fn pattern_field_for_constraint<'a>(
+    registry: &'a CompiledRegistry,
+    constraint: &str,
+) -> Option<(&'a str, &'a str)> {
+    registry
+        .physical_names()
+        .entities
+        .iter()
+        .find_map(|(entity, names)| {
+            names.constraints.iter().find_map(|(member, physical)| {
+                if physical != constraint {
+                    return None;
+                }
+                member
+                    .strip_prefix("pattern:")
+                    .map(|field| (entity.as_str(), field))
+            })
+        })
+}
+
+/// Only the compiler-resolved field address survives the PostgreSQL boundary.
+/// Expressions, row values, and physical names never enter the returned error.
+pub(crate) fn map_pattern_database_error(
+    error: tokio_postgres::Error,
+    pattern_field: Option<(&str, &str)>,
+) -> PostgresKernelError {
+    use tokio_postgres::error::SqlState;
+    match (error.code(), pattern_field) {
+        (Some(&SqlState::INVALID_REGULAR_EXPRESSION), Some((entity, field))) => {
+            PostgresKernelError::FieldPatternSyntax {
+                entity_id: entity.to_owned(),
+                field_id: field.to_owned(),
+            }
+        }
+        (Some(&SqlState::CHECK_VIOLATION), Some((entity, field))) => {
+            PostgresKernelError::FieldPatternExistingRows {
+                entity_id: entity.to_owned(),
+                field_id: field.to_owned(),
+            }
+        }
+        _ => PostgresKernelError::Connection,
     }
 }
 

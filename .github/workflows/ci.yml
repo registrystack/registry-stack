@@ -669,7 +669,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install uv
-        if: matrix.lane == 'contracts'
+        if: matrix.lane != 'immediate-actions'
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.11.16"

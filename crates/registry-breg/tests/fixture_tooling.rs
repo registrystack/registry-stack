@@ -74,6 +74,92 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
 }
 
 #[test]
+fn fixture_tooling_direct_claims_accept_bounded_strings_and_sets_without_widening() {
+    let registry = compiled_crud_alias_fixture();
+    let journey = |value: &str| {
+        format!(
+            r#"apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: claim-set-query
+    steps:
+      - id: query-people
+        entity: person
+        accessProfile: registrar
+        claims:
+          principal: fixture-registrar
+          purpose: case-management
+          directClaims: {{jurisdiction: {value}}}
+        request: {{operation: query, select: [personCode]}}
+        expect: {{outcome: success, status: 200, count: 0}}
+"#
+        )
+    };
+    let maximum_set = serde_json::to_string(
+        &(0..64)
+            .map(|index| format!("zone-{index}"))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let maximum_value = format!(r#"["{}"]"#, "a".repeat(256));
+    for value in [
+        "zone-a",
+        "[zone-a]",
+        "[zone-b, zone-a]",
+        &maximum_set,
+        &maximum_value,
+    ] {
+        validate_fixture_journeys(journey(value).as_bytes(), &registry)
+            .expect("existing scalar and bounded string-set claims validate");
+    }
+    let oversized_set = serde_json::to_string(
+        &(0..65)
+            .map(|index| format!("zone-{index}"))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    for value in [
+        "[]".to_owned(),
+        "[zone-a, zone-a]".to_owned(),
+        r#"[""]"#.to_owned(),
+        r#"["zone\na"]"#.to_owned(),
+        format!(r#"["{}"]"#, "a".repeat(257)),
+        format!(r#"["{}"]"#, "é".repeat(129)),
+        "a".repeat(257),
+        oversized_set,
+    ] {
+        let error = validate_fixture_journeys(journey(&value).as_bytes(), &registry)
+            .expect_err("invalid or oversized claim values fail before execution");
+        assert_eq!(
+            underlying_fixture_error(&error),
+            &FixtureError::AuthorityWideningRefused
+        );
+    }
+    for value in ["[zone-a, 7]", "[true]", "[{}]", "null", "7"] {
+        assert!(matches!(
+            validate_fixture_journeys(journey(value).as_bytes(), &registry).unwrap_err(),
+            FixtureError::JourneyShapeInvalid { .. }
+        ));
+    }
+    for changed in [
+        journey("[zone-a, zone-b]").replace(
+            "directClaims: {jurisdiction:",
+            "directClaims: {unknown_claim:",
+        ),
+        journey("[zone-a, zone-b]").replace(
+            "purpose: case-management",
+            "purpose: case-management\n          scopes: [registry:extra]",
+        ),
+    ] {
+        let error = validate_fixture_journeys(changed.as_bytes(), &registry)
+            .expect_err("sets do not permit undeclared names or scopes");
+        assert_eq!(
+            underlying_fixture_error(&error),
+            &FixtureError::AuthorityWideningRefused
+        );
+    }
+}
+
+#[test]
 fn fixture_tooling_crud_fields_accept_public_names_without_alias_overwrite() {
     let registry = compiled_crud_alias_fixture();
     let valid = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
@@ -1011,4 +1097,47 @@ journeys:
         message.contains("128"),
         "the refusal names the bound it enforces: {message}"
     );
+}
+
+#[test]
+fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contract() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/person-registration-rhai");
+    let project = parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+    let assets = project
+        .actions
+        .iter()
+        .filter_map(|action| action.handler.as_ref())
+        .map(|handler| registry_breg::contract::ModuleAssetSource {
+            module: None,
+            path: handler.script.clone(),
+            bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    let registry = registry_breg::compiler::compile_project_with_assets(
+        &project,
+        &[],
+        &assets,
+        CompileProfile::Authoring,
+    )
+    .unwrap();
+    let source = std::fs::read_to_string(root.join("tests/journeys.yaml")).unwrap();
+    validate_fixture_journeys(source.as_bytes(), &registry)
+        .expect("the complete authored handler and native-pattern suite preflights");
+    for changed in [
+        source.replace("      refusalCode: blank-name\n", ""),
+        source.replace("refusalCode: blank-name", "refusalCode: unknown"),
+        source.replace("status: 422", "status: 400"),
+        source.replace(
+            "problemCode: action.refused",
+            "problemCode: mutation.conflict",
+        ),
+        source.replace("givenName:", "undeclaredInput:"),
+        source.replace(
+            "problemCode: request.invalid",
+            "problemCode: mutation.conflict",
+        ),
+    ] {
+        assert!(validate_fixture_journeys(changed.as_bytes(), &registry).is_err());
+    }
 }
