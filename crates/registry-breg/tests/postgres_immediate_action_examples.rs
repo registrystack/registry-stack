@@ -160,6 +160,43 @@ async fn household_contact_action_example_runs_patch_conditions_and_replay_witho
     fixture.finish().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn facility_action_example_runs_authorized_transfer_and_emits_schema_test_receipt() {
+    let fixture = RunningFixture::start("facility-registry-actions").await;
+    assert_action_profile_has_no_crud_route(&fixture.registry, "facility-registrar");
+    assert_action_profile_has_no_crud_route(&fixture.registry, "facility-transfer");
+    let suite = validate_fixture_journeys(&fixture.sources.journeys, &fixture.registry)
+        .expect("facility source journey preflights");
+    let runner = prepare_runner(
+        &fixture.package,
+        &fixture.sources,
+        &suite,
+        &fixture.prepared,
+        facility_registry_tokens(&fixture.sources.journeys, &suite, &fixture.idp),
+    )
+    .await;
+    let completed = runner.run_all().await.unwrap_or_else(|error| {
+        panic!(
+            "facility source journey executes: {}",
+            fixture_error_with_source_context(&fixture.sources.journeys, &error)
+        )
+    });
+    let receipt = completed
+        .build_receipt(&suite)
+        .expect("bound facility receipt");
+    validate_schema_test_receipt_for_package(
+        &receipt.canonical_bytes().expect("receipt canonicalizes"),
+        &fixture.package.prepared,
+        &suite,
+    )
+    .expect("executed journey receipt validates against exact signed source package");
+    assert_eq!(
+        receipt.successful_journey_ids(),
+        ["register-and-transfer-facility"]
+    );
+    fixture.finish().await;
+}
+
 struct RunningFixture {
     database: TestDatabase,
     registry: Arc<CompiledRegistry>,
@@ -425,6 +462,40 @@ impl TestPackage {
             .expect("static JWKS serializes"),
         );
         let identity = self.package.manifest();
+        // The facility example captures delivery-bound events. The prepared
+        // router does not start its background delivery worker in these tests.
+        let destinations = if self
+            .package
+            .registry()
+            .event_deliveries()
+            .deliveries
+            .is_empty()
+        {
+            String::new()
+        } else {
+            assert!(self
+                .package
+                .registry()
+                .event_deliveries()
+                .deliveries
+                .iter()
+                .all(|delivery| delivery.destination_id == "facility-events"));
+            write_private(&secrets.join("event-key"), &[0x65; 32]);
+            "eventDestinations:
+  facility-events:
+    origin: https://consumer.example/
+    path: /events
+    networkProfile: productionHttps
+    dnsFamily: dualStackStrict
+    allowedPrivateCidrs: []
+    hmacSha256KeyRef: secret:file/event-key
+    classificationCeiling: internal
+    deliveryCeilings:
+      attemptTimeoutMilliseconds: 5000
+      maximumAttempts: 5
+"
+            .to_owned()
+        };
         let path = self.directory.join("runtime.yaml");
         fs::write(
             &path,
@@ -486,7 +557,7 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300
-operationalTimeouts:
+{destinations}operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000
   recordLockMilliseconds: 2000
@@ -575,6 +646,107 @@ fn assert_action_profile_has_no_crud_route(registry: &CompiledRegistry, profile_
             .any(|route| route.access_profiles.iter().any(|id| id == profile_id)),
         "immediate-action profile must be visible only through compiled action routes"
     );
+}
+
+fn facility_registry_tokens(
+    source: &[u8],
+    suite: &ValidatedFixtureJourneys,
+    idp: &MockIdp,
+) -> Vec<String> {
+    let administrator = action_token(
+        idp,
+        "synthetic-operator-administrator",
+        "facility-administration",
+        &[],
+        &["registry:operator:manage"],
+    );
+    let registrar = action_token(
+        idp,
+        "owner-a",
+        "facility-administration",
+        &[],
+        &["registry:facility:register"],
+    );
+    let owner = action_token(
+        idp,
+        "owner-a",
+        "facility-administration",
+        &[],
+        &["registry:facility:read"],
+    );
+    let destination = action_token(
+        idp,
+        "owner-b",
+        "facility-administration",
+        &[],
+        &["registry:facility:read"],
+    );
+    let broker = idp.mint_token(json!({
+        "aud":AUDIENCE, "registry_principal":"synthetic-transfer-broker",
+        "purpose":"facility-administration", "scope":"registry:facility:transfer",
+        "allowed_owners":["owner-a", "owner-b"],
+    }));
+    tokens_for_source_steps(
+        source,
+        suite,
+        [
+            (
+                "register-and-transfer-facility",
+                "create-operator",
+                administrator.clone(),
+            ),
+            (
+                "register-and-transfer-facility",
+                "register-facility-and-assignment",
+                registrar.clone(),
+            ),
+            (
+                "register-and-transfer-facility",
+                "recover-registration-response",
+                registrar.clone(),
+            ),
+            (
+                "register-and-transfer-facility",
+                "read-as-current-owner",
+                owner.clone(),
+            ),
+            (
+                "register-and-transfer-facility",
+                "create-inactive-operator",
+                administrator,
+            ),
+            (
+                "register-and-transfer-facility",
+                "refuse-inactive-operator",
+                registrar,
+            ),
+            (
+                "register-and-transfer-facility",
+                "obtain-transfer-condition",
+                broker.clone(),
+            ),
+            (
+                "register-and-transfer-facility",
+                "refuse-ungranted-destination",
+                broker.clone(),
+            ),
+            (
+                "register-and-transfer-facility",
+                "transfer-facility-owner",
+                broker,
+            ),
+            (
+                "register-and-transfer-facility",
+                "former-owner-is-concealed",
+                owner,
+            ),
+            (
+                "register-and-transfer-facility",
+                "destination-owner-can-read",
+                destination,
+            ),
+        ],
+    )
 }
 
 fn asset_registration_tokens(

@@ -1256,16 +1256,19 @@ fn validate_action_input(
             {
                 return Err(MutationError::InvalidRequest);
             }
-            Some(Value::Null) if action.handler.is_none() => {
-                return Err(MutationError::InvalidRequest);
+            Some(value) => {
+                let valid = if action.handler.is_some() {
+                    value.is_null()
+                        || crate::action_handler::validate_input_value(value, &source.field_type)
+                            .is_ok()
+                } else {
+                    validate_field_value(FieldValue::Json(value), &source.field_type)
+                };
+                if !valid {
+                    return Err(MutationError::InvalidRequest);
+                }
             }
-            Some(value)
-                if !value.is_null()
-                    && !validate_field_value(FieldValue::Json(value), &source.field_type) =>
-            {
-                return Err(MutationError::InvalidRequest);
-            }
-            Some(_) | None => {}
+            None => {}
         }
     }
     Ok(input)
@@ -2144,6 +2147,40 @@ pub(crate) async fn erase_expired_action_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_optional_from_input_has_the_same_type_contract_at_admission_and_materialization() {
+        let project = crate::contract::parse_project_yaml(include_bytes!(
+            "../../tests/fixtures/fixed-optional-action-input.yaml"
+        ))
+        .unwrap();
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let action = &registry.actions().actions[0];
+        let entity = &registry.entities()["entry"];
+        let effect = &action.effects[0];
+        assert!(action.handler.is_none());
+        let value = Map::from_iter([("label".to_owned(), json!("A label"))]);
+        assert_eq!(validate_action_input(action, value.clone()).unwrap(), value);
+        assert_eq!(
+            action_effect_document(action, entity, effect, &value, &BTreeMap::new(), None).unwrap(),
+            value
+        );
+
+        let null = Map::from_iter([("label".to_owned(), Value::Null)]);
+        assert!(matches!(
+            action_effect_document(action, entity, effect, &null, &BTreeMap::new(), None),
+            Err(MutationError::InvalidRequest)
+        ));
+        assert!(matches!(
+            validate_action_input(action, null),
+            Err(MutationError::InvalidRequest)
+        ));
+    }
 
     #[test]
     fn internal_action_admission_keeps_null_specific_to_handlers() {

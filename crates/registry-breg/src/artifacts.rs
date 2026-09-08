@@ -4183,7 +4183,10 @@ mod problem_contract_tests {
     #[test]
     fn problem_contract_accepts_declared_refusals_and_server_faults() {
         let schema = problem_schema();
-        let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
         let mut refusal = problem_example("422", "action.refused", "A name is required.");
         assert!(
             !validator.is_valid(&refusal),
@@ -4211,7 +4214,10 @@ mod problem_contract_tests {
     #[test]
     fn evidence_dependency_problem_is_static_and_has_service_unavailable_status() {
         let schema = problem_schema();
-        let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
         let mut problem = problem_example(
             "503",
             "action.evidence_failed",
@@ -4233,7 +4239,10 @@ mod problem_contract_tests {
     #[test]
     fn problem_contract_keeps_pattern_locations_paired_and_errors_closed() {
         let schema = problem_schema();
-        let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
         let mut problem = problem_example("409", "mutation.conflict", "The write was refused.");
         assert!(validator.is_valid(&problem));
         problem["entityId"] = json!("person");

@@ -128,42 +128,78 @@ fn a_fixed_patch_target_remains_required_when_its_input_is_declared_optional() {
 }
 
 #[test]
-fn fixed_action_optional_values_reject_explicit_null_in_schema_and_admission() {
-    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
-    project.actions[0].inputs[1].required = false;
-    project.entities[0].fields[0].required = false;
+fn fixed_optional_from_input_is_typed_and_rejects_null_at_http_admission() {
+    let project = parse_project_yaml(include_bytes!(
+        "../../../tests/fixtures/fixed-optional-action-input.yaml"
+    ))
+    .unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let action = &registry.actions().actions[0];
+    assert!(action.handler.is_none());
+    let complete = br#"{"input":{"displayLabel":"A label"}}"#;
+    let null = br#"{"input":{"displayLabel":null}}"#;
     let schema = crate::artifacts::openapi_action_input_schema(action);
-    let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
-    let mut body = json!({
-        "input": {"caseId": "00000000-0000-4000-8000-000000000001"},
-        "preconditions": {"caseId": {"ifMatch": "\"opaque\""}}
-    });
-    assert!(validator.is_valid(&body));
-    assert!(parse_body(
-        action,
-        ActionRouteKind::Invoke,
-        &serde_json::to_vec(&body).unwrap()
-    )
-    .is_ok());
-    body["input"]["newLabel"] = json!("Changed");
-    assert!(validator.is_valid(&body));
-    assert!(parse_body(
-        action,
-        ActionRouteKind::Invoke,
-        &serde_json::to_vec(&body).unwrap()
-    )
-    .is_ok());
-    body["input"]["newLabel"] = Value::Null;
-    assert!(!validator.is_valid(&body));
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    assert!(validator.is_valid(&serde_json::from_slice::<Value>(complete).unwrap()));
+    assert!(!validator.is_valid(&serde_json::from_slice::<Value>(null).unwrap()));
+    assert!(parse_body(action, ActionRouteKind::Invoke, complete).is_ok());
     assert_eq!(
-        parse_error_path(
-            action,
-            ActionRouteKind::Invoke,
-            &serde_json::to_vec(&body).unwrap()
-        ),
-        "/input/newLabel"
+        parse_error_path(action, ActionRouteKind::Invoke, null),
+        "/input/displayLabel"
+    );
+}
+
+#[test]
+fn handler_timestamp_admission_enforces_the_kernel_string_bound_without_changing_fixed_inputs() {
+    let mut project = parse_project_yaml(include_bytes!(
+        "../../../tests/fixtures/fixed-optional-action-input.yaml"
+    ))
+    .unwrap();
+    project.actions[0].inputs[0].field_type = crate::contract::FieldTypeSource::Timestamp;
+    project.entities[0].fields[0].field_type = crate::contract::FieldTypeSource::Timestamp;
+    let oversized = serde_json::to_vec(&json!({
+        "input": {"displayLabel": format!("2026-09-08T10:20:30.{}Z", "1".repeat(16_384))}
+    }))
+    .unwrap();
+    let fixed = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    assert!(parse_body(
+        &fixed.actions().actions[0],
+        ActionRouteKind::Invoke,
+        &oversized
+    )
+    .is_ok());
+
+    project.actions[0].effects.clear();
+    project.actions[0].handler = Some(serde_json::from_value(json!({
+        "kind": "rhai",
+        "script": "handlers/create-entry.rhai",
+        "abi": "registry.action-handler/v1",
+        "writes": [{"id": "created", "target": {"entity": "entry"}, "operation": "create", "fields": ["label"]}]
+    })).unwrap());
+    let handler = crate::compiler::compile_project_with_assets(
+        &project,
+        &[],
+        &[crate::contract::ModuleAssetSource {
+            module: None,
+            path: "handlers/create-entry.rhai".to_owned(),
+            bytes: br#"fn handle(ctx) { #{effects:[#{id:"created",set:#{label:"2026-09-08T10:20:30Z"}}]} }"#.to_vec(),
+        }],
+        CompileProfile::Authoring,
+    ).unwrap();
+    let action = &handler.actions().actions[0];
+    for accepted in [
+        br#"{"input":{"displayLabel":"2026-09-08T10:20:30.123Z"}}"#.as_slice(),
+        br#"{"input":{"displayLabel":null}}"#,
+        br#"{"input":{}}"#,
+    ] {
+        assert!(parse_body(action, ActionRouteKind::Invoke, accepted).is_ok());
+    }
+    assert_eq!(
+        parse_error_path(action, ActionRouteKind::Invoke, &oversized),
+        "/input/displayLabel"
     );
 }
 
@@ -583,6 +619,46 @@ fn action_without_default_requires_explicit_profile_even_when_token_has_authorit
             .context
             .selected_profile(),
         "registrar"
+    );
+}
+
+#[test]
+fn fixed_action_optional_values_reject_explicit_null_in_schema_and_admission() {
+    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+    project.actions[0].inputs[1].required = false;
+    project.entities[0].fields[0].required = false;
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let action = &registry.actions().actions[0];
+    let schema = crate::artifacts::openapi_action_input_schema(action);
+    let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+    let mut body = json!({
+        "input": {"caseId": "00000000-0000-4000-8000-000000000001"},
+        "preconditions": {"caseId": {"ifMatch": "\"opaque\""}}
+    });
+    assert!(validator.is_valid(&body));
+    assert!(parse_body(
+        action,
+        ActionRouteKind::Invoke,
+        &serde_json::to_vec(&body).unwrap()
+    )
+    .is_ok());
+    body["input"]["newLabel"] = json!("Changed");
+    assert!(validator.is_valid(&body));
+    assert!(parse_body(
+        action,
+        ActionRouteKind::Invoke,
+        &serde_json::to_vec(&body).unwrap()
+    )
+    .is_ok());
+    body["input"]["newLabel"] = Value::Null;
+    assert!(!validator.is_valid(&body));
+    assert_eq!(
+        parse_error_path(
+            action,
+            ActionRouteKind::Invoke,
+            &serde_json::to_vec(&body).unwrap()
+        ),
+        "/input/newLabel"
     );
 }
 

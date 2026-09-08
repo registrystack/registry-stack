@@ -94,6 +94,11 @@ permissions; `check --deny-findings` makes review findings blocking for automati
 Entity `accessRequirements` are mandatory compiler checks, not additional grants.
 
 For configured atomic writes across records, see [Immediate actions](immediate-actions.md).
+
+The [facility registration and transfer example](registry-extensibility.md)
+combines those actions with a related-record acceptance condition, current
+ownership and committed events. [Membership access](membership-access.md)
+describes read permissions based on current governed membership records.
 The create-only asset example introduces typed inputs, fixed effects and an
 action-only grant. The household example adds narrow target conditions and
 recovery from stale input or a lost response. Mandatory reviewed change control
@@ -223,6 +228,12 @@ The separate `household-history` fixture proves correction batches and retained
 snapshot answers through the same compiler and runtime.
 The additional `spatial-service-sites` project covers governed Point queries
 and the QGIS installation-client path.
+The [person-registration-rhai project](acceptance/person-registration-rhai/README.md)
+combines a persisted native identifier pattern with an input-only immediate Rhai
+handler, declared business refusal, coordinated creates and an optional patch.
+See [native string patterns](native-patterns.md) for stored integrity rules.
+Its synthetic CLI cases assert computed effects and its PostgreSQL journeys
+verify stored values and existing action authority and concurrency contracts.
 
 Run the current deterministic contract checks with:
 

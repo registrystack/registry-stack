@@ -1,0 +1,79 @@
+id: facility-registry-actions-core
+version: 0.1.0
+entities:
+  - id: operator
+    primaryDataset: facility-registry-actions
+    route: operators
+    mutationMode: mutable
+    fields:
+      - {id: operator-code, apiName: operatorCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: status, type: vocabulary-code, vocabulary: operator-status, required: true, classification: internal}
+    constraints:
+      - {kind: unique, fields: [operator-code]}
+  - id: facility
+    primaryDataset: facility-registry-actions
+    route: facilities
+    mutationMode: mutable
+    fields:
+      - {id: facility-code, apiName: facilityCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: owner, type: string, required: true, maxLength: 80, classification: internal}
+    constraints:
+      - {kind: unique, fields: [facility-code]}
+    events:
+      - id: facility-registered-v1
+        trigger: created
+        projection: [facility-code]
+        webhook: {destinationId: facility-events}
+      - id: facility-owner-changed-v1
+        trigger: patched
+        projection: [facility-code]
+        when: {kind: fields, changed: [owner]}
+        webhook: {destinationId: facility-events}
+  - id: initial-operator-assignment
+    primaryDataset: facility-registry-actions
+    route: initial-operator-assignments
+    mutationMode: create_only
+    fields:
+      - {id: facility, type: reference, target: facility, required: true, classification: internal}
+      - {id: operator, type: reference, target: operator, required: true, classification: internal}
+    constraints:
+      - {kind: unique, fields: [facility]}
+    events:
+      - id: initial-operator-assigned-v1
+        trigger: created
+        projection: [facility, operator]
+        webhook: {destinationId: facility-events}
+actions:
+  - id: register-facility
+    requires:
+      - {input: operator, field: status, equals: active}
+    inputs:
+      - {id: facility-code, apiName: facilityCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: owner, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: operator, apiName: operatorId, type: reference, target: operator, required: true, classification: internal}
+    effects:
+      - id: facility
+        target: {entity: facility}
+        operation: create
+        set:
+          facility-code: {fromField: facility-code}
+          label: {fromField: label}
+          owner: {fromField: owner}
+      - id: initial-assignment
+        target: {entity: initial-operator-assignment}
+        operation: create
+        set:
+          facility: {fromEffect: facility}
+          operator: {fromField: operator}
+  - id: transfer-facility
+    inputs:
+      - {id: facility, apiName: facilityId, type: reference, target: facility, required: true, classification: internal}
+      - {id: owner, type: string, required: true, maxLength: 80, classification: internal}
+    effects:
+      - id: facility
+        target: {fromField: facility}
+        operation: patch
+        set:
+          owner: {fromField: owner}

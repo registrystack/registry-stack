@@ -334,6 +334,13 @@ operationalTimeouts:
 }
 
 fn prepared_package(schema_fingerprint: &str) -> PreparedPackage {
+    prepared_package_with_source(
+        schema_fingerprint,
+        project_bytes(ENVIRONMENT, INSTANCE, SOURCE_REVISION),
+    )
+}
+
+fn prepared_package_with_source(schema_fingerprint: &str, project: Vec<u8>) -> PreparedPackage {
     prepare_package(PackageBuildRequest {
         environment: ENVIRONMENT.to_owned(),
         instance_id: INSTANCE.to_owned(),
@@ -348,7 +355,7 @@ fn prepared_package(schema_fingerprint: &str) -> PreparedPackage {
         },
         project: PackageSourceFile {
             path: "source/registry.json".to_owned(),
-            bytes: project_bytes(ENVIRONMENT, INSTANCE, SOURCE_REVISION),
+            bytes: project,
         },
         modules: vec![],
         fixture_journeys: PackageSourceFile {
@@ -426,4 +433,98 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
 }}"#
     );
     project.into_bytes()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_native_pattern_reports_authored_field_and_rolls_back_empty_schema_rehearsal() {
+    let database = TestDatabase::create(1).await;
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let mut project =
+        parse_project_json(&project_bytes(ENVIRONMENT, INSTANCE, SOURCE_REVISION)).unwrap();
+    project.entities[0].fields[0].pattern = Some("[private-expression-canary".to_owned());
+    let registry = compile_project(&project, &[], CompileProfile::Production)
+        .expect("offline authoring does not emulate PostgreSQL regex syntax");
+    let error = rehearse_schema_fingerprint_with_connection_config_for_test(
+        &config,
+        &registry,
+        &database.migration_config,
+    )
+    .await
+    .expect_err("empty-table native syntax is validated by PostgreSQL");
+    assert_eq!(
+        error,
+        StartupError::FieldPatternSyntax {
+            entity_id: "case".to_owned(),
+            field_id: "code".to_owned()
+        }
+    );
+    assert!(!format!("{error:?}").contains("private-expression-canary"));
+    assert!(!format!("{error:?}").contains("registry_data"));
+    assert!(managed_schemas_empty_by_restrict(&database).await);
+    assert!(registry_state_table(&database).await.is_none());
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_schema_test_installs_exactly_one_validated_native_pattern_constraint() {
+    let database = TestDatabase::create(1).await;
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE, SOURCE_REVISION);
+    let mut project: serde_json::Value =
+        serde_json::from_slice(&project_bytes(ENVIRONMENT, INSTANCE, SOURCE_REVISION)).unwrap();
+    project["entities"][0]["fields"][0]["pattern"] = serde_json::json!("^[A-Z]+$");
+    let project = serde_json::to_vec(&project).unwrap();
+    let registry = compile_project(
+        &parse_project_json(&project).unwrap(),
+        &[],
+        CompileProfile::Production,
+    )
+    .unwrap();
+    let fingerprint = rehearse_schema_fingerprint_with_connection_config_for_test(
+        &config,
+        &registry,
+        &database.migration_config,
+    )
+    .await
+    .unwrap();
+    let package = prepared_package_with_source(&fingerprint, project);
+    prepare_schema_test_database_with_connection_configs_for_test(
+        &config,
+        &package,
+        &database.migration_config,
+        &database.runtime_config,
+    )
+    .await
+    .unwrap();
+
+    let constraints = database
+        .admin
+        .query(
+            "SELECT conname, contype::text, convalidated, pg_catalog.pg_get_constraintdef(oid)
+         FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'registry_data'::regnamespace AND conname LIKE 'breg_pattern_%'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        constraints.len(),
+        1,
+        "fresh installation creates exactly the compiled pattern inventory"
+    );
+    let constraint = &constraints[0];
+    assert_eq!(
+        constraint.get::<_, String>(0),
+        registry.physical_names().entities["case"].constraints["pattern:code"]
+    );
+    assert_eq!(constraint.get::<_, String>(1), "c");
+    assert!(
+        constraint.get::<_, bool>(2),
+        "the CHECK validates all existing rows"
+    );
+    let definition: String = constraint.get(3);
+    assert!(definition.contains(&registry.entities()["case"].fields["code"].physical_name));
+    assert!(definition.contains(" ~ "));
+    assert!(definition.contains("^[A-Z]+$"));
+    assert_eq!(active_schema_fingerprint(&database).await, fingerprint);
+    database.cleanup().await;
 }

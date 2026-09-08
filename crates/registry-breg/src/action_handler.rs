@@ -2,7 +2,7 @@
 //! Input-only immediate action evaluation inside the shared bounded Rhai kernel.
 
 use crate::{
-    contract::{Operation, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2},
+    contract::{FieldTypeSource, Operation, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2},
     data::{validate_field_value, FieldValue},
     model::*,
     rhai_planner::{
@@ -223,6 +223,25 @@ pub fn evaluate_action(
     evaluate_action_detailed(action, inputs, deadline).map_err(|diagnostic| diagnostic.kind)
 }
 
+/// The shared handler input rule for HTTP, direct invocation and local tests.
+/// Callers admit optional null separately. The byte check also covers scalar
+/// parsers, such as RFC3339, that accept arbitrarily long fractional seconds.
+pub(crate) fn validate_input_value(
+    value: &Value,
+    field_type: &FieldTypeSource,
+) -> Result<(), &'static str> {
+    if value
+        .as_str()
+        .is_some_and(|value| value.len() > rhai_planner::MAXIMUM_STRING_BYTES)
+    {
+        return Err("Use a handler input string of at most 16,384 UTF-8 bytes.");
+    }
+    if !validate_field_value(FieldValue::Json(value), field_type) {
+        return Err("Use an input value matching the declared type and bounds.");
+    }
+    Ok(())
+}
+
 /// Evaluate through the same runtime verifier with actionable local diagnostics.
 pub fn evaluate_action_detailed(
     action: &CompiledAction,
@@ -260,17 +279,16 @@ fn validate_inputs(
                     message: "Supply a non-null value for this required input.",
                 })
             }
-            Some(value)
-                if !value.is_null()
-                    && !validate_field_value(FieldValue::Json(value), &input.field_type) =>
-            {
-                return Err(ActionHandlerDiagnostic {
-                    kind: ActionHandlerError::Input,
-                    evidence_capability: None,
-                    slot: None,
-                    field: Some(input.id.clone()),
-                    message: "Use an input value matching the declared type and bounds.",
-                })
+            Some(value) if !value.is_null() => {
+                if let Err(message) = validate_input_value(value, &input.field_type) {
+                    return Err(ActionHandlerDiagnostic {
+                        kind: ActionHandlerError::Input,
+                        evidence_capability: None,
+                        slot: None,
+                        field: Some(input.id.clone()),
+                        message,
+                    });
+                }
             }
             _ => {}
         }

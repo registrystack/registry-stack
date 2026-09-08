@@ -7,11 +7,16 @@ import base64
 import json
 import os
 import re
+import socket
+import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
 import unittest.mock as mock
 import uuid
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1217,6 +1222,173 @@ class WaitHttpTests(unittest.TestCase):
         message = str(raised.exception)
         self.assertIn("did not become ready within 0.3 seconds", message)
         self.assertIn("Connection refused", message)
+
+
+class WebhookAcceptanceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / "secrets").mkdir(mode=0o700)
+        self.key = b"synthetic-receiver-test-key" * 2
+        DEMO._write_new(self.root / "secrets/webhook-key", self.key.decode())
+        self.process = None
+        self.addCleanup(self.stop_receiver)
+        self.start_receiver()
+
+    def start_receiver(self) -> None:
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        self.origin = f"http://127.0.0.1:{port}"
+        (self.root / "receiver-origin").write_text(self.origin)
+        self.process = subprocess.Popen(
+            [sys.executable, str(MODULE_PATH), "serve-webhook-receiver", "--root", str(self.root)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        DEMO.wait_http(self.origin + "/ready", 3)
+
+    def stop_receiver(self) -> None:
+        if self.process is not None:
+            self.process.kill()
+            self.process.wait(timeout=3)
+            self.process = None
+
+    def request(
+        self,
+        *,
+        generation: int = 1,
+        attempt: int = 1,
+        code: str = "SYNTHETIC",
+        valid: bool = True,
+        event_time: str | None = None,
+        event_id: str = "00000000-0000-4000-8000-000000000001",
+        delivery_key: str | None = None,
+    ) -> int:
+        body = json.dumps(
+            {
+                "entity": "establishment",
+                "packageRevision": "sha256:" + "4" * 64,
+                "recordId": "00000000-0000-4000-8000-000000000002",
+                "revision": 1,
+                "trigger": "created",
+                "values": {"establishment-code": code, "operating-status": "operating"},
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "ce-specversion": "1.0",
+            "ce-id": event_id,
+            "ce-source": (
+                "urn:registrystack:registry:business-establishments:"
+                f"instance:{DEMO.BUSINESS_INSTANCE_ID}"
+            ),
+            "ce-type": "operating-created-v1",
+            "ce-time": event_time or "2026-01-01T00:00:00Z",
+            "ce-dataschema": (
+                "urn:breg:event-schema:business-establishments:establishment:"
+                "operating-created-v1:sha256:" + "5" * 64
+            ),
+            "x-registry-event-generation": str(generation),
+            "x-registry-delivery-attempt": str(attempt),
+            "x-registry-delivery-time": datetime.now(timezone.utc).isoformat(),
+            "idempotency-key": delivery_key or "sha256:" + str(generation) * 64,
+        }
+        headers["x-registry-signature"] = DEMO._expected_webhook_signature(self.key, headers, body)
+        if not valid:
+            headers["x-registry-signature"] = "v1=invalid"
+        request = urllib.request.Request(self.origin + "/events", body, headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            error.close()
+            return error.code
+
+    def accepted(self) -> list[tuple[str, str, bytes]]:
+        connection = sqlite3.connect(self.root / "webhook-inbox.sqlite3")
+        try:
+            return connection.execute(
+                "SELECT event_id, metadata, body FROM accepted_events ORDER BY source, event_id"
+            ).fetchall()
+        finally:
+            connection.close()
+
+    def test_authenticated_retry_and_process_restart_preserve_one_durable_acceptance(self) -> None:
+        self.assertEqual(self.request(), 204)
+        retained = self.accepted()
+        self.assertEqual(len(retained), 1)
+        self.assertEqual(json.loads(retained[0][2])["values"]["establishment-code"], "SYNTHETIC")
+        self.assertEqual(self.request(attempt=2), 204)
+        self.stop_receiver()
+        self.start_receiver()
+        self.assertEqual(self.request(attempt=3), 204)
+        self.assertEqual(self.accepted(), retained)
+        state = DEMO._read_json_object(self.root / "webhook-receiver-state.json")
+        self.assertEqual(len(next(iter(state["events"].values()))["attempts"]), 3)
+        self.assertNotIn("SYNTHETIC", json.dumps(state))
+        self.assertEqual((self.root / "webhook-inbox.sqlite3").stat().st_mode & 0o077, 0)
+
+    def test_replay_generation_binds_its_new_delivery_key_without_duplicate_work(self) -> None:
+        self.assertEqual(self.request(), 204)
+        retained = self.accepted()
+        self.stop_receiver()
+        self.start_receiver()
+        self.assertEqual(self.request(generation=2), 204)
+        self.assertEqual(self.request(generation=2, attempt=2), 204)
+        self.assertEqual(self.accepted(), retained)
+        connection = sqlite3.connect(self.root / "webhook-inbox.sqlite3")
+        try:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM accepted_deliveries").fetchone(), (2,))
+        finally:
+            connection.close()
+
+    def test_previously_unaccepted_replay_creates_one_work_item(self) -> None:
+        self.assertEqual(self.request(generation=2), 204)
+        self.assertEqual(len(self.accepted()), 1)
+
+    def test_reused_delivery_key_cannot_bind_another_event_or_generation(self) -> None:
+        self.assertEqual(self.request(), 204)
+        retained = self.accepted()
+        self.assertEqual(self.request(generation=2, delivery_key="sha256:" + "1" * 64), 409)
+        self.assertEqual(
+            self.request(event_id="00000000-0000-4000-8000-000000000003", attempt=2),
+            409,
+        )
+        self.assertEqual(self.accepted(), retained)
+
+    def test_conflicting_authenticated_duplicate_preserves_original_acceptance(self) -> None:
+        self.assertEqual(self.request(), 204)
+        retained = self.accepted()
+        self.assertEqual(self.request(code="CHANGED"), 409)
+        self.assertEqual(self.request(event_time="2026-01-02T00:00:00Z"), 409)
+        self.assertEqual(self.request(generation=2, code="CHANGED"), 409)
+        self.assertEqual(self.accepted(), retained)
+
+    def test_failed_authentication_never_reaches_durable_acceptance(self) -> None:
+        self.assertEqual(self.request(valid=False), 400)
+        self.assertEqual(self.accepted(), [])
+
+    def test_storage_failure_is_retryable_and_never_acknowledged(self) -> None:
+        connection = sqlite3.connect(self.root / "webhook-inbox.sqlite3")
+        try:
+            connection.execute(
+                "CREATE TRIGGER refuse_acceptance BEFORE INSERT ON accepted_events "
+                "BEGIN SELECT RAISE(ABORT, 'synthetic storage refusal'); END"
+            )
+            connection.commit()
+            self.assertEqual(self.request(), 503)
+            self.assertEqual(self.accepted(), [])
+            connection.execute("DROP TRIGGER refuse_acceptance")
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertEqual(self.request(attempt=2), 204)
+        self.assertEqual(len(self.accepted()), 1)
 
 
 if __name__ == "__main__":

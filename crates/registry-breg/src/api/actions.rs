@@ -370,9 +370,14 @@ fn parse_body(
             && !declared.required
             && kind == ActionRouteKind::Invoke
             && !condition_inputs.contains(declared.id.as_str());
-        if !(nullable && value.is_null()
-            || validate_field_value(FieldValue::Json(value), &declared.field_type))
-        {
+        let valid = if nullable && value.is_null() {
+            true
+        } else if action.handler.is_some() {
+            crate::action_handler::validate_input_value(value, &declared.field_type).is_ok()
+        } else {
+            validate_field_value(FieldValue::Json(value), &declared.field_type)
+        };
+        if !valid {
             return Err(ParseActionError::at(json_pointer([
                 "input",
                 declared.api_name.as_str(),

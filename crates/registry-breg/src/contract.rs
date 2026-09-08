@@ -1960,6 +1960,9 @@ pub struct AccessProfileSource {
     pub spatial_queries: Option<SpatialQueryGrantSource>,
     /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
+    /// Current active membership required for each stored reference key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub membership_boundaries: Vec<MembershipBoundarySource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_visibility: Option<RequestVisibilitySource>,
@@ -2023,6 +2026,20 @@ pub struct RowBoundarySource {
     pub field: String,
     pub claim: String,
     pub operator: BoundaryOperator,
+}
+
+/// A one-hop current membership requirement, combined with every other row boundary.
+/// The root field and membership key must reference the same entity. The active
+/// field is Boolean, and principalField matches the profile's verified principal.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MembershipBoundarySource {
+    pub field: String,
+    pub membership_entity: String,
+    pub membership_key_field: String,
+    pub principal_field: String,
+    pub active_field: String,
 }
 
 /// Compile-time requirements, not grants. Profiles must explicitly satisfy them.
@@ -2182,6 +2199,9 @@ pub struct AccessGrantSource {
     pub spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
+    /// Current active membership required for each stored reference key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub membership_boundaries: Vec<MembershipBoundarySource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_visibility: Option<RequestVisibilitySource>,
@@ -2229,6 +2249,8 @@ struct RawAccessGrantSource {
     spatial_queries: Option<SpatialQueryGrantSource>,
     #[serde(default)]
     row_boundaries: Option<Vec<RowBoundarySource>>,
+    #[serde(default)]
+    membership_boundaries: Vec<MembershipBoundarySource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     request_visibility: Option<RequestVisibilitySource>,
@@ -2279,6 +2301,7 @@ impl<'de> Deserialize<'de> for AccessGrantSource {
             sortable_fields: raw.sortable_fields,
             spatial_queries: raw.spatial_queries,
             row_boundaries: raw.row_boundaries.unwrap_or_default(),
+            membership_boundaries: raw.membership_boundaries,
             request_visibility: raw.request_visibility,
             lookups: raw.lookups,
             read_paths: raw.read_paths,
@@ -2337,6 +2360,9 @@ struct EntityAccessGrantSourceSchema {
     #[serde(default)]
     spatial_queries: Option<SpatialQueryGrantSource>,
     row_boundaries: Vec<RowBoundarySource>,
+    /// Current active membership required for each stored reference key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    membership_boundaries: Vec<MembershipBoundarySource>,
     #[serde(default)]
     request_visibility: Option<RequestVisibilitySource>,
     #[serde(default)]

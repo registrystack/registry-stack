@@ -558,6 +558,18 @@ pub enum CompiledActionTargetUseSource {
     Input { input: String },
 }
 
+/// Resolved stored-column inputs for one current membership predicate.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledMembershipBoundary {
+    pub field: String,
+    pub membership_entity: String,
+    pub membership_table: String,
+    pub membership_key_column: String,
+    pub principal_column: String,
+    pub active_column: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEntity {
@@ -592,6 +604,8 @@ pub struct CompiledEntity {
     pub constraints: BTreeMap<String, ConstraintSource>,
     pub indexes: BTreeMap<String, Vec<String>>,
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub membership_boundaries: BTreeMap<String, Vec<CompiledMembershipBoundary>>,
     pub events: BTreeMap<String, EventSource>,
 }
 

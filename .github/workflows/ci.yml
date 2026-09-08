@@ -696,6 +696,10 @@ jobs:
         if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-adopter-workflow.sh
 
+      - name: Base Registry Engine immediate-action adopter examples
+        if: matrix.lane == 'contracts'
+        run: products/breg/scripts/test-immediate-action-examples.sh
+
       - name: Base Registry Engine generic quickstart
         if: matrix.lane == 'contracts'
         run: products/breg/quickstart/run.sh --smoke

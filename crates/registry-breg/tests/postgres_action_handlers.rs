@@ -403,6 +403,10 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
     let refused = call(simple, "refused-retry", blank.clone()).await;
     assert_eq!(refused.0, StatusCode::UNPROCESSABLE_ENTITY, "{}", refused.1);
     assert_eq!(refused.1["code"], "action.refused");
+    assert_eq!(
+        refused.1["type"],
+        "https://id.registrystack.org/problems/registry-breg/action/refused"
+    );
     assert_eq!(refused.1["refusalCode"], "blank-name");
     assert_eq!(refused.1["fieldPath"], "/input/givenName");
     assert_eq!(refused.1["detail"], "At least one name part is required.");
@@ -465,6 +469,10 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
     let failed = call(simple, "handler-failure-retry", input("1123456789012")).await;
     assert_eq!(failed.0, StatusCode::INTERNAL_SERVER_ERROR, "{}", failed.1);
     assert_eq!(failed.1["code"], "action.handler_failed");
+    assert_eq!(
+        failed.1["type"],
+        "https://id.registrystack.org/problems/registry-breg/action/handler_failed"
+    );
     assert!(problem_validator.is_valid(&failed.1), "{}", failed.1);
     assert_eq!(test_action_handler_invocation_count("register-person"), 1);
     assert_eq!(after, counts(&database, &registry).await);

@@ -142,6 +142,7 @@ pub fn compile_project_with_assets(
     resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
     validate_entities(&sources, profile, &mut diagnostics);
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
+    crate::membership::validate(&sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
     validate_derived_assets(&sources, &derived_origins, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
@@ -149,6 +150,7 @@ pub fn compile_project_with_assets(
     }
 
     let (mut entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
+    crate::membership::compile(&mut entities);
     crate::change_request::compile_change_requests(
         &action_sources
             .values()
@@ -1660,6 +1662,7 @@ fn expand_project_access(
                 sortable_fields: grant.sortable_fields.clone(),
                 spatial_queries: grant.spatial_queries.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
+                membership_boundaries: grant.membership_boundaries.clone(),
                 request_visibility: grant.request_visibility,
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
@@ -4415,6 +4418,7 @@ fn compile_entities(
                 constraints,
                 indexes,
                 access_profiles: profiles,
+                membership_boundaries: BTreeMap::new(),
                 events,
             },
         );

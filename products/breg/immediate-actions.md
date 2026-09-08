@@ -132,11 +132,25 @@ handler:
       fields: [identifier, display-name]
 ```
 
+`registry.action-handler/v1` accepts scalar inputs, including references encoded
+as record-ID strings. Decimal inputs retain their canonical JSON string form.
+The compiler rejects `crs84-point` and `structured` inputs for this ABI; use fixed
+effects when an action needs those types. The input object has only declared
+fields, with no arbitrary JSON objects or arrays as input values.
+
+String and text inputs must declare `maxLength` of at most 4,096 Unicode scalar
+values. That bound guarantees each value fits Rhai's existing 16,384-byte UTF-8
+string budget. Other scalar types retain their own format and value bounds.
+Admission also rejects any input string above 16,384 bytes before evaluation,
+including timestamps with excessive fractional-second digits. Reduce an
+overlarge declared `maxLength` to repair the project; an oversized request value
+returns HTTP `400 request.invalid` without running the handler.
+
 `fn handle(ctx)` receives admitted input values in `ctx.inputs`, keyed by logical
-input IDs. HTTP aliases are resolved by BREG. Optional absent inputs stay absent;
-explicit JSON `null` is a present key with Rhai's unit value `()`. A required
-input rejects either omission or null before evaluation. For an optional string,
-guard both cases before calling a string method:
+input IDs. HTTP aliases are resolved by BREG. For this ABI, optional absent inputs
+stay absent; explicit JSON `null` is a present key with Rhai's unit value `()`.
+A required input rejects either omission or null before evaluation. For an
+optional string, guard both cases before calling a string method:
 
 ```rust
 let family = if "family-name" in ctx.inputs && ctx.inputs["family-name"] != () {
@@ -147,6 +161,8 @@ family.trim();
 
 Use `in` to distinguish absence from an explicitly supplied value. The example
 name policy treats omission, null and blank strings as empty name parts.
+Fixed-effect actions reject explicit null inputs. Supply a typed value for each
+input used by a fixed mapping.
 Rhai has no database query, stored-record snapshot, clock, filesystem or network
 API. The script returns exactly one of `effects` or `refusal`:
 
@@ -247,9 +263,8 @@ Requirements describe acceptance-time state. Later inactivation does not undo
 an accepted assignment, and replay of the same committed idempotency key
 recovers its original receipt subject to the existing current-authority checks.
 Use an entity constraint for a rule that must remain true after every write.
-Requirements do not bypass reviewed change control. The
-[person-registration acceptance project](acceptance/person-registration-rhai/registry.yaml)
-combines a handler with acceptance-time requirements.
+Requirements do not bypass reviewed change control. For the complete authored
+journey, see [Registry extensibility](registry-extensibility.md).
 
 ## Local Checks
 
@@ -325,7 +340,7 @@ Run the two fixed-action fixtures and the
 [person registration Rhai fixture](acceptance/person-registration-rhai/README.md)
 with the local runner. It expects the same isolated TLS PostgreSQL environment
 used by the existing [change-request examples](CHANGE_REQUEST_EXAMPLES.md).
-Prerequisites are a disposable PostgreSQL 18 cluster with TLS, its CA PEM, an
+Prerequisites are a disposable PostgreSQL 15-or-newer cluster with TLS, its CA PEM, an
 administrator credential able to create roles and databases and install
 `btree_gist`, `psql`, OpenSSL with Ed25519 signing support, and Python 3 with
 PyYAML. Building from source also requires the repository's Rust toolchain.

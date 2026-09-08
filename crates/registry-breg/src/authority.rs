@@ -70,7 +70,7 @@ pub fn authority_inventory(
                 profile.principal_claim.as_deref(),
                 &profile.required_scopes,
                 &profile.required_purposes,
-                !profile.row_boundaries.is_empty(),
+                !profile.row_boundaries.is_empty() || !profile.membership_boundaries.is_empty(),
             )?;
             let surface = format!("entities/{}/profiles/{}", entity.id, profile.id);
             inventory.boundaries(entity, &profile.id, &surface, &profile.row_boundaries)?;

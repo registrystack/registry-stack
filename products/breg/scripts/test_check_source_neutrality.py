@@ -174,6 +174,16 @@ class SourceNeutralityTests(unittest.TestCase):
                 violations,
             )
 
+    def test_generic_membership_authority_keeps_concrete_fixture_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "crates/registry-breg/src/lib.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('const CODE: &str = "access.membership.read_only";\n')
+            self.assertEqual([], CHECKER.find_violations(root))
+            source.write_text('const ROUTE: &str = "/v1/records/group-memberships";\n')
+            self.assertTrue(CHECKER.find_violations(root))
+
     def test_rust_string_scanner_stays_synchronized_after_escaped_quotes_and_raw_literals(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

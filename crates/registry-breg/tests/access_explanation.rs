@@ -24,6 +24,37 @@ fn compile(source: &Value) -> registry_breg::CompiledRegistry {
     .unwrap()
 }
 
+fn membership_source() -> Value {
+    let mut source = source();
+    source["entities"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"organization", "type":"reference", "target":"organization",
+            "classification":"internal"
+        }));
+    source["entities"].as_array_mut().unwrap().extend([
+        json!({"id":"organization", "primaryDataset":"test-dataset", "route":"organizations", "mutationMode":"mutable",
+            "fields":[{"id":"label", "type":"string", "maxLength":32, "classification":"internal"}]}),
+        json!({"id":"membership", "primaryDataset":"test-dataset", "route":"memberships", "mutationMode":"mutable",
+            "fields":[
+                {"id":"organization", "type":"reference", "target":"organization", "classification":"internal"},
+                {"id":"principal", "type":"string", "maxLength":64, "classification":"internal"},
+                {"id":"active", "type":"boolean", "classification":"internal"}
+            ]}),
+    ]);
+    source["accessProfiles"][0]["principalClaim"] = json!("sub");
+    let grant = &mut source["accessProfiles"][0]["grants"][0];
+    grant["operations"] = json!(["get", "list"]);
+    grant["writableFields"] = json!([]);
+    grant["rowBoundaries"] = json!([]);
+    grant["membershipBoundaries"] = json!([{
+        "field":"organization", "membershipEntity":"membership",
+        "membershipKeyField":"organization", "principalField":"principal", "activeField":"active"
+    }]);
+    source
+}
+
 #[test]
 fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
     let registry = compile(&source());
@@ -100,6 +131,99 @@ fn access_explanation_includes_nested_target_authority_and_owner_read_limits() {
         owner.rows, "all",
         "ownership applies to reads, not every granted operation"
     );
+}
+
+#[test]
+fn membership_row_reach_is_explicit_and_uses_the_selected_principal() {
+    for (boundaries, rows, direct_claims) in [
+        (json!([]), "membership_bound", 0),
+        (
+            json!([{"field":"district", "claim":"districts", "operator":"in"}]),
+            "claim_and_membership_bound",
+            1,
+        ),
+    ] {
+        let mut source = membership_source();
+        source["accessProfiles"][0]["grants"][0]["rowBoundaries"] = boundaries;
+        let registry = compile(&source);
+        let explanation = registry_breg::access::explain_access(&registry);
+        let reach = explanation
+            .row_reach
+            .iter()
+            .find(|reach| reach.entity == "entry" && reach.profile == "clerk")
+            .unwrap();
+        assert_eq!(reach.rows, rows);
+        assert_eq!(reach.membership_boundaries.len(), 1);
+        assert_eq!(reach.membership_boundaries[0].principal_field, "principal");
+        assert!(!registry.findings().iter().any(|finding| matches!(
+            finding.code.as_str(),
+            "access.profile.unrestricted_rows" | "access.profile.unrestricted_collection"
+        )));
+        let claims = explanation.claim_contract.unwrap();
+        assert_eq!(claims.principal_claims, ["sub".to_owned()].into());
+        assert_eq!(claims.direct_claims.len(), direct_claims);
+    }
+}
+
+#[test]
+fn membership_only_profiles_require_authentication() {
+    let mut source = membership_source();
+    let profile = &mut source["accessProfiles"][0];
+    profile.as_object_mut().unwrap().remove("principalClaim");
+    profile["requiredScopes"] = json!([]);
+    profile["anonymous"] = json!(true);
+    let failure = compile_project(
+        &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+        &[],
+        CompileProfile::Authoring,
+    )
+    .expect_err("stored membership never grants anonymous record access");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "access.membership.authentication"));
+}
+
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+#[test]
+fn membership_changes_report_authority_narrowing_and_widening() {
+    use registry_breg::tooling::{classify_registry_diff, AccessChangeDirection};
+
+    let mut source = membership_source();
+    source["entities"][2]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"approved", "type":"boolean", "classification":"internal"}));
+    let mut additional =
+        source["accessProfiles"][0]["grants"][0]["membershipBoundaries"][0].clone();
+    additional["activeField"] = json!("approved");
+    let mut boundaries = source["accessProfiles"][0]["grants"][0]["membershipBoundaries"]
+        .as_array()
+        .unwrap()
+        .clone();
+    boundaries.push(additional);
+    let registries = (0..=2)
+        .map(|count| {
+            source["accessProfiles"][0]["grants"][0]["membershipBoundaries"] =
+                json!(&boundaries[..count]);
+            compile(&source)
+        })
+        .collect::<Vec<_>>();
+    for (before, after, expected) in [
+        (0, 1, AccessChangeDirection::Narrowing),
+        (1, 2, AccessChangeDirection::Narrowing),
+        (2, 1, AccessChangeDirection::Widening),
+        (1, 0, AccessChangeDirection::Widening),
+    ] {
+        let diff = classify_registry_diff(&registries[before], &registries[after], "baseline");
+        let detail = diff
+            .changes
+            .iter()
+            .flat_map(|change| &change.access_details)
+            .find(|detail| detail.field == "membershipBoundaries")
+            .expect("changed membership authority is reported");
+        assert_eq!(detail.direction, expected, "{before} -> {after}");
+    }
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]

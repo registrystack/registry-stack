@@ -89,7 +89,9 @@ currently available.
 Before returning a body, the client enforces bounded headers and body, exactly
 one canonical lower-case W3C Trace Context v0 `traceparent`, BReg's exact
 response media type, and the closed BReg Problem vocabulary. Registry Metadata
-and lifecycle JSON are decoded with strict duplicate-member rejection.
+and lifecycle JSON are decoded with strict duplicate-member rejection. Storage-pattern
+conflicts preserve the `MutationConflict` classification; their optional paired
+`entityId` and `fieldId` members are bounded, validated and discarded.
 
 Errors retain fixed local reasons, public status or problem codes, validated
 trace identifiers, and bounded retry guidance. They do not retain credentials,

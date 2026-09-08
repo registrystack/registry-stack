@@ -66,6 +66,7 @@ pub mod idempotency;
 pub mod immediate_actions;
 pub mod logical_names;
 pub mod manifest_adapter;
+pub(crate) mod membership;
 #[cfg(feature = "runtime")]
 pub mod metrics;
 #[cfg(feature = "runtime")]

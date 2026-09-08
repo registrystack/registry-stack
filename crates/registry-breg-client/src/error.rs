@@ -214,6 +214,14 @@ impl BRegProblemCode {
         }
     }
 
+    /// Closed alternate text for the field-pattern form of mutation conflict.
+    /// It remains the same typed conflict for existing client consumers.
+    pub(crate) fn accepts_detail(self, detail: &str) -> bool {
+        detail == self.detail()
+            || (self == Self::MutationConflict
+                && detail == "The field does not conform to its declared storage pattern.")
+    }
+
     /// The type URI the service names for this code, resolved the same way the
     /// service builds it: each dot in the code separates a path segment under
     /// the shared Registry Stack product prefix.
@@ -422,6 +430,19 @@ mod tests {
                 .count();
             assert_eq!(sharing, 1, "{code} shares its detail with another problem");
         }
+    }
+
+    #[test]
+    fn field_pattern_detail_is_a_closed_mutation_conflict_variant() {
+        let detail = "The field does not conform to its declared storage pattern.";
+        let matches = BRegProblemCode::ALL
+            .into_iter()
+            .filter(|code| code.accepts_detail(detail))
+            .collect::<Vec<_>>();
+        assert_eq!(matches, vec![BRegProblemCode::MutationConflict]);
+        assert!(BRegProblemCode::MutationConflict
+            .accepts_detail(BRegProblemCode::MutationConflict.detail()));
+        assert!(!BRegProblemCode::MutationConflict.accepts_detail("response-authored-canary"));
     }
 
     // app-developer-22: a missing record answered with `kind: "problem"` and

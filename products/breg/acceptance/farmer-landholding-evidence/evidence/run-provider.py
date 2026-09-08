@@ -72,8 +72,11 @@ def sign_token(pem, public, claims):
 
 
 def write_json(path, value):
-    path.write_text(json.dumps(value, indent=2) + "\n")
-    path.chmod(0o600)
+    # Publish complete JSON before readers can observe the readiness file.
+    pending = path.with_name(path.name + ".pending")
+    pending.touch(mode=0o600)
+    pending.write_text(json.dumps(value, indent=2) + "\n")
+    pending.replace(path)
 
 
 def main():

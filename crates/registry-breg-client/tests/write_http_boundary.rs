@@ -1031,6 +1031,117 @@ async fn every_registered_problem_is_accepted_exactly_for_a_direct_write() {
     );
 }
 
+#[tokio::test]
+async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata() {
+    let generic = problem_response(BRegProblemCode::MutationConflict);
+    let mut pattern: Value = serde_json::from_slice(&generic.body).unwrap();
+    pattern["detail"] = json!("The field does not conform to its declared storage pattern.");
+    let without_location = pattern.clone();
+    pattern["entityId"] = json!("company");
+    pattern["fieldId"] = json!("registration_number");
+    let response_for = |value: Value| {
+        let mut response = generic.clone();
+        response.body = serde_json::to_vec(&value).unwrap();
+        response
+    };
+    let mut bad = Vec::new();
+    for member in ["entityId", "fieldId"] {
+        let mut absent = pattern.clone();
+        absent.as_object_mut().unwrap().remove(member);
+        bad.push(response_for(absent));
+        for value in [
+            Value::Null,
+            json!(17),
+            json!(""),
+            json!("x".repeat(129)),
+            json!("id\ncanary"),
+        ] {
+            let mut malformed = pattern.clone();
+            malformed[member] = value;
+            bad.push(response_for(malformed));
+        }
+    }
+    for (member, value) in [
+        ("extra", json!("response-canary")),
+        ("detail", json!("response-canary")),
+        ("status", json!(400)),
+        ("fieldPath", json!("/evidence/status")),
+        ("refusalCode", json!("response-canary")),
+        ("traceId", json!("0123456789abcdef0123456789abcdef")),
+    ] {
+        let mut malformed = pattern.clone();
+        malformed[member] = value;
+        bad.push(response_for(malformed));
+    }
+    let evidence = problem_response(BRegProblemCode::ActionEvidenceFailed);
+    let mut misplaced: Value = serde_json::from_slice(&evidence.body).unwrap();
+    misplaced["entityId"] = json!("company");
+    misplaced["fieldId"] = json!("registration_number");
+    bad.push(MockResponse {
+        body: serde_json::to_vec(&misplaced).unwrap(),
+        ..evidence
+    });
+    for member in ["entityId", "fieldId", "detail"] {
+        let mut duplicate = generic.clone();
+        duplicate.body = format!(
+            "{{\"{member}\":\"duplicate-canary\",{}",
+            &pattern.to_string()[1..]
+        )
+        .into_bytes();
+        bad.push(duplicate);
+    }
+    let failures = bad.len();
+    let responses = std::iter::once(metadata_response())
+        .chain([
+            generic.clone(),
+            response_for(without_location),
+            response_for(pattern),
+        ])
+        .chain(bad)
+        .collect();
+    let fixture = test_client(responses).await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    for index in 0..3 + failures {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("pattern-conflict"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("conflict or protocol refusal");
+        if index < 3 {
+            assert_eq!(
+                error.problem_code(),
+                Some(BRegProblemCode::MutationConflict)
+            );
+            assert_eq!(error.status(), Some(409));
+        } else {
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Problem,
+                    ..
+                }
+            ));
+        }
+        assert!(!format!("{error:?}: {error}").contains("canary"));
+    }
+    assert_eq!(
+        fixture.requests.lock().unwrap().len(),
+        1 + 3 + failures,
+        "no retry after a conflict or malformed problem"
+    );
+}
+
 fn problem_response(code: BRegProblemCode) -> MockResponse {
     MockResponse::json(
         StatusCode::from_u16(code.status()).expect("registered status"),

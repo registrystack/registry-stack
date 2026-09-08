@@ -156,11 +156,12 @@ pub(crate) fn action_evidence_failure_response(capability: Option<String>) -> Re
 pub(crate) fn action_refusal_response(
     refusal: crate::action_handler::ActionHandlerRefusal,
 ) -> Response {
+    let code = crate::problem::ProblemCode::ActionRefused;
     let mut response = problem_response(
         StatusCode::UNPROCESSABLE_ENTITY,
-        "Unprocessable Entity",
-        "The action was refused.",
-        "action.refused",
+        code.title(),
+        code.description(),
+        code.code(),
     );
     let problem = response
         .extensions_mut()

@@ -32,6 +32,18 @@ handler:
       fields: [identifier, display-name]
 ```
 
+This ABI accepts declared scalar inputs, including reference IDs. It does not
+accept `crs84-point`, `structured`, or arbitrary JSON object or array values.
+String and text inputs must declare `maxLength` of at most 4,096 Unicode scalar
+values so every value fits Rhai's 16,384-byte UTF-8 string budget. This project
+uses 13 characters for the identifier and 80 for each name part. Other scalar
+types retain their own bounds, and decimal values use canonical JSON strings.
+Every input string also has a 16,384-byte admission limit, including timestamps.
+An HTTP request exceeding a declared bound or this byte limit returns
+`400 request.invalid` before the handler runs. A project with an overlarge
+`maxLength` must reduce it; use fixed effects for actions needing point or
+structured inputs.
+
 The [handler](scripts/register-person.rhai) exports `fn handle(ctx)` and reads
 logical input IDs such as `ctx.inputs["given-name"]`. An omitted optional input
 has no map key; an explicit JSON `null` has a key with Rhai's unit value `()`.
@@ -47,6 +59,8 @@ family.trim();
 Test membership with `in` when absence matters. Calling string methods on an
 unguarded missing or null value fails handler execution. Required inputs such
 as `identifier` still reject omission and null before the handler runs.
+This optional-null behavior belongs to the handler ABI; fixed-effect actions
+reject explicit null inputs.
 
 The handler returns either
 `{effects: [...]}` or `{refusal: {code: "blank-name", field: "given-name"}}`
@@ -163,7 +177,8 @@ refusal. It removes only its own temporary resources.
 
 The journeys verify padded, omitted and null name parts through authorized GETs,
 blank-name refusal (with `expect.refusalCode: blank-name`), duplicate identifiers,
-invalid stored formats, lost-response
+invalid stored formats (with `expect.entityId: person` and
+`expect.fieldId: identifier`), lost-response
 replay, changed-input conflict, the direct CRUD distinction, coordinated writes,
 and omitted patch conditions and requirements. Person and registration creates
 retain the configured events. The runner binds `person-events` to a synthetic

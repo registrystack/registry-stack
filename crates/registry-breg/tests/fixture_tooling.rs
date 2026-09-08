@@ -1103,7 +1103,18 @@ journeys:
 fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contract() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/acceptance/person-registration-rhai");
-    let project = parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+    let mut project =
+        parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+    project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == "register")
+        .unwrap()
+        .fields
+        .iter_mut()
+        .find(|field| field.id == "register-code")
+        .unwrap()
+        .pattern = Some(".*".to_owned());
     let assets = project
         .actions
         .iter()
@@ -1133,6 +1144,19 @@ fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contrac
         source.replace(
             "recordRef: active-register",
             "recordRef: uncaptured-register",
+        ),
+        source.replace("      entityId: person\n", ""),
+        source.replace("      fieldId: identifier\n", ""),
+        source.replace("entityId: person", "entityId: unknown"),
+        source.replace("fieldId: identifier", "fieldId: unknown"),
+        source.replace("fieldId: identifier", "fieldId: display-name"),
+        source.replace(
+            "entityId: person\n      fieldId: identifier",
+            "entityId: register\n      fieldId: register-code",
+        ),
+        source.replace(
+            "status: 409\n      problemCode: mutation.conflict\n      entityId:",
+            "status: 400\n      problemCode: request.invalid\n      entityId:",
         ),
         source.replace("      refusalCode: blank-name\n", ""),
         source.replace("refusalCode: blank-name", "refusalCode: unknown"),

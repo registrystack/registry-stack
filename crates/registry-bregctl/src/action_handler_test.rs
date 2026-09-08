@@ -674,7 +674,7 @@ mod tests {
             br#"{"refusal":{"code":"blank-name","field":"given-name"}}"#,
         )
         .unwrap();
-        let report = run(&args, &compiled).unwrap_or_else(|failure| {
+        let mut report = run(&args, &compiled).unwrap_or_else(|failure| {
             panic!("expected refusal failed: {}", failure.diagnostics[0].code)
         });
         assert_eq!(report.disposition, None);
@@ -692,10 +692,24 @@ mod tests {
         );
         assert!(stderr.is_empty());
         let human = String::from_utf8(stdout).unwrap();
-        assert!(human.contains("blank-name (At least one name part is required.)"));
-        assert!(human.contains("refusal input") && human.contains("given-name"));
-        assert!(!human.contains("disposition:"));
+        let human = anstream::adapter::strip_str(&human).to_string();
+        let aligned = human.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(human.starts_with("Ran the handler. Returned a declared refusal.\n"));
+        assert!(aligned.contains("refusal blank-name (At least one name part is required.)"));
+        assert!(aligned.contains("refusal input given-name"));
+        assert!(!human.contains("disposition"));
         assert!(!human.contains("0123456789012"));
+
+        report.refusal.as_mut().unwrap()["label"] = json!("safe\nFORGED\u{1b}[2J");
+        let mut stdout = Vec::new();
+        assert_eq!(
+            write_planner_test_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        let human = String::from_utf8(stdout).unwrap();
+        let human = anstream::adapter::strip_str(&human).to_string();
+        assert!(human.contains("safe\\nFORGED"));
+        assert!(!human.contains("\nFORGED"));
     }
 
     #[test]

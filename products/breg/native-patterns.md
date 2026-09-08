@@ -73,6 +73,26 @@ generic conflict because application authority does not grant target-field
 disclosure. No response includes stored values, physical table names, constraint
 names, or raw PostgreSQL diagnostics.
 
+Fixture journeys for a direct-write or immediate-action pattern rejection declare
+the exact authored identifiers in the expectation:
+
+```yaml
+expect:
+  outcome: refusal
+  status: 409
+  problemCode: mutation.conflict
+  entityId: person
+  fieldId: identifier
+```
+
+`entityId` and `fieldId` are optional together and allowed only for this conflict
+expectation. Preflight checks that the pair names a patterned field on a target
+of the step; execution requires that exact pair in the response. Preflight does
+not evaluate PostgreSQL expressions or infer the failed field from input values.
+Omit both identifiers when expecting a generic conflict, such as a duplicate
+unique value or a concealed change-request application failure. That expectation
+requires a response without field metadata.
+
 ## Package evolution
 
 Every pattern check has a stable identity derived from its entity and field,

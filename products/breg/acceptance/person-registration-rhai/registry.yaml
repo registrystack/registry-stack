@@ -142,13 +142,13 @@ accessProfiles:
     requiredScopes: [registry:person:read]
     requiredPurposes: [person-registration-audit]
     grants:
-      - {entity: person, rowBoundaries: [], operations: [get], readableFields: [identifier, display-name]}
-      - {entity: registration, rowBoundaries: [], operations: [get], readableFields: [registration-code, person, register]}
-      - {entity: register, rowBoundaries: [], operations: [get], readableFields: [register-code, active, last-person]}
+      - {entity: person, operations: [get], readableFields: [identifier, display-name], rowBoundaries: []}
+      - {entity: registration, operations: [get], readableFields: [registration-code, person, register], rowBoundaries: []}
+      - {entity: register, operations: [get], readableFields: [register-code, active, last-person], rowBoundaries: []}
   - id: person-administrator
     principalClaim: registry_principal
     requiredScopes: [registry:person:manage]
     requiredPurposes: [person-maintenance]
     grants:
-      - {entity: person, rowBoundaries: [], operations: [create, get, patch], readableFields: [identifier, display-name], writableFields: [identifier, display-name]}
-      - {entity: register, rowBoundaries: [], operations: [create, get, patch], readableFields: [register-code, active, last-person], writableFields: [register-code, active, last-person]}
+      - {entity: person, operations: [create, get, patch], readableFields: [identifier, display-name], writableFields: [identifier, display-name], rowBoundaries: []}
+      - {entity: register, operations: [create, get, patch], readableFields: [register-code, active, last-person], writableFields: [register-code, active, last-person], rowBoundaries: []}

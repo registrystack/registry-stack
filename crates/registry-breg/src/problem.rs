@@ -124,16 +124,18 @@ impl ProblemCode {
             | Self::QueryInvalid
             | Self::RequestInvalid
             | Self::RequestPlanRefused => 400,
-            Self::ActionEvidenceFailed => 503,
-            Self::ActionHandlerFailed => 500,
-            Self::ActionRefused => 422,
             Self::AuthenticationRefused => 401,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::IdempotencyConflict | Self::MutationConflict => 409,
             Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
+            Self::ActionRefused => 422,
             Self::PreconditionRequired => 428,
-            Self::RuntimeNotReady | Self::ServiceUnavailable | Self::SourceUnavailable => 503,
+            Self::ActionHandlerFailed => 500,
+            Self::ActionEvidenceFailed
+            | Self::RuntimeNotReady
+            | Self::ServiceUnavailable
+            | Self::SourceUnavailable => 503,
             Self::RequestTimeout => 504,
         }
     }
@@ -149,8 +151,8 @@ impl ProblemCode {
             412 => "Precondition Failed",
             415 => "Unsupported Media Type",
             422 => "Unprocessable Entity",
-            500 => "Internal Server Error",
             428 => "Precondition Required",
+            500 => "Internal Server Error",
             503 => "Service Unavailable",
             504 => "Gateway Timeout",
             _ => "Request failed",
@@ -159,13 +161,14 @@ impl ProblemCode {
 
     /// The value-free sentence published for this code. A refusal carries the
     /// same sentence on the wire, except a refused plan, which names the
-    /// planner failure kind from its own closed vocabulary.
+    /// planner failure kind from its own closed vocabulary, and an action
+    /// business refusal, which uses its package-declared catalogue label.
     #[must_use]
     pub const fn description(self) -> &'static str {
         match self {
             Self::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
-            Self::ActionRefused => "The action was refused by its declared business policy.",
+            Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",
@@ -203,6 +206,30 @@ impl std::fmt::Display for ProblemCode {
 #[cfg(test)]
 mod tests {
     use super::{type_uri, ProblemCode, PROBLEM_TYPE_BASE};
+
+    #[test]
+    fn action_faults_and_business_refusals_have_their_exact_public_contracts() {
+        for (problem, status, title, code) in [
+            (
+                ProblemCode::ActionHandlerFailed,
+                500,
+                "Internal Server Error",
+                "action.handler_failed",
+            ),
+            (
+                ProblemCode::ActionRefused,
+                422,
+                "Unprocessable Entity",
+                "action.refused",
+            ),
+        ] {
+            assert!(ProblemCode::ALL.contains(&problem));
+            assert!(ProblemCode::DOCUMENTED.contains(&problem));
+            assert_eq!(problem.status(), status);
+            assert_eq!(problem.title(), title);
+            assert_eq!(problem.code(), code);
+        }
+    }
 
     #[test]
     fn every_type_resolves_under_the_shared_product_prefix() {

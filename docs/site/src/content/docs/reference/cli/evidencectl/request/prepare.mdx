@@ -18,7 +18,7 @@ Prepare the request, authorization header, and verification context.
 
 ## Contract status
 
-This page is generated from the public Clap command tree for Registry Stack source version `0.27.0` and catalog SHA-256 `c0ad18affb56f809e2ca0b0b07975ef80d171d4c69ba812da25fa36456116e71`. Hidden implementation commands are omitted.
+This page is generated from the public Clap command tree for Registry Stack source version `0.27.0` and catalog SHA-256 `f63b20e786a454125b7b2a6f00594de0a76e811e76bf1931b85fcaa1f4acf535`. Hidden implementation commands are omitted.
 
 ## Usage
 
@@ -31,6 +31,8 @@ evidencectl request prepare [OPTIONS] --name <NAME> <QUESTION|--profile <PROFILE
 | Condition | Requirement |
 | --- | --- |
 | Command invocation | Exactly one of `[QUESTION]`, `--profile <PROFILE>` is required. |
+| `--requirement <REQUIREMENT>` is present | `--profile <PROFILE>` is required. |
+| `--purpose <PURPOSE>` is present | `<QUESTION>` is required. |
 | Command invocation | `--profile <PROFILE>` and `[QUESTION]` cannot be used together. |
 | Command invocation | `--subject <SUBJECT>` and `--subjects-file <PATH>` cannot be used together. |
 

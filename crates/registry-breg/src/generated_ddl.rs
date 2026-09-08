@@ -349,6 +349,39 @@ pub(crate) fn generate_ddl_with_actions(
             spatial_bbox_execute: true,
         });
     }
+    // Invoker helpers give membership facts a processing-only RLS context.
+    // The exception block rolls back the local marker on errors; normal return
+    // restores its prior value. No cluster-wide custom-parameter ACL is needed.
+    for entity in entities.values() {
+        for (profile_id, boundaries) in &entity.membership_boundaries {
+            for (index, boundary) in boundaries.iter().enumerate() {
+                let name = crate::membership::function_name(&entity.id, profile_id, index);
+                let body = format!(
+                    "DECLARE prior_marker text := current_setting('registry.membership_probe', true); authorized boolean; BEGIN PERFORM set_config('registry.membership_probe', {}, true); SELECT EXISTS (SELECT 1 FROM registry_data.{} AS membership WHERE {} AND membership.{} = $1) INTO authorized; PERFORM set_config('registry.membership_probe', COALESCE(prior_marker, ''), true); RETURN authorized; EXCEPTION WHEN OTHERS THEN RAISE; END",
+                    quote_literal(&name),
+                    quote_identifier(&boundary.membership_table),
+                    crate::membership::source_predicate(boundary, "membership"),
+                    quote_identifier(&boundary.membership_key_column),
+                );
+                statements.push(DdlStatement {
+                    id: format!("registry_context.{name}"),
+                    kind: DdlStatementKind::Function,
+                    sql: format!(
+                        "CREATE FUNCTION registry_context.{}(uuid) RETURNS boolean LANGUAGE plpgsql STABLE STRICT SECURITY INVOKER SET search_path = pg_catalog AS {}",
+                        quote_identifier(&name), quote_literal(&body),
+                    ),
+                });
+                functions.push(DdlFunction {
+                    id: format!("registry_context.{name}"),
+                    schema: "registry_context".to_owned(),
+                    name,
+                    arguments: "uuid".to_owned(),
+                    runtime_execute: true,
+                    spatial_bbox_execute: false,
+                });
+            }
+        }
+    }
     for entity in entities.values() {
         let runtime_privileges = runtime_privileges(entity, entities, actions);
         let policies = policies(entity, entities, actions);
@@ -838,6 +871,12 @@ fn runtime_privileges(
                 | Operation::Snapshot
         )
     }) || path_select_entities(entities).contains(&entity.id)
+        || entities.values().any(|root| {
+            root.membership_boundaries
+                .values()
+                .flatten()
+                .any(|boundary| boundary.membership_entity == entity.id)
+        })
     {
         privileges.insert(TablePrivilege::Select);
     }
@@ -1016,12 +1055,48 @@ fn policies(
             });
         }
     }
+    policies.extend(membership_source_policies(entity, entities));
     policies.extend(change_request_action_policies_for_table(entity));
     policies.extend(change_request_presence_policies_for_table(entity, entities));
     policies.extend(read_path_policies_for_table(entity, entities));
     policies.extend(change_request_target_policies_for_table(entity, entities));
     policies.extend(immediate_action_target_policies_for_table(entity, actions));
     policies.extend(spatial_bbox_select_policies(entity));
+    policies
+}
+
+fn membership_source_policies(
+    entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Vec<DdlPolicy> {
+    let mut policies = Vec::new();
+    for root in entities.values() {
+        for (profile, boundaries) in &root.membership_boundaries {
+            for (index, boundary) in boundaries.iter().enumerate() {
+                if boundary.membership_entity != entity.id {
+                    continue;
+                }
+                policies.push(DdlPolicy {
+                    name: format!(
+                        "registry_{}",
+                        crate::membership::function_name(&root.id, profile, index)
+                    ),
+                    command: PolicyCommand::Select,
+                    access_profile: profile.clone(),
+                    applies_to: DdlPolicyRole::Runtime,
+                    using_expression: Some(format!(
+                        "({}) AND ({})",
+                        crate::membership::source_guard(&root.id, profile, index),
+                        crate::membership::source_predicate(
+                            boundary,
+                            &quote_identifier(&entity.physical_table)
+                        )
+                    )),
+                    check_expression: None,
+                });
+            }
+        }
+    }
     policies
 }
 
@@ -3291,6 +3366,12 @@ fn policy_authority_expression_for_alias(
                 ));
             }
         }
+    }
+    let membership = crate::membership::predicate(entity, &profile.id, |field| {
+        field_name_with_alias(entity, field, alias)
+    });
+    if !membership.is_empty() {
+        predicates.push(membership);
     }
     predicates.join(" AND ")
 }

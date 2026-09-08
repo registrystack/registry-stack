@@ -5283,13 +5283,17 @@ fn load_planner_asset_files(
                 &path,
                 || planner_asset_path_diagnostic(&declaring_path),
                 |error| {
-                    path_diagnostic(
+                    let mut diagnostic = path_diagnostic(
                         error,
                         "source.planner_asset.missing",
                         &declaring_path,
                         "the required authoring source is not available",
                         "authoring sources must be regular files and must not be symbolic links",
-                    )
+                    );
+                    diagnostic.message.push_str(&format!(
+                        "; referenced Rhai script: {path:?}, relative to its declaring project or module"
+                    ));
+                    diagnostic
                 },
             )
             .map_err(|mut error| {
@@ -8353,74 +8357,102 @@ fn write_planner_test_success(
             .and_then(|bytes| stdout.write_all(&bytes))
             .and_then(|()| writeln!(stdout))
     } else {
-        let mut lines = report::Lines::new();
-        let mut pairs = vec![("compiled revision", report.compiled_revision.clone())];
-        if report.action.is_some() {
-            lines.lead(&format!(
-                "Ran the action handler, {}.",
-                report::counted(report.effects.len(), "effect")
-            ));
-        } else {
-            lines.lead(&format!(
-                "Ran the planner. Disposition {}, {}.",
-                report.disposition.unwrap_or("effects"),
-                report::counted(report.effects.len(), "effect")
-            ));
-            pairs.push(("request entity", report.request_entity.clone()));
-            if let Some(disposition) = report.disposition {
-                pairs.push(("disposition", disposition.to_owned()));
-            }
-        }
-        if let Some(identity) = report.handler.as_ref().or(report.planner.as_ref()) {
-            pairs.push(("script ABI", identity.abi.clone()));
-            pairs.push(("script SHA-256", identity.script_sha256.clone()));
-        }
-        if let Some(action) = &report.action {
-            pairs.push(("action", action.clone()));
-        }
-        if report.assertions_passed == Some(true) {
-            pairs.push(("exact assertions", "passed".into()));
-        }
-        if let Some(refusal) = &report.refusal {
-            pairs.push((
-                "refusal",
-                format!(
-                    "{} ({})",
-                    refusal["code"].as_str().unwrap_or(""),
-                    refusal["label"].as_str().unwrap_or("")
-                ),
-            ));
-            if let Some(field) = refusal.get("field").and_then(Value::as_str) {
-                pairs.push(("refusal input", field.to_owned()));
-            }
-        }
-        if let Some(reason) = &report.queue_reason {
-            pairs.push((
-                "queue reason",
-                format!("{} ({})", reason.code, reason.label),
-            ));
-        }
-        pairs.push(("effects", report.counts.effects.to_string()));
-        pairs.push(("field mutations", report.counts.field_mutations.to_string()));
-        pairs.push(("dependencies", report.counts.dependencies.to_string()));
-        lines.pairs(&pairs);
+        let script = report
+            .handler
+            .as_ref()
+            .map(|identity| {
+                (
+                    "handler kind",
+                    "handler ABI",
+                    "handler script SHA-256",
+                    identity,
+                )
+            })
+            .or_else(|| {
+                report.planner.as_ref().map(|identity| {
+                    (
+                        "planner kind",
+                        "planner ABI",
+                        "planner script SHA-256",
+                        identity,
+                    )
+                })
+            });
+        script
+            .ok_or_else(|| io::Error::other("missing compiled script identity"))
+            .and_then(|(kind_label, abi_label, digest_label, identity)| {
+                let mut lines = report::Lines::new();
+                if let Some(disposition) = report.disposition {
+                    lines.lead(&format!(
+                        "Ran the planner. Disposition {}, {}.",
+                        disposition,
+                        report::counted(report.effects.len(), "effect")
+                    ));
+                } else if report.refusal.is_some() {
+                    lines.lead("Ran the handler. Returned a declared refusal.");
+                } else {
+                    lines.lead(&format!(
+                        "Ran the handler. Returned {}.",
+                        report::counted(report.effects.len(), "effect")
+                    ));
+                }
+                let mut pairs = vec![("compiled revision", report.compiled_revision.clone())];
+                match &report.action {
+                    Some(action) => pairs.push(("action", action.clone())),
+                    None => pairs.push(("request entity", report.request_entity.clone())),
+                }
+                pairs.extend([
+                    (kind_label, identity.kind.to_owned()),
+                    (abi_label, identity.abi.clone()),
+                    (digest_label, identity.script_sha256.clone()),
+                ]);
+                if report.assertions_passed == Some(true) {
+                    pairs.push(("exact assertions", "passed".to_owned()));
+                }
+                if let Some(disposition) = report.disposition {
+                    pairs.push(("disposition", disposition.to_owned()));
+                }
+                if let Some(refusal) = &report.refusal {
+                    pairs.push((
+                        "refusal",
+                        format!(
+                            "{} ({})",
+                            refusal["code"].as_str().unwrap_or(""),
+                            refusal["label"].as_str().unwrap_or("")
+                        ),
+                    ));
+                    if let Some(field) = refusal.get("field").and_then(Value::as_str) {
+                        pairs.push(("refusal input", field.to_owned()));
+                    }
+                }
+                if let Some(reason) = &report.queue_reason {
+                    pairs.push((
+                        "queue reason",
+                        format!("{} ({})", reason.code, reason.label),
+                    ));
+                }
+                pairs.push(("effects", report.counts.effects.to_string()));
+                pairs.push(("field mutations", report.counts.field_mutations.to_string()));
+                pairs.push(("dependencies", report.counts.dependencies.to_string()));
+                lines.pairs(&pairs);
 
-        // One block per effect, so the fields and dependencies an effect
-        // carries are named once instead of on every effect line.
-        for effect in &report.effects {
-            lines.blank();
-            lines.item(&format!("effect {}", effect.id));
-            lines.pairs_at(
-                2,
-                &[
-                    ("target", effect.target_kind.to_owned()),
-                    ("operation", effect.operation.to_owned()),
-                    ("fields", list_or_none(&effect.fields)),
-                    ("dependencies", list_or_none(&effect.depends_on)),
-                ],
-            );
-        }
-        stdout.write_all(lines.finish().as_bytes())
+                // One block per effect, so the fields and dependencies an effect
+                // carries are named once instead of on every effect line.
+                for effect in &report.effects {
+                    lines.blank();
+                    lines.item(&format!("effect {}", effect.id));
+                    lines.pairs_at(
+                        2,
+                        &[
+                            ("target", effect.target_kind.to_owned()),
+                            ("operation", effect.operation.to_owned()),
+                            ("fields", list_or_none(&effect.fields)),
+                            ("dependencies", list_or_none(&effect.depends_on)),
+                        ],
+                    );
+                }
+                stdout.write_all(lines.finish().as_bytes())
+            })
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -8508,6 +8540,9 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
             .unwrap_or("none (anonymous)")
             .to_owned(),
     )];
+    let membership_restricted = profile["membershipBoundaries"]
+        .as_array()
+        .is_some_and(|boundaries| !boundaries.is_empty());
     for (field, label, empty) in [
         ("operations", "operations", "none"),
         ("requiredScopes", "required scopes (all)", "none required"),
@@ -8522,11 +8557,21 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
     ] {
         let value = &profile[field];
         let rendered = if value.is_null() || value.as_array().is_some_and(Vec::is_empty) {
-            empty.to_owned()
+            if field == "rowBoundaries" && membership_restricted {
+                "governed membership required".to_owned()
+            } else {
+                empty.to_owned()
+            }
         } else {
             value.to_string()
         };
         fields.push((label, rendered));
+    }
+    if membership_restricted {
+        fields.push((
+            "membership restrictions (all)",
+            profile["membershipBoundaries"].to_string(),
+        ));
     }
     for field in [
         "anonymous",
@@ -11094,8 +11139,8 @@ accessProfiles:
             assert_eq!(fs::read(&named).unwrap(), b"decoy\n");
         }
 
-        /// A module that declares one derived SQL asset and one Rhai planner
-        /// script, so both asset readers are exercised by one capture.
+        /// A module that declares derived SQL and both Rhai entry points, so
+        /// each declared asset stays bound to the module's directory descriptor.
         const MODULE_WITH_ASSETS: &[u8] = br#"id: persons
 version: 0.1.0
 extendEntities:
@@ -11110,25 +11155,40 @@ extendEntities:
         script: planners/person.rhai
         abi: registry.change-request-plan/v1
       review: {}
+actions:
+  - id: normalize-person
+    handler:
+      kind: rhai
+      script: handlers/person.rhai
+      abi: registry.action-handler/v1
+      writes: []
 "#;
 
-        fn plant_module_with_assets(root: &Path, sql: &[u8], planner: &[u8]) {
+        fn plant_module_with_assets(root: &Path, sql: &[u8], planner: &[u8], handler: &[u8]) {
             fs::create_dir_all(root.join("modules/persons/sql")).unwrap();
             fs::create_dir_all(root.join("modules/persons/planners")).unwrap();
+            fs::create_dir_all(root.join("modules/persons/handlers")).unwrap();
             fs::write(root.join("modules/persons/module.yaml"), MODULE_WITH_ASSETS).unwrap();
             fs::write(root.join("modules/persons/sql/summary.sql"), sql).unwrap();
             fs::write(root.join("modules/persons/planners/person.rhai"), planner).unwrap();
+            fs::write(root.join("modules/persons/handlers/person.rhai"), handler).unwrap();
         }
 
         #[test]
         fn module_assets_read_after_an_ancestor_swap_carry_the_listed_module_bytes() {
             let tree = race_tree();
             let project = tree.named_directory();
-            plant_module_with_assets(&project, b"genuine sql\n", b"genuine planner\n");
+            plant_module_with_assets(
+                &project,
+                b"genuine sql\n",
+                b"genuine planner\n",
+                b"genuine handler\n",
+            );
             plant_module_with_assets(
                 &tree.outside_directory(),
                 b"decoy sql\n",
                 b"decoy planner\n",
+                b"decoy handler\n",
             );
 
             let sources = read_module_yaml_files(read_module_directory_names(&project).unwrap())
@@ -11148,6 +11208,7 @@ extendEntities:
             assert_eq!(
                 captured,
                 vec![
+                    ("handlers/person.rhai", b"genuine handler\n".as_slice()),
                     ("planners/person.rhai", b"genuine planner\n".as_slice()),
                     ("sql/summary.sql", b"genuine sql\n".as_slice()),
                 ]
@@ -11160,6 +11221,10 @@ extendEntities:
             assert_eq!(
                 fs::read(project.join("modules/persons/planners/person.rhai")).unwrap(),
                 b"decoy planner\n"
+            );
+            assert_eq!(
+                fs::read(project.join("modules/persons/handlers/person.rhai")).unwrap(),
+                b"decoy handler\n"
             );
         }
 

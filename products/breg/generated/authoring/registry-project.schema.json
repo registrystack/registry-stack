@@ -1774,6 +1774,13 @@
           },
           "type": "array"
         },
+        "membershipBoundaries": {
+          "description": "Current active membership required for each stored reference key.",
+          "items": {
+            "$ref": "#/$defs/MembershipBoundarySource"
+          },
+          "type": "array"
+        },
         "operations": {
           "items": {
             "$ref": "#/$defs/Operation"
@@ -2956,6 +2963,35 @@
       "required": [
         "id",
         "schemeIri"
+      ],
+      "type": "object"
+    },
+    "MembershipBoundarySource": {
+      "additionalProperties": false,
+      "description": "A one-hop current membership requirement, combined with every other row boundary.\nThe root field and membership key must reference the same entity. The active\nfield is Boolean, and principalField matches the profile's verified principal.",
+      "properties": {
+        "activeField": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "membershipEntity": {
+          "type": "string"
+        },
+        "membershipKeyField": {
+          "type": "string"
+        },
+        "principalField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "membershipEntity",
+        "membershipKeyField",
+        "principalField",
+        "activeField"
       ],
       "type": "object"
     },

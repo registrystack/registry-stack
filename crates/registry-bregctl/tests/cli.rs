@@ -340,6 +340,29 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
 }
 
 #[test]
+fn explain_access_names_membership_constraints_instead_of_unrestricted_rows() {
+    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/fixtures/organization-membership-access")
+        .canonicalize()
+        .unwrap();
+    let output = bregctl(&["explain", "access", path(&project)]);
+    assert!(output.status.success(), "{output:?}");
+    let human = String::from_utf8(output.stdout).unwrap();
+    let member = human
+        .split("profile member")
+        .nth(1)
+        .expect("the member profile is explained")
+        .split("profile steward")
+        .next()
+        .unwrap();
+    let aligned = member.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(aligned.contains("row restrictions (all) governed membership required"));
+    assert!(aligned.contains("membership restrictions (all)"));
+    assert!(aligned.contains("membershipEntity"));
+    assert!(!aligned.contains("row restrictions (all) unrestricted"));
+}
+
+#[test]
 fn missing_action_script_identifies_action_and_safe_relative_path() {
     let project = TestProject::from_registry_source(include_bytes!(
         "../../../products/breg/acceptance/person-registration-rhai/registry.yaml"

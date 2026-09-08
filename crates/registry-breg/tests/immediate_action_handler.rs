@@ -481,6 +481,192 @@ fn handler_optional_inputs_preserve_absence_and_explicit_null() {
 }
 
 #[test]
+fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
+    let script = result(r#"#{effects:[#{id:"person",set:#{name:"Mina"}}]}"#);
+    for (field_type, code, member, repair) in [
+        (
+            json!({"type":"string","maxLength":17_000}),
+            "action.handler.input.string_bound",
+            "maxLength",
+            "4096",
+        ),
+        (
+            json!({"type":"text","maxLength":20_000}),
+            "action.handler.input.string_bound",
+            "maxLength",
+            "4096",
+        ),
+        (
+            json!({"type":"crs84-point","precision":6}),
+            "action.handler.input.type_unsupported",
+            "type",
+            "scalar",
+        ),
+        (
+            json!({"type":"structured","maxBytes":1024,"schema":{
+                "type":"object","properties":{"value":{"type":"number"}},
+                "additionalProperties":false
+            }}),
+            "action.handler.input.type_unsupported",
+            "type",
+            "scalar",
+        ),
+    ] {
+        let mut input = field_type;
+        input["id"] = json!("extra");
+        input["classification"] = json!("restricted");
+        let mut source = project();
+        source["actions"][0]["inputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(input.clone());
+        let failure = compile(source, &script).unwrap_err();
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("expected {code}: {:?}", failure.diagnostics()));
+        assert_eq!(
+            diagnostic.path,
+            format!("actions[register-person].inputs[extra].{member}")
+        );
+        assert!(diagnostic.message.contains(repair));
+        assert!(diagnostic.message.contains("registry.action-handler/v1"));
+
+        // The same declared input is valid for an action with fixed effects.
+        let mut fixed = project();
+        fixed["actions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("handler");
+        fixed["actions"][0]["inputs"] = json!([
+            input,
+            {"id":"name","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+        ]);
+        fixed["actions"][0]["effects"] = json!([{
+            "id":"person","target":{"entity":"person"},"operation":"create",
+            "set":{"name":{"fromField":"name"}}
+        }]);
+        fixed["accessProfiles"][0]["grants"][0]["results"] = json!(["person"]);
+        let fixed = parse_project_json(&serde_json::to_vec(&fixed).unwrap()).unwrap();
+        compile_project_with_assets(&fixed, &[], &[], CompileProfile::Authoring).unwrap();
+    }
+}
+
+#[test]
+fn handler_string_declarations_cover_the_full_unicode_boundary() {
+    let script = result(r#"#{effects:[#{id:"person",set:#{name:"Mina"}}]}"#);
+    for kind in ["string", "text"] {
+        let mut source = project();
+        source["actions"][0]["inputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"extra","type":kind,"maxLength":4096,"classification":"restricted"
+            }));
+        let action = compile(source.clone(), &script).unwrap();
+        let mut input = inputs();
+        input["extra"] = json!("\u{1f642}".repeat(4096));
+        assert_eq!(
+            input["extra"].as_str().unwrap().len(),
+            registry_breg::rhai_planner::MAXIMUM_STRING_BYTES
+        );
+        assert!(matches!(
+            evaluate_action(
+                &action,
+                input.as_object().unwrap(),
+                Instant::now() + Duration::from_secs(5)
+            ),
+            Ok(ActionHandlerOutcome::Effects(_))
+        ));
+        input["extra"] = json!("\u{1f642}".repeat(4097));
+        let diagnostic = evaluate_action_detailed(
+            &action,
+            input.as_object().unwrap(),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert_eq!(diagnostic.kind, ActionHandlerError::Input);
+        assert_eq!(diagnostic.field.as_deref(), Some("extra"));
+
+        source["actions"][0]["inputs"][3]["maxLength"] = json!(4097);
+        assert!(compile(source, &script)
+            .unwrap_err()
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "action.handler.input.string_bound"));
+    }
+}
+
+#[test]
+fn handler_accepts_supported_scalars_and_rejects_oversized_timestamp_input() {
+    let script = result(r#"#{effects:[#{id:"person",set:#{name:"Mina"}}]}"#);
+    for (field_type, value) in [
+        (json!({"type":"boolean"}), json!(true)),
+        (json!({"type":"int64"}), json!(i64::MIN)),
+        (
+            json!({"type":"decimal","precision":38,"scale":2}),
+            json!("-123456789012345678901234567890123456.78"),
+        ),
+        (json!({"type":"date"}), json!("2026-09-08")),
+        (
+            json!({"type":"uuid"}),
+            json!("550e8400-e29b-41d4-a716-446655440000"),
+        ),
+        (
+            json!({"type":"vocabulary-code","vocabulary":"codes","values":["a".repeat(64)]}),
+            json!("a".repeat(64)),
+        ),
+        (
+            json!({"type":"timestamp"}),
+            json!("2026-09-08T12:00:00.123456789+07:00"),
+        ),
+    ] {
+        let mut extra = field_type;
+        extra["id"] = json!("extra");
+        extra["classification"] = json!("restricted");
+        let mut source = project();
+        source["actions"][0]["inputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(extra);
+        let action = compile(source, &script).unwrap();
+        let mut input = inputs();
+        input["extra"] = value;
+        assert!(matches!(
+            evaluate_action(
+                &action,
+                input.as_object().unwrap(),
+                Instant::now() + Duration::from_secs(5)
+            ),
+            Ok(ActionHandlerOutcome::Effects(_))
+        ));
+        if input["extra"].as_str() == Some("2026-09-08T12:00:00.123456789+07:00") {
+            let oversized = format!("2026-09-08T12:00:00.{}Z", "1".repeat(17_000));
+            assert!(time::OffsetDateTime::parse(
+                &oversized,
+                &time::format_description::well_known::Rfc3339
+            )
+            .is_ok());
+            input["extra"] = json!(oversized);
+            let diagnostic = evaluate_action_detailed(
+                &action,
+                input.as_object().unwrap(),
+                Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap_err();
+            assert_eq!(diagnostic.kind, ActionHandlerError::Input);
+            assert_eq!(diagnostic.field.as_deref(), Some("extra"));
+            assert_eq!(
+                diagnostic.message,
+                "Use a handler input string of at most 16,384 UTF-8 bytes."
+            );
+            assert!(!format!("{diagnostic:?}").contains("2026-09-08"));
+        }
+    }
+}
+
+#[test]
 fn handler_cannot_write_an_existing_field_outside_its_narrower_slot() {
     let mut source = project();
     source["actions"][0]["handler"]["writes"][2]["fields"] = json!(["name"]);

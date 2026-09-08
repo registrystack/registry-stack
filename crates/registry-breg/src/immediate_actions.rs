@@ -229,6 +229,34 @@ fn compile_handler(
             "handler input count exceeds the engine map bound",
         ));
     }
+    for input in inputs.values() {
+        let input_path = format!("actions[{}].inputs[{}]", collected.source.id, input.id);
+        match &input.field_type {
+            FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length }
+                if u64::from(*max_length) * 4
+                    > crate::rhai_planner::MAXIMUM_STRING_BYTES as u64 =>
+            {
+                errors.push(Diagnostic::error(
+                    "action.handler.input.string_bound",
+                    format!("{input_path}.maxLength"),
+                    &format!(
+                        "{} input strings support at most {} UTF-8 bytes; set maxLength to {} or less so every Unicode value fits",
+                        source.abi,
+                        crate::rhai_planner::MAXIMUM_STRING_BYTES,
+                        crate::rhai_planner::MAXIMUM_STRING_BYTES / 4,
+                    ),
+                ));
+            }
+            FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+                errors.push(Diagnostic::error(
+                    "action.handler.input.type_unsupported",
+                    format!("{input_path}.type"),
+                    &format!("{} accepts scalar inputs; use scalar fields or fixed effects for crs84-point and structured values", source.abi),
+                ));
+            }
+            _ => {}
+        }
+    }
     if source.writes.len() > usize::from(MAX_CHANGE_REQUEST_TARGETS) {
         errors.push(Diagnostic::error(
             "action.handler.slots_bound",
@@ -1606,6 +1634,7 @@ fn validate_grant_access_requirements(
             sortable_fields: BTreeSet::new(),
             spatial_queries: None,
             row_boundaries: row_boundaries.to_vec(),
+            membership_boundaries: Vec::new(),
             request_visibility: None,
             lookups: Vec::new(),
             read_paths: Vec::new(),
@@ -1703,6 +1732,7 @@ fn entity_grant_fields_empty(grant: &crate::contract::AccessGrantSource) -> bool
         && grant.filterable_fields.is_empty()
         && grant.sortable_fields.is_empty()
         && grant.row_boundaries.is_empty()
+        && grant.membership_boundaries.is_empty()
         && grant.lookups.is_empty()
         && grant.read_paths.is_empty()
         && grant.review_stages.is_empty()

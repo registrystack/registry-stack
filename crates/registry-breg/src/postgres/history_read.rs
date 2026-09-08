@@ -667,13 +667,21 @@ impl SnapshotReadPlan {
         {
             return Err(());
         }
-        let required_fields = required_history_fields(request, operation)?;
-        let authorizing_fields = request
+        let mut required_fields = required_history_fields(request, operation)?;
+        required_fields.extend(crate::membership::fields(
+            entity,
+            request.context.selected_profile(),
+        ));
+        let mut authorizing_fields: BTreeSet<String> = request
             .context
             .row_boundaries()
             .iter()
             .map(|boundary| boundary.field().to_owned())
             .collect();
+        authorizing_fields.extend(crate::membership::fields(
+            entity,
+            request.context.selected_profile(),
+        ));
         Ok(Self {
             entity: entity.clone(),
             query_operation: operation.clone(),
@@ -1107,6 +1115,21 @@ fn snapshot_where_sql(
                 predicates.push(format!("{typed} IN ({})", placeholders.join(", ")));
             }
         }
+    }
+    for (index, boundary) in crate::membership::boundaries(entity, claims.access_profile())
+        .iter()
+        .enumerate()
+    {
+        let field = fields.field(&boundary.field)?;
+        predicates.push(format!(
+            "registry_context.{}({})",
+            crate::generated_ddl::quote_identifier(&crate::membership::function_name(
+                &entity.id,
+                claims.access_profile(),
+                index
+            )),
+            field_typed_sql(field)?
+        ));
     }
     if let Some(instant) = &query.temporal_instant {
         let temporal = entity

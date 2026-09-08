@@ -726,6 +726,7 @@ mod tests {
             constraints: BTreeMap::new(),
             indexes: BTreeMap::new(),
             access_profiles: BTreeMap::new(),
+            membership_boundaries: BTreeMap::new(),
             events: BTreeMap::new(),
         }
     }

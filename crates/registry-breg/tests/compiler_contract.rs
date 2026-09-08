@@ -5601,6 +5601,7 @@ fn public_profile_cannot_process_an_internal_field() {
         required_scopes: Default::default(),
         required_purposes: Default::default(),
         grants: vec![AccessGrantSource {
+            membership_boundaries: Vec::new(),
             entity: "asset-item".to_owned(),
             action: None,
             operations: [Operation::Get].into_iter().collect(),
