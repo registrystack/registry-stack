@@ -1213,7 +1213,7 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         Ok(value) => value,
         Err(error) => return error,
     };
-    let (document, has_declared_field) = match parse_breg_problem(&body) {
+    let (document, has_declared_field, has_evidence_path) = match parse_breg_problem(&body) {
         Ok(value) => value,
         Err(_) => return problem_failure(status, trace_id),
     };
@@ -1230,6 +1230,7 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
     if code.status() != status.as_u16()
         || document.trace_id != trace_id
         || (has_declared_field && code != BRegProblemCode::MutationConflict)
+        || (has_evidence_path && code != BRegProblemCode::ActionEvidenceFailed)
     {
         return problem_failure(status, trace_id);
     }
@@ -1240,10 +1241,10 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
     }
 }
 
-/// BReg owns the optional paired field-location extension; the platform parser
+/// BReg owns paired field locations and Evidence capability paths; the platform parser
 /// continues to own the exact six common members. Locations are checked and
 /// discarded, never retained as response-authored error text.
-fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, bool), ()> {
+fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, bool, bool), ()> {
     if body.is_empty() || body.len() > MAXIMUM_PROBLEM_BYTES {
         return Err(());
     }
@@ -1261,9 +1262,26 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, bool), ()> {
         }
         _ => return Err(()),
     };
+    let has_evidence_path = match object.remove("fieldPath") {
+        None => false,
+        Some(serde_json::Value::String(path)) if valid_evidence_problem_path(&path) => true,
+        _ => return Err(()),
+    };
     let common = serde_json::to_vec(&object).map_err(|_| ())?;
     let document = ProblemDocument::parse_exact(&common, MAXIMUM_PROBLEM_BYTES).map_err(|_| ())?;
-    Ok((document, has_declared_field))
+    Ok((document, has_declared_field, has_evidence_path))
+}
+
+fn valid_evidence_problem_path(path: &str) -> bool {
+    let Some(alias) = path.strip_prefix("/evidence/") else {
+        return false;
+    };
+    let mut bytes = alias.bytes();
+    alias.len() <= 64
+        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
 }
 
 fn body_failure(status: u16, trace_id: TraceId) -> BaseRegistryClientError {

@@ -1062,6 +1062,7 @@ enum DiagnosticArtifact {
     WebhookSample,
     WebhookOperations,
     RequestRetentionOperation,
+    EvidenceRetentionOperation,
     AuditJournal,
     HistoryErasure,
     HistoryRebaseline,
@@ -1109,6 +1110,7 @@ enum SuggestedAction {
     SelectWebhookEvent,
     VerifyWebhookOperation,
     VerifyRequestRetentionOperation,
+    VerifyEvidenceRetentionOperation,
     VerifyAuditJournal,
     PrepareHistoryErasureRequest,
     PrepareHistoryRebaselineRequest,
@@ -1805,7 +1807,7 @@ where
                 }
                 Err(()) => write_failure(&source_failure("evidence-retention erase-expired",
                     diagnostic("evidence_retention.unavailable", "evidenceRetention", "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff."),
-                    DiagnosticArtifact::RequestRetentionOperation, SuggestedAction::VerifyRequestRetentionOperation), format, stdout, stderr),
+                    DiagnosticArtifact::EvidenceRetentionOperation, SuggestedAction::VerifyEvidenceRetentionOperation), format, stdout, stderr),
             };
         }
         Command::RequestRetention(args) => {
