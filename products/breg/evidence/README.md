@@ -9,7 +9,8 @@ For a custom-model journey, derive `organization-selection.yaml` with
 `bregctl init --from publicschema --selection`, start and edit a record, then stop
 normally. `evidencectl source add ./registry --project ./evidence --source-id
 registry-name --selector-profile by-code` guides the code/name lookup authority
-and configures the connection. Copy the `named-starter/` question, derivation, and
+and reports the connection it would configure; the same command with `--apply`
+configures it. Copy the `named-starter/` question, derivation, and
 fixtures into the created project. The archive supplies sample question material;
 source setup itself needs no archive or copied endpoint settings.
 

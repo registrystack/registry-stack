@@ -209,6 +209,58 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
     return {"questions": 1, "fixtureCases": 11, "defaultSourceClient": "dedicated"}
 
 
+def verify_source_add_review(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
+    """source add reviews by default and refuses before it changes either project.
+
+    The public preparation it drives needs the retained session only the live
+    proof starts, so this offline path proves the command surface, the matching
+    tooling requirement, and that a refused connection leaves nothing behind.
+    """
+    workspace.mkdir()
+    environment = dict(os.environ)
+    environment.pop("REGISTRY_EVIDENCE_RUNTIME", None)
+    environment["PATH"] = os.pathsep.join(
+        [str(binaries["bregctl"].parent), environment.get("PATH", "")]
+    )
+    registry = workspace / "registry"
+    project = workspace / "evidence"
+    run(binaries["bregctl"], "init", registry, environment=environment)
+
+    def refuse(*args: object) -> str:
+        result = subprocess.run(
+            [str(binaries["evidencectl"]), *(str(arg) for arg in args)],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode, f"evidencectl {args} must refuse:\n{result.stdout[-4096:]}"
+        return result.stderr[-8192:]
+
+    add_arguments = ("source", "add", registry, "--project", project, "--entity", "record",
+                     "--selector-field", "code", "--fields", "status", "--all-records")
+    version = run(binaries["bregctl"], "--version", environment=environment).strip()
+    help_text = run(binaries["evidencectl"], "source", "add", "--help", environment=environment)
+    assert "bregctl" in help_text and "PATH" in help_text and "--apply" in help_text
+    # The withdrawn review flag must not survive as an accepted argument.
+    assert "--dry-run" in refuse(*add_arguments, "--dry-run")
+    mismatched = refuse(*add_arguments, "--bregctl-bin", binaries["evidence"])
+    assert version in mismatched and "BREGCTL_BIN" in mismatched, mismatched
+    # A review and an apply both stop at the one public preparation this
+    # command drives, naming the operation an adopter can inspect by hand.
+    for consent in [(), ("--apply",)]:
+        refused = refuse(*add_arguments, *consent)
+        assert "dev prepare-source" in refused, refused
+        assert not project.exists(), "a refused connection creates no Evidence project"
+        assert not (registry / ".breg").exists(), "a refused connection starts no session"
+    return {
+        "reviewFlag": "withdrawn",
+        "bregctlRequirement": version,
+        "publicPreparation": "refused without a retained session",
+    }
+
+
 def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = False) -> dict[str, object]:
     """Opt-in retained-record proof; cleans up only the services it creates."""
     import socket
@@ -380,18 +432,21 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
                              "--source-id", source_id, "--selector-profile", "by-code")
             state_before_preview = {path: path.read_bytes() for path in
                 [state_root / "state.json", registry / "registry.yaml", registry / "dev-clients.yaml"]}
-            preview = json.loads(command("evidencectl", *add_arguments[:-2], "--dry-run"))
+            preview = json.loads(command("evidencectl", *add_arguments[:-2]))
+            assert preview["status"] == "preview"
+            assert all("--apply" in step for step in preview["next"])
             assert all(preview[key] == source_id for key in ["client", "accessProfile", "selectorProfile"])
             assert not project.exists()
             assert all(path.read_bytes() == content for path, content in state_before_preview.items())
             assert {str(path.relative_to(state_root)): path.read_bytes()
                     for path in (state_root / "credentials").rglob("*") if path.is_file()} == prior_keys
-            command("evidencectl", *add_arguments)
+            command("evidencectl", *add_arguments, "--apply")
             retry_paths = [registry / "registry.yaml", registry / "dev-clients.yaml",
                            state_root / "clients.json", state_root / "state.json",
                            state_root / "credentials" / source_client / "assertion-key.jwk"]
             before_retry = {path: path.read_bytes() for path in retry_paths}
-            command("evidencectl", *add_arguments)  # An identical attachment is retryable.
+            # An identical attachment is retryable.
+            command("evidencectl", *add_arguments, "--apply")
             assert all(path.read_bytes() == content for path, content in before_retry.items()), (
                 "identical source attachment must not evolve or rotate the retained session"
             )
@@ -437,7 +492,9 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
                 [state_root / "state.json", registry / "registry.yaml", registry / "dev-clients.yaml"]}
             preview = json.loads(command("evidencectl", "source", "add", registry, "--project", project,
                 "--entity", "record", "--selector-field", "code", "--fields", "status",
-                "--all-records", "--dry-run"))
+                "--all-records"))
+            assert preview["status"] == "preview"
+            assert all("--apply" in step for step in preview["next"])
             assert all(preview[key] == "registry-record"
                        for key in ["sourceId", "client", "accessProfile", "selectorProfile"])
             assert not project.exists()
@@ -576,6 +633,7 @@ def main() -> None:
         workspace.mkdir(mode=0o700)
         report = verify(workspace, binaries)
         report["defaultInit"] = verify_default_init(workspace / "default-init", binaries)
+        report["sourceAddReview"] = verify_source_add_review(workspace / "source-add", binaries)
         if args.live:
             report["live"] = verify_live(workspace / "live", binaries)
             report["lateAdoption"] = verify_live(workspace / "late-adoption", binaries, late=True)
@@ -585,6 +643,7 @@ def main() -> None:
             try:
                 report = verify(workspace, binaries)
                 report["defaultInit"] = verify_default_init(workspace / "default-init", binaries)
+                report["sourceAddReview"] = verify_source_add_review(workspace / "source-add", binaries)
                 if args.live:
                     report["live"] = verify_live(workspace / "live", binaries)
                     report["lateAdoption"] = verify_live(workspace / "late-adoption", binaries, late=True)

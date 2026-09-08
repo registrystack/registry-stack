@@ -18,6 +18,13 @@ use crate::{authoring, build, source_add, source_import, source_mock, suggest};
 #[derive(Debug, Subcommand)]
 pub(crate) enum SourceCommand {
     /// Connect a retained local registry through its public lookup export.
+    ///
+    /// This command reviews the connection by default and reports the choices
+    /// it would apply; re-run it with --apply to perform them.
+    ///
+    /// It drives the public Base Registry Engine commands, so a bregctl binary
+    /// of this same version must be on PATH, or named by --bregctl-bin or
+    /// BREGCTL_BIN.
     Add(source_add::SourceAddArgs),
     /// Suggest source configuration from an OpenAPI document.
     Suggest(suggest::SuggestArgs),
