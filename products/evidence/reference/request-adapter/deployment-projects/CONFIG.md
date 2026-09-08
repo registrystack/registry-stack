@@ -471,7 +471,7 @@ logical `tlsTrustProfile` retains its additive runtime CA binding.
 
 | Connection key | Required | Meaning |
 |---|---|---|
-| `baseUrl`, `authentication` | yes | Sole authored owner of origin and workload identity. |
+| `baseUrl`, `authentication` | yes | Sole authored owner of origin and workload identity. `baseUrl` is a fixed HTTPS origin, or an HTTP numeric-loopback origin when `authentication.kind` is `none`, with no path, query, fragment, or user information; `kind: none` additionally requires an explicit port. |
 | `tlsTrustProfile` | no | Sole authored TLS profile; omission uses system roots. |
 | `concurrencyLimit` | no | Aggregate source-call capacity for this name in one process, 1 to 256; default 4. |
 | `admissionTimeoutMilliseconds` | no | Maximum wait for capacity or an in-progress OAuth refresh, 1 to 30,000; default 5,000. |
