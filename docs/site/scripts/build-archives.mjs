@@ -20,6 +20,8 @@ import {
   validateArchiveOutputLocation,
 } from './archive-bundle.mjs';
 import { isCandidateSourceProduct, loadDocsets } from './docsets.mjs';
+import { generateBRegConfiguration } from './generate-breg-configuration.mjs';
+import { generateEvidenceConfiguration } from './generate-evidence-configuration.mjs';
 
 const execFileAsync = promisify(execFile);
 const archiveExecutionEnvironmentKeys = Object.freeze([
@@ -50,16 +52,19 @@ const archiveExecutionEnvironmentKeys = Object.freeze([
   'http_proxy',
   'no_proxy',
 ]);
-// Artifacts a current-source generator writes from the checked-out tree, which
-// an archive must instead take from its docset's pinned source ref. A directory
-// entry stages every regular file below it. That keeps command
-// additions covered without maintaining a second manifest of generated pages.
+const configurationGenerators = new Map([
+  ['docs/site/src/data/generated/evidence-configuration.json', generateEvidenceConfiguration],
+  ['docs/site/src/data/generated/breg-configuration.json', generateBRegConfiguration],
+]);
+// New archives generate these artifacts from their pinned source. Legacy refs
+// stage only their original CLI and starter inventory; configuration JSON was
+// supplied by the current renderer's checked-in data before build generation.
+// Directory entries include every file, including newly added command pages.
 export const currentSourceGeneratedArtifacts = Object.freeze([
   'docs/site/public/examples/breg-evidence-starter.tar.gz',
   'docs/site/src/content/docs/reference/cli',
   'docs/site/src/data/generated/cli-reference.json',
-  'docs/site/src/data/generated/evidence-configuration.json',
-  'docs/site/src/data/generated/breg-configuration.json',
+  ...configurationGenerators.keys(),
 ]);
 
 function compareEntryNames(left, right) {
@@ -398,14 +403,9 @@ export async function stagePinnedGeneratedArtifacts(docset, {
   if (artifacts.length === 0) {
     return async () => {};
   }
-  const currentPaths = new Set();
   for (const repoRelative of artifacts) {
-    const local = resolve(repoRoot, repoRelative);
-    if (relative(docsRoot, local).startsWith('..')) {
+    if (relative(docsRoot, resolve(repoRoot, repoRelative)).startsWith('..')) {
       throw new Error(`generated archive input resolves outside docs root: ${repoRelative}`);
-    }
-    for (const file of await regularFilesBelow(local)) {
-      currentPaths.add(relative(repoRoot, file).split(sep).join('/'));
     }
   }
   const packagePath = 'docs/site/package.json';
@@ -425,6 +425,28 @@ export async function stagePinnedGeneratedArtifacts(docset, {
     const { stdout } = await executeGit('git', ['show', `${sourceRef}:${packagePath}`], repoRoot);
     const packageJson = JSON.parse(stdout.toString('utf8'));
     generateFromSource = typeof packageJson.scripts?.['generate:source'] === 'string';
+  }
+  const stagedArtifacts = generateFromSource
+    ? artifacts
+    : artifacts.filter((path) => !configurationGenerators.has(path));
+  if (!generateFromSource) {
+    // Older archives were rendered with the current checkout's configuration
+    // tables, even when their source predates those tables. Preserve that
+    // behavior and populate a fresh checkout now that the tables are untracked.
+    for (const path of artifacts) {
+      const generateConfiguration = configurationGenerators.get(path);
+      if (!generateConfiguration) continue;
+      pinnedPaths.delete(path);
+      if (await readOptionalRegularFile(resolve(repoRoot, path)) === null) {
+        await generateConfiguration(docsRoot, repoRoot);
+      }
+    }
+  }
+  const currentPaths = new Set();
+  for (const repoRelative of stagedArtifacts) {
+    for (const file of await regularFilesBelow(resolve(repoRoot, repoRelative))) {
+      currentPaths.add(relative(repoRoot, file).split(sep).join('/'));
+    }
   }
   const pinnedContents = generateFromSource
     ? await generatePinnedSourceArtifacts(sourceRef, {

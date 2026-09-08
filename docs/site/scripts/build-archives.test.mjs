@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import {
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -24,6 +25,8 @@ import {
 } from './build-archives.mjs';
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
 import { treeDigest } from './archive-bundle.mjs';
+import { CONTRACTS as bregContracts } from './generate-breg-configuration.mjs';
+import { CONTRACTS as evidenceContracts } from './generate-evidence-configuration.mjs';
 
 const execFileAsync = promisify(execFile);
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -317,6 +320,55 @@ test('an empty artifact list stages nothing instead of listing the whole tree', 
 
   await restore();
   assert.deepEqual(calls, []);
+});
+
+test('legacy archives retain pinned CLI bytes and generate missing current configuration tables', async (t) => {
+  const repoRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-legacy-config-'));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  const siteRoot = resolve(repoRoot, 'docs/site');
+  const cliPath = resolve(siteRoot, 'src/content/docs/reference/cli/index.mdx');
+  const evidencePath = resolve(siteRoot, 'src/data/generated/evidence-configuration.json');
+  const bregPath = resolve(siteRoot, 'src/data/generated/breg-configuration.json');
+  const legacyCli = 'exact committed legacy CLI bytes\n';
+  await mkdir(dirname(cliPath), { recursive: true });
+  await mkdir(dirname(evidencePath), { recursive: true });
+  await writeFile(cliPath, legacyCli);
+  await writeFile(evidencePath, '{"old":"configuration from before BReg"}');
+  await writeFile(resolve(siteRoot, 'package.json'), '{"scripts":{"generate":"legacy-generator"}}');
+  await execFileAsync('git', ['init', '--quiet'], { cwd: repoRoot });
+  await execFileAsync('git', ['config', 'user.name', 'Archive Test'], { cwd: repoRoot });
+  await execFileAsync('git', ['config', 'user.email', 'archive@example.invalid'], { cwd: repoRoot });
+  await execFileAsync('git', ['add', '.'], { cwd: repoRoot });
+  await execFileAsync('git', ['commit', '--quiet', '-m', 'legacy release'], { cwd: repoRoot });
+  const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
+  const docset = {
+    ...archivedDocset,
+    products: { 'registry-stack': { ref: stdout.trim() } },
+  };
+  await rm(resolve(siteRoot, 'src'), { recursive: true });
+  for (const contract of [...bregContracts, ...evidenceContracts]) {
+    const destination = resolve(repoRoot, contract.file);
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(resolve(docsRoot, '../..', contract.file), destination);
+  }
+
+  const restore = await stagePinnedGeneratedArtifacts(docset, { docsRoot: siteRoot });
+  assert.equal(await readFile(cliPath, 'utf8'), legacyCli);
+  const currentEvidence = await readFile(evidencePath, 'utf8');
+  const currentBreg = await readFile(bregPath, 'utf8');
+  assert.equal(JSON.parse(currentEvidence).contracts.length, evidenceContracts.length);
+  assert.equal(JSON.parse(currentBreg).contracts.length, bregContracts.length);
+  await restore();
+  await assert.rejects(readFile(cliPath), { code: 'ENOENT' });
+  assert.equal(await readFile(evidencePath, 'utf8'), currentEvidence);
+  assert.equal(await readFile(bregPath, 'utf8'), currentBreg);
+
+  // Existing current tables are renderer inputs, not historical staged bytes.
+  const restoreAgain = await stagePinnedGeneratedArtifacts(docset, { docsRoot: siteRoot });
+  assert.equal(await readFile(cliPath, 'utf8'), legacyCli);
+  assert.equal(await readFile(evidencePath, 'utf8'), currentEvidence);
+  assert.equal(await readFile(bregPath, 'utf8'), currentBreg);
+  await restoreAgain();
 });
 
 async function buildTimeSourceFixture(t) {

@@ -238,7 +238,9 @@ and Linux. Gzip normalization does not make those payloads identical, so a
 macOS archive digest is not a substitute for the Ubuntu lock.
 
 Start from a commit containing the prepared version, candidate docset, release
-notes, and generated inputs. The new candidate must not yet have an archive
+notes, and generator inputs. Source-generated CLI references require the Rust
+toolchain in `rust-toolchain.toml` and native build dependencies, installed below.
+The new candidate must not yet have an archive
 lock entry. This procedure adds that one entry; it never replaces an existing
 entry. Run the following from the prepared repository with Docker available:
 
@@ -264,7 +266,12 @@ docker run --rm --platform linux/amd64 \
 set -euo pipefail
 cp -R /input/. /workspace
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl git python3 xz-utils
+apt-get install -y -qq ca-certificates curl git python3 xz-utils \
+  build-essential pkg-config libssl-dev libclang-dev protobuf-compiler
+curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh
+sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
+export PATH="/root/.cargo/bin:${PATH}"
+rustup show active-toolchain
 cd /tmp
 curl -fsSLO https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz
 curl -fsSLO https://nodejs.org/dist/v22.12.0/SHASUMS256.txt
@@ -285,9 +292,12 @@ cp ".archive-bundles/${DOCS_DOCSET}.tar.gz" /output/
 The fresh clone includes committed inputs only. It excludes local dependencies,
 uncommitted edits, and ignored generated assets. Docker mounts it read-only and
 builds a container-owned copy, avoiding Git ownership mismatches on Linux hosts.
-Archive builds also stage their owned generated inputs from the docset's source
-ref, including `public/examples/breg-evidence-starter.tar.gz`. A local starter
-archive absent from that ref is omitted during the build and restored afterward.
+Archive builds stage their owned generated inputs from the docset's source ref.
+Refs declaring `generate:source` generate CLI, configuration, and starter outputs
+in a clean export using that ref's dependency lock. Historical refs use their
+committed CLI and starter outputs with the current renderer's configuration data.
+A local starter archive absent from a historical ref is omitted during the build
+and restored afterward.
 This also covers archive bootstrap after current-site generation. Other local
 files are not cleared, so use the fresh checkout for canonical preparation.
 
