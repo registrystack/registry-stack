@@ -355,9 +355,10 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
 - Changes to authentication, authorization, assertion evaluation or signing,
   audit integrity, release provenance, deployment defaults, or data
   minimization are security-sensitive and need explicit review notes.
-- Generated outputs (OpenAPI under `docs/site/openapi/`, `docs/site`
-  generated data, release artifacts) must be reproduced by their documented
-  generator commands, never hand-edited, and must be bit-for-bit repeatable.
+- Generated outputs (site references, OpenAPI, release artifacts) must be
+  reproduced by their documented generator commands, never hand-edited, and
+  must be bit-for-bit repeatable. Site CLI pages and generated data are ignored
+  build artifacts; commit their sources and generators, not rendered copies.
   If you change an HTTP endpoint, regenerating and committing the OpenAPI
   documents is part of the change, not a follow-up.
 - Suspected vulnerabilities (minimum-disclosure failure, auth bypass, audit

@@ -6,7 +6,9 @@ This repo is an Astro and Starlight documentation site.
 - Keep v0 English-only. Add French only after the English site is approved.
 - Keep reference tables data-driven. Update `src/data/*.yaml`, then run
   `npm run generate`.
-- Do not hand-maintain generated files under `src/data/generated/`.
+- CLI pages under `src/content/docs/reference/cli/` and data under
+  `src/data/generated/` are ignored build artifacts. Commit authored inputs and
+  generators. `npm test` and `npm run check` regenerate them before validation.
 - Keep OpenAPI reference content in `openapi/*.openapi.json`; Redoc output is
   generated into `public/api/`.
 - Keep SVG illustrations in `public/images/` and include `<title>` and `<desc>`.

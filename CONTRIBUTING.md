@@ -232,10 +232,13 @@ duplicate build in every ordinary Beta transaction. Public repeatable-build
 evidence is recorded in
 [`release/REPEATABLE-BUILDS.md`](release/REPEATABLE-BUILDS.md).
 
-Generated documentation data and checked-in generated snapshots must be produced
-by the documented generator commands, such as `npm run generate` under
-`docs/site`, and committed only when rerunning the generator from the same
-source tree produces the same bytes. Do not introduce generators that depend on
+Site reference pages and data are ignored build outputs. Commit their authored
+inputs and generators, then run `npm test` and `npm run check` under `docs/site`;
+both generate the required outputs from a fresh checkout. See the
+[docs contributor workflow](docs/site/README.md#generated-references).
+Product-owned generated schemas and checked-in release snapshots still belong
+in the source change and must reproduce the same bytes when regenerated.
+Do not introduce generators that depend on
 wall-clock time, unordered traversal, ambient local paths, network responses, or
 unlocked dependencies unless the generated output is normalized or pinned so the
 same source can reproduce it exactly.

@@ -640,7 +640,6 @@ class RegistryReleasePlanTest(unittest.TestCase):
                 "repo-docs",
                 "release-documents",
                 "openapi-versions",
-                "generated-docset-mirror",
             },
             {check["name"] for check in plan["checks"]},
         )
@@ -659,7 +658,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "docs/site/src/data/docsets.yaml",
             {change["path"] for change in plan["changes"]},
         )
-        self.assertIn(
+        self.assertNotIn(
             "docs/site/src/data/generated/docsets.json",
             {change["path"] for change in plan["changes"]},
         )
@@ -688,6 +687,23 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual(0, repeated.returncode, repeated.stderr)
         self.assertEqual(result.stdout, repeated.stdout)
         self.assertEqual(before, self.repo.snapshot())
+
+    def test_prepare_ignores_generated_docs_build_state(self) -> None:
+        data_dir = self.repo.root / "docs/site/src/data"
+        (data_dir / "generated/docsets.json").unlink()
+        without_generated = self.prepare()
+        self.assertEqual(0, without_generated.returncode, without_generated.stderr)
+
+        write_json(data_dir / "generated/docsets.json", {"stale": "v1.1.0"})
+        for relative in (
+            "docs/site/src/data/generated/cli-reference.json",
+            "docs/site/src/content/docs/reference/cli/index.mdx",
+            "docs/site/src/content/docs/products/example/index.mdx",
+        ):
+            write(self.repo.root / relative, "v1.1.0 beta-9 generated output\n")
+        with_generated = self.prepare()
+        self.assertEqual(0, with_generated.returncode, with_generated.stderr)
+        self.assertEqual(without_generated.stdout, with_generated.stdout)
 
     def test_prepare_requires_release_docs_metadata(self) -> None:
         data_dir = self.repo.root / "docs/site/src/data"

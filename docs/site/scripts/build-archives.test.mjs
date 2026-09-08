@@ -171,7 +171,7 @@ test('archive generation excludes current-source generators', async () => {
       new RegExp(`scripts/${script.replace('.', '\\.')}`),
     );
     assert.match(
-      packageJson.scripts.generate,
+      packageJson.scripts['generate:source'],
       new RegExp(`scripts/${script.replace('.', '\\.')}`),
     );
   }
@@ -183,6 +183,8 @@ test('archive generation excludes current-source generators', async () => {
     'docs/site/public/examples/breg-evidence-starter.tar.gz',
     'docs/site/src/content/docs/reference/cli',
     'docs/site/src/data/generated/cli-reference.json',
+    'docs/site/src/data/generated/evidence-configuration.json',
+    'docs/site/src/data/generated/breg-configuration.json',
   ]);
 });
 
@@ -315,6 +317,123 @@ test('an empty artifact list stages nothing instead of listing the whole tree', 
 
   await restore();
   assert.deepEqual(calls, []);
+});
+
+async function buildTimeSourceFixture(t) {
+  const repoRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-generated-ref-'));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  const siteRoot = resolve(repoRoot, 'docs/site');
+  const artifactRoot = resolve(repoRoot, stagedArtifactFixtures[0]);
+  await mkdir(artifactRoot, { recursive: true });
+  await writeFile(resolve(siteRoot, 'package.json'), JSON.stringify({
+    name: 'archive-fixture', version: '1.0.0',
+    scripts: { 'generate:source': 'node generate.cjs' },
+  }));
+  await writeFile(resolve(siteRoot, 'package-lock.json'), JSON.stringify({
+    name: 'archive-fixture', version: '1.0.0', lockfileVersion: 3,
+    packages: { '': { name: 'archive-fixture', version: '1.0.0' } },
+  }));
+  await mkdir(resolve(siteRoot, 'node_modules'));
+  await writeFile(resolve(siteRoot, 'input.txt'), 'pinned release source');
+  await writeFile(resolve(siteRoot, 'generate.cjs'), `
+    const fs = require('node:fs');
+    const output = 'src/data/generated/staged-fixtures';
+    fs.mkdirSync(output, { recursive: true });
+    fs.writeFileSync(output + '/pinned.json', fs.readFileSync('input.txt'));
+    fs.writeFileSync(output + '/generated-only.json', 'generated from pinned source');
+  `);
+  await execFileAsync('git', ['init', '--quiet'], { cwd: repoRoot });
+  await execFileAsync('git', ['config', 'user.name', 'Archive Test'], { cwd: repoRoot });
+  await execFileAsync('git', ['config', 'user.email', 'archive@example.invalid'], { cwd: repoRoot });
+  await execFileAsync('git', ['add', '.'], { cwd: repoRoot });
+  await execFileAsync('git', ['commit', '--quiet', '-m', 'release inputs'], { cwd: repoRoot });
+  const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
+  const sourceRef = stdout.trim();
+  await writeFile(resolve(siteRoot, 'input.txt'), 'newer committed source');
+  await execFileAsync('git', ['add', '.'], { cwd: repoRoot });
+  await execFileAsync('git', ['commit', '--quiet', '-m', 'next source'], { cwd: repoRoot });
+  await writeFile(resolve(siteRoot, 'input.txt'), 'dirty current source');
+  await writeFile(resolve(artifactRoot, 'pinned.json'), 'current generated output');
+  await writeFile(resolve(artifactRoot, 'current-only.json'), 'current-only output');
+  return { repoRoot, siteRoot, artifactRoot, sourceRef };
+}
+
+test('build-time archive generation uses the pinned source and restores current outputs', async (t) => {
+  const { siteRoot, artifactRoot, sourceRef } = await buildTimeSourceFixture(t);
+  let exportedDocsRoot;
+  const restore = await stagePinnedGeneratedArtifacts({
+    ...archivedDocset,
+    products: { 'registry-stack': { ref: sourceRef } },
+  }, {
+    docsRoot: siteRoot,
+    artifacts: stagedArtifactFixtures,
+    environment: { ...process.env, UNRELATED_SECRET: 'must-not-be-forwarded' },
+    runSourceGeneration: async (command, args, env, cwd) => {
+      exportedDocsRoot = cwd;
+      assert.equal(env.UNRELATED_SECRET, undefined);
+      assert.equal(env.DOCS_DOCSET, 'v1.2.3');
+      assert.equal(env.CARGO_INCREMENTAL, '0');
+      assert.equal(env.PUBLIC_UMAMI_WEBSITE_ID, '');
+      await execFileAsync(command, args, { cwd, env });
+    },
+  });
+
+  assert.equal(await readFile(resolve(artifactRoot, 'pinned.json'), 'utf8'), 'pinned release source');
+  assert.equal(await readFile(resolve(artifactRoot, 'generated-only.json'), 'utf8'), 'generated from pinned source');
+  await assert.rejects(readFile(resolve(artifactRoot, 'current-only.json')), { code: 'ENOENT' });
+  await assert.rejects(readFile(resolve(exportedDocsRoot, 'input.txt')), { code: 'ENOENT' });
+  assert.equal(await readFile(resolve(siteRoot, 'input.txt'), 'utf8'), 'dirty current source');
+
+  await restore();
+  assert.equal(await readFile(resolve(artifactRoot, 'pinned.json'), 'utf8'), 'current generated output');
+  assert.equal(await readFile(resolve(artifactRoot, 'current-only.json'), 'utf8'), 'current-only output');
+  await assert.rejects(readFile(resolve(artifactRoot, 'generated-only.json')), { code: 'ENOENT' });
+});
+
+test('a different pinned dependency lock installs its own dependencies before generation', async (t) => {
+  const { siteRoot, artifactRoot, sourceRef } = await buildTimeSourceFixture(t);
+  await writeFile(resolve(siteRoot, 'package-lock.json'), '{"different":"current dependencies"}');
+  const calls = [];
+  const restore = await stagePinnedGeneratedArtifacts({
+    ...archivedDocset,
+    products: { 'registry-stack': { ref: sourceRef } },
+  }, {
+    docsRoot: siteRoot,
+    artifacts: stagedArtifactFixtures,
+    runSourceGeneration: async (command, args, env, cwd) => {
+      calls.push([command, args]);
+      assert.equal(JSON.parse(await readFile(resolve(cwd, 'package-lock.json'), 'utf8')).version, '1.0.0');
+      await execFileAsync(command, args, { cwd, env });
+    },
+  });
+  assert.deepEqual(calls, [
+    ['npm', ['ci']],
+    ['npm', ['run', 'generate:source']],
+  ]);
+  assert.equal(await readFile(resolve(artifactRoot, 'pinned.json'), 'utf8'), 'pinned release source');
+  await restore();
+  assert.equal(await readFile(resolve(artifactRoot, 'pinned.json'), 'utf8'), 'current generated output');
+});
+
+test('a failed pinned-source generator leaves current outputs intact and removes its export', async (t) => {
+  const { siteRoot, artifactRoot, sourceRef } = await buildTimeSourceFixture(t);
+  let exportedDocsRoot;
+  await assert.rejects(stagePinnedGeneratedArtifacts({
+    ...archivedDocset,
+    products: { 'registry-stack': { ref: sourceRef } },
+  }, {
+    docsRoot: siteRoot,
+    artifacts: stagedArtifactFixtures,
+    runSourceGeneration: async (_command, _args, _env, cwd) => {
+      exportedDocsRoot = cwd;
+      assert.equal(await readFile(resolve(cwd, 'input.txt'), 'utf8'), 'pinned release source');
+      throw new Error('source generator failed');
+    },
+  }), /source generator failed/);
+
+  assert.equal(await readFile(resolve(artifactRoot, 'pinned.json'), 'utf8'), 'current generated output');
+  assert.equal(await readFile(resolve(artifactRoot, 'current-only.json'), 'utf8'), 'current-only output');
+  await assert.rejects(readFile(resolve(exportedDocsRoot, 'input.txt')), { code: 'ENOENT' });
 });
 
 test('candidate archive rejects a tag that does not match its release identity', async () => {

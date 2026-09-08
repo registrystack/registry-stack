@@ -1,10 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { lstat, mkdir, mkdtemp, open, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { lstat, mkdir, mkdtemp, open, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { extract } from 'tar';
 import {
   constants as zlibConstants,
   crc32,
@@ -57,6 +58,8 @@ export const currentSourceGeneratedArtifacts = Object.freeze([
   'docs/site/public/examples/breg-evidence-starter.tar.gz',
   'docs/site/src/content/docs/reference/cli',
   'docs/site/src/data/generated/cli-reference.json',
+  'docs/site/src/data/generated/evidence-configuration.json',
+  'docs/site/src/data/generated/breg-configuration.json',
 ]);
 
 function compareEntryNames(left, right) {
@@ -131,9 +134,10 @@ function archiveBuildEnvironment(inheritedEnvironment, docset, {
   };
 }
 
-async function run(command, args, env) {
+async function run(command, args, env, cwd) {
   await new Promise((resolveRun, rejectRun) => {
     const child = spawn(command, args, {
+      cwd,
       env,
       shell: process.platform === 'win32',
       stdio: 'inherit',
@@ -285,12 +289,87 @@ async function resolveLocalCommit(ref, cwd) {
   }
 }
 
+// New source refs keep the generator and its inputs in Git. Execute that ref's
+// explicit source-generation entrypoint in a clean export, so a current checkout
+// can reconstruct another release without lending it modified source or outputs.
+async function generatePinnedSourceArtifacts(sourceRef, {
+  artifacts,
+  docset,
+  docsRoot,
+  repoRoot,
+  executeGit,
+  environment,
+  runCommand,
+}) {
+  const scratch = await mkdtemp(resolve(tmpdir(), 'registry-docs-pinned-source-'));
+  const sourceRoot = resolve(scratch, 'source');
+  const sourceDocsRoot = resolve(sourceRoot, 'docs/site');
+  const archivePath = resolve(scratch, 'source.tar');
+  const homeDirectory = resolve(scratch, 'home');
+  try {
+    await mkdir(sourceRoot);
+    await mkdir(homeDirectory);
+    await executeGit('git', [
+      'archive', '--format=tar', '--output', archivePath, sourceRef,
+    ], repoRoot);
+    await extract({ cwd: sourceRoot, file: archivePath, strict: true });
+    const sourceEnvironment = {
+      ...archiveBuildEnvironment(environment, docset, {
+        base: '/', homeDirectory, indexable: false,
+      }),
+      // Cargo and rustup caches contain toolchains and downloaded dependencies,
+      // not generated documentation. Share them without sharing checkout files.
+      CARGO_HOME: environment.CARGO_HOME || resolve(homedir(), '.cargo'),
+      RUSTUP_HOME: environment.RUSTUP_HOME || resolve(homedir(), '.rustup'),
+      CARGO_TARGET_DIR: environment.CARGO_TARGET_DIR
+        ? resolve(repoRoot, environment.CARGO_TARGET_DIR)
+        : resolve(repoRoot, 'target'),
+      CARGO_INCREMENTAL: '0',
+      CARGO_PROFILE_DEV_DEBUG: '0',
+      CARGO_PROFILE_TEST_DEBUG: '0',
+    };
+    const pinnedLock = await readOptionalRegularFile(resolve(sourceDocsRoot, 'package-lock.json'));
+    const currentLock = await readOptionalRegularFile(resolve(docsRoot, 'package-lock.json'));
+    if (pinnedLock === null) {
+      throw new Error(`Pinned docs source ${sourceRef} must contain package-lock.json`);
+    }
+    const installed = await lstat(resolve(docsRoot, 'node_modules')).catch((error) => {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (currentLock?.equals(pinnedLock) && installed) {
+      await symlink(
+        resolve(docsRoot, 'node_modules'),
+        resolve(sourceDocsRoot, 'node_modules'),
+        'dir',
+      );
+    } else {
+      await runCommand('npm', ['ci'], sourceEnvironment, sourceDocsRoot);
+    }
+    await runCommand('npm', ['run', 'generate:source'], sourceEnvironment, sourceDocsRoot);
+    const contents = new Map();
+    for (const repoRelative of artifacts) {
+      for (const file of await regularFilesBelow(resolve(sourceRoot, repoRelative))) {
+        contents.set(
+          relative(sourceRoot, file).split(sep).join('/'),
+          await readOptionalRegularFile(file),
+        );
+      }
+    }
+    return contents;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 export async function stagePinnedGeneratedArtifacts(docset, {
   docsRoot = process.cwd(),
   executeGit = git,
   resolveCommit = resolveLocalCommit,
   allowUnpublishedCandidate = false,
   artifacts = currentSourceGeneratedArtifacts,
+  environment = process.env,
+  runSourceGeneration = run,
 } = {}) {
   const sourceProduct = docset.products?.['registry-stack'];
   const declaredSourceRef = sourceProduct?.ref;
@@ -329,9 +408,10 @@ export async function stagePinnedGeneratedArtifacts(docset, {
       currentPaths.add(relative(repoRoot, file).split(sep).join('/'));
     }
   }
+  const packagePath = 'docs/site/package.json';
   const { stdout: listed } = await executeGit(
     'git',
-    ['ls-tree', '-rz', '-r', '--name-only', sourceRef, '--', ...artifacts],
+    ['ls-tree', '-rz', '-r', '--name-only', sourceRef, '--', ...artifacts, packagePath],
     repoRoot,
   );
   const pinnedPaths = new Set(
@@ -340,13 +420,24 @@ export async function stagePinnedGeneratedArtifacts(docset, {
       .split('\0')
       .filter(Boolean),
   );
-  const pinnedContents = new Map();
-  for (const path of pinnedPaths) {
+  let generateFromSource = false;
+  if (pinnedPaths.delete(packagePath)) {
+    const { stdout } = await executeGit('git', ['show', `${sourceRef}:${packagePath}`], repoRoot);
+    const packageJson = JSON.parse(stdout.toString('utf8'));
+    generateFromSource = typeof packageJson.scripts?.['generate:source'] === 'string';
+  }
+  const pinnedContents = generateFromSource
+    ? await generatePinnedSourceArtifacts(sourceRef, {
+      artifacts, docset, docsRoot, repoRoot, executeGit, environment,
+      runCommand: runSourceGeneration,
+    })
+    : new Map();
+  for (const path of generateFromSource ? [] : pinnedPaths) {
     const { stdout } = await executeGit('git', ['show', `${sourceRef}:${path}`], repoRoot);
     pinnedContents.set(path, stdout);
   }
 
-  const affectedPaths = [...new Set([...pinnedPaths, ...currentPaths])].sort();
+  const affectedPaths = [...new Set([...pinnedContents.keys(), ...currentPaths])].sort();
   const snapshots = new Map();
   for (const repoRelative of affectedPaths) {
     const local = resolve(repoRoot, repoRelative);
@@ -407,10 +498,10 @@ export async function buildDocsetArchive(docset, {
     homeDirectory: archiveHome,
     indexable: false,
   });
-  // Current-source generators read the checked-out tree and label their output
-  // as unreleased. Release archives instead stage those generated artifacts
-  // from the docset's pinned source ref and refresh only inputs whose
-  // generators honor DOCS_DOCSET. Released archives are built at the canonical
+  // Stage source-generated artifacts from the docset's pinned ref, either its
+  // committed historical outputs or a clean export running its source generator.
+  // Refresh the remaining inputs with generators that honor DOCS_DOCSET.
+  // Released archives are built at the canonical
   // root so Pages can promote their bytes without rewriting links or canonical
   // metadata.
   let restoreGeneratedArtifacts = async () => {};
@@ -418,6 +509,7 @@ export async function buildDocsetArchive(docset, {
     restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, {
       docsRoot,
       allowUnpublishedCandidate,
+      environment,
     });
     await runCommand('npm', ['run', 'generate:archive'], rootEnv);
     await runCommand('npx', ['astro', 'check'], rootEnv);

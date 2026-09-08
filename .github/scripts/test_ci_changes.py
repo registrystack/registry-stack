@@ -1619,6 +1619,18 @@ on:
             with self.subTest(source=source):
                 self.assertTrue(classify(self.workspace, (source,))["docs"])
 
+    def test_docs_rebuild_from_generator_inputs_without_rendered_changes(self) -> None:
+        for path in (
+            "crates/registry-cli-docs/Cargo.toml",
+            "crates/registry-breg/Cargo.toml",
+            "crates/registry-cli-docs/examples/catalog.rs",
+            "products/evidence/generated/registry-evidence.openapi.json",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertFalse(outputs["docs_archives"])
+
     def test_evidence_contract_change_runs_docs_and_evidence_contracts(self) -> None:
         """The docs Evidence configuration page is generated from these files."""
         for path in (

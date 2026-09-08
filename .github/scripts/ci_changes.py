@@ -245,7 +245,9 @@ EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS = tuple(
 CLI_REFERENCE_INPUTS = (
     ("Cargo.lock", "Cargo.lock"),
     ("Cargo.toml", "Cargo.toml"),
-    ("crates/registry-cli-docs/src/**", "crates/registry-cli-docs/src/lib.rs"),
+    ("crates/registry-cli-docs/**", "crates/registry-cli-docs/src/lib.rs"),
+    # Feature/dependency changes can alter the collector without editing Clap.
+    ("crates/*/Cargo.toml", "crates/registry-cli-docs/Cargo.toml"),
     ("crates/registry-evidence/src/cli.rs", "crates/registry-evidence/src/cli.rs"),
     (
         "crates/registry-evidence-oid4vci/src/cli.rs",
@@ -735,6 +737,7 @@ def classify(
             # frozen contracts and from the authoring-form schemas beside
             # them, so either going stale needs a docs rebuild.
             "products/evidence/contracts/*",
+            "products/evidence/generated/registry-evidence.openapi.json",
             "crates/registry-evidencectl/schemas/authoring/*",
             "products/breg/generated/authoring/*",
             "products/breg/generated/runtime/*",
