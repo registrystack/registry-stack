@@ -18,8 +18,8 @@
     "classificationCeiling": "restricted",
     "catalog": {
       "baseUrl": "https://professional-licences.example.org",
-      "title": "Nursing licence register",
-      "description": "Record nursing licence decisions and review recorded activity and condition corrections.",
+      "title": "Professional licence register",
+      "description": "Record professional licence decisions and review recorded activity and condition corrections.",
       "publisher": {
         "id": "synthetic-custodian",
         "name": "Synthetic example custodian"
@@ -27,13 +27,13 @@
     },
     "publicService": {
       "id": "directory-service",
-      "title": "Nursing licence register"
+      "title": "Professional licence register"
     },
     "datasets": [
       {
         "id": "directory",
-        "title": "Nursing licence register",
-        "description": "Record nursing licence decisions and review recorded activity and condition corrections.",
+        "title": "Professional licence register",
+        "description": "Record professional licence decisions and review recorded activity and condition corrections.",
         "owner": "Synthetic example custodian",
         "status": "active"
       }
@@ -41,7 +41,7 @@
     "dataServices": [
       {
         "id": "directory-api",
-        "title": "Nursing licence register",
+        "title": "Professional licence register",
         "endpointUrl": "https://professional-licences.example.org",
         "servesDatasets": [
           "directory"
@@ -159,7 +159,8 @@
           "apiName": "professionCode",
           "vocabulary": "https://professional-licences.example.org/profession-codes",
           "values": [
-            "example-nursing"
+            "example-nursing",
+            "example-engineering"
           ]
         },
         {
@@ -201,9 +202,9 @@
             "items": {
               "type": "string",
               "enum": [
-                "example-general-nursing-care",
-                "example-community-nursing",
-                "example-health-education"
+                "example-assessment",
+                "example-advisory-services",
+                "example-practical-services"
               ]
             },
             "minItems": 1,
@@ -266,9 +267,9 @@
             "items": {
               "type": "string",
               "enum": [
-                "example-general-nursing-care",
-                "example-community-nursing",
-                "example-health-education"
+                "example-assessment",
+                "example-advisory-services",
+                "example-practical-services"
               ]
             },
             "minItems": 1,

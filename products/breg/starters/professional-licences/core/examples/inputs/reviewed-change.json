@@ -3,11 +3,11 @@
     "record": {
       "recordRef": "first-record"
     },
-    "reason": "Correct transcription of the existing nursing decision, including its recorded activities and conditions.",
+    "reason": "Correct transcription of the existing professional decision, including its recorded activities and conditions.",
     "supportingReference": "SYNTHETIC-REVIEW-001",
     "licensedActivities": [
-      "example-general-nursing-care",
-      "example-health-education"
+      "example-assessment",
+      "example-practical-services"
     ],
     "authorizationConditions": ""
   }

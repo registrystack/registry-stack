@@ -1,7 +1,7 @@
-# Nursing licence core profile
+# Professional licence core profile
 
 This synthetic learning register records a regulator's dated authorization to
-practise nursing. Recording a licence fact does not issue a credential,
+practise a profession. Recording a licence fact does not issue a credential,
 verify a person's identity, award a qualification, establish a practice role,
 or prove that a person may lawfully practise now. All supplied people,
 regulators, jurisdictions, identifiers and codes are fictional.
@@ -24,7 +24,7 @@ not the complete draft or a jurisdiction's licensing legislation.
 | professionCode | profession_code | Closed example vocabulary in an explicitly local scheme |
 | validFrom | valid_from | Required first calendar date of the asserted authorization, not the date the record was entered |
 | validTo | valid_to | Optional last calendar date; omission means unknown, not perpetual validity |
-| licensedActivities | Local extension | Required nonempty collection of distinct codes from the fictional nursing activity catalogue |
+| licensedActivities | Local extension | Required nonempty collection of distinct codes from the fictional generic activity catalogue |
 | authorizationConditions | authorization_conditions | Bounded free-text conditions; the empty string means no conditions are recorded |
 | licenceStatus | Local extension | Recorded status, not a computed current authorization decision |
 | scope-correction | Local review workflow | Native typed record reference plus proposed activities and conditions, a reason and supporting reference |
@@ -38,7 +38,7 @@ register/record/subject provenance structure. They never duplicate an external
 person or regulator master. Class IRIs describe concepts, never instances.
 No importer may infer identity by matching a person's name.
 
-The fixed local profession code `example-nursing` and the
+The local profession codes `example-nursing` and `example-engineering` and the
 statuses `recorded-active`, `recorded-suspended` and `recorded-expired` are
 explicit examples. They are not international classifications or jurisdictional
 legal definitions. Status is recorded independently of dates; this profile
@@ -93,8 +93,8 @@ proof, verified external evidence or authority to license someone.
 
 ## Examples and verification
 
-`starter-data` creates three independent fictional nursing licences with different
-activity/status combinations. `first-record` needs no samples: its explicit
+`starter-data` creates three independent fictional professional licences with different
+profession/activity/status combinations. `first-record` needs no samples: its explicit
 fictional external URIs permit an independent create and read. Edit
 `examples/inputs/first-record.json` before the first run. Native retained state
 binds exact inputs and captured UUIDs to each attempt. The correction's
@@ -149,16 +149,28 @@ concurrency; it is not a general row-level admission or delegation framework.
 
 ## Fictional activity catalogue and conditions
 
-This nurse-specific learning profile accepts only `example-nursing`. Its small
-local activity catalogue contains `example-general-nursing-care` (general nursing
-care), `example-community-nursing` (community nursing), and
-`example-health-education` (health education). These are fictional teaching labels,
-not a clinical scope standard, specialty taxonomy, competency assessment or legal
-permission. One licence can record one, two or all three distinct activities.
+This reusable professional-licence template includes `example-nursing` and
+`example-engineering` as coequal fictional profession codes. Its generic activity
+catalogue contains `example-assessment` (assessment), `example-advisory-services`
+(advisory services), and `example-practical-services` (practical services). These
+are teaching labels applicable to either example profession, not clinical or
+engineering scope standards, specialty taxonomies, competency assessments or
+legal permissions. One licence can record one, two or all three distinct activities.
+
+An adopter specializes a copy of this template for its particular profession
+and institution before deployment. That adaptation can narrow the profession
+vocabulary and replace the fictional activity catalogue, while preserving the
+separate activity/conditions fields, complete replacement correction, and native
+authority and review controls. A nursing-specific registry is one such adapted
+consumer, not the generic template itself. Real permitted activities and their
+professional applicability require an institution's reviewed governing rules;
+this example catalogue does not encode those rules.
 
 `licensedActivities` is a required JSON array of distinct catalogue strings, with
 one to three entries and a 512-byte bound. The governed structured-field schema
-rejects unknown codes, duplicates, empty arrays and mixed-profession inputs.
+rejects unknown codes, duplicates and empty arrays. Both example professions
+use the same explicitly fictional activity catalogue. Unknown professions are
+refused by the separate profession vocabulary.
 `authorizationConditions` is a required wire string of at most 500 characters.
 Its content is optional: `""` explicitly means no conditions recorded. Null and
 omission are refused on creation. User interfaces may show an optional text area

@@ -611,11 +611,8 @@ async fn assert_http_policy(starter: &Starter, http: &StarterHttp<'_>) {
         for activities in [
             json!([]),
             json!(["unknown"]),
-            json!([
-                "example-general-nursing-care",
-                "example-general-nursing-care"
-            ]),
-            json!(["example-general-nursing-care", "example-engineering-design"]),
+            json!(["example-assessment", "example-assessment"]),
+            json!(["example-assessment", "example-unlisted-activity"]),
         ] {
             let mut invalid = change.clone();
             invalid["licensedActivities"] = activities;
@@ -734,7 +731,7 @@ async fn assert_http_policy(starter: &Starter, http: &StarterHttp<'_>) {
         let apply_path = apply["href"].as_str().unwrap().split('?').next().unwrap();
         let headers = [
             ("if-match", apply["ifMatch"].as_str().unwrap()),
-            ("idempotency-key", "nursing-rebased-apply"),
+            ("idempotency-key", "licence-rebased-apply"),
         ];
         let (status, applied, _) = http
             .persona(

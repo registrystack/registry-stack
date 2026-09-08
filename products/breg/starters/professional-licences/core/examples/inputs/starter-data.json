@@ -9,7 +9,7 @@
     "validFrom": "2026-01-01",
     "validTo": "2026-12-31",
     "licensedActivities": [
-      "example-general-nursing-care"
+      "example-assessment"
     ],
     "authorizationConditions": "General supervised practice"
   },
@@ -23,22 +23,22 @@
     "validFrom": "2026-01-01",
     "validTo": "2026-12-31",
     "licensedActivities": [
-      "example-general-nursing-care"
+      "example-assessment"
     ],
     "authorizationConditions": "General supervised practice"
   },
-  "community": {
+  "engineering": {
     "localIdentifier": "SYNTHETIC-LIC-002",
     "personReference": "https://people.example.org/people/synthetic-lic-002",
     "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
     "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
-    "professionCode": "example-nursing",
+    "professionCode": "example-engineering",
     "licenceStatus": "recorded-active",
     "validFrom": "2026-01-01",
     "validTo": "2026-12-31",
     "licensedActivities": [
-      "example-community-nursing",
-      "example-health-education"
+      "example-advisory-services",
+      "example-practical-services"
     ],
     "authorizationConditions": ""
   }

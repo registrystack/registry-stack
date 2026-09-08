@@ -39,7 +39,7 @@ fn holder(principal: &str, person: &str) -> VerifiedRequestClaims {
 }
 
 fn correction(record: &str) -> Value {
-    json!({"record": record, "licensedActivities":["example-general-nursing-care"],"authorizationConditions":"corrected scope", "reason":"recorded transcription correction", "supportingReference":"https://example.test/synthetic-reference"})
+    json!({"record": record, "licensedActivities":["example-assessment"],"authorizationConditions":"corrected scope", "reason":"recorded transcription correction", "supportingReference":"https://example.test/synthetic-reference"})
 }
 
 async fn create_request(
@@ -91,7 +91,7 @@ async fn native_reference_submitter_admission_is_live_and_atomic() {
     let mut licences = Vec::new();
     for (identifier, person) in [("A1", "person:a"), ("A2", "person:a"), ("B1", "person:b")] {
         licences.push(create_record(&app, "/v1/records/professional-licenses?accessProfile=editor", registrar.clone(), identifier,
-            json!({"localIdentifier":identifier,"personReference":person,"regulatorReference":"regulator:synthetic","jurisdictionReference":"jurisdiction:synthetic","professionCode":"example-nursing","licenceStatus":"recorded-active","validFrom":"2026-01-01","licensedActivities":["example-general-nursing-care"],"authorizationConditions":"original scope"})).await);
+            json!({"localIdentifier":identifier,"personReference":person,"regulatorReference":"regulator:synthetic","jurisdictionReference":"jurisdiction:synthetic","professionCode":"example-nursing","licenceStatus":"recorded-active","validFrom":"2026-01-01","licensedActivities":["example-assessment"],"authorizationConditions":"original scope"})).await);
     }
     let own = &licences[0];
     let other = &licences[2];
@@ -355,7 +355,7 @@ async fn review_snapshots_require_current_target_authority() {
         "current-review-context",
         None,
     );
-    let licence = create_record(&app,"/v1/records/professional-licenses?accessProfile=editor",actor("editor","registrar",None),"context-licence",json!({"localIdentifier":"CTX1","personReference":"person:a","regulatorReference":"regulator:synthetic","jurisdictionReference":"jurisdiction:synthetic","professionCode":"example-nursing","licenceStatus":"recorded-active","validFrom":"2026-01-01","licensedActivities":["example-general-nursing-care"],"authorizationConditions":"prior scope canary"})).await;
+    let licence = create_record(&app,"/v1/records/professional-licenses?accessProfile=editor",actor("editor","registrar",None),"context-licence",json!({"localIdentifier":"CTX1","personReference":"person:a","regulatorReference":"regulator:synthetic","jurisdictionReference":"jurisdiction:synthetic","professionCode":"example-nursing","licenceStatus":"recorded-active","validFrom":"2026-01-01","licensedActivities":["example-assessment"],"authorizationConditions":"prior scope canary"})).await;
     let request = create_request(
         &app,
         holder("holder-a", "person:a"),
