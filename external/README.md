@@ -50,3 +50,20 @@ with the commit, date, and version it read.
 publicschema` depends on `registry-linkml` for it. The snapshot is data read
 at build time, not a Cargo dependency: no crate depends on a PublicSchema
 package, and the workspace lockfile carries no PublicSchema entry.
+
+The pin has needed correction before: a previous pin sat on a PublicSchema
+branch commit that was later squash-merged upstream, so it was no longer
+reachable from upstream `main`. Confirm a new pin candidate is reachable from
+upstream `main` before recording it in `PIN.yaml`.
+
+### Review triggers
+
+Review this snapshot when:
+
+- the pin in `crates/registry-linkml/publicschema/PIN.yaml` is bumped to a new
+  upstream commit;
+- PublicSchema publishes a release after version 0.3.0;
+- a starter beyond `household` is added to
+  `crates/registry-linkml/publicschema/starters/`;
+- any vendored file under `crates/registry-linkml/publicschema/schema/`
+  changes.

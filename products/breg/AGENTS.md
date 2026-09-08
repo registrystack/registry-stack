@@ -33,6 +33,21 @@ migration authority stay separate: tooling can edit, diff, and check
 configuration, and cannot mint a package signature or hold the production
 migration credential.
 
+## Source neutrality
+
+`products/breg/scripts/check_source_neutrality.py` forbids fixture-specific
+compound identifiers, concrete entity, route, and Rust-type names such as
+`group-membership` or `GroupMembership`, from `registry-breg`,
+`registry-bregctl`, and `registry-breg-client` production source. It does not
+forbid the bare words `membership` or `memberships`: `membershipBoundaries` is
+a generic, configured read-boundary mechanism, a one-hop join predicate over a
+configured entity, key field, principal field, and active flag, restricted to
+`get`, `lookup`, `list`, `revisions`, and `snapshot`, with at most eight
+boundaries per access profile (`crates/registry-breg/src/membership.rs`,
+`crates/registry-breg/src/contract.rs`, `products/breg/membership-access.md`).
+Domain-specific compounds such as `group-membership` remain forbidden.
+Changing the blocklist is a boundary decision: record it in this file.
+
 ## Where the owning material lives
 
 - Delivery catalog: `products/breg/contracts/`, including
@@ -43,10 +58,16 @@ migration credential.
 - Design and behavior: `products/breg/IMPLEMENTATION.md` first, then the
   focused document beside it that owns the changed area, among
   `products/breg/HISTORY.md`, `products/breg/SPATIAL-QUERIES.md`,
-  `products/breg/EVENTS-AND-WEBHOOKS.md`, `products/breg/metadata.md`, and
-  `products/breg/immediate-actions.md`.
+  `products/breg/EVENTS-AND-WEBHOOKS.md`, `products/breg/metadata.md`,
+  `products/breg/immediate-actions.md`, `products/breg/registry-extensibility.md`,
+  `products/breg/native-patterns.md`, and `products/breg/membership-access.md`.
 - Local loops: `products/breg/DEV.md` for the native `bregctl dev` lifecycle,
-  and `products/breg/quickstart/` for the scripted first hour.
+  `products/breg/quickstart/` for the scripted first hour, and
+  `products/breg/starters/` for the resumable starter journeys `bregctl
+  examples` lists and runs.
+- Model-derived projects: the embedded PublicSchema snapshot in
+  `crates/registry-linkml`, the reference model behind `bregctl init --from
+  publicschema`.
 - Composition: `products/breg/EVIDENCE.md` for the lookup export, and
   `products/breg/evidence/` for the reviewed registry, starter project, and
   proof it is tested with.
