@@ -56,7 +56,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const exactRecord = record.replace('9007199254740992', responseNumber);
     if (request.method === 'GET' && !request.url.split('?')[0].endsWith(id)) {
       response.removeHeader('etag');
-      return response.end(`{"items":[${exactRecord}],"meta":${JSON.stringify(meta)},"pageInfo":{"nextCursor":${request.url.includes('$skiptoken=') ? 'null' : '"opaque_cursor-1"'}}}`);
+      return response.end(`{"items":[${exactRecord}],"meta":${JSON.stringify(meta)},"pageInfo":{"nextCursor":${request.url.includes('$skiptoken=') ? 'null' : '"cursor-1"'}}}`);
     }
     if (request.method === 'POST') {
       response.statusCode = 201;
@@ -92,9 +92,9 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.match(requests.at(-1).body,/"path":"\/data\/wide"/);
     const page = await client.listRecordsJson('items',{accessProfile:profile,filter:"bregState eq 'submitted'"});
     assert.match(page.valueJson,/9007199254740992/);
-    assert.equal(page.continuation.skiptoken,'opaque_cursor-1');
+    assert.equal(page.continuation.skiptoken,'cursor-1');
     await client.continueListJson(page.continuation);
-    assert.match(requests.at(-1).url,/\$skiptoken=opaque_cursor-1/);
+    assert.match(requests.at(-1).url,/\$skiptoken=cursor-1/);
     responseNumber = '9007199254740993';
     const read = await client.getRecordJson('items',id,{accessProfile:profile});
     assert.match(read.valueJson,/9007199254740993/);
