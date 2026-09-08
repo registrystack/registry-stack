@@ -1319,6 +1319,21 @@ fn resolve_source_connections(
     Ok(())
 }
 
+/// Read authored connection references without requiring questions or secrets.
+pub(crate) fn source_connection_users(
+    project_root: &Path,
+    connection: &str,
+) -> Result<Vec<String>> {
+    Ok(
+        read_named_objects(project_root, SOURCES_DIRECTORY, "source")?
+            .into_iter()
+            .filter_map(|(id, source)| {
+                (source.get("connection").and_then(Value::as_str) == Some(connection)).then_some(id)
+            })
+            .collect(),
+    )
+}
+
 /// Validate imported ordinary artifact references without synthesizing a
 /// deployment, authority, connection, credential, or question. This is a
 /// structural import check; the real Evidence bundle check remains mandatory
@@ -2987,6 +3002,20 @@ fn render_governance_parts(
         requirement_value["fixtures"] = Value::String(governance.fixtures.clone());
     }
     (grants, requirement_value)
+}
+
+/// Local target baseline for source-first authoring. Actual local grants are
+/// compiled from authored questions and access policies by `dev`.
+pub(crate) fn local_target_governance(project: &Path) -> Result<Value> {
+    let (key, _) = local_signing_public_jwk(project)?;
+    let mut governance = render_local_bundle(&[], &[], LocalServicePorts::new(8080, 8081)?, &key)?;
+    let object = governance
+        .as_object_mut()
+        .expect("local bundle is a mapping");
+    for name in ["selectorProfiles", "sources", "requirements"] {
+        object.remove(name);
+    }
+    Ok(governance)
 }
 
 fn render_local_bundle(

@@ -22,9 +22,10 @@ diagnostics.
 The copied `targets/local/settings.yaml` is an explicit loopback teaching target.
 Review its authority and source connection, then set its absolute runtime paths.
 The fixed `registry` connection uses a dedicated BReg workload credential, separate
-from the Evidence caller and the registry operator. BReg dev can write that client's
-ID and assertion key into this project's owner-only secrets directory when its
-clients file explicitly names those output paths.
+from the Evidence caller and the registry operator. After BReg's first start, `bregctl dev export-client ../registry --client source`
+can copy its existing ID and key into this project's owner-only secrets directory.
+Pass `--client-id-file ./secrets/registry-client-id` and
+`--assertion-key-file ./secrets/registry-client-key`; normal stop/start retains this pair.
 
 With the native binaries on PATH, create the target and import the export:
 

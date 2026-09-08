@@ -8,9 +8,10 @@ OAuth resource server.
 
 Prepare the project with `bregctl init ./registry`. The generated package
 already declares `package.environment: local` and `package.sequence: 1`, and the
-generated `dev-clients.yaml` binds two local clients to the `operator` and
-`record-reader` profiles, so the project starts unchanged. Finish the model,
+generated `dev-clients.yaml` binds three distinct local clients to `operator`,
+`record-reader`, and `evidence-source`, so the project starts unchanged. Review the model,
 access profiles, journey fixtures and local clients before the first start.
+A later dedicated Evidence source can be prepared explicitly on a stopped session.
 
 ```sh
 bregctl dev ./registry
@@ -39,11 +40,14 @@ deadline fails, stops what it acquired and keeps its owner-only diagnostics.
 volume, records, audit history, keys, credentials and the built package. Add
 `--remove` to reclaim the storage as well; it removes the owned container and
 its `breg-dev-<owner>` data volume, discarding records, audit history and seed
-checkpoints, so the next start builds an empty database from the same authored
-project, ports, credentials and package. It also lets the next start take edited
+checkpoints. For an initial package at sequence 1, the next start builds an empty
+database from the same authored project, ports, credentials and package. It also
+lets the next start take edited
 inputs: once no records are retained, a changed package, clients file or port
 replaces the session with a fresh one that keeps the previous ports and clients
-file and generates new keys.
+file and generates new keys. A successor package prepared for retained records
+cannot initialize an empty database after removal: start refuses before Docker.
+Create a fresh project at package sequence 1 for a separate empty experiment.
 
 Use `--format json` to consume the status, URLs, audience, package revision,
 runtime configuration and private credential file references. Keys and access
@@ -74,6 +78,12 @@ clients:
       registry_principal: generic-registry-reader
       registry_purpose: registry-reporting
       registry_record_status: active
+  - id: source
+    accessProfiles: [evidence-source]
+    scopes: [registry:evidence:lookup]
+    claims:
+      registry_principal: generic-registry-source
+      registry_purpose: evidence-source-read
 seed:
   - id: first-record
     client: operator
@@ -90,9 +100,30 @@ operator and source workload use different keys. The reserved client ID `issuer`
 is unavailable. Client and seed IDs contain lowercase ASCII letters, digits or
 hyphens and have at most 64 bytes. There can be at most 32 clients and 100 seeds.
 
-For an Evidence source workload, author a separate narrow BReg profile and
-declare a corresponding client. To publish that client's key and ID into a
-prepared Evidence secrets directory, explicitly add both absolute output paths:
+Plain `init` includes a dedicated `source` client for the existing lookup-only
+`evidence-source` profile. That profile permits whole-registry exact lookups by
+code, reads code and status, and grants no list or mutation operation. A supplied
+code is not a row authorization rule. Custom models, including `init --from`, can start without an Evidence lookup or
+client. Add one later through the explicit preparation below.
+
+After creating Evidence, copy that existing source pair explicitly:
+
+```sh
+bregctl dev export-client ./registry --client source \
+  --client-id-file ./evidence/secrets/registry-client-id \
+  --assertion-key-file ./evidence/secrets/registry-client-key
+```
+
+Both destination parents must already be owner-only directories. Relative paths
+are resolved from your current directory. Export reads the retained named client's
+pair, including while stopped; it does not create a client, rotate keys, rewrite
+registrations, or add persistent output bindings. Identical destination files are
+reusable. A retry can complete a pair after one complete file was published.
+Conflicting files, links, or unsafe permissions are refused without replacement;
+choose fresh output names and update the target if you intentionally replaced the
+session. The report contains file references and endpoints, never credentials.
+
+The clients file also supports first-start publication through both absolute paths:
 
 ```yaml
     clientIdFile: /absolute/private/evidence/secrets/registry-client-id
@@ -107,6 +138,34 @@ different bytes, links or public permissions are refused. Without these options,
 credentials remain under `.breg/dev/credentials/<client-id>/`. Choose output paths
 only for the dedicated source client when configuring Evidence. Evidence's caller
 credential and BReg's operator credential retain separate authority.
+
+## Prepare a source after using a registry
+
+Stop the retained registry normally, then use Evidence's guided local setup:
+
+```sh
+bregctl dev stop ./registry
+evidencectl source add ./registry --project ./evidence
+```
+
+Choose the entity, an existing required unique scalar field, readable facts, and
+record scope. The review distinguishes registry-wide exact lookups from an
+explicit fixed binding on a string-valued row field. The tool prepares one dedicated lookup-only client
+and source contract; it imports the contract and copies that credential into
+Evidence's private secrets directory. Local target endpoints and paths come from
+the retained session and selected project, not from copied settings.
+
+The owning BReg operation is `bregctl dev prepare-source`. Without `--apply`, it
+reports the inventory or proposed change. `--apply` stages a policy-only successor
+while the session is stopped. It adds the selected selector, narrow grant, and
+separate client, then advances the package sequence. The next `dev start` activates
+that successor while preserving record IDs, revisions, values, audit history,
+and existing client credentials. It does not infer authority from field names.
+
+This is not general retained-schema evolution. It refuses unrelated authored
+changes, a nonunique selector, or reused client/profile identifiers. Correct the
+named issue without removing retained data. For other model changes use the
+reviewed package lifecycle.
 
 ## Retained state and recovery
 
@@ -129,19 +188,20 @@ identifiable and reclaimable once the container is gone.
 | Already running | Return the existing ready session and credential references. |
 | Stop, including repeated stop | Gracefully stop owned BReg and Mint children and stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and audit history. |
 | Stop where no start ever ran | Refuse and name the absent session. Nothing is created, changed or removed, so a mistyped project path cannot read as a stopped session. |
-| Start after stop | Reuse the same container, database, credentials and package. Obtain fresh short-lived tokens. Preserve record edits. |
+| Start after stop | Reuse the same container, database, and existing credentials. Preserve record edits; activate the explicitly prepared source successor when present. Obtain fresh short-lived tokens. |
 | Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
-| Start after `--remove` | Create an empty container and volume under the same ownership identifier, activate the retained package again and replay the authored seeds. |
+| Start after `--remove` | At sequence 1, create an empty container and volume, activate the initial package, and replay authored seeds. A retained successor refuses before Docker because its predecessor records were removed; use a fresh project at sequence 1 for an empty experiment. |
 | Seed request committed before checkpoint | Replay the same permanent BReg idempotency reservation. The original create result is returned without creating or overwriting a record. |
 | Partial start failure | Stop acquired service children and the owned container; retain private diagnostics and completed phases. Retry the same command after correcting the prerequisite. The separate schema-test database may be recreated for a failed rehearsal. |
 | Missing or mismatched owned container | Refuse. Never silently initialize an empty replacement or stop another container. |
 | Unreachable supervisor with an occupied service port | Refuse. Never signal a stored PID that could belong to another process. Inspect the process owning the port before recovery. |
-| Authored package, clients or ports changed while records are retained | Refuse before activation or record mutation. Restore the original inputs to restart, run `dev stop --remove` to discard the records and start from the edited inputs, or copy authored files to a new project directory for a fresh experiment. |
-| Authored package, clients or ports changed after `--remove` | Replace the session: remove the retained private state and start fresh from the edited inputs, keeping the previous ports and clients file and generating new keys. |
+| Authored package, clients or ports changed while records are retained | Refuse before activation or record mutation. Restore the original inputs to restart, or create a fresh project at package sequence 1 for a separate experiment. |
+| Authored package, clients or ports changed after `--remove` | At sequence 1, replace the session from the edited inputs, keeping previous ports and clients file and generating new keys. A successor still requires retained predecessor records. |
 
 Reclamation is explicit: only `dev stop --remove` discards records, only a start
 after it replaces retained keys, and only for edited inputs; this command
-implements no automatic reset or retained-schema upgrade. An operated
+implements no automatic reset or general retained-schema upgrade. The explicit
+source preparation above is limited to its reviewed policy-only successor. An operated
 successor uses BReg's normal reviewed package, migration, activation and
 recovery procedure. Copy only authored files to start a separate local
 experiment; copying private retained state does not clone its database.

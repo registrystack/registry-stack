@@ -47,6 +47,39 @@ The output directory must be new. Generate the next version into another
 directory so that you can compare and review it before changing an Evidence
 project.
 
+## Add Evidence after local registry use
+
+A project derived with `init --from` can be used before it has an Evidence lookup
+or client. Stop normally, then add a source through guided local setup:
+
+```sh
+bregctl dev stop ./registry
+evidencectl source add ./registry --project ./evidence
+```
+
+Select the entity, existing required unique scalar selector, readable facts, and
+explicit row scope: all records or a fixed value on a string-valued row field.
+Use a nonsecret scope label for a fixed boundary. Its value is stored as a client
+claim in `dev-clients.yaml`, which is ordinary authored configuration. The hidden
+prompt and private input file keep the value out of command arguments and reports;
+they do not make the authored claim private.
+Review the proposed authority before accepting it. Setup
+prepares a dedicated source client and a policy-only successor package, imports
+the generated source contract, copies its credential privately, and configures
+local endpoints and paths from the retained session. It creates no business
+question. Add your authored questions, run fixtures, and restart BReg to activate
+the successor over the retained records. The package revision advances; records,
+audit history, and existing client identities remain.
+
+The reviewed `evidence/organization-selection.yaml` and `evidence/named-starter/`
+show a custom PublicSchema selection and a matching name-present question. The
+other teaching starters preserve the plain-init and two-selector examples.
+
+For a profile and client already prepared in the registry, the lower-level
+export/import path remains available. `bregctl dev export-client` copies an
+explicitly selected retained pair; it does not grant authority. See
+[the local lifecycle](DEV.md) for credential export and preparation limits.
+
 ## Configure the connection in Evidence
 
 The export records a logical connection name, `registry` in this example.

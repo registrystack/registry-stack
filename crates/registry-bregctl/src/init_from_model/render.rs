@@ -1203,6 +1203,14 @@ fn readme(plan: &Plan) -> String {
          bind a `rowBoundaries` entry to whatever field carries your registry's tenancy, or \
          remove `list`."
     );
+    let _ = writeln!(
+        out,
+        "\nThis model-derived project declares no lookup grant or selector profile. To add \
+         Evidence later, stop the retained session and run `evidencectl source add . --project ../evidence` \
+         to select the existing unique identifier, readable facts, explicit row scope, and a \
+         dedicated client. `bregctl dev prepare-source` previews and prepares that bounded \
+         policy successor; the next `bregctl dev` activates it while retaining records."
+    );
     if let Some(note) = sensitive_note(plan) {
         let _ = writeln!(out, "\n{note}");
     }
@@ -1987,6 +1995,8 @@ mod tests {
         assert!(readme.contains("## Attribution"));
         assert!(readme.contains(&plan.model.repository));
         assert!(readme.contains(&plan.model.license_url));
+        assert!(readme.contains("bregctl dev prepare-source"));
+        assert!(readme.contains("declares no lookup grant or selector profile"));
         assert!(
             !readme.contains("assigned by the registry") && !readme.contains("registry assigns"),
             "the identifier is supplied by the caller"

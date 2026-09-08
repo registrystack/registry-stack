@@ -782,8 +782,10 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
     assert_eq!(attempts, 2);
     let retried_counts = counts(&database, &registry).await;
     assert_eq!(retried_counts, vec![4, 1, 6, 5, 4, 4, 6]);
+    // Leave time for connection checkout and handler evaluation before the deadline;
+    // the longer SQL sleep still forces cancellation after the candidate is evaluated.
     database.admin.batch_execute(&format!(
-        "DROP TRIGGER handler_retry_probe ON registry_data.{}; CREATE FUNCTION registry_internal.handler_sleep_probe() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN PERFORM pg_sleep(0.3); RETURN NEW; END $body$; CREATE TRIGGER handler_sleep_probe BEFORE INSERT ON registry_data.{} FOR EACH ROW EXECUTE FUNCTION registry_internal.handler_sleep_probe()",
+        "DROP TRIGGER handler_retry_probe ON registry_data.{}; CREATE FUNCTION registry_internal.handler_sleep_probe() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN PERFORM pg_sleep(2); RETURN NEW; END $body$; CREATE TRIGGER handler_sleep_probe BEFORE INSERT ON registry_data.{} FOR EACH ROW EXECUTE FUNCTION registry_internal.handler_sleep_probe()",
         q(&person.physical_table), q(&person.physical_table)
     )).await.unwrap();
     reset_test_action_handler_invocation_count("register-person");
@@ -792,7 +794,7 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
         registry.clone(),
         identity.clone(),
         None,
-        Some(Duration::from_millis(80)),
+        Some(Duration::from_secs(1)),
     );
     let timed_out = send(
         timeout_app,
@@ -815,7 +817,7 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
         1,
         "one request deadline extends from evaluated candidate into blocked SQL"
     );
-    tokio::time::sleep(Duration::from_millis(350)).await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
     assert_eq!(
         retried_counts,
         counts(&database, &registry).await,

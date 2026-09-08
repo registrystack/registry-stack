@@ -123,6 +123,13 @@ pub struct EditorArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(long, default_value = ".")]
     pub project: PathBuf,
+
+    /// Editor workspace directory containing the Evidence project.
+    ///
+    /// Writes settings here with workspace-relative schema mappings. Defaults
+    /// to the project directory; does not select a runtime target.
+    #[arg(long)]
+    pub workspace: Option<PathBuf>,
 }
 
 /// What one run wrote, for an author reading the terminal or a script reading
@@ -133,6 +140,7 @@ pub struct EditorSetupReport {
     pub schema_version: &'static str,
     pub status: &'static str,
     pub project_directory: String,
+    pub workspace_directory: String,
     pub files: Vec<String>,
 }
 
@@ -142,6 +150,8 @@ struct EditorManifest {
     format: String,
     version: u8,
     evidencectl_version: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    project_prefix: String,
     schemas: Vec<EditorManifestSchema>,
 }
 
@@ -200,10 +210,13 @@ std::thread_local! {
 }
 
 pub fn run(args: EditorArgs) -> Result<ExitCode> {
-    let report = setup_project_editor(&args.project)?;
+    let report = setup_workspace_editor(
+        &args.project,
+        args.workspace.as_deref().unwrap_or(&args.project),
+    )?;
     println!(
         "Editor schema mappings are {} for {}.",
-        report.status, report.project_directory
+        report.status, report.workspace_directory
     );
     for file in &report.files {
         println!("  {file}");
@@ -219,10 +232,23 @@ pub fn run(args: EditorArgs) -> Result<ExitCode> {
 /// managed destination holds something this command did not write, or when
 /// publication faults. A faulted run is rolled back to what preflight saw.
 pub fn setup_project_editor(project_directory: &Path) -> Result<EditorSetupReport> {
-    let root = canonical_root(project_directory)?;
-    require_authoring_project_root(&root)?;
-    let files = editor_files()?;
-    let prior = managed_prior_editor(&root, &files)?;
+    setup_workspace_editor(project_directory, project_directory)
+}
+
+fn setup_workspace_editor(
+    project_directory: &Path,
+    workspace_directory: &Path,
+) -> Result<EditorSetupReport> {
+    let project = canonical_root(project_directory)?;
+    require_authoring_project_root(&project)?;
+    let root = canonical_root(workspace_directory)?;
+    let relative_project = project.strip_prefix(&root).context(
+        "Evidence project must be inside the editor workspace; choose a containing --workspace",
+    )?;
+    let prefix = portable_project_prefix(relative_project)?;
+    let files = editor_files_for_project(&prefix)?;
+    let prior = managed_prior_editor(&root, &files)
+        .with_context(|| manual_editor_recovery(&project, &files))?;
 
     let mut states = Vec::with_capacity(files.len());
     let mut conflicts = BTreeSet::new();
@@ -266,8 +292,9 @@ pub fn setup_project_editor(project_directory: &Path) -> Result<EditorSetupRepor
             ));
         }
         bail!(
-            "editor setup preflight failed; {}; no files were changed. Keep these files and install the Evidence schema mappings by hand, or restore the expected generated files before rerunning the command",
-            causes.join("; ")
+            "editor setup preflight failed; {}; {}",
+            causes.join("; "),
+            manual_editor_recovery(&project, &files)
         );
     }
 
@@ -276,7 +303,8 @@ pub fn setup_project_editor(project_directory: &Path) -> Result<EditorSetupRepor
     Ok(EditorSetupReport {
         schema_version: EDITOR_REPORT_SCHEMA_VERSION,
         status: "configured",
-        project_directory: root.display().to_string(),
+        project_directory: project.display().to_string(),
+        workspace_directory: root.display().to_string(),
         files: files
             .iter()
             .map(|file| file.relative_path.display().to_string())
@@ -335,8 +363,15 @@ fn carries_authored_pair(root: &Path) -> bool {
             .is_ok_and(|metadata| metadata.file_type().is_dir())
 }
 
+#[cfg(test)]
 fn editor_files() -> Result<Vec<EditorFile>> {
-    let manifest = current_editor_manifest();
+    editor_files_for_project("")
+}
+
+fn editor_files_for_project(prefix: &str) -> Result<Vec<EditorFile>> {
+    let manifest = current_editor_manifest(prefix);
+    // Each settings root owns its schema copies and their manifest. Sharing
+    // component files would let either setup mode invalidate the other manifest.
     let mut files = Vec::with_capacity(EDITOR_SCHEMA_CATALOG.len() + 4);
     for entry in &EDITOR_SCHEMA_CATALOG {
         files.push(EditorFile {
@@ -350,21 +385,22 @@ fn editor_files() -> Result<Vec<EditorFile>> {
         relative_path: PathBuf::from(EDITOR_MANIFEST_PATH),
         bytes: pretty_json(&manifest)?,
     });
-    files.extend(editor_configuration_files(&manifest.schemas)?);
+    files.extend(editor_configuration_files_at(&manifest.schemas, "")?);
     Ok(files)
 }
 
-fn current_editor_manifest() -> EditorManifest {
+fn current_editor_manifest(prefix: &str) -> EditorManifest {
     EditorManifest {
         format: EDITOR_MANIFEST_FORMAT.to_string(),
         version: EDITOR_MANIFEST_VERSION,
         evidencectl_version: env!("CARGO_PKG_VERSION").to_string(),
+        project_prefix: prefix.to_string(),
         schemas: EDITOR_SCHEMA_CATALOG
             .iter()
             .map(|entry| EditorManifestSchema {
                 kind: entry.name.to_string(),
                 path: format!("schemas/{}", entry.filename),
-                file_glob: entry.file_glob.to_string(),
+                file_glob: format!("{prefix}{}", entry.file_glob),
                 sha256: schema_hash(entry.document.as_bytes()),
             })
             .collect(),
@@ -374,12 +410,20 @@ fn current_editor_manifest() -> EditorManifest {
 /// The editor settings, built from the manifest rather than from the catalogue
 /// directly, so that a refresh can rebuild exactly what a prior manifest
 /// described and recognize it byte for byte.
+#[cfg(test)]
 fn editor_configuration_files(schemas: &[EditorManifestSchema]) -> Result<Vec<EditorFile>> {
+    editor_configuration_files_at(schemas, "")
+}
+
+fn editor_configuration_files_at(
+    schemas: &[EditorManifestSchema],
+    prefix: &str,
+) -> Result<Vec<EditorFile>> {
     let schema_mappings = schemas
         .iter()
         .map(|schema| {
             (
-                format!("./{EDITOR_ROOT}/{}", schema.path),
+                format!("./{prefix}{EDITOR_ROOT}/{}", schema.path),
                 schema.file_glob.clone(),
             )
         })
@@ -442,21 +486,64 @@ fn managed_prior_editor(
         .map(Some)
 }
 
-/// The way out of a manifest this command cannot read. Everything it writes is
-/// generated, so removing the managed set returns the project to one a fresh
-/// run configures; naming that set is what keeps the way out from being a
-/// guess.
-fn managed_editor_recovery(current_files: &[EditorFile]) -> String {
-    let mut configuration = current_files
-        .iter()
-        .filter(|file| !file.relative_path.starts_with(EDITOR_ROOT))
-        .map(|file| file.relative_path.display().to_string())
-        .collect::<Vec<_>>();
-    configuration.sort();
-    format!(
-        "to configure the project again from scratch, remove {EDITOR_ROOT} and the editor configuration this command writes ({}), then rerun",
-        configuration.join(", ")
+/// Keep customized settings and supply the exact additions for either editor.
+fn manual_editor_recovery(project: &Path, files: &[EditorFile]) -> String {
+    // Recovery deliberately uses component-local schema paths, so the suggested
+    // standalone command can prepare them without replacing customized workspace settings.
+    let manifest: EditorManifest = serde_json::from_slice(
+        &files
+            .iter()
+            .find(|file| file.relative_path == Path::new(EDITOR_MANIFEST_PATH))
+            .expect("generated editor manifest exists")
+            .bytes,
     )
+    .expect("generated editor manifest is valid");
+    let recovery_files = editor_configuration_files_at(&manifest.schemas, &manifest.project_prefix)
+        .expect("generated editor mappings serialize");
+    let settings = recovery_files
+        .iter()
+        .filter(|file| file.relative_path.ends_with("settings.json"))
+        .map(|file| {
+            format!(
+                "{}:\n{}",
+                file.relative_path.display(),
+                String::from_utf8_lossy(&file.bytes)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let quoted_project = format!(
+        "'{}'",
+        project.display().to_string().replace('\'', "'\"'\"'")
+    );
+    format!("no files were changed. Keep existing settings. If schemas are not yet present, run `evidencectl tooling editor --project {quoted_project}` to prepare component-local schemas. Add the following mappings to your workspace settings, preserving other keys (VS Code requires the redhat.vscode-yaml extension):\n{settings}")
+}
+
+fn managed_editor_recovery(_current_files: &[EditorFile]) -> String {
+    format!("keep {EDITOR_ROOT}, .vscode/settings.json and .zed/settings.json; restore expected generated files before you rerun, or use the manual mappings below")
+}
+
+/// Glob metacharacters in the component path would select unrelated documents.
+fn portable_project_prefix(relative: &Path) -> Result<String> {
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            bail!("Evidence project must be inside the editor workspace");
+        };
+        let name = name.to_str().context("editor project path must be UTF-8")?;
+        if name
+            .chars()
+            .any(|c| c.is_control() || "*?[]{}!\\".contains(c))
+        {
+            bail!("editor project path contains glob metacharacters; choose a --workspace whose relative project path has no glob metacharacters");
+        }
+        parts.push(name);
+    }
+    Ok(if parts.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", parts.join("/"))
+    })
 }
 
 fn validate_managed_prior_editor(
@@ -477,6 +564,16 @@ fn validate_managed_prior_editor(
     {
         bail!("prior editor manifest has an invalid evidencectl version");
     }
+    let current_manifest: EditorManifest = serde_json::from_slice(
+        &current_files
+            .iter()
+            .find(|file| file.relative_path == Path::new(EDITOR_MANIFEST_PATH))
+            .expect("current manifest exists")
+            .bytes,
+    )?;
+    if manifest.project_prefix != current_manifest.project_prefix {
+        bail!("prior editor manifest belongs to a different Evidence project");
+    }
     // A prior manifest may list fewer schemas than the current catalogue, and
     // the entries it lists may be in any order: the catalogue grows as more of
     // the authoring form gains a Rust type behind it, and a project scaffolded
@@ -490,7 +587,7 @@ fn validate_managed_prior_editor(
         let known = EDITOR_SCHEMA_CATALOG.iter().any(|entry| {
             schema.kind == entry.name
                 && schema.path == format!("schemas/{}", entry.filename)
-                && schema.file_glob == entry.file_glob
+                && schema.file_glob == format!("{}{}", manifest.project_prefix, entry.file_glob)
         });
         if !known || !is_schema_hash(&schema.sha256) || !listed.insert(schema.kind.as_str()) {
             bail!(
@@ -530,7 +627,7 @@ fn validate_managed_prior_editor(
         }
     }
 
-    for prior_file in editor_configuration_files(&manifest.schemas)? {
+    for prior_file in editor_configuration_files_at(&manifest.schemas, "")? {
         let current = current_by_path
             .get(&prior_file.relative_path)
             .expect("current editor files contain every configuration target");
@@ -1084,6 +1181,243 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn workspace_mappings_use_the_component_path_and_preserve_standalone_setup() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        setup_project_editor(&project).unwrap();
+        let standalone = managed_bytes(&project);
+        let workspace = temporary.path();
+        let report = setup_workspace_editor(&project, workspace).unwrap();
+        assert_eq!(
+            report.project_directory,
+            project.canonicalize().unwrap().display().to_string()
+        );
+        assert_eq!(
+            report.workspace_directory,
+            workspace.canonicalize().unwrap().display().to_string()
+        );
+        let vscode: serde_json::Value =
+            serde_json::from_slice(&fs::read(workspace.join(".vscode/settings.json")).unwrap())
+                .unwrap();
+        let zed: serde_json::Value =
+            serde_json::from_slice(&fs::read(workspace.join(".zed/settings.json")).unwrap())
+                .unwrap();
+        let mappings = &vscode["yaml.schemas"];
+        assert_eq!(
+            mappings,
+            &zed["lsp"]["yaml-language-server"]["settings"]["yaml"]["schemas"]
+        );
+        assert_eq!(
+            mappings["./.evidence-editor/schemas/question.schema.json"],
+            "authoring-project/questions/*.yaml"
+        );
+        assert_eq!(
+            mappings["./.evidence-editor/schemas/project-marker.schema.json"],
+            "authoring-project/evidence-project.yaml"
+        );
+        for location in mappings.as_object().unwrap().keys() {
+            assert!(workspace.join(location).is_file());
+        }
+        let before = fs::read(workspace.join(".vscode/settings.json")).unwrap();
+        setup_workspace_editor(&project, workspace).unwrap();
+        assert_eq!(
+            fs::read(workspace.join(".vscode/settings.json")).unwrap(),
+            before
+        );
+        assert_eq!(managed_bytes(&project), standalone);
+    }
+
+    fn age_editor_installation(root: &Path) {
+        let schema_path = root.join(EDITOR_ROOT).join("schemas/question.schema.json");
+        let mut prior_schema = fs::read(&schema_path).unwrap();
+        prior_schema.push(b'\n');
+        fs::write(&schema_path, &prior_schema).unwrap();
+        let manifest_path = root.join(EDITOR_MANIFEST_PATH);
+        let mut manifest: EditorManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.evidencectl_version = "0.9.0".to_owned();
+        manifest.schemas.retain(|schema| schema.kind == "question");
+        manifest.schemas[0].sha256 = schema_hash(&prior_schema);
+        for file in editor_configuration_files_at(&manifest.schemas, "").unwrap() {
+            fs::write(root.join(file.relative_path), file.bytes).unwrap();
+        }
+        fs::write(manifest_path, pretty_json(&manifest).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn workspace_and_standalone_schema_refreshes_are_independent_in_both_orders() {
+        for workspace_first in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let project = project(&temporary);
+            let workspace = temporary.path();
+            setup_project_editor(&project).unwrap();
+            setup_workspace_editor(&project, workspace).unwrap();
+            age_editor_installation(&project);
+            age_editor_installation(workspace);
+            let standalone_before = managed_bytes(&project);
+            let workspace_before = managed_bytes(workspace);
+            if workspace_first {
+                setup_workspace_editor(&project, workspace).unwrap();
+                assert_eq!(managed_bytes(&project), standalone_before);
+                setup_project_editor(&project).unwrap();
+            } else {
+                setup_project_editor(&project).unwrap();
+                assert_eq!(managed_bytes(workspace), workspace_before);
+                setup_workspace_editor(&project, workspace).unwrap();
+            }
+            for (root, prefix) in [(&project as &Path, ""), (workspace, "authoring-project/")] {
+                for file in editor_files_for_project(prefix).unwrap() {
+                    assert_eq!(fs::read(root.join(file.relative_path)).unwrap(), file.bytes);
+                }
+            }
+            setup_project_editor(&project).unwrap();
+            setup_workspace_editor(&project, workspace).unwrap();
+        }
+    }
+
+    #[test]
+    fn workspace_refresh_does_not_touch_customized_standalone_files() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        let workspace = temporary.path();
+        setup_project_editor(&project).unwrap();
+        setup_workspace_editor(&project, workspace).unwrap();
+        age_editor_installation(workspace);
+        fs::write(
+            project.join(".vscode/settings.json"),
+            b"{\"editor.tabSize\": 8}",
+        )
+        .unwrap();
+        let before = managed_bytes(&project);
+        setup_workspace_editor(&project, workspace).unwrap();
+        assert_eq!(managed_bytes(&project), before);
+    }
+
+    #[test]
+    fn customized_parent_settings_have_copyable_recovery_without_writes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        let workspace = temporary.path();
+        fs::create_dir(workspace.join(".vscode")).unwrap();
+        let settings = b"{\"editor.tabSize\": 4}\n";
+        fs::write(workspace.join(".vscode/settings.json"), settings).unwrap();
+        let error = setup_workspace_editor(&project, workspace).unwrap_err();
+        let diagnostic = format!("{error:#}");
+        for expected in [
+            "no files were changed",
+            "Keep existing settings",
+            "evidencectl tooling editor --project",
+            "authoring-project/questions/*.yaml",
+            "./authoring-project/.evidence-editor/schemas/question.schema.json",
+            ".vscode/settings.json",
+            ".zed/settings.json",
+        ] {
+            assert!(diagnostic.contains(expected), "{diagnostic}");
+        }
+        assert_eq!(
+            fs::read(workspace.join(".vscode/settings.json")).unwrap(),
+            settings
+        );
+        assert!(!workspace.join(EDITOR_ROOT).exists());
+        assert!(!project.join(EDITOR_ROOT).exists());
+        assert!(!workspace.join(".zed").exists());
+    }
+
+    #[test]
+    fn workspace_refresh_preserves_customization_and_provides_mappings() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        let workspace = temporary.path();
+        setup_workspace_editor(&project, workspace).unwrap();
+        let manifest_path = workspace.join(EDITOR_MANIFEST_PATH);
+        let mut manifest: EditorManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.evidencectl_version = "0.9.0".to_string();
+        fs::write(&manifest_path, pretty_json(&manifest).unwrap()).unwrap();
+        let customized = b"{\"theme\": \"custom\"}";
+        fs::write(workspace.join(".zed/settings.json"), customized).unwrap();
+        let diagnostic = format!(
+            "{:#}",
+            setup_workspace_editor(&project, workspace).unwrap_err()
+        );
+        assert!(diagnostic.contains("customized"), "{diagnostic}");
+        assert!(
+            diagnostic.contains("authoring-project/questions/*.yaml"),
+            "{diagnostic}"
+        );
+        assert_eq!(
+            fs::read(workspace.join(".zed/settings.json")).unwrap(),
+            customized
+        );
+    }
+
+    #[test]
+    fn workspace_publication_failure_rolls_back_workspace_schemas_and_settings() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        EDITOR_TEST_PUBLISH_FAILURE_AFTER.with(|remaining| remaining.set(Some(3)));
+        let error = setup_workspace_editor(&project, temporary.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("rolled back"));
+        for directory in [
+            project.join(EDITOR_ROOT),
+            temporary.path().join(EDITOR_ROOT),
+            temporary.path().join(".vscode"),
+            temporary.path().join(".zed"),
+        ] {
+            assert!(
+                !directory.exists(),
+                "{} survived rollback",
+                directory.display()
+            );
+        }
+    }
+
+    #[test]
+    fn a_workspace_outside_the_component_is_refused_before_writing() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        let unrelated = temporary.path().join("unrelated");
+        fs::create_dir(&unrelated).unwrap();
+        assert!(format!(
+            "{:#}",
+            setup_workspace_editor(&project, &unrelated).unwrap_err()
+        )
+        .contains("inside the editor workspace"));
+        assert!(!unrelated.join(EDITOR_ROOT).exists());
+        assert!(!project.join(EDITOR_ROOT).exists());
+    }
+
+    #[test]
+    fn component_paths_with_glob_metacharacters_are_refused() {
+        for path in [
+            "evidence*",
+            "evidence?",
+            "[evidence]",
+            "{one,two}",
+            "evidence\\other",
+        ] {
+            assert!(portable_project_prefix(Path::new(path)).is_err(), "{path}");
+        }
+        assert_eq!(
+            portable_project_prefix(Path::new("components/my evidence")).unwrap(),
+            "components/my evidence/"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_parent_settings_destination_is_refused() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), temporary.path().join(".vscode")).unwrap();
+        let error = setup_workspace_editor(&project, temporary.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("symlink"));
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert!(!project.join(EDITOR_ROOT).exists());
     }
 
     #[test]

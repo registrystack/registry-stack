@@ -20,7 +20,7 @@ use thiserror::Error;
 use crate::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{
-    parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, Operation,
+    parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource,
     PackageIdentitySource, RegistryModule, RegistryProject,
 };
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
@@ -46,8 +46,7 @@ use crate::migration_plan::{
 };
 use crate::model::{
     CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
-    CompiledQueryKind, CompiledQueryOperation, CompiledQueryTemporalValueKind,
-    CompiledRouteInventory,
+    CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRouteInventory,
 };
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
@@ -1760,59 +1759,30 @@ fn query_changed_by_access_grant_delta(
 ) -> bool {
     match (before, after) {
         (Some(before), None) => {
-            let Some(before_entity) = previous.entities.get(&before.entity_id) else {
-                return false;
-            };
-            if !before_entity
-                .access_profiles
-                .contains_key(&before.profile_id)
-            {
-                return false;
-            }
-            let Some(after_entity) = candidate.entities.get(&before.entity_id) else {
-                return false;
-            };
-            match after_entity.access_profiles.get(&before.profile_id) {
-                Some(after_profile) => !after_profile
-                    .operations
-                    .contains(&query_governing_operation(before.kind)),
-                None => true,
-            }
+            previous.entities.contains_key(&before.entity_id)
+                && candidate.entities.contains_key(&before.entity_id)
+                && route_grants_query(previous, before)
+                && !route_grants_query(candidate, before)
         }
         (None, Some(after)) => {
-            let Some(after_entity) = candidate.entities.get(&after.entity_id) else {
-                return false;
-            };
-            let Some(after_profile) = after_entity.access_profiles.get(&after.profile_id) else {
-                return false;
-            };
-            if !after_profile
-                .operations
-                .contains(&query_governing_operation(after.kind))
-            {
-                return false;
-            }
-            let Some(before_entity) = previous.entities.get(&after.entity_id) else {
-                return false;
-            };
-            match before_entity.access_profiles.get(&after.profile_id) {
-                Some(before_profile) => !before_profile
-                    .operations
-                    .contains(&query_governing_operation(after.kind)),
-                None => true,
-            }
+            previous.entities.contains_key(&after.entity_id)
+                && candidate.entities.contains_key(&after.entity_id)
+                && !route_grants_query(previous, after)
+                && route_grants_query(candidate, after)
         }
         _ => false,
     }
 }
 
-fn query_governing_operation(kind: CompiledQueryKind) -> Operation {
-    match kind {
-        CompiledQueryKind::List | CompiledQueryKind::Current | CompiledQueryKind::AsOf => {
-            Operation::List
-        }
-        CompiledQueryKind::Snapshot => Operation::Snapshot,
-    }
+fn route_grants_query(
+    baseline: &CompiledRegistryMigrationBaseline,
+    query: &CompiledQueryOperation,
+) -> bool {
+    // The canonical route owns the grant: lookup shares List's execution kind,
+    // and a read-path query names its target entity while its route names the source.
+    baseline.routes.routes.iter().any(|route| {
+        route.id == query.route_id && route.access_profiles.contains(&query.profile_id)
+    })
 }
 
 fn additive_migration_plan(

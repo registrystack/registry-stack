@@ -133,7 +133,7 @@ pub(super) fn hash(bytes: &[u8]) -> String {
     crate::hex_lower(&Sha256::digest(bytes))
 }
 
-fn keypair(root: &Path) -> Result<Value> {
+pub(super) fn keypair(root: &Path) -> Result<Value> {
     private::directory(root)?;
     let key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
     let point = key.verifying_key().to_encoded_point(false);
@@ -317,7 +317,7 @@ pub(super) fn runtime(
             "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID,"databaseInitializationEnvironment":"local"},
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
-            "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":1},
+            "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
             "authentication":{"oidc":{"issuer":state.mint_origin(),"audience":state.audience(),"allowedAlgorithm":"ES256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":clients.clients.iter().map(|c|&c.id).collect::<Vec<_>>(),"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/mint-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":{}
         }),

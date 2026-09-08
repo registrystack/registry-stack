@@ -392,7 +392,9 @@ fn valid_claim_name(value: &str) -> bool {
             .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
 }
 
-fn valid_authority_claim_name(value: &str) -> bool {
+/// Whether a direct authority claim name is valid and does not shadow a registered JWT claim.
+/// Authoring preflight shares the same rule as runtime authority configuration.
+pub fn valid_authority_claim_name(value: &str) -> bool {
     valid_claim_name(value) && !REGISTERED_CLAIMS.contains(&value)
 }
 
@@ -462,6 +464,12 @@ pub(crate) fn map_authority_claim(
         VerifiedClaimValue::direct_string(mapped_scalar_claim(value, field_type)?)
             .map_err(|_| AuthenticationError::InvalidClaims)
     }
+}
+
+/// Validate the shape and field bounds of one direct scalar row claim.
+/// This authoring preflight grants no authority and performs no authentication.
+pub fn valid_direct_scalar_claim(value: &Value, field_type: &FieldTypeSource) -> bool {
+    mapped_scalar_claim(value, field_type).is_ok()
 }
 
 fn mapped_scalar_claim(

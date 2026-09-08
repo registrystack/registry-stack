@@ -2,8 +2,9 @@
 //!
 //! A target is a native pair of reviewed `governance.yaml` and `runtime.yaml`
 //! plus public signing keys. This module packages those files create-only
-//! from an explicit settings document; it does not invent production
-//! authority, generate keys, copy secrets, or relax the runtime schema.
+//! from explicit settings or a local development baseline. Local generation
+//! reuses project keys and paths; it never invents production authority, copies
+//! secrets, or relaxes the runtime schema.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -28,7 +29,7 @@ const SECRET_PREFIX: &str = "secret:file/";
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum TargetCommand {
-    /// Create deployment target files from an explicit settings file.
+    /// Create target files from explicit settings or a project-local baseline.
     New(NewArgs),
     /// Inspect the public files and logical secret references in a target.
     Explain(ExplainArgs),
@@ -45,11 +46,22 @@ pub(crate) struct NewArgs {
     /// public-key identity. Project-specific bundle and runtime semantics are
     /// checked by `target explain`, `fixtures run --target`, `build --target`,
     /// and `doctor`.
+    #[arg(long, required_unless_present = "local")]
+    pub settings: Option<PathBuf>,
+
+    /// Evidence project directory; defaults to the current directory with --local.
+    ///
+    /// This command needs an editable project with local signing keys when
+    /// using --local. Its paths fill only omitted local filesystem settings.
+    #[arg(long, requires = "local")]
+    pub project: Option<PathBuf>,
+
+    /// Use project-local development paths; requires local assurance governance.
     #[arg(long)]
-    pub settings: PathBuf,
+    pub local: bool,
 
     /// Public signing JWK whose RFC 7638 thumbprint names activePublicJwkFile.
-    #[arg(long)]
+    #[arg(long, requires = "settings")]
     pub signing_public_key: Option<PathBuf>,
 }
 
@@ -133,9 +145,21 @@ pub(crate) fn run(command: TargetCommand) -> Result<ExitCode> {
 fn new(args: NewArgs) -> Result<ExitCode> {
     reject_existing(&args.directory)?;
     let parent = plain_parent(&args.directory, "target parent")?;
-    let settings_parent = plain_parent(&args.settings, "settings parent")?;
-    let settings_name = args
-        .settings
+    let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
+    if args.settings.is_none() {
+        if !args.local {
+            bail!("target new requires --settings or --local");
+        }
+        create_local_target(project, &args.directory, serde_json::json!({}))?;
+        println!(
+            "Created local development target {}",
+            args.directory.display()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    let settings_arg = args.settings.as_deref().expect("settings checked above");
+    let settings_parent = plain_parent(settings_arg, "settings parent")?;
+    let settings_name = settings_arg
         .file_name()
         .ok_or_else(|| anyhow!("settings file must name one file"))?;
     let settings_path = settings_parent.join(settings_name);
@@ -147,6 +171,9 @@ fn new(args: NewArgs) -> Result<ExitCode> {
     .context("target settings are not the closed Version 1 shape")?;
     if settings.format_version != 1 {
         bail!("target settings formatVersion must be 1");
+    }
+    if args.local {
+        fill_local_paths(project, &settings.governance, &mut settings.runtime)?;
     }
     validate_settings_documents(&settings.governance, &settings.runtime)?;
     let derived_signing_public_key = args
@@ -218,6 +245,177 @@ fn new(args: NewArgs) -> Result<ExitCode> {
         args.directory.display()
     );
     Ok(ExitCode::SUCCESS)
+}
+
+/// Preflight one connection before an external local-client registration.
+/// The caller keeps the project lock through preflight and insertion.
+pub(crate) fn check_local_connection(directory: &Path, name: &str, binding: &Value) -> Result<()> {
+    if !crate::authoring::valid_local_identifier(name) || !binding.is_object() {
+        bail!("local source connection requires a valid name and a mapping");
+    }
+    if !directory.try_exists()? {
+        return reject_existing(directory);
+    }
+    let (connections, _) = build::local_dev_target_inputs(directory)
+        .context("existing target must contain complete local governance.yaml and runtime.yaml; choose a new target for a settings-only directory")?;
+    if let Some(existing) = connections.get(name) {
+        if existing != binding {
+            bail!("local source connection already has different authored settings; review it or choose another connection name");
+        }
+    }
+    Ok(())
+}
+
+/// Add one connection without changing the target's other deployment settings.
+/// The caller owns the project lock; only governance.yaml is atomically replaced.
+pub(crate) fn ensure_local_connection(
+    project: &Path,
+    directory: &Path,
+    name: &str,
+    binding: Value,
+) -> Result<()> {
+    check_local_connection(directory, name, &binding)?;
+    if !directory.exists() {
+        return create_local_target(project, directory, serde_json::json!({name: binding}));
+    }
+    let path = directory.join("governance.yaml");
+    let mut governance: Value = serde_norway::from_slice(&read_plain_file(
+        &path,
+        MAX_SETTINGS_BYTES,
+        "local target governance",
+    )?)?;
+    let connections = governance
+        .as_object_mut()
+        .context("local governance must be a mapping")?
+        .entry("sourceConnections")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .context("local sourceConnections must be a mapping")?;
+    if connections.contains_key(name) {
+        return Ok(());
+    }
+    connections.insert(name.to_owned(), binding);
+    let bytes = serde_norway::to_string(&governance)?;
+    let permissions = fs::metadata(&path)?.permissions();
+    let mut staged =
+        tempfile::NamedTempFile::new_in(directory).context("staging local connection settings")?;
+    staged.as_file().set_permissions(permissions)?;
+    staged.write_all(bytes.as_bytes())?;
+    staged.as_file().sync_all()?;
+    staged
+        .persist(&path)
+        .context("publishing local connection settings")?;
+    Ok(())
+}
+
+/// Create a local source-first target with existing project signing material.
+/// Identical retries are harmless; authored target files are never overwritten.
+pub(crate) fn create_local_target(
+    project: &Path,
+    directory: &Path,
+    source_connections: Value,
+) -> Result<()> {
+    if !source_connections.is_object() {
+        bail!("local sourceConnections must be a mapping");
+    }
+    let mut governance = crate::authoring::local_target_governance(project)?;
+    governance["sourceConnections"] = source_connections;
+    let mut runtime = serde_json::json!({
+        "version": 1,
+        "listener": {
+            "bindHost": "127.0.0.1", "port": 8080,
+            "tlsTermination": "operator-controlled-upstream", "trustProxyIdentityHeaders": false,
+            "maximumRequestBytes": 65536, "maximumConcurrentRequests": 64,
+            "requestTimeoutMilliseconds": 10000, "shutdownGraceMilliseconds": 30000,
+        },
+        "signer": {"kind": "local-jwk", "privateKeyRef": "secret:file/signing-p256-private-jwk"},
+        "auditStorage": {"maximumFileBytes": 1073741824_u64},
+        "outboundTls": {"systemRoots": true, "trustProfiles": {}},
+    });
+    fill_local_paths(project, &governance, &mut runtime)?;
+    validate_settings_documents(&governance, &runtime)?;
+    let (relative, key) = signing_public_key_reference(
+        &project
+            .join(crate::authoring::SECRETS_DIRECTORY)
+            .join("signing-p256-public.jwk.json"),
+        "local signing public key",
+    )?;
+    let files = [
+        (
+            "governance.yaml".to_owned(),
+            serde_norway::to_string(&governance)?.into_bytes(),
+        ),
+        (
+            "runtime.yaml".to_owned(),
+            serde_norway::to_string(&runtime)?.into_bytes(),
+        ),
+        (relative, key.bytes),
+    ];
+    if directory.exists() {
+        let metadata = fs::symlink_metadata(directory)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!("existing local target must be a plain directory");
+        }
+        for (name, expected) in &files {
+            let actual = read_plain_file(
+                &directory.join(name),
+                MAX_SETTINGS_BYTES,
+                "existing local target file",
+            )?;
+            if actual != *expected {
+                bail!("local target already contains different authored settings; choose a new target directory or review its files explicitly");
+            }
+        }
+        return Ok(());
+    }
+    reject_existing(directory)?;
+    let parent = plain_parent(directory, "target parent")?;
+    let staging = tempfile::Builder::new()
+        .prefix(".evidencectl-target-")
+        .tempdir_in(parent)?;
+    fs::create_dir(staging.path().join("public-keys"))?;
+    for (name, bytes) in files {
+        write_new_file(&staging.path().join(name), &bytes, 0o644)?;
+    }
+    publish(staging, directory)
+}
+
+/// Fill only omitted paths in an explicitly local target. Authored paths are
+/// retained, including when the target is intended for a different local layout.
+fn fill_local_paths(project: &Path, governance: &Value, runtime: &mut Value) -> Result<()> {
+    if governance.get("assuranceProfile").and_then(Value::as_str) != Some("local") {
+        bail!("--local requires governance assuranceProfile local; production paths are never inferred");
+    }
+    let project = fs::canonicalize(project).context("resolving local Evidence project")?;
+    read_plain_file(
+        &project.join("evidence-project.yaml"),
+        MAX_SETTINGS_BYTES,
+        "Evidence project marker",
+    )?;
+    let secrets = project.join(crate::authoring::SECRETS_DIRECTORY);
+    let local = project.join(".evidence/dev");
+    for (components, path) in [
+        (vec!["bundleDirectory"], local.join("bundle")),
+        (vec!["secretProviders", "file", "root"], secrets),
+        (
+            vec!["auditStorage", "path"],
+            local.join("audit/evidence.jsonl"),
+        ),
+    ] {
+        let mut node = &mut *runtime;
+        for component in &components[..components.len() - 1] {
+            node = node
+                .as_object_mut()
+                .context("local runtime path sections must be mappings")?
+                .entry((*component).to_owned())
+                .or_insert_with(|| serde_json::json!({}));
+        }
+        node.as_object_mut()
+            .context("local runtime path sections must be mappings")?
+            .entry(components[components.len() - 1].to_owned())
+            .or_insert_with(|| Value::String(path.to_string_lossy().into_owned()));
+    }
+    Ok(())
 }
 
 fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()> {
@@ -682,6 +880,123 @@ runtime:
     }
 
     #[test]
+    fn local_target_derives_paths_without_overwriting_authored_paths_or_production() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(temporary.path().join("evidence-project.yaml"), "version: 1").unwrap();
+        let project = fs::canonicalize(temporary.path()).unwrap();
+        let local = serde_json::json!({"assuranceProfile": "local"});
+        let mut runtime = serde_json::json!({});
+        fill_local_paths(&project, &local, &mut runtime).unwrap();
+        assert_eq!(
+            runtime["bundleDirectory"],
+            project
+                .join(".evidence/dev/bundle")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert_eq!(
+            runtime["secretProviders"]["file"]["root"],
+            project.join("secrets").to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            runtime["auditStorage"]["path"],
+            project
+                .join(".evidence/dev/audit/evidence.jsonl")
+                .to_string_lossy()
+                .as_ref()
+        );
+        runtime["bundleDirectory"] = Value::String("/srv/reviewed/bundle".to_owned());
+        runtime["secretProviders"]["file"]["root"] =
+            Value::String("/srv/reviewed/secrets".to_owned());
+        runtime["auditStorage"]["path"] = Value::String("/srv/reviewed/audit.jsonl".to_owned());
+        let authored = runtime.clone();
+        fill_local_paths(&project, &local, &mut runtime).unwrap();
+        assert_eq!(runtime, authored);
+        assert!(fill_local_paths(
+            &project,
+            &serde_json::json!({"assuranceProfile": "production"}),
+            &mut runtime
+        )
+        .is_err());
+        assert_eq!(runtime, authored);
+    }
+
+    #[test]
+    fn local_target_creation_reuses_public_key_and_refuses_changed_retry() {
+        let temporary = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temporary.path()).unwrap();
+        let project = canonical.as_path();
+        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
+        fs::create_dir(project.join("secrets")).unwrap();
+        fs::write(
+            project.join("secrets/signing-p256-public.jwk.json"),
+            ES256_PUBLIC_JWK,
+        )
+        .unwrap();
+        let target = project.join("target");
+        let connections = serde_json::json!({});
+        create_local_target(project, &target, connections.clone()).unwrap();
+        create_local_target(project, &target, connections.clone()).unwrap();
+        let governance: Value =
+            serde_norway::from_slice(&fs::read(target.join("governance.yaml")).unwrap()).unwrap();
+        assert_eq!(governance["assuranceProfile"], "local");
+        assert!(governance["authorityProfiles"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|profile| profile["grants"].as_array().unwrap().is_empty()));
+        assert!(governance.get("requirements").is_none());
+        fs::write(target.join("runtime.yaml"), "operator authored settings").unwrap();
+        assert!(create_local_target(project, &target, connections).is_err());
+        assert_eq!(
+            fs::read_to_string(target.join("runtime.yaml")).unwrap(),
+            "operator authored settings"
+        );
+    }
+
+    #[test]
+    fn local_connection_insertion_preserves_custom_settings_and_refuses_conflicts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temporary.path()).unwrap();
+        let project = canonical.as_path();
+        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
+        fs::create_dir(project.join("secrets")).unwrap();
+        fs::write(
+            project.join("secrets/signing-p256-public.jwk.json"),
+            ES256_PUBLIC_JWK,
+        )
+        .unwrap();
+        let target = project.join("target");
+        let first = serde_json::json!({"baseUrl": "http://127.0.0.1:18000"});
+        ensure_local_connection(project, &target, "first", first.clone()).unwrap();
+        let path = target.join("governance.yaml");
+        let mut governance: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
+        governance["service"]["publicOrigin"] = serde_json::json!("http://127.0.0.1:19000");
+        fs::write(&path, serde_norway::to_string(&governance).unwrap()).unwrap();
+        let runtime = fs::read(target.join("runtime.yaml")).unwrap();
+        let before = fs::read(&path).unwrap();
+        ensure_local_connection(project, &target, "first", first).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let second = serde_json::json!({"baseUrl": "http://127.0.0.1:18001"});
+        ensure_local_connection(project, &target, "second", second.clone()).unwrap();
+        governance["sourceConnections"]["second"] = second;
+        let actual: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(actual, governance);
+        assert_eq!(fs::read(target.join("runtime.yaml")).unwrap(), runtime);
+        let before = fs::read(&path).unwrap();
+        assert!(check_local_connection(
+            &target,
+            "first",
+            &serde_json::json!({"baseUrl": "http://127.0.0.1:19001"})
+        )
+        .is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        governance["assuranceProfile"] = serde_json::json!("production");
+        fs::write(&path, serde_norway::to_string(&governance).unwrap()).unwrap();
+        assert!(check_local_connection(&target, "third", &serde_json::json!({})).is_err());
+    }
+
+    #[test]
     fn signing_public_key_reference_names_active_key_by_thumbprint() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let key_path = temporary.path().join("signing-public.jwk.json");
@@ -724,7 +1039,9 @@ runtime:
 
         new(NewArgs {
             directory: target.clone(),
-            settings: settings_path,
+            settings: Some(settings_path),
+            project: None,
+            local: false,
             signing_public_key: Some(key_path),
         })
         .expect("target created");
@@ -791,7 +1108,9 @@ runtime:
 
         assert!(new(NewArgs {
             directory: target.clone(),
-            settings: settings_path,
+            settings: Some(settings_path),
+            project: None,
+            local: false,
             signing_public_key: None,
         })
         .is_err());
@@ -819,7 +1138,9 @@ runtime:
 
         assert!(new(NewArgs {
             directory: target.clone(),
-            settings: settings_path,
+            settings: Some(settings_path),
+            project: None,
+            local: false,
             signing_public_key: None,
         })
         .is_err());
@@ -870,7 +1191,9 @@ publicKeys:
 
         assert!(new(NewArgs {
             directory: target.clone(),
-            settings: settings_path,
+            settings: Some(settings_path),
+            project: None,
+            local: false,
             signing_public_key: None,
         })
         .is_err());
@@ -922,7 +1245,9 @@ runtime:
         // too instead of creating a target those commands then refuse to open.
         assert!(new(NewArgs {
             directory: target.clone(),
-            settings: settings_path,
+            settings: Some(settings_path),
+            project: None,
+            local: false,
             signing_public_key: None,
         })
         .is_err());
@@ -953,7 +1278,9 @@ runtime:
         // writing a runtime.yaml the deployment cannot load.
         let Err(error) = new(NewArgs {
             directory: target.clone(),
-            settings: settings_path,
+            settings: Some(settings_path),
+            project: None,
+            local: false,
             signing_public_key: None,
         }) else {
             panic!("an unknown runtime field is refused");
@@ -1072,7 +1399,9 @@ runtime:
         // assuranceProfile to local, production, or evidence-grade.
         assert!(new(NewArgs {
             directory: target.clone(),
-            settings: settings_path,
+            settings: Some(settings_path),
+            project: None,
+            local: false,
             signing_public_key: None,
         })
         .is_err());
@@ -1100,7 +1429,9 @@ runtime:
 
         new(NewArgs {
             directory: target.clone(),
-            settings: settings_path,
+            settings: Some(settings_path),
+            project: None,
+            local: false,
             signing_public_key: None,
         })
         .expect("a settings file matching the closed governance shape is accepted");

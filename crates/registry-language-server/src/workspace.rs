@@ -1440,6 +1440,40 @@ mod tests {
     }
 
     #[test]
+    fn an_evidence_component_is_discovered_under_an_ordinary_parent_workspace() {
+        let temp = TempDir::new().unwrap();
+        let component = temp.path().join("evidence");
+        fs::create_dir(&component).unwrap();
+        evidence_project_in(&component);
+        let registry = temp.path().join("registry");
+        fs::create_dir(&registry).unwrap();
+        let registry_yaml = registry.join("registry.yaml");
+        fs::write(&registry_yaml, "kind: registry.breg.project\n").unwrap();
+        let notes = temp.path().join("notes.yaml");
+        fs::write(&notes, "notes: unrelated\n").unwrap();
+        let question = component
+            .canonicalize()
+            .unwrap()
+            .join(QUESTIONS_DIRECTORY)
+            .join("adult-status.yaml");
+
+        let mut workspace = workspace_over(&[temp.path()]);
+        assert_eq!(workspace.roots().count(), 0);
+        workspace.ensure_root_for(&question).unwrap();
+        let root = workspace
+            .root_for(&question)
+            .expect("nested Evidence root discovered");
+        assert_eq!(root.family, ProjectFamily::Evidence);
+        assert!(root.index().document_paths().any(|path| path == question));
+        for unrelated in [registry_yaml, notes] {
+            let unrelated = unrelated.canonicalize().unwrap();
+            workspace.ensure_root_for(&unrelated).unwrap();
+            assert!(workspace.root_for(&unrelated).is_none());
+        }
+        assert_eq!(workspace.roots().count(), 1);
+    }
+
+    #[test]
     fn a_document_outside_every_root_is_served_without_an_index() {
         let temp = TempDir::new().unwrap();
         let loose = temp.path().join("notes.yaml");

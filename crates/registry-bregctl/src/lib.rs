@@ -5521,6 +5521,17 @@ bregctl generate evidence-source . --access-profile evidence-source \
   --output ./exports/registry-status
 ```
 
+The dedicated `source` client in `dev-clients.yaml` binds only this lookup
+profile and gets its own key on first start. This teaching profile can look up
+any record by code: a supplied code is not a row authorization rule. Set your
+intended readable fields and row boundaries before retaining records.
+
+After stopping with `bregctl dev stop .`, use `bregctl dev export-client .
+--client source --client-id-file PATH --assertion-key-file PATH` to copy its
+existing pair into prepared owner-only directories. The command preserves
+existing identical files and refuses conflicts; choose fresh paths and update
+the consuming target if you explicitly replaced the development session.
+
 The export refuses a destination that already exists and a parent directory that
 does not, so the output path names a directory the command creates inside one
 you made.
@@ -5886,6 +5897,12 @@ clients:
       registry_principal: generic-registry-reader
       registry_purpose: registry-reporting
       registry_record_status: active
+  - id: source
+    accessProfiles: [evidence-source]
+    scopes: [registry:evidence:lookup]
+    claims:
+      registry_principal: generic-registry-source
+      registry_purpose: evidence-source-read
 "#;
 
 const INIT_JOURNEYS: &[u8] = br#"# Project journeys: the requests `bregctl test` replays over real
@@ -8714,6 +8731,10 @@ fn write_dev_success(
             ));
             let pairs: Vec<(&str, String)> = [
                 ("status", "status"),
+                ("client", "client"),
+                ("access profiles", "accessProfilesText"),
+                ("client id file", "clientIdFile"),
+                ("assertion key file", "assertionKeyFile"),
                 ("project", "project"),
                 ("breg url", "bregUrl"),
                 ("token endpoint", "tokenEndpoint"),

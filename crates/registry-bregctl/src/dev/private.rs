@@ -21,6 +21,10 @@ pub(super) fn directory(path: &Path) -> Result<()> {
 
 pub(super) fn check(path: &Path, directory: bool) -> Result<()> {
     let metadata = fs::symlink_metadata(path).context("local state path is missing")?;
+    check_metadata(&metadata, directory)
+}
+
+pub(super) fn check_metadata(metadata: &fs::Metadata, directory: bool) -> Result<()> {
     if metadata.uid() != rustix::process::geteuid().as_raw()
         || metadata.permissions().mode() & 0o077 != 0
         || (directory && !metadata.is_dir())

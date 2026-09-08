@@ -13,7 +13,9 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_norway::Value as YamlValue;
 
-use crate::authoring::{compile_fixture_project, CompiledFixtureProject};
+use crate::authoring::{
+    compile_fixture_project, compile_fixture_project_with_connections, CompiledFixtureProject,
+};
 use crate::{build, evidence_binary, source_import::ProjectLock};
 
 #[derive(Debug, Subcommand)]
@@ -39,6 +41,10 @@ pub struct RunArgs {
     /// Complete deployment target to use when compiling an editable project.
     #[arg(long)]
     pub target: Option<PathBuf>,
+
+    /// Generate local caller governance from current questions, using target connections.
+    #[arg(long, requires = "target")]
+    pub local: bool,
 
     /// Run only the exact bundle-relative fixture path named here.
     #[arg(long)]
@@ -110,6 +116,9 @@ pub fn run(command: FixturesCommand) -> Result<ExitCode> {
 }
 
 fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
+    if args.local && args.target.is_none() {
+        bail!("--local requires --target");
+    }
     let runtime_path = args.project.join("runtime.yaml");
     let evidence_bin = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
     let mut editable_lock = None;
@@ -134,7 +143,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
             ProjectLock::acquire(&args.project)
                 .with_context(|| format!("locking editable project {}", args.project.display()))?,
         );
-        if let Some(target) = args.target.as_deref() {
+        if let Some(target) = args.target.as_deref().filter(|_| !args.local) {
             let compilation =
                 build::compile_target_fixture_project(&args.project, target, &evidence_bin)
                     .context("compiling editable project with deployment target")?;
@@ -150,8 +159,18 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
                 fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
                     .context("sealing private fixture compilation staging")?;
             }
-            let compilation = compile_fixture_project(&args.project, staging.path(), &evidence_bin)
-                .context("compiling editable project for fixture evaluation")?;
+            let compilation = if let Some(target) = args.target.as_deref() {
+                let (connections, _) = build::local_dev_target_inputs(target)?;
+                compile_fixture_project_with_connections(
+                    &args.project,
+                    staging.path(),
+                    &evidence_bin,
+                    connections,
+                )
+            } else {
+                compile_fixture_project(&args.project, staging.path(), &evidence_bin)
+            }
+            .context("compiling editable project for fixture evaluation")?;
             FixtureTarget::Editable {
                 compilation,
                 _staging: staging,

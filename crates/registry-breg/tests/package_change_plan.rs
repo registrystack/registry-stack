@@ -2469,3 +2469,120 @@ fn disagreeing_environment_identity_keys_refuse_the_package_and_name_both_values
         ]
     );
 }
+
+#[test]
+fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
+    let fixture = include_bytes!("../../../products/breg/evidence/registry/registry.yaml");
+    let mut source: serde_json::Value = serde_norway::from_slice(fixture).unwrap();
+    source["entities"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("selectorProfiles");
+    source["accessProfiles"].as_array_mut().unwrap().truncate(1);
+    let compile = |source: &serde_json::Value| {
+        let project = parse_project_yaml(&serde_json::to_vec(source).unwrap()).unwrap();
+        compile_project(&project, &[], CompileProfile::Production).unwrap()
+    };
+    let previous = compile(&source);
+    source["package"]["sequence"] = serde_json::json!(2);
+    source["entities"][0]["selectorProfiles"] =
+        serde_json::json!([{"id":"by-code","fields":["code"]}]);
+    source["accessProfiles"].as_array_mut().unwrap().push(serde_json::json!({
+        "id":"source","principalClaim":"registry_principal","requiredScopes":["registry:source:lookup"],
+        "grants":[{"entity":"record","operations":["lookup"],"readableFields":["code","status"],
+            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":[]}]}));
+    let candidate = compile(&source);
+    let changes = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    let plan = change_set_to_applicable_migration_plan(&changes)
+        .expect("lookup-only authority is a policy successor");
+    assert!(plan.statements.is_empty());
+    assert!(changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
+    // Changing an existing query projection does not become a grant addition.
+    source["package"]["sequence"] = serde_json::json!(3);
+    source["accessProfiles"][1]["grants"][0]["readableFields"] =
+        serde_json::json!(["code", "status", "label"]);
+    let widened = compile(&source);
+    let changes = compiled_registry_change_set(&candidate, &widened, PRIOR_REVISION);
+    assert!(change_set_to_applicable_migration_plan(&changes).is_err());
+}
+
+#[test]
+fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
+    let fixture = include_bytes!("../../../products/breg/evidence/registry/registry.yaml");
+    let mut source: serde_json::Value = serde_norway::from_slice(fixture).unwrap();
+    source["accessProfiles"].as_array_mut().unwrap().truncate(1);
+    source["entities"][0]["readPaths"] = serde_json::json!([
+        {"id":"children","through":"link","to":"child","route":"children"}
+    ]);
+    let dataset = source["entities"][0]["primaryDataset"].clone();
+    source["entities"].as_array_mut().unwrap().extend([
+        serde_json::json!({"id":"child","primaryDataset":dataset,"route":"children","mutationMode":"mutable",
+            "fields":[{"id":"code","type":"string","maxLength":64,"classification":"internal"},
+                      {"id":"label","type":"string","maxLength":100,"classification":"internal"}]}),
+        serde_json::json!({"id":"link","primaryDataset":dataset,"route":"links","mutationMode":"mutable",
+            "fields":[{"id":"record","type":"reference","target":"record","classification":"internal"},
+                      {"id":"child","type":"reference","target":"child","classification":"internal"}]})
+    ]);
+    source["accessProfiles"][0]["grants"].as_array_mut().unwrap().extend([
+        serde_json::json!({"entity":"child","operations":["get"],"readableFields":["code","label"],"rowBoundaries":[]}),
+        serde_json::json!({"entity":"link","operations":["get"],"readableFields":["record","child"],"rowBoundaries":[]})
+    ]);
+    let compile = |source: &serde_json::Value| {
+        let project = parse_project_yaml(&serde_json::to_vec(source).unwrap()).unwrap();
+        compile_project(&project, &[], CompileProfile::Production).unwrap()
+    };
+    let previous = compile(&source);
+    source["package"]["sequence"] = serde_json::json!(2);
+    source["accessProfiles"][0]["grants"][0]["readPaths"] =
+        serde_json::json!([{"path":"children","readableFields":["code"]}]);
+    let granted = compile(&source);
+    let query = granted
+        .queries()
+        .operations
+        .iter()
+        .find(|query| query.read_path.as_deref() == Some("children"))
+        .unwrap();
+    let route = granted
+        .routes()
+        .routes
+        .iter()
+        .find(|route| route.id == query.route_id)
+        .unwrap();
+    assert_eq!(query.entity_id, "child");
+    assert_eq!(route.entity_id, "record");
+    assert!(!granted.entities()["record"].access_profiles["operator"]
+        .operations
+        .contains(&registry_breg::contract::Operation::List));
+    let changes = compiled_registry_change_set(&previous, &granted, PRIOR_REVISION);
+    let plan = change_set_to_applicable_migration_plan(&changes)
+        .expect("adding a source read-path grant is a policy successor");
+    assert!(plan.statements.is_empty());
+    assert!(changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
+
+    source["package"]["sequence"] = serde_json::json!(3);
+    source["accessProfiles"][0]["grants"][0]["readPaths"][0]["readableFields"] =
+        serde_json::json!(["code", "label"]);
+    let widened = compile(&source);
+    let changes = compiled_registry_change_set(&granted, &widened, PRIOR_REVISION);
+    assert!(
+        change_set_to_applicable_migration_plan(&changes).is_err(),
+        "an existing query projection change still requires review"
+    );
+
+    source["accessProfiles"][0]["grants"][0]["readPaths"] = serde_json::json!([]);
+    let removed = compile(&source);
+    let changes = compiled_registry_change_set(&granted, &removed, PRIOR_REVISION);
+    let plan = change_set_to_applicable_migration_plan(&changes)
+        .expect("removing a source read-path grant is a policy successor");
+    assert!(plan.statements.is_empty());
+    assert!(changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
+}

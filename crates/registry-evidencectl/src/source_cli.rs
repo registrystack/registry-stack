@@ -13,10 +13,12 @@ use anyhow::{bail, Context as _, Result};
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
-use crate::{authoring, build, source_import, source_mock, suggest};
+use crate::{authoring, build, source_add, source_import, source_mock, suggest};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SourceCommand {
+    /// Connect a retained local registry through its public lookup export.
+    Add(source_add::SourceAddArgs),
     /// Suggest source configuration from an OpenAPI document.
     Suggest(suggest::SuggestArgs),
     /// Generate, inspect, and serve a local synthetic source API.
@@ -65,6 +67,7 @@ pub(crate) struct SourceDetachArgs {
 
 pub(crate) fn run(command: SourceCommand) -> Result<ExitCode> {
     match command {
+        SourceCommand::Add(args) => source_add::run(args),
         SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args)),
         SourceCommand::Mock(command) => source_mock::run(command),
         SourceCommand::Diff(args) => diff(args),

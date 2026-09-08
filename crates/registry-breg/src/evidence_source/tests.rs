@@ -532,24 +532,58 @@ fn refuses_a_lookup_grant_without_a_compiled_lookup_route() {
 }
 
 #[test]
-fn refuses_selector_names_beyond_the_evidence_profile_name_bound() {
-    let mut original = project();
-    let selector = format!("by-{}", "a".repeat(37));
-    original["entities"][0]["selectorProfiles"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"id":selector,"fields":["code"]}));
-    original["accessProfiles"][0]["grants"][0]["lookups"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"selector":selector,"valueOrigin":"request"}));
-    let mut selection = options();
-    selection.selectors = vec![selector];
-    let diagnostic = refused(&compiled(&original, SQL), &selection);
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+fn long_eligible_selector_names_export_as_stable_distinct_bounded_profiles() {
+    let short = export_evidence_source(&compiled(&project(), SQL), &options()).unwrap();
     assert_eq!(
-        diagnostic.message,
-        "the connection/entity/selector names produce a profile longer than 64 bytes; use shorter stable technical names or a custom adapter"
+        short.selector_profiles["by-code"],
+        "breg-8-registry-6-record-7-by-code"
+    );
+    let mut original = project();
+    let entity = format!("record-{}", "e".repeat(57));
+    let first = format!("by-{}a", "s".repeat(60));
+    let second = format!("by-{}b", "s".repeat(60));
+    original["entities"][0]["id"] = json!(entity);
+    original["entities"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("derived");
+    original["accessProfiles"][0]["grants"][0]["entity"] = json!(entity);
+    original["accessProfiles"][0]["grants"][0]["readableFields"] = json!(["code", "status"]);
+    original["entities"][0]["selectorProfiles"] = json!([
+        {"id":first,"fields":["code"]},{"id":second,"fields":["code"]}]);
+    original["accessProfiles"][0]["grants"][0]["lookups"] = json!([
+        {"selector":first,"valueOrigin":"request"},{"selector":second,"valueOrigin":"request"}]);
+    let source = parse_project_json(&serde_json::to_vec(&original).unwrap()).unwrap();
+    let registry =
+        crate::compiler::compile_project(&source, &[], CompileProfile::Authoring).unwrap();
+    let mut selection = options();
+    selection.entity = entity;
+    selection.connection = "c".repeat(64);
+    selection.selectors = vec![first.clone(), second.clone()];
+    let export = export_evidence_source(&registry, &selection).unwrap();
+    assert_eq!(
+        export.artifacts,
+        export_evidence_source(&registry, &selection)
+            .unwrap()
+            .artifacts
+    );
+    assert_ne!(
+        export.selector_profiles[&first],
+        export.selector_profiles[&second]
+    );
+    for profile in export.selector_profiles.values() {
+        assert_eq!(profile.len(), 64);
+        assert!(local_name(profile));
+        assert!(export
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == format!("selectors/{profile}.yaml")));
+    }
+    selection.connection.replace_range(63.., "d");
+    let other = export_evidence_source(&registry, &selection).unwrap();
+    assert_ne!(
+        export.selector_profiles[&first],
+        other.selector_profiles[&first]
     );
 }
 

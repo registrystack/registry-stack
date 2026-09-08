@@ -1,0 +1,13 @@
+apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+kind: ModelSelection
+model: publicschema
+modelVersion: "0.3.0"
+registry:
+  id: organization-registry
+  title: Synthetic organization registry
+entities:
+  - concept: Organization
+    id: record
+    identifierField: code
+    properties:
+      - name: name

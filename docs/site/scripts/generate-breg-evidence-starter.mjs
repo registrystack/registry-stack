@@ -5,6 +5,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as tar from 'tar';
 
 export const starterFiles = [
+  'organization-selection.yaml',
+  'named-starter/README.md',
+  'named-starter/questions/record-named.yaml',
+  'named-starter/derivations/record-named.rhai',
+  'named-starter/fixtures/record-named.yaml',
+  'default-starter/README.md',
+  'default-starter/questions/record-active.yaml',
+  'default-starter/derivations/record-active.rhai',
+  'default-starter/fixtures/record-active.yaml',
+  'default-starter/targets/local/settings.yaml',
   'registry/registry.yaml',
   'registry/clients.yaml',
   'registry/tests/journeys.yaml',
