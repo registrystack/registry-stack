@@ -45,14 +45,14 @@ repos:
         last_reviewed: unreviewed
 `;
 
-async function fixture(t, { external = {}, manifestVersion = '0.29.0' } = {}) {
+async function fixture(t, { external = {}, manifestVersion = '0.29.0', releaseId = 'beta-41' } = {}) {
   const root = await mkdtemp(resolve(tmpdir(), 'prepare-docs-metadata-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const siteRoot = resolve(root, 'docs/site');
   await mkdir(resolve(siteRoot, 'src/data'), { recursive: true });
   await mkdir(resolve(root, 'release/manifests'), { recursive: true });
-  await writeFile(resolve(root, 'release/manifests/registry-stack-beta-41.yaml'), YAML.stringify({
-    stack: { release: 'beta-41', version: manifestVersion, source_tag: 'v0.29.0' },
+  await writeFile(resolve(root, `release/manifests/registry-stack-${releaseId}.yaml`), YAML.stringify({
+    stack: { release: releaseId, version: manifestVersion, source_tag: 'v0.29.0' },
     artifacts: { 'registry-docs': '0.29.0' }, external,
   }));
   await writeFile(resolve(siteRoot, 'src/data/docsets.yaml'), docsetsSource);
@@ -60,7 +60,7 @@ async function fixture(t, { external = {}, manifestVersion = '0.29.0' } = {}) {
   const read = async (name) => readFile(resolve(siteRoot, `src/data/${name}.yaml`), 'utf8');
   const write = async (name, value) => writeFile(resolve(siteRoot, `src/data/${name}.yaml`), value);
   const prepare = (options = {}) => prepareReleaseDocsMetadata({
-    siteRoot, version: '0.29.0', releaseId: 'beta-41', date: '2026-09-10', ...options,
+    siteRoot, version: '0.29.0', releaseId, date: '2026-09-10', ...options,
   });
   return { read, write, prepare };
 }
@@ -142,4 +142,13 @@ test('allows an exact frozen rerun but refuses missing or changed frozen metadat
   assert.deepEqual((await prepare()).changedPaths, []);
   await write('repo-docs', (await read('repo-docs')).replace('last_reviewed: 2026-09-01', 'last_reviewed: 2026-09-02'));
   await assert.rejects(prepare(), /conflicting metadata snapshot/);
+});
+
+test('accepts the release tool ID grammar and rejects unsafe or overlong IDs', async (t) => {
+  const { prepare, read } = await fixture(t, { releaseId: 'Beta_41' });
+  assert.equal((await prepare()).changedPaths.length, 2);
+  assert.match(await read('docsets'), /Beta_41 candidate/);
+  for (const releaseId of ['', '.beta', '../beta', 'beta/41', 'a'.repeat(65)]) {
+    await assert.rejects(prepare({ releaseId }), /release identifier/);
+  }
 });
