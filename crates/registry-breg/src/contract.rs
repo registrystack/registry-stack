@@ -1952,6 +1952,12 @@ pub struct AccessProfileSource {
     pub operations: BTreeSet<Operation>,
     #[serde(default)]
     pub readable_fields: BTreeSet<String>,
+    /// Readable change-request decision detail. Anonymous profiles never receive reason text.
+    #[serde(
+        default = "default_readable_request_fields",
+        skip_serializing_if = "is_default_readable_request_fields"
+    )]
+    pub readable_request_fields: BTreeSet<RequestMetadataFieldSource>,
     #[serde(default)]
     pub writable_fields: BTreeSet<String>,
     #[serde(default)]
@@ -1989,6 +1995,24 @@ pub struct AccessProfileSource {
     pub provenance_fields: Vec<ProvenanceFieldSource>,
     #[serde(default)]
     pub allow_data_export: bool,
+}
+
+/// Fields of request decision metadata governed separately from stored record fields.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestMetadataFieldSource {
+    Reason,
+}
+
+fn default_readable_request_fields() -> BTreeSet<RequestMetadataFieldSource> {
+    BTreeSet::from([RequestMetadataFieldSource::Reason])
+}
+
+pub(crate) fn is_default_readable_request_fields(
+    fields: &BTreeSet<RequestMetadataFieldSource>,
+) -> bool {
+    fields == &default_readable_request_fields()
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2194,6 +2218,12 @@ pub struct AccessGrantSource {
     pub operations: BTreeSet<Operation>,
     #[serde(default)]
     pub readable_fields: BTreeSet<String>,
+    /// Readable change-request decision detail. Anonymous profiles never receive reason text.
+    #[serde(
+        default = "default_readable_request_fields",
+        skip_serializing_if = "is_default_readable_request_fields"
+    )]
+    pub readable_request_fields: BTreeSet<RequestMetadataFieldSource>,
     #[serde(default)]
     pub writable_fields: BTreeSet<String>,
     #[serde(default)]
@@ -2247,6 +2277,12 @@ struct RawAccessGrantSource {
     operations: BTreeSet<Operation>,
     #[serde(default)]
     readable_fields: BTreeSet<String>,
+    /// Readable change-request decision detail. Anonymous profiles never receive reason text.
+    #[serde(
+        default = "default_readable_request_fields",
+        skip_serializing_if = "is_default_readable_request_fields"
+    )]
+    readable_request_fields: BTreeSet<RequestMetadataFieldSource>,
     #[serde(default)]
     writable_fields: BTreeSet<String>,
     #[serde(default)]
@@ -2306,6 +2342,7 @@ impl<'de> Deserialize<'de> for AccessGrantSource {
             action: raw.action,
             operations: raw.operations,
             readable_fields: raw.readable_fields,
+            readable_request_fields: raw.readable_request_fields,
             writable_fields: raw.writable_fields,
             filterable_fields: raw.filterable_fields,
             sortable_fields: raw.sortable_fields,
@@ -2362,6 +2399,12 @@ struct EntityAccessGrantSourceSchema {
     operations: BTreeSet<Operation>,
     #[serde(default)]
     readable_fields: BTreeSet<String>,
+    /// Readable change-request decision detail. Anonymous profiles never receive reason text.
+    #[serde(
+        default = "default_readable_request_fields",
+        skip_serializing_if = "is_default_readable_request_fields"
+    )]
+    readable_request_fields: BTreeSet<RequestMetadataFieldSource>,
     #[serde(default)]
     writable_fields: BTreeSet<String>,
     #[serde(default)]

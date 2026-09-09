@@ -75,3 +75,10 @@ Actions retain their original opaque authority and exact retry semantics.
 A lost response is still uncertain, and the caller must explicitly choose
 whether to retry the same action with the same idempotency key. The client
 performs no automatic mutation retry or durable session recovery.
+
+Use `action.withReason(text)` on a promoted `reject_request` or
+`request_revision` action to add optional reviewer text. It returns a copy and
+validates before network effects. The original action omits the reason. Text
+is preserved exactly, allows an empty string, and is limited to 4096 Unicode
+characters with NUL refused. Reuse the same action and idempotency key for an
+explicit retry.

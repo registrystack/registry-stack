@@ -40,6 +40,10 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                 "proposalVersion": 2,
                 "effectDigest": digest,
                 "editable": false,
+                "decisions": [{
+                    "stageId": "review", "kind": "approve",
+                    "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": false
+                }],
                 "actions": [{
                     "operation": "approve_request",
                     "method": "POST",
@@ -77,7 +81,12 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                         "applicationId": null,
                         "resultLinkCount": 0,
                         "resultLinks": [],
-                        "effectDigest": digest
+                        "effectDigest": digest,
+                        "decisions": [{
+                            "stageId": "review", "kind": "request_revision",
+                            "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": true,
+                            "reason": "  Please confirm. ตรวจสอบ 🙂  "
+                        }]
                     }],
                     "nextAfterProposalVersion": null
                 }
@@ -103,6 +112,10 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                 "proposalVersion": 2,
                 "detailErased": true,
                 "editable": false,
+                "decisions": [{
+                    "stageId": "review", "kind": "reject",
+                    "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": true
+                }],
                 "effectDigest": digest,
                 "application": {
                     "applicationId": "00000000-0000-4000-8000-0000000000aa",

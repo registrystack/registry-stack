@@ -28,6 +28,7 @@ pub struct RequestLifecycleEvent<'a> {
     pub to_state: &'a str,
     pub transition: &'a str,
     pub stage_id: Option<&'a str>,
+    pub reason: Option<&'a str>,
     pub effect_digest: Option<&'a str>,
     pub package_revision: &'a str,
     pub schema_fingerprint: &'a str,
@@ -50,6 +51,13 @@ pub async fn insert_request_lifecycle_events(
         || event.from_state.is_empty()
         || event.to_state.is_empty()
         || event.transition.is_empty()
+        || event.reason.is_some_and(|reason| {
+            !crate::request_workflow::valid_review_reason(reason)
+                || !matches!(
+                    (event.transition, event.to_state),
+                    ("reject", "rejected") | ("request_revision", "needs_changes")
+                )
+        })
     {
         return Err(OutboxError::InvalidProjection);
     }
@@ -90,7 +98,7 @@ pub async fn insert_request_lifecycle_events(
         }
 
         let deduplication_key = lifecycle_deduplication_key(&source.id, &event);
-        let payload = canonicalize_json(&json!({
+        let mut payload_value = json!({
             "entity": event.request_entity_id,
             "recordId": event.request_id.to_string(),
             "revision": event.request_record_revision,
@@ -103,12 +111,17 @@ pub async fn insert_request_lifecycle_events(
                 "fromState": event.from_state,
                 "toState": event.to_state,
                 "stage": event.stage_id,
+                "reasonPresent": event.reason.is_some(),
                 "effectDigest": event.effect_digest,
                 "deduplicationKey": deduplication_key,
             },
             "values": values,
-        }))
-        .map_err(|_| OutboxError::InvalidProjection)?;
+        });
+        if let Some(reason) = event.reason {
+            payload_value["request"]["reason"] = json!(reason);
+        }
+        let payload =
+            canonicalize_json(&payload_value).map_err(|_| OutboxError::InvalidProjection)?;
         let activated = if let Some(delivery) = delivery {
             if delivery.trigger != EventTrigger::RequestLifecycle {
                 return Err(OutboxError::InvalidProjection);

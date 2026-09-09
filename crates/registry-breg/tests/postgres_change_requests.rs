@@ -6,6 +6,9 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
+#[path = "support/reviewer_reasons.rs"]
+mod reviewer_reasons;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

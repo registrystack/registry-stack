@@ -333,7 +333,9 @@ pub(crate) fn event_data_schema_binding(
                     "toState": {"type": "string"},
                     "stage": {"type": ["string", "null"]},
                     "effectDigest": {"type": ["string", "null"]},
-                    "deduplicationKey": {"type": "string"}
+                    "deduplicationKey": {"type": "string"},
+                    "reasonPresent": {"type": "boolean"},
+                    "reason": review_reason_schema()
                 },
                 "required": [
                     "proposalVersion",
@@ -343,7 +345,8 @@ pub(crate) fn event_data_schema_binding(
                     "toState",
                     "stage",
                     "effectDigest",
-                    "deduplicationKey"
+                    "deduplicationKey",
+                    "reasonPresent"
                 ]
             }),
         );
@@ -487,8 +490,17 @@ pub(crate) fn openapi_entity_input_schema(
     })
 }
 
+fn review_reason_schema() -> Value {
+    json!({
+        "type": "string",
+        "maxLength": crate::request_workflow::MAX_REVIEW_REASON_CHARS,
+        "pattern": "^[^\\u0000]*$",
+        "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
+    })
+}
+
 pub(crate) fn openapi_request_action_input_schema(operation: Operation) -> Value {
-    let proposal_binding = json!({
+    let mut proposal_binding = json!({
         "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
         "effectDigest": {
             "type": "string",
@@ -496,6 +508,12 @@ pub(crate) fn openapi_request_action_input_schema(operation: Operation) -> Value
             "description": "Digest of the immutable proposal effects displayed to the actor."
         }
     });
+    if matches!(
+        operation,
+        Operation::RejectRequest | Operation::RequestRevision
+    ) {
+        proposal_binding["reason"] = review_reason_schema();
+    }
     match operation {
         Operation::ApproveRequest
         | Operation::RejectRequest
@@ -2996,6 +3014,7 @@ fn request_record_metadata_schema() -> Value {
             },
             "application": request_application_metadata_schema(false),
             "history": retained_request_history_schema(),
+            "decisions": request_decisions_schema(),
         }
     })
 }
@@ -3081,6 +3100,24 @@ fn request_application_metadata_schema(require_receipt_fields: bool) -> Value {
     })
 }
 
+fn request_decisions_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["stageId", "kind", "decidedAt", "reasonPresent"],
+            "properties": {
+                "stageId": {"type": "string"},
+                "kind": {"enum": ["approve", "reject", "request_revision"]},
+                "decidedAt": {"type": "string", "format": "date-time"},
+                "reasonPresent": {"type": "boolean"},
+                "reason": review_reason_schema()
+            }
+        }
+    })
+}
+
 fn retained_request_history_schema() -> Value {
     json!({
         "type": "object",
@@ -3129,7 +3166,8 @@ fn retained_request_history_schema() -> Value {
                                 }
                             }
                         },
-                        "effectDigest": effect_digest_schema()
+                        "effectDigest": effect_digest_schema(),
+                        "decisions": request_decisions_schema()
                     }
                 }
             },
@@ -4179,6 +4217,69 @@ fn canonicalization_error() -> Diagnostic {
 #[cfg(test)]
 mod problem_contract_tests {
     use super::*;
+
+    #[test]
+    fn review_action_reason_contract_is_optional_bounded_and_closed() {
+        for operation in [
+            Operation::RejectRequest,
+            Operation::RequestRevision,
+            Operation::ApproveRequest,
+            Operation::ApplyRequest,
+        ] {
+            let schema = openapi_request_action_input_schema(operation);
+            let validator = jsonschema::JSONSchema::options()
+                .with_draft(jsonschema::Draft::Draft202012)
+                .compile(&schema)
+                .unwrap();
+            let mut body =
+                json!({"proposalVersion": 1, "effectDigest": format!("sha256:{}", "a".repeat(64))});
+            assert!(validator.is_valid(&body));
+            for reason in [json!(""), json!(" สาเหตุ\n🙂 "), json!("🙂".repeat(4096))]
+            {
+                body["reason"] = reason;
+                assert_eq!(
+                    validator.is_valid(&body),
+                    matches!(
+                        operation,
+                        Operation::RejectRequest | Operation::RequestRevision
+                    )
+                );
+            }
+            for reason in [
+                Value::Null,
+                json!(false),
+                json!(42),
+                json!([]),
+                json!({}),
+                json!("🙂".repeat(4097)),
+                json!("a\0b"),
+            ] {
+                body["reason"] = reason;
+                assert!(!validator.is_valid(&body));
+            }
+            body.as_object_mut().unwrap().remove("reason");
+            body["unexpected"] = json!(true);
+            assert!(!validator.is_valid(&body));
+        }
+    }
+
+    #[test]
+    fn decision_schema_preserves_presence_without_exposing_private_fields() {
+        let schema = request_decisions_schema();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        let mut decisions = json!([{"stageId":"review", "kind":"reject", "decidedAt":"2026-09-09T00:00:00Z", "reasonPresent":true}]);
+        assert!(validator.is_valid(&decisions));
+        decisions[0]["reason"] = json!(" Please clarify. ");
+        assert!(validator.is_valid(&decisions));
+        for field in ["actor", "reasonDigest"] {
+            decisions[0][field] = json!("private");
+            assert!(!validator.is_valid(&decisions));
+            decisions[0].as_object_mut().unwrap().remove(field);
+        }
+    }
 
     #[test]
     fn problem_contract_accepts_declared_refusals_and_server_faults() {

@@ -1225,7 +1225,7 @@ fn lifecycle_request_is_exact(
 
 fn expected_lifecycle_schema(kind: crate::BRegLifecycleOperation) -> Value {
     use crate::BRegLifecycleOperation as Lifecycle;
-    match kind {
+    let mut schema = match kind {
         Lifecycle::ApproveRequest
         | Lifecycle::RejectRequest
         | Lifecycle::RequestRevision
@@ -1259,7 +1259,11 @@ fn expected_lifecycle_schema(kind: crate::BRegLifecycleOperation) -> Value {
             "additionalProperties": false,
             "properties": {}
         }),
+    };
+    if matches!(kind, Lifecycle::RejectRequest | Lifecycle::RequestRevision) {
+        schema["properties"]["reason"] = serde_json::json!({"type": "string", "maxLength": 4096, "pattern": r"^[^\u0000]*$", "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."});
     }
+    schema
 }
 
 fn lifecycle_route_stage(

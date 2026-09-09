@@ -15,7 +15,7 @@ use crate::api::{
     RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRequestAction, VerifiedRequestPresence,
     VerifiedRequestTargetAuthority, VerifiedRowBoundary,
 };
-use crate::contract::Operation;
+use crate::contract::{Operation, RequestMetadataFieldSource};
 use crate::model::{CompiledEntity, CompiledRegistry, CompiledRoute, HttpMethod};
 use crate::mutation::request_action_etag;
 use crate::postgres::context::ChangeRequestPresenceContext;
@@ -25,7 +25,8 @@ use crate::postgres::{
 };
 use crate::request_prepare::{validate_frozen_targets, RequestTargetSnapshot};
 use crate::request_retention::{
-    RetainedHistoryQuery, RetainedRequestProposal, RetainedRequestResultLink,
+    RetainedHistoryQuery, RetainedRequestDecision, RetainedRequestProposal,
+    RetainedRequestResultLink,
 };
 use crate::request_workflow::{
     FrozenPlannerDisposition, FrozenReviewPolicy, ProposalSnapshot, RequestState, RequestWorkflow,
@@ -109,6 +110,14 @@ pub(super) async fn erased_terminal_request_record(
             &header,
             history,
             may_disclose_effect_digests(entity, request),
+            decision_metadata(
+                transaction,
+                entity,
+                request,
+                record_uuid,
+                header.proposal_version,
+            )
+            .await?,
         )),
         request_presence: None,
     };
@@ -162,6 +171,14 @@ async fn annotate_request_records(
                 &header,
                 history,
                 may_disclose_effect_digests(entity, request),
+                decision_metadata(
+                    transaction,
+                    entity,
+                    request,
+                    record_uuid,
+                    header.proposal_version,
+                )
+                .await?,
             ));
             continue;
         }
@@ -234,6 +251,17 @@ async fn annotate_request_records(
                 metadata.insert("proposal".to_owned(), proposal);
             }
         }
+        metadata.insert(
+            "decisions".to_owned(),
+            decision_metadata(
+                transaction,
+                entity,
+                request,
+                record_uuid,
+                i64::from(workflow.current_version().get()),
+            )
+            .await?,
+        );
         metadata.insert("editable".to_owned(), json!(editable));
         if !actions.is_empty() {
             metadata.insert("actions".to_owned(), Value::Array(actions));
@@ -288,11 +316,13 @@ fn erased_terminal_request_metadata(
     header: &crate::request_store::RequestWorkflowHeader,
     history: Option<RetainedHistoryMetadata>,
     disclose_effect_digests: bool,
+    decisions: Value,
 ) -> Value {
     let mut metadata = Map::new();
     metadata.insert("bregState".to_owned(), json!(header.state));
     metadata.insert("proposalVersion".to_owned(), json!(header.proposal_version));
     metadata.insert("detailErased".to_owned(), json!(true));
+    metadata.insert("decisions".to_owned(), decisions);
     metadata.insert("editable".to_owned(), json!(false));
     if let Some(history) = history {
         if disclose_effect_digests {
@@ -848,6 +878,7 @@ async fn retained_history(
             after_proposal_version: request.request_history_after_proposal_version,
             limit: 50,
             authorized_target_entities: &authorized_target_entities,
+            include_decision_reasons: may_disclose_decision_reasons(entity, request),
         },
     )
     .await
@@ -869,7 +900,7 @@ async fn retained_history(
         "proposals": page
             .proposals
             .into_iter()
-            .map(|proposal| retained_history_value(proposal, may_disclose_effect_digests(entity, request)))
+            .map(|proposal| retained_history_value(proposal, may_disclose_effect_digests(entity, request), may_disclose_decision_reasons(entity, request)))
             .collect::<Vec<_>>(),
         "nextAfterProposalVersion": page.next_after_proposal_version,
     });
@@ -1033,6 +1064,7 @@ async fn target_get_is_authorized(
 fn retained_history_value(
     proposal: RetainedRequestProposal,
     disclose_effect_digests: bool,
+    disclose_decision_reasons: bool,
 ) -> Value {
     let mut value = json!({
         "requestEntityId": proposal.request_entity_id,
@@ -1042,6 +1074,7 @@ fn retained_history_value(
         "current": proposal.current,
         "contractFingerprint": proposal.contract_fingerprint,
         "detailErased": proposal.detail_erased,
+        "decisions": decisions_value(&proposal.decisions, disclose_decision_reasons),
         "applicationId": proposal.application_id,
         "resultLinkCount": proposal.result_link_count,
         "resultLinks": proposal.result_links.into_iter().map(|link| {
@@ -1057,6 +1090,60 @@ fn retained_history_value(
         value["effectDigest"] = json!(proposal.effect_digest);
     }
     value
+}
+
+async fn decision_metadata(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    request: &RecordReadRequest,
+    request_id: Uuid,
+    proposal_version: i64,
+) -> Result<Value, ReadServiceError> {
+    let disclose_reasons = may_disclose_decision_reasons(entity, request);
+    let decisions = crate::request_retention::load_retained_decisions(
+        transaction,
+        &entity.id,
+        request_id,
+        proposal_version,
+        disclose_reasons,
+    )
+    .await
+    .map_err(|_| ReadServiceError::Unavailable)?;
+    Ok(decisions_value(&decisions, disclose_reasons))
+}
+
+fn decisions_value(decisions: &[RetainedRequestDecision], disclose_reasons: bool) -> Value {
+    Value::Array(
+        decisions
+            .iter()
+            .map(|decision| {
+                let mut value = json!({
+                    "stageId": decision.stage_id,
+                    "kind": decision.kind,
+                    "decidedAt": decision.decided_at,
+                    "reasonPresent": decision.reason_present,
+                });
+                if disclose_reasons {
+                    if let Some(reason) = &decision.reason {
+                        value["reason"] = json!(reason);
+                    }
+                }
+                value
+            })
+            .collect(),
+    )
+}
+
+fn may_disclose_decision_reasons(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
+    entity
+        .access_profiles
+        .get(request.context.selected_profile())
+        .is_some_and(|profile| {
+            !profile.anonymous
+                && profile
+                    .readable_request_fields
+                    .contains(&RequestMetadataFieldSource::Reason)
+        })
 }
 
 fn may_disclose_effect_digests(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
@@ -1210,10 +1297,10 @@ mod tests {
     use serde_json::{json, Map, Value};
 
     use super::{
-        action_href, action_is_available, api_object, authorized_target_claims,
-        erased_terminal_request_metadata, retained_history_value, revise_rebase_available,
-        selected_profile_allows_draft_patch, ClaimContext, RetainedHistoryMetadata,
-        RowBoundaryContext,
+        action_href, action_is_available, api_object, authorized_target_claims, decisions_value,
+        erased_terminal_request_metadata, may_disclose_decision_reasons, retained_history_value,
+        revise_rebase_available, selected_profile_allows_draft_patch, ClaimContext,
+        RetainedHistoryMetadata, RowBoundaryContext,
     };
     use crate::api::{
         AuthorizedRequestContext, RecordReadKind, RecordReadRequest, VerifiedRequestAction,
@@ -1222,7 +1309,9 @@ mod tests {
     use crate::contract::{parse_project_json, parse_project_yaml, Operation};
     use crate::correlation::RequestCorrelation;
     use crate::model::{CompiledChangeRequestStage, HttpMethod};
-    use crate::request_retention::{RetainedRequestProposal, RetainedRequestResultLink};
+    use crate::request_retention::{
+        RetainedRequestDecision, RetainedRequestProposal, RetainedRequestResultLink,
+    };
     use crate::request_workflow::{
         ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, PackageFingerprint,
         PreparedEffect, PreparedFieldChange, PreparedProposal, PreparedTarget, ProposalVersion,
@@ -1460,6 +1549,69 @@ mod tests {
     }
 
     #[test]
+    fn decision_metadata_hides_reason_text_but_preserves_presence_and_decision_facts() {
+        let mut decision = RetainedRequestDecision {
+            stage_id: "review".to_owned(),
+            kind: "reject".to_owned(),
+            decided_at: "2026-09-09T00:00:00Z".to_owned(),
+            reason_present: true,
+            reason: Some("protected-review-reason-canary".to_owned()),
+        };
+        let disclosed = decisions_value(std::slice::from_ref(&decision), true);
+        assert_eq!(disclosed[0]["reason"], "protected-review-reason-canary");
+        let hidden = decisions_value(std::slice::from_ref(&decision), false);
+        assert_eq!(hidden[0]["reasonPresent"], true);
+        assert_eq!(hidden[0]["stageId"], "review");
+        assert_eq!(hidden[0]["kind"], "reject");
+        assert!(hidden[0].get("reason").is_none());
+        assert!(!hidden
+            .to_string()
+            .contains("protected-review-reason-canary"));
+        assert!(hidden[0].get("actor").is_none());
+        assert!(hidden[0].get("effectDigest").is_none());
+        decision.reason = None;
+        let erased = decisions_value(std::slice::from_ref(&decision), true);
+        assert_eq!(erased[0]["reasonPresent"], true);
+        assert!(erased[0].get("reason").is_none());
+    }
+
+    #[test]
+    fn decision_reason_disclosure_requires_selected_profile_permission_and_authentication() {
+        let project = parse_project_yaml(include_bytes!(
+            "../../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
+        ))
+        .expect("acceptance project parses");
+        let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("acceptance project compiles");
+        let mut entity = compiled.entities()["placement-correction-request"].clone();
+        let request = request_for_profile("correction-submitter");
+        assert!(may_disclose_decision_reasons(&entity, &request));
+        entity
+            .access_profiles
+            .get_mut("correction-submitter")
+            .expect("profile")
+            .readable_request_fields
+            .clear();
+        assert!(!may_disclose_decision_reasons(&entity, &request));
+        entity
+            .access_profiles
+            .get_mut("correction-submitter")
+            .expect("profile")
+            .readable_request_fields
+            .insert(crate::contract::RequestMetadataFieldSource::Reason);
+        entity
+            .access_profiles
+            .get_mut("correction-submitter")
+            .expect("profile")
+            .anonymous = true;
+        assert!(!may_disclose_decision_reasons(&entity, &request));
+        assert!(!may_disclose_decision_reasons(
+            &entity,
+            &request_for_profile("missing")
+        ));
+    }
+
+    #[test]
     fn retained_history_exposes_erased_detail_without_payload() {
         let proposal = RetainedRequestProposal {
             request_entity_id: "request".to_owned(),
@@ -1470,6 +1622,7 @@ mod tests {
             contract_fingerprint: "sha256:contract".to_owned(),
             effect_digest: "sha256:effect".to_owned(),
             detail_erased: true,
+            decisions: Vec::new(),
             application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
             result_link_count: 1,
             result_links: vec![RetainedRequestResultLink {
@@ -1478,7 +1631,7 @@ mod tests {
                 target_revision: 7,
             }],
         };
-        let value = retained_history_value(proposal, true);
+        let value = retained_history_value(proposal, true, true);
         assert_eq!(value["detailErased"], json!(true));
         assert_eq!(value["effectDigest"], json!("sha256:effect"));
         assert_eq!(value["resultLinkCount"], json!(1));
@@ -1500,10 +1653,12 @@ mod tests {
                 contract_fingerprint: "sha256:contract".to_owned(),
                 effect_digest: "sha256:effect".to_owned(),
                 detail_erased: true,
+                decisions: Vec::new(),
                 application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
                 result_link_count: 0,
                 result_links: Vec::new(),
             },
+            false,
             false,
         );
         assert_eq!(value["detailErased"], json!(true));
@@ -1537,6 +1692,7 @@ mod tests {
                 current_application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
             }),
             true,
+            json!([]),
         );
         assert_eq!(value["bregState"], json!("applied"));
         assert_eq!(value["proposalVersion"], json!(2));
@@ -1573,6 +1729,7 @@ mod tests {
                 current_application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
             }),
             false,
+            json!([]),
         );
         assert_eq!(value["bregState"], json!("applied"));
         assert!(value.get("effectDigest").is_none());

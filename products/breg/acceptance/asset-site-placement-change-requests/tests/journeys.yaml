@@ -138,6 +138,52 @@ journeys:
           status: 200
           fields: {reason: site correction after supervisor field audit}
         capture: correction-before-review
+      - id: request-correction-revision-with-reason
+        entity: placement-correction-request
+        accessProfile: correction-reviewer
+        claims: *reviewer_claims
+        request:
+          operation: request_revision
+          stage: review
+          recordRef: correction-before-review
+          etagRef: correction-before-review
+          proposalVersionRef: correction-before-review
+          effectDigestRef: correction-before-review
+          reason: "  Please confirm the field audit. ตรวจสอบ 🙂  "
+        expect: {outcome: success, status: 200}
+      - id: submitter-reads-review-feedback
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request: {operation: get, recordRef: correction-request}
+        expect: {outcome: success, status: 200}
+        capture: correction-needs-changes
+      - id: revise-correction-after-feedback
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request: {operation: revise_request, recordRef: correction-needs-changes, etagRef: correction-needs-changes, rebase: false}
+        expect: {outcome: success, status: 200}
+      - id: get-before-resubmit
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request: {operation: get, recordRef: correction-request}
+        expect: {outcome: success, status: 200}
+        capture: correction-before-resubmit
+      - id: resubmit-correction-request
+        entity: placement-correction-request
+        accessProfile: correction-submitter
+        claims: *submitter_claims
+        request: {operation: submit_request, recordRef: correction-before-resubmit, etagRef: correction-before-resubmit}
+        expect: {outcome: success, status: 200}
+      - id: get-before-review-after-feedback
+        entity: placement-correction-request
+        accessProfile: correction-reviewer
+        claims: *reviewer_claims
+        request: {operation: get, recordRef: correction-request}
+        expect: {outcome: success, status: 200}
+        capture: correction-before-reviewed-approval
       - id: approve-review-stage
         entity: placement-correction-request
         accessProfile: correction-reviewer
@@ -145,10 +191,10 @@ journeys:
         request:
           operation: approve_request
           stage: review
-          recordRef: correction-before-review
-          etagRef: correction-before-review
-          proposalVersionRef: correction-before-review
-          effectDigestRef: correction-before-review
+          recordRef: correction-before-reviewed-approval
+          etagRef: correction-before-reviewed-approval
+          proposalVersionRef: correction-before-reviewed-approval
+          effectDigestRef: correction-before-reviewed-approval
         expect: {outcome: success, status: 200}
       - id: get-before-final-approval
         entity: placement-correction-request

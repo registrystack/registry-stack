@@ -3152,6 +3152,11 @@ mod tests {
                         action: None,
                         operations: operations.clone(),
                         readable_fields: BTreeSet::from(["tenant".to_owned(), "region".to_owned()]),
+                        readable_request_fields: [
+                            crate::contract::RequestMetadataFieldSource::Reason,
+                        ]
+                        .into_iter()
+                        .collect(),
                         writable_fields: BTreeSet::new(),
                         filterable_fields: BTreeSet::new(),
                         sortable_fields: BTreeSet::new(),
@@ -3196,6 +3201,11 @@ mod tests {
                         action: None,
                         operations,
                         readable_fields: BTreeSet::from(["tenant".to_owned()]),
+                        readable_request_fields: [
+                            crate::contract::RequestMetadataFieldSource::Reason,
+                        ]
+                        .into_iter()
+                        .collect(),
                         writable_fields: BTreeSet::new(),
                         filterable_fields: BTreeSet::new(),
                         sortable_fields: BTreeSet::new(),

@@ -79,7 +79,13 @@ restate it. A condition can disclose information through whether an event
 fires even when that field is not in the payload. Activation therefore
 requires the runtime destination to permit the full derived classification,
 but the destination can never add to the compiled projection.
-Lifecycle events are at least as classified as their request entity.
+Lifecycle events are at least as classified as their request entity. Events
+whose transition and destination-state filters permit rejection or a request
+for revision also have an `internal` classification floor, because the system
+request envelope may contain the reviewer's explanation. An omitted filter
+permits both outcomes. Filters that exclude both outcomes, such as approval-only
+transitions or `toStates: [applied]`, keep the ordinary derived classification.
+Stage filters do not lower this floor.
 
 ### Event evaluation and capture
 
@@ -126,8 +132,15 @@ headers because infrastructure commonly logs headers.
 
 Lifecycle bodies also require a `request` object containing `proposalVersion`,
 `workflowRevision`, `transition`, `fromState`, `toState`, `stage`, `effectDigest`,
-and `deduplicationKey`. `stage` and `effectDigest` may be null. The deduplication
-key stays stable across automatic retries and operator replay.
+`deduplicationKey`, and `reasonPresent`. `stage` and `effectDigest` may be null.
+For rejection and request-revision transitions, an explanation supplied by the
+reviewer appears unchanged as the optional `request.reason` string, bounded to
+4096 Unicode characters. An absent explanation omits `reason` and sets
+`reasonPresent` to false. The event's compiled classification and destination
+authority govern delivery independently of a reader's `readableRequestFields`.
+The deduplication key stays stable across automatic retries and operator replay.
+Request-detail erasure removes retained explanation text from request events
+and webhook payloads while preserving the decision's reason-presence flag.
 
 Registry delivery headers add `Idempotency-Key`,
 `X-Registry-Event-Generation`, `X-Registry-Delivery-Attempt`, and

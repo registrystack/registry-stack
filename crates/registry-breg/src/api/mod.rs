@@ -4925,17 +4925,19 @@ fn parse_request_action_body(
             })
         }
         Operation::RejectRequest if request_stage.is_some() => {
-            let (proposal_version, effect_digest) = parse_bound_proposal_action(object)?;
+            let (proposal_version, effect_digest, reason) = parse_reasoned_proposal_action(object)?;
             Ok(RequestActionBody::Reject {
                 proposal_version,
                 effect_digest,
+                reason,
             })
         }
         Operation::RequestRevision if request_stage.is_some() => {
-            let (proposal_version, effect_digest) = parse_bound_proposal_action(object)?;
+            let (proposal_version, effect_digest, reason) = parse_reasoned_proposal_action(object)?;
             Ok(RequestActionBody::RequestRevision {
                 proposal_version,
                 effect_digest,
+                reason,
             })
         }
         Operation::ReviseRequest if request_stage.is_none() => {
@@ -4984,6 +4986,23 @@ fn parse_bound_proposal_action(object: &Map<String, Value>) -> Result<(u32, Stri
         .filter(|value| valid_sha256_digest(value))
         .ok_or(())?;
     Ok((version, digest.to_owned()))
+}
+
+fn parse_reasoned_proposal_action(
+    object: &Map<String, Value>,
+) -> Result<(u32, String, Option<String>), ()> {
+    let Some(reason) = object.get("reason") else {
+        let (version, digest) = parse_bound_proposal_action(object)?;
+        return Ok((version, digest, None));
+    };
+    let reason = reason
+        .as_str()
+        .filter(|reason| crate::request_workflow::valid_review_reason(reason))
+        .ok_or(())?;
+    let mut binding = object.clone();
+    binding.remove("reason");
+    let (version, digest) = parse_bound_proposal_action(&binding)?;
+    Ok((version, digest, Some(reason.to_owned())))
 }
 
 fn valid_sha256_digest(value: &str) -> bool {

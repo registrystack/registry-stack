@@ -58,6 +58,7 @@ pub struct RetainedHistoryQuery<'a> {
     pub request_id: Uuid,
     pub after_proposal_version: Option<i64>,
     pub limit: u16,
+    pub include_decision_reasons: bool,
     pub authorized_target_entities: &'a BTreeSet<String>,
 }
 
@@ -82,6 +83,31 @@ pub struct RetainedRequestProposal {
     pub application_id: Option<String>,
     pub result_link_count: u16,
     pub result_links: Vec<RetainedRequestResultLink>,
+    pub decisions: Vec<RetainedRequestDecision>,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedRequestDecision {
+    pub stage_id: String,
+    pub kind: String,
+    pub decided_at: String,
+    pub reason_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl std::fmt::Debug for RetainedRequestDecision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RetainedRequestDecision")
+            .field("stage_id", &self.stage_id)
+            .field("kind", &self.kind)
+            .field("decided_at", &self.decided_at)
+            .field("reason_present", &self.reason_present)
+            .field("reason", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -97,6 +123,7 @@ pub struct RetainedRequestResultLink {
 pub struct RequestDetailErasure {
     pub proposal_snapshots: u64,
     pub target_snapshots: u64,
+    pub decision_reasons: u64,
     pub idempotency_results: u64,
     pub request_revision_snapshots: u64,
     pub outbox_payloads: u64,
@@ -568,8 +595,8 @@ pub async fn erase_request_detail(
     Ok(erasure)
 }
 
-/// Load retained proposal history without materializing erased or live payload
-/// copies. Target identifiers are withheld until the caller can prove exact
+/// Load retained proposal history, including decision text only when the caller
+/// grants its disclosure. Target identifiers are withheld until the caller can prove exact
 /// record-level read authority for each target row.
 pub async fn load_retained_history(
     client: &impl GenericClient,
@@ -632,12 +659,61 @@ pub async fn load_retained_history(
             application_id: row.get::<_, Option<Uuid>>(6).map(|id| id.to_string()),
             result_link_count: 0,
             result_links: Vec::new(),
+            decisions: load_retained_decisions(
+                client,
+                query.request_entity_id,
+                query.request_id,
+                proposal_version,
+                query.include_decision_reasons,
+            )
+            .await?,
         });
     }
     Ok(RetainedRequestHistoryPage {
         proposals: history,
         next_after_proposal_version,
     })
+}
+
+/// Retained decision facts survive detail erasure. The caller supplies current
+/// read authority before requesting the optional reason text.
+pub async fn load_retained_decisions(
+    client: &impl GenericClient,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal_version: i64,
+    include_reason: bool,
+) -> Result<Vec<RetainedRequestDecision>> {
+    let rows = client
+        .query(
+            "SELECT stage_id, decision,
+                    to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    reason_present, CASE WHEN $4::boolean THEN reason ELSE NULL END
+               FROM registry_internal.registry_request_decisions
+              WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = $3
+              ORDER BY decision_index LIMIT 1025",
+            &[
+                &request_entity_id,
+                &request_id,
+                &proposal_version,
+                &include_reason,
+            ],
+        )
+        .await
+        .map_err(map_retention_error)?;
+    if rows.len() > 1024 {
+        return Err(RequestRetentionError::Unavailable);
+    }
+    Ok(rows
+        .into_iter()
+        .map(|row| RetainedRequestDecision {
+            stage_id: row.get(0),
+            kind: row.get(1),
+            decided_at: row.get(2),
+            reason_present: row.get(3),
+            reason: row.get(4),
+        })
+        .collect())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -795,7 +871,12 @@ async fn count_request_detail_erasure(
                     AND l.record_id = $2
                     AND l.link_kind IN
                         ('request_create','request_patch','request_lifecycle','request_batch')
-                    AND o.payload IS NOT NULL)",
+                    AND o.payload IS NOT NULL),
+                (SELECT count(*) FROM registry_internal.registry_request_decisions
+                  WHERE request_entity_id = $1
+                    AND request_id = $2
+                    AND proposal_version = $3
+                    AND reason IS NOT NULL)",
             &[
                 &scope.request_entity_id,
                 &scope.request_id,
@@ -810,6 +891,7 @@ async fn count_request_detail_erasure(
         idempotency_results: count_to_u64(row.get(2))?,
         request_revision_snapshots: count_to_u64(row.get(3))?,
         outbox_payloads: count_to_u64(row.get(4))?,
+        decision_reasons: count_to_u64(row.get(5))?,
         current_intake_rows: u64::from(erase_current_intake),
     })
 }
@@ -852,6 +934,22 @@ async fn erase_request_detail_in_transaction(
                 AND request_id = $2
                 AND proposal_version = $3
                 AND (base_snapshot IS NOT NULL OR after_snapshot IS NOT NULL)",
+            &[
+                &scope.request_entity_id,
+                &scope.request_id,
+                &scope.proposal_version,
+            ],
+        )
+        .await
+        .map_err(map_retention_error)?;
+    let decision_reasons = transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_decisions
+                SET reason = NULL
+              WHERE request_entity_id = $1
+                AND request_id = $2
+                AND proposal_version = $3
+                AND reason IS NOT NULL",
             &[
                 &scope.request_entity_id,
                 &scope.request_id,
@@ -947,6 +1045,7 @@ async fn erase_request_detail_in_transaction(
     let erasure = RequestDetailErasure {
         proposal_snapshots,
         target_snapshots,
+        decision_reasons,
         idempotency_results,
         request_revision_snapshots,
         outbox_payloads,
@@ -994,6 +1093,7 @@ async fn append_retention_audit(
     let count = erasure
         .proposal_snapshots
         .checked_add(erasure.target_snapshots)
+        .and_then(|count| count.checked_add(erasure.decision_reasons))
         .and_then(|count| count.checked_add(erasure.idempotency_results))
         .and_then(|count| count.checked_add(erasure.request_revision_snapshots))
         .and_then(|count| count.checked_add(erasure.outbox_payloads))
@@ -1235,4 +1335,28 @@ fn map_retention_error(_error: tokio_postgres::Error) -> RequestRetentionError {
 
 fn map_history_commit_error(_error: HistoryCommitError) -> RequestRetentionError {
     RequestRetentionError::Unavailable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RetainedRequestDecision;
+
+    #[test]
+    fn retained_decision_debug_redacts_reason_without_changing_serialization() {
+        let reason = "retained-review-reason-debug-canary";
+        let decision = RetainedRequestDecision {
+            stage_id: "review".to_owned(),
+            kind: "reject".to_owned(),
+            decided_at: "2026-09-09T12:00:00Z".to_owned(),
+            reason_present: true,
+            reason: Some(reason.to_owned()),
+        };
+        let debug = format!("{decision:?}");
+        assert!(!debug.contains(reason));
+        assert!(debug.contains("reason_present: true"));
+        assert!(debug.contains("review"));
+        let serialized = serde_json::to_value(&decision).expect("decision serializes");
+        assert_eq!(serialized["reason"], reason);
+        assert_eq!(serialized["reasonPresent"], true);
+    }
 }

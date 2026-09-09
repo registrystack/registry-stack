@@ -873,10 +873,12 @@ impl MutationCoordinator {
             | RequestActionBody::Reject {
                 proposal_version,
                 effect_digest,
+                ..
             }
             | RequestActionBody::RequestRevision {
                 proposal_version,
                 effect_digest,
+                ..
             } => {
                 let targets = crate::request_store::load_targets(
                     transaction.transaction(),
@@ -900,7 +902,7 @@ impl MutationCoordinator {
                     _ => ReviewDecisionKind::RequestRevision,
                 };
                 workflow
-                    .decide(
+                    .decide_with_reason(
                         trusted.clone(),
                         route
                             .request_stage
@@ -909,6 +911,7 @@ impl MutationCoordinator {
                         ProposalVersion::new(*proposal_version).map_err(workflow_error)?,
                         &ProposalDigest::new(effect_digest).map_err(workflow_error)?,
                         decision,
+                        input.action.reason().map(str::to_owned),
                     )
                     .map_err(workflow_error)?
                     .into_workflow()
@@ -1120,6 +1123,7 @@ impl MutationCoordinator {
                     RequestActionBody::Cancel => "cancel",
                     RequestActionBody::Apply { .. } => "apply",
                 },
+                reason: input.action.reason(),
                 stage_id: route.request_stage.as_deref(),
                 effect_digest: next
                     .current_proposal()
@@ -1969,7 +1973,7 @@ async fn advance_request_revision(
 }
 
 fn action_binding_json(input: &RequestActionInput<'_>) -> Result<Value, MutationError> {
-    let action = match &input.action {
+    let mut action = match &input.action {
         RequestActionBody::Submit => json!({"operation": "submit"}),
         RequestActionBody::Cancel => json!({"operation": "cancel"}),
         RequestActionBody::Revise { rebase } => json!({"operation": "revise", "rebase": rebase}),
@@ -1980,10 +1984,12 @@ fn action_binding_json(input: &RequestActionInput<'_>) -> Result<Value, Mutation
         | RequestActionBody::Reject {
             proposal_version,
             effect_digest,
+            ..
         }
         | RequestActionBody::RequestRevision {
             proposal_version,
             effect_digest,
+            ..
         }
         | RequestActionBody::Apply {
             proposal_version,
@@ -1992,6 +1998,9 @@ fn action_binding_json(input: &RequestActionInput<'_>) -> Result<Value, Mutation
             "operation": action_operation(&input.action), "proposalVersion": proposal_version, "effectDigest": effect_digest,
         }),
     };
+    if let Some(reason) = input.action.reason() {
+        action["reason"] = json!(reason);
+    }
     Ok(json!({"action": action, "ifMatch": input.if_match,
             "targetAuthority": target_authority_binding(&input.target_authority),
             "automaticApplyAuthority": input.automatic_apply_authority.as_deref().map(target_authority_binding)}))
@@ -2154,10 +2163,12 @@ mod owner_gate_tests {
             RequestActionBody::Reject {
                 proposal_version: 1,
                 effect_digest: String::new(),
+                reason: None,
             },
             RequestActionBody::RequestRevision {
                 proposal_version: 1,
                 effect_digest: String::new(),
+                reason: None,
             },
             RequestActionBody::Apply {
                 proposal_version: 1,

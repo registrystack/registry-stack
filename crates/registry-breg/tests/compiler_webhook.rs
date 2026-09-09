@@ -247,6 +247,67 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
 }
 
 #[test]
+fn reviewer_reason_webhooks_require_internal_delivery_unless_conditions_exclude_reasons() {
+    let mut source = change_request_event_project();
+    let request = &mut source["entities"][2];
+    request["classification"] = json!("public");
+    request["fields"][2]["classification"] = json!("public");
+    request["events"][0]["projection"] = json!(["reason"]);
+    for (condition, expected) in [
+        (None, Classification::Internal),
+        (
+            Some(json!({"kind":"request_lifecycle", "transitions":["reject"]})),
+            Classification::Internal,
+        ),
+        (
+            Some(json!({"kind":"request_lifecycle", "toStates":["needs_changes"]})),
+            Classification::Internal,
+        ),
+        (
+            Some(json!({"kind":"request_lifecycle", "stages":["review"]})),
+            Classification::Internal,
+        ),
+        (
+            Some(json!({"kind":"request_lifecycle", "transitions":["approve"]})),
+            Classification::Public,
+        ),
+        (
+            Some(json!({"kind":"request_lifecycle", "toStates":["applied"]})),
+            Classification::Public,
+        ),
+        (
+            Some(
+                json!({"kind":"request_lifecycle", "transitions":["reject"], "toStates":["needs_changes"]}),
+            ),
+            Classification::Public,
+        ),
+        (
+            Some(
+                json!({"kind":"request_lifecycle", "transitions":["approve","request_revision"], "toStates":["needs_changes"]}),
+            ),
+            Classification::Internal,
+        ),
+    ] {
+        if let Some(condition) = condition {
+            source["entities"][2]["events"][0]["when"] = condition;
+        } else {
+            source["entities"][2]["events"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("when");
+        }
+        let compiled = compile(&source).expect("public request event compiles");
+        let delivery = compiled
+            .event_deliveries()
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.event_id == "request-lifecycle")
+            .expect("delivery");
+        assert_eq!(delivery.classification_ceiling, expected);
+    }
+}
+
+#[test]
 fn request_lifecycle_webhook_uses_classified_request_projection() {
     let compiled =
         compile(&change_request_event_project()).expect("request lifecycle event compiles");
@@ -299,9 +360,29 @@ fn request_lifecycle_webhook_uses_classified_request_projection() {
             "toState",
             "stage",
             "effectDigest",
-            "deduplicationKey"
+            "deduplicationKey",
+            "reasonPresent"
         ])
     );
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema_value["properties"]["request"])
+        .expect("lifecycle envelope schema compiles");
+    let mut request = json!({
+        "proposalVersion": 1, "workflowRevision": 3,
+        "transition": "request_revision", "fromState": "submitted",
+        "toState": "needs_changes", "stage": "review",
+        "effectDigest": null, "deduplicationKey": "captured-event",
+        "reasonPresent": true, "reason": " ขอรายละเอียดเพิ่มเติม 🙂 "
+    });
+    assert!(validator.is_valid(&request));
+    request.as_object_mut().unwrap().remove("reason");
+    assert!(validator.is_valid(&request));
+    request["reason"] = json!("🙂".repeat(4097));
+    assert!(!validator.is_valid(&request));
+    request.as_object_mut().unwrap().remove("reason");
+    request.as_object_mut().unwrap().remove("reasonPresent");
+    assert!(!validator.is_valid(&request));
 }
 
 #[test]

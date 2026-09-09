@@ -89,6 +89,41 @@ fn all_seven_actions_promote_and_synthesize_exact_bodies() {
 }
 
 #[test]
+fn review_reason_is_bounded_preserved_and_restricted_to_rejection_and_revision() {
+    let metadata = BRegRequestMetadata::from_value(request_metadata(all_actions()), false).unwrap();
+    let actions = metadata
+        .promote_actions(&authority("case-worker"), &record_binding())
+        .unwrap();
+    for action in actions {
+        if !matches!(
+            action.operation(),
+            BRegLifecycleOperation::RejectRequest | BRegLifecycleOperation::RequestRevision
+        ) {
+            assert!(action.with_reason("explanation").is_err());
+            assert!(action.with_reason("").is_err());
+            continue;
+        }
+        for reason in [
+            String::new(),
+            "  Please update the address.\nเหตุผล 📝  ".to_owned(),
+            "📝".repeat(4096),
+        ] {
+            let with_reason = action.with_reason(&reason).unwrap();
+            let mut expected = action.body().to_value();
+            expected["reason"] = json!(reason);
+            assert_eq!(serde_json::to_value(with_reason.body()).unwrap(), expected);
+            assert!(action.body().to_value().get("reason").is_none());
+            assert_eq!(with_reason.href(), action.href());
+            assert_eq!(with_reason.if_match(), action.if_match());
+            assert_eq!(with_reason.stage(), action.stage());
+            assert!(!format!("{with_reason:?}").contains("Please update"));
+        }
+        assert!(action.with_reason("📝".repeat(4097)).is_err());
+        assert!(action.with_reason("contains\0NUL").is_err());
+    }
+}
+
+#[test]
 fn advisory_links_do_not_promote_across_profile_record_route_or_metadata_context() {
     let metadata = BRegRequestMetadata::from_value(
         request_metadata(vec![action(BRegLifecycleOperation::SubmitRequest, None)]),
@@ -769,4 +804,59 @@ fn record_binding() -> BRegLifecycleRecordBinding {
         8,
     )
     .unwrap()
+}
+
+#[test]
+fn retained_decisions_preserve_disclosed_withheld_and_absent_reasons() {
+    let base = json!({"stageId":"review", "kind":"reject", "decidedAt":"2026-09-09T00:00:00Z", "reasonPresent":true});
+    let mut visible = base.clone();
+    visible["reason"] = json!("  Please correct the values.\nเหตุผล 📝  ");
+    let mut absent = base.clone();
+    absent["reasonPresent"] = json!(false);
+    let mut request = request_metadata(vec![]);
+    request["decisions"] = json!([visible.clone(), base.clone(), absent]);
+    request["history"] = json!({"proposals":[{"decisions":[visible.clone()]}]});
+    let decoded = BRegRequestMetadata::from_value(request.clone(), false).unwrap();
+    assert_eq!(decoded.decisions().len(), 3);
+    assert_eq!(
+        decoded.decisions()[0].kind(),
+        BRegRequestDecisionKind::Reject
+    );
+    assert_eq!(
+        decoded.decisions()[0].reason(),
+        Some("  Please correct the values.\nเหตุผล 📝  ")
+    );
+    assert!(decoded.decisions()[1].reason_present());
+    assert!(decoded.decisions()[1].reason().is_none());
+    assert!(!decoded.decisions()[2].reason_present());
+    assert_eq!(
+        decoded.retained_history().unwrap()["proposals"][0]["decisions"][0],
+        visible
+    );
+    assert!(!format!("{:?}", decoded.decisions()).contains("Please correct"));
+    for (field, value) in [
+        ("reason", json!(null)),
+        ("reason", json!("x".repeat(4097))),
+        ("reason", json!("\0")),
+        ("kind", json!("other")),
+        ("kind", json!("approve")),
+        ("reasonPresent", json!(false)),
+        ("unknown", json!(true)),
+    ] {
+        let mut invalid = request.clone();
+        invalid["decisions"][0][field] = value.clone();
+        assert!(BRegRequestMetadata::from_value(invalid, false).is_err());
+        let mut invalid = request.clone();
+        invalid["history"]["proposals"][0]["decisions"][0][field] = value;
+        assert!(BRegRequestMetadata::from_value(invalid, false).is_err());
+    }
+    let mut oversized = request.clone();
+    oversized["decisions"] = json!(vec![base; 1025]);
+    assert!(BRegRequestMetadata::from_value(oversized, false).is_err());
+    assert!(
+        BRegRequestMetadata::from_value(request_metadata(vec![]), false)
+            .unwrap()
+            .decisions()
+            .is_empty()
+    );
 }

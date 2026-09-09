@@ -352,6 +352,7 @@ async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_prove
             request_id: Uuid::parse_str(REQUEST_ID).unwrap(),
             after_proposal_version: None,
             limit: 1,
+            include_decision_reasons: false,
             authorized_target_entities: &authorized_targets,
         },
     )
@@ -379,6 +380,7 @@ async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_prove
             request_id: Uuid::parse_str(REQUEST_ID).unwrap(),
             after_proposal_version: None,
             limit: 1,
+            include_decision_reasons: false,
             authorized_target_entities: &BTreeSet::new(),
         },
     )
@@ -499,6 +501,61 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     );
     assert!(second_page.requests[0].pinned);
 
+    let reason_canary = "review-reason-retention-canary";
+    let request_id = Uuid::parse_str(REQUEST_ID).expect("request id parses");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_request_proposals
+             (request_entity_id, request_id, proposal_version, request_record_revision,
+              contract_fingerprint, effect_digest, snapshot)
+         SELECT request_entity_id, request_id, 2, request_record_revision,
+                contract_fingerprint, effect_digest, snapshot
+           FROM registry_internal.registry_request_proposals
+          WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = 1",
+            &[&REQUEST_ENTITY, &request_id],
+        )
+        .await
+        .expect("separate proposal version fixture inserts");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_request_decisions
+             (request_entity_id, request_id, proposal_version, decision_index, stage_id,
+              actor_reference, decision, effect_digest, decided_at, reason, reason_present)
+         SELECT request_entity_id, request_id, proposal_version, 0, 'review',
+                'reviewer-ref', 'request_revision', effect_digest, transaction_timestamp(), $3, true
+           FROM registry_internal.registry_request_proposals
+          WHERE request_entity_id = $1 AND request_id = $2",
+            &[&REQUEST_ENTITY, &request_id, &reason_canary],
+        )
+        .await
+        .expect("decision reasons for both proposal versions insert");
+    let event_payload = serde_json::to_vec(&json!({
+        "review": {"stageId": "review", "decision": "request_revision", "reason": reason_canary}
+    }))
+    .expect("review event fixture serializes");
+    let event_rows = migration
+        .execute(
+            "UPDATE registry_internal.registry_outbox SET payload = $2
+          WHERE entity_id = $1 AND record_reference = 'request-ref' AND record_revision = 8
+            AND trigger = 'request_lifecycle'",
+            &[&REQUEST_ENTITY, &event_payload],
+        )
+        .await
+        .expect("selected lifecycle event carries reviewer reason");
+    assert_eq!(event_rows, 1);
+    let stored_event: Vec<u8> = migration
+        .query_one(
+            "SELECT payload FROM registry_internal.registry_outbox
+          WHERE entity_id = $1 AND record_reference = 'request-ref' AND record_revision = 8",
+            &[&REQUEST_ENTITY],
+        )
+        .await
+        .expect("review event retained before erasure")
+        .get(0);
+    assert!(String::from_utf8(stored_event)
+        .unwrap()
+        .contains(reason_canary));
+
     let planned = service
         .dry_run(scope.clone())
         .await
@@ -511,6 +568,31 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     assert_eq!(planned.erasure.request_revision_snapshots, 4);
     assert_eq!(planned.erasure.outbox_payloads, 4);
     assert_eq!(planned.erasure.current_intake_rows, 1);
+    assert_eq!(planned.erasure.decision_reasons, 1);
+    assert!(!serde_json::to_string(&planned)
+        .unwrap()
+        .contains(reason_canary));
+    let hidden_decisions = registry_breg::request_retention::load_retained_decisions(
+        &migration,
+        REQUEST_ENTITY,
+        request_id,
+        1,
+        false,
+    )
+    .await
+    .expect("decision facts read without reasons");
+    assert!(hidden_decisions[0].reason_present);
+    assert!(hidden_decisions[0].reason.is_none());
+    let visible_decisions = registry_breg::request_retention::load_retained_decisions(
+        &migration,
+        REQUEST_ENTITY,
+        request_id,
+        1,
+        true,
+    )
+    .await
+    .expect("authorized reason reads");
+    assert_eq!(visible_decisions[0].reason.as_deref(), Some(reason_canary));
 
     let before_history = history_commit_counts(&migration).await;
     let erased = service
@@ -518,6 +600,46 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         .await
         .expect("operator erasure succeeds");
     assert_eq!(erased.erasure, planned.erasure);
+    assert!(!serde_json::to_string(&erased)
+        .unwrap()
+        .contains(reason_canary));
+    let retained_decisions = registry_breg::request_retention::load_retained_decisions(
+        &migration,
+        REQUEST_ENTITY,
+        request_id,
+        1,
+        true,
+    )
+    .await
+    .expect("erased decision facts remain readable");
+    assert_eq!(retained_decisions.len(), 1);
+    assert_eq!(retained_decisions[0].stage_id, "review");
+    assert_eq!(retained_decisions[0].kind, "request_revision");
+    assert!(retained_decisions[0].reason_present);
+    assert!(retained_decisions[0].reason.is_none());
+    let erased_event = migration
+        .query_one(
+            "SELECT payload IS NULL FROM registry_internal.registry_outbox
+          WHERE entity_id = $1 AND record_reference = 'request-ref' AND record_revision = 8",
+            &[&REQUEST_ENTITY],
+        )
+        .await
+        .expect("review event metadata survives erasure")
+        .get::<_, bool>(0);
+    assert!(
+        erased_event,
+        "the selected proposal's reviewer reason event is erased"
+    );
+    let other_version = registry_breg::request_retention::load_retained_decisions(
+        &migration,
+        REQUEST_ENTITY,
+        request_id,
+        2,
+        true,
+    )
+    .await
+    .expect("other proposal version remains retained");
+    assert_eq!(other_version[0].reason.as_deref(), Some(reason_canary));
     let after_history = history_commit_counts(&migration).await;
     assert_eq!(
         after_history.commits - before_history.commits,
@@ -542,7 +664,7 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         }],
         "operator erasure commit member points at the tombstoned request revision"
     );
-    assert_eq!(retained_payload_counts(&migration).await, (0, 0, 2, 2, 2));
+    assert_eq!(retained_payload_counts(&migration).await, (1, 0, 2, 2, 2));
     assert!(
         request_table_force_rls(&migration, &registry).await,
         "operator erasure restores FORCE ROW LEVEL SECURITY"
@@ -556,6 +678,17 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         audit_rows, 1,
         "operator erasure appends one durable audit record"
     );
+
+    let audit_contains_reason = migration
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_audit a
+                         WHERE to_jsonb(a)::text LIKE '%' || $1::text || '%')",
+            &[&reason_canary],
+        )
+        .await
+        .expect("audit redaction check")
+        .get::<_, bool>(0);
+    assert!(!audit_contains_reason);
 
     migration_task.abort();
     database.cleanup().await;

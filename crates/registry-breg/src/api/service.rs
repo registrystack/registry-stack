@@ -148,7 +148,7 @@ pub struct BatchMutationInput<'a> {
 }
 
 /// Strictly parsed HTTP body for one compiled change-request action route.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum RequestActionBody {
     Submit,
     Approve {
@@ -158,10 +158,12 @@ pub enum RequestActionBody {
     Reject {
         proposal_version: u32,
         effect_digest: String,
+        reason: Option<String>,
     },
     RequestRevision {
         proposal_version: u32,
         effect_digest: String,
+        reason: Option<String>,
     },
     Revise {
         rebase: bool,
@@ -171,6 +173,30 @@ pub enum RequestActionBody {
         proposal_version: u32,
         effect_digest: String,
     },
+}
+
+impl RequestActionBody {
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Reject { reason, .. } | Self::RequestRevision { reason, .. } => reason.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for RequestActionBody {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let operation = match self {
+            Self::Submit => "Submit",
+            Self::Approve { .. } => "Approve",
+            Self::Reject { .. } => "Reject",
+            Self::RequestRevision { .. } => "RequestRevision",
+            Self::Revise { .. } => "Revise",
+            Self::Cancel => "Cancel",
+            Self::Apply { .. } => "Apply",
+        };
+        formatter.debug_struct(operation).finish_non_exhaustive()
+    }
 }
 
 /// Target authority derived from the selected review/apply grant row

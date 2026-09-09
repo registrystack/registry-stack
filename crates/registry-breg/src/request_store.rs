@@ -123,11 +123,23 @@ pub(crate) async fn install(
              decision text NOT NULL CHECK (decision IN ('approve','reject','request_revision')),
              effect_digest text NOT NULL CHECK (effect_digest ~ '^sha256:[0-9a-f]{64}$'),
              decided_at timestamptz NOT NULL,
+             reason text,
+             reason_present boolean NOT NULL DEFAULT false,
              PRIMARY KEY (request_entity_id, request_id, proposal_version, decision_index),
              UNIQUE (request_entity_id, request_id, proposal_version, stage_id, actor_reference),
              FOREIGN KEY (request_entity_id, request_id, proposal_version)
                  REFERENCES registry_internal.registry_request_proposals
          );
+         ALTER TABLE registry_internal.registry_request_decisions
+             ADD COLUMN IF NOT EXISTS reason text,
+             ADD COLUMN IF NOT EXISTS reason_present boolean NOT NULL DEFAULT false;
+         ALTER TABLE registry_internal.registry_request_decisions
+             DROP CONSTRAINT IF EXISTS registry_request_decision_reason_bound;
+         ALTER TABLE registry_internal.registry_request_decisions
+             ADD CONSTRAINT registry_request_decision_reason_bound CHECK (
+                 (reason IS NULL OR (char_length(reason) <= 4096 AND reason_present))
+                 AND (NOT reason_present OR decision IN ('reject','request_revision'))
+             );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_applications (
              request_entity_id text NOT NULL,
              request_id uuid NOT NULL,
@@ -396,7 +408,8 @@ pub(crate) async fn load(
     let decisions = transaction
         .query(
             "SELECT proposal_version, stage_id, actor_reference, decision, effect_digest,
-                to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
+                to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                reason, reason_present
          FROM registry_internal.registry_request_decisions
          WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = $3
          ORDER BY decision_index LIMIT 1025",
@@ -422,6 +435,8 @@ pub(crate) async fn load(
                     .map_err(|_| MutationError::Unavailable)?,
                 ProposalDigest::new(decision.get::<_, String>(4))
                     .map_err(|_| MutationError::Unavailable)?,
+                decision.get(6),
+                decision.get(7),
             )
             .map_err(|_| MutationError::Unavailable)
         })
@@ -785,13 +800,14 @@ pub(crate) async fn save(
         let inserted = transaction.execute(
             "INSERT INTO registry_internal.registry_request_decisions
                  (request_entity_id, request_id, proposal_version, decision_index,
-                  stage_id, actor_reference, decision, effect_digest, decided_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text::timestamptz)
+                  stage_id, actor_reference, decision, effect_digest, decided_at,
+                  reason, reason_present)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text::timestamptz, $10, $11)
              ON CONFLICT (request_entity_id, request_id, proposal_version, decision_index) DO NOTHING",
             &[&entity_id, &record_id, &decision_version, &index,
               &decision.stage_id(), &decision.actor().as_str(),
               &decision.kind().as_storage(), &decision.effect_digest().as_str(),
-              &decision.decided_at().as_str()],
+              &decision.decided_at().as_str(), &decision.reason(), &decision.reason_present()],
         ).await.map_err(map_store_error)?;
         if inserted == 0 {
             verify_existing_decision(transaction, entity_id, record_id, decision, index).await?;
@@ -931,7 +947,7 @@ async fn verify_existing_decision(
     let row = transaction
         .query_opt(
             "SELECT stage_id, actor_reference, decision, effect_digest,
-                    decided_at = $5::text::timestamptz AS same_time
+                    decided_at = $5::text::timestamptz AS same_time, reason, reason_present
              FROM registry_internal.registry_request_decisions
              WHERE request_entity_id = $1 AND request_id = $2
                AND proposal_version = $3 AND decision_index = $4",
@@ -945,6 +961,8 @@ async fn verify_existing_decision(
         && row.get::<_, String>(2) == kind
         && row.get::<_, String>(3) == effect_digest
         && row.get::<_, bool>(4)
+        && row.get::<_, Option<String>>(5).as_deref() == decision.reason()
+        && row.get::<_, bool>(6) == decision.reason_present()
     {
         Ok(())
     } else {
@@ -1355,6 +1373,149 @@ mod tests {
                     .get::<_, bool>(0);
                 assert!(allowed, "declared runtime table privilege is granted");
             }
+        }
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn reviewer_reasons_upgrade_roundtrip_and_refuse_immutable_mismatch() {
+        let (database, mut migration, migration_task) = install_schema().await;
+        let request_id = Uuid::new_v4();
+        let submitted = workflow(request_id)
+            .submit(
+                context("submitter", 1),
+                proposal(Uuid::new_v4(), "site-a", "site-b"),
+            )
+            .expect("submit")
+            .into_workflow();
+        let legacy_decision = request_revision(submitted.clone(), "reviewer-a", 2);
+        let transaction = migration.transaction().await.expect("legacy transaction");
+        initialize_draft(&transaction, REQUEST_ENTITY, request_id, "submitter")
+            .await
+            .expect("draft initializes");
+        save(&transaction, REQUEST_ENTITY, request_id, 1, &submitted)
+            .await
+            .expect("proposal saves");
+        save(
+            &transaction,
+            REQUEST_ENTITY,
+            request_id,
+            2,
+            &legacy_decision,
+        )
+        .await
+        .expect("legacy decision saves");
+        transaction.commit().await.expect("legacy commits");
+        migration
+            .batch_execute(
+                "ALTER TABLE registry_internal.registry_request_decisions
+                 DROP COLUMN reason, DROP COLUMN reason_present",
+            )
+            .await
+            .expect("simulate pre-reason installed database");
+        for _ in 0..2 {
+            install_mutation_schema(&migration, &database.runtime_role)
+                .await
+                .expect("existing database upgrades repeatably");
+        }
+        let transaction = migration
+            .transaction()
+            .await
+            .expect("read upgraded decision");
+        let loaded = load(&transaction, REQUEST_ENTITY, request_id, false)
+            .await
+            .expect("legacy workflow still restores");
+        assert!(!loaded.decisions()[0].reason_present());
+        assert!(loaded.decisions()[0].reason().is_none());
+        transaction.commit().await.expect("read commits");
+        let privileges = migration.query_one(
+            "SELECT has_table_privilege($1, 'registry_internal.registry_request_decisions', 'UPDATE'),
+                    has_table_privilege($1, 'registry_internal.registry_request_decisions', 'DELETE')",
+            &[&database.runtime_role.as_str()],
+        ).await.expect("runtime privileges resolve");
+        assert!(!privileges.get::<_, bool>(0));
+        assert!(!privileges.get::<_, bool>(1));
+
+        let reason = "界".repeat(4096);
+        let reasoned = submitted
+            .clone()
+            .decide_with_reason(
+                context("reviewer-a", 2),
+                "review",
+                submitted.current_version(),
+                submitted.current_proposal().unwrap().effect_digest(),
+                ReviewDecisionKind::RequestRevision,
+                Some(reason.clone()),
+            )
+            .expect("bounded Unicode reason")
+            .into_workflow();
+        let transaction = migration.transaction().await.expect("mismatch transaction");
+        assert_eq!(
+            verify_existing_decision(
+                &transaction,
+                REQUEST_ENTITY,
+                request_id,
+                &reasoned.decisions()[0],
+                0
+            )
+            .await,
+            Err(MutationError::Conflict),
+            "different reason cannot reuse an existing immutable decision"
+        );
+        let erased_reason = ReviewDecision::restore(
+            legacy_decision.decisions()[0].version(),
+            legacy_decision.decisions()[0].stage_id().to_owned(),
+            legacy_decision.decisions()[0].kind(),
+            legacy_decision.decisions()[0].actor().clone(),
+            legacy_decision.decisions()[0].decided_at().clone(),
+            legacy_decision.decisions()[0].effect_digest().clone(),
+            None,
+            true,
+        )
+        .expect("erased reason retains presence");
+        assert_eq!(
+            verify_existing_decision(&transaction, REQUEST_ENTITY, request_id, &erased_reason, 0)
+                .await,
+            Err(MutationError::Conflict),
+            "presence differs even when both reason texts are absent"
+        );
+        transaction.rollback().await.expect("mismatch rollback");
+        migration.execute(
+            "UPDATE registry_internal.registry_request_decisions SET reason = $3, reason_present = true
+              WHERE request_entity_id = $1 AND request_id = $2",
+            &[&REQUEST_ENTITY, &request_id, &reason],
+        ).await.expect("migration fixture stores a full Unicode reason");
+        let transaction = migration
+            .transaction()
+            .await
+            .expect("reason read transaction");
+        let loaded = load(&transaction, REQUEST_ENTITY, request_id, false)
+            .await
+            .expect("reasoned decision restores");
+        assert_eq!(loaded.decisions()[0].reason(), Some(reason.as_str()));
+        assert!(loaded.decisions()[0].reason_present());
+        verify_existing_decision(
+            &transaction,
+            REQUEST_ENTITY,
+            request_id,
+            &reasoned.decisions()[0],
+            0,
+        )
+        .await
+        .expect("exact reason is replayable");
+        transaction.commit().await.expect("reason read commits");
+        for (kind, text, present) in [
+            ("request_revision", "界".repeat(4097), true),
+            ("approve", "reason".to_owned(), true),
+            ("reject", "reason".to_owned(), false),
+        ] {
+            let error = migration.execute(
+                "UPDATE registry_internal.registry_request_decisions SET decision = $3, reason = $4, reason_present = $5
+                  WHERE request_entity_id = $1 AND request_id = $2",
+                &[&REQUEST_ENTITY, &request_id, &kind, &text, &present],
+            ).await.expect_err("database refuses invalid reason state");
+            assert_eq!(error.code(), Some(&SqlState::CHECK_VIOLATION));
         }
         migration_task.abort();
         database.cleanup().await;

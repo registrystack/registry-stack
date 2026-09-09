@@ -12,6 +12,13 @@ use subtle::ConstantTimeEq;
 use crate::contract::Operation;
 use crate::model::CompiledChangeRequestStage;
 
+/// Maximum Unicode characters in a reviewer-supplied reason.
+pub const MAX_REVIEW_REASON_CHARS: usize = 4096;
+
+pub fn valid_review_reason(reason: &str) -> bool {
+    !reason.contains('\0') && reason.chars().count() <= MAX_REVIEW_REASON_CHARS
+}
+
 pub const MAX_REQUEST_TARGETS: usize = 16;
 pub const MAX_REQUEST_FIELD_MUTATIONS: usize = 128;
 pub const MAX_REQUEST_SNAPSHOT_BYTES: usize = 2_097_152;
@@ -150,13 +157,33 @@ impl RequestWorkflow {
     }
 
     pub fn decide(
-        mut self,
+        self,
         context: TrustedTransitionContext,
         stage_id: impl Into<String>,
         version: ProposalVersion,
         displayed_digest: &ProposalDigest,
         decision: ReviewDecisionKind,
     ) -> Result<WorkflowTransition, WorkflowError> {
+        self.decide_with_reason(context, stage_id, version, displayed_digest, decision, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn decide_with_reason(
+        mut self,
+        context: TrustedTransitionContext,
+        stage_id: impl Into<String>,
+        version: ProposalVersion,
+        displayed_digest: &ProposalDigest,
+        decision: ReviewDecisionKind,
+        reason: Option<String>,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        if reason
+            .as_deref()
+            .is_some_and(|reason| !valid_review_reason(reason))
+            || (decision == ReviewDecisionKind::Approve && reason.is_some())
+        {
+            return Err(WorkflowError::InvalidReviewReason);
+        }
         if self.state != RequestState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
@@ -218,6 +245,8 @@ impl RequestWorkflow {
             actor: context.actor,
             decided_at: context.now,
             effect_digest: proposal_digest,
+            reason_present: reason.is_some(),
+            reason,
         };
         self.decisions.push(review.clone());
 
@@ -1609,10 +1638,15 @@ pub struct ReviewDecision {
     actor: TrustedActorRef,
     decided_at: TrustedTimestamp,
     effect_digest: ProposalDigest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(default)]
+    reason_present: bool,
 }
 
 impl ReviewDecision {
     #[cfg(feature = "runtime")]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn restore(
         version: ProposalVersion,
         stage_id: String,
@@ -1620,6 +1654,8 @@ impl ReviewDecision {
         actor: TrustedActorRef,
         decided_at: TrustedTimestamp,
         effect_digest: ProposalDigest,
+        reason: Option<String>,
+        reason_present: bool,
     ) -> Result<Self, WorkflowError> {
         let decision = Self {
             version,
@@ -1628,6 +1664,8 @@ impl ReviewDecision {
             actor,
             decided_at,
             effect_digest,
+            reason,
+            reason_present,
         };
         decision.validate()?;
         Ok(decision)
@@ -1657,7 +1695,24 @@ impl ReviewDecision {
         &self.effect_digest
     }
 
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    pub fn reason_present(&self) -> bool {
+        self.reason_present
+    }
+
     fn validate(&self) -> Result<(), WorkflowError> {
+        if self
+            .reason
+            .as_deref()
+            .is_some_and(|reason| !valid_review_reason(reason))
+            || (self.reason.is_some() && !self.reason_present)
+            || (self.kind == ReviewDecisionKind::Approve && self.reason_present)
+        {
+            return Err(WorkflowError::InvalidReviewReason);
+        }
         self.version.validate()?;
         ValidatedToken::new(self.stage_id.clone(), TokenKind::Stage)?;
         self.actor.validate()?;
@@ -2322,6 +2377,8 @@ impl fmt::Debug for ReviewDecision {
             .field("actor", &Redacted)
             .field("decided_at", &Redacted)
             .field("effect_digest", &Redacted)
+            .field("reason_present", &self.reason_present)
+            .field("reason", &Redacted)
             .finish()
     }
 }
@@ -2382,6 +2439,8 @@ impl fmt::Debug for ApplicationId {
 pub enum WorkflowError {
     #[error("request workflow transition is not valid from the current state")]
     InvalidTransition,
+    #[error("review reason is invalid for this decision or exceeds its bounds")]
+    InvalidReviewReason,
     #[error("proposal version is stale")]
     StaleProposalVersion,
     #[error("proposal digest does not match the frozen version")]
@@ -3120,6 +3179,72 @@ mod tests {
             } else {
                 validation.expect("shared reviewers remain valid after storage");
             }
+        }
+    }
+
+    #[test]
+    fn reviewer_reason_is_bounded_decision_payload_and_debug_is_value_free() {
+        let submitted = submitted_one_stage();
+        let digest = submitted
+            .current_proposal()
+            .unwrap()
+            .effect_digest()
+            .clone();
+        for kind in [
+            ReviewDecisionKind::Reject,
+            ReviewDecisionKind::RequestRevision,
+        ] {
+            let reason = "แก้ไข資料".repeat(512);
+            let decided = submitted
+                .clone()
+                .decide_with_reason(
+                    context("reviewer-a", 2),
+                    "review",
+                    ProposalVersion::first(),
+                    &digest,
+                    kind,
+                    Some(reason.clone()),
+                )
+                .expect("bounded Unicode reason")
+                .into_workflow();
+            assert_eq!(decided.decisions()[0].reason(), Some(reason.as_str()));
+            assert!(decided.decisions()[0].reason_present());
+            assert!(!format!("{:?}", decided.decisions()[0]).contains(&reason));
+            let restored: RequestWorkflow =
+                serde_json::from_value(serde_json::to_value(&decided).unwrap()).unwrap();
+            assert_eq!(restored.validate_restored().unwrap(), decided);
+            let mut invalid = decided;
+            invalid.decisions[0].reason_present = false;
+            assert_eq!(
+                invalid.validate_restored().unwrap_err(),
+                WorkflowError::InvalidReviewReason
+            );
+        }
+        for (kind, reason) in [
+            (ReviewDecisionKind::Approve, "must refuse".to_owned()),
+            (
+                ReviewDecisionKind::Reject,
+                "x".repeat(MAX_REVIEW_REASON_CHARS + 1),
+            ),
+            (
+                ReviewDecisionKind::RequestRevision,
+                "invalid\0text".to_owned(),
+            ),
+        ] {
+            assert_eq!(
+                submitted
+                    .clone()
+                    .decide_with_reason(
+                        context("reviewer-a", 2),
+                        "review",
+                        ProposalVersion::first(),
+                        &digest,
+                        kind,
+                        Some(reason),
+                    )
+                    .unwrap_err(),
+                WorkflowError::InvalidReviewReason
+            );
         }
     }
 

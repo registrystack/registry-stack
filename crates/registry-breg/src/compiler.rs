@@ -1657,6 +1657,7 @@ fn expand_project_access(
                 required_purposes: profile.required_purposes.clone(),
                 operations: grant.operations.clone(),
                 readable_fields: grant.readable_fields.clone(),
+                readable_request_fields: grant.readable_request_fields.clone(),
                 writable_fields: grant.writable_fields.clone(),
                 filterable_fields: grant.filterable_fields.clone(),
                 sortable_fields: grant.sortable_fields.clone(),
@@ -2959,6 +2960,15 @@ fn validate_profiles(
                 "bulk data export requires an authenticated list profile with a readable projection",
             ));
         }
+        if entity.change_request.is_none()
+            && !crate::contract::is_default_readable_request_fields(&access.readable_request_fields)
+        {
+            errors.push(Diagnostic::error(
+                "access_profile.request_fields.invalid",
+                "entities[].accessProfiles[].readableRequestFields",
+                "request metadata field permissions require a change-request entity",
+            ));
+        }
         if access.request_visibility.is_some()
             && (entity.change_request.is_none()
                 || access.anonymous
@@ -3861,6 +3871,8 @@ fn maximum_event_payload_bytes<'a>(
             "stage",
             "effectDigest",
             "deduplicationKey",
+            "reasonPresent",
+            "reason",
         ];
         total = total
             .checked_add(2)?
@@ -3876,7 +3888,12 @@ fn maximum_event_payload_bytes<'a>(
             .checked_add(16)?
             .checked_add(258)?
             .checked_add(73)?
-            .checked_add(512)?;
+            .checked_add(512)?
+            .checked_add(5)?
+            // Reviewer text is bounded in Unicode characters; a JSON control
+            // escape is at most six bytes per character, plus string quotes.
+            .checked_add((crate::request_workflow::MAX_REVIEW_REASON_CHARS as u64).checked_mul(6)?)?
+            .checked_add(2)?;
     }
     // Entity ids and triggers use the compiler's closed ASCII grammars.
     total = total.checked_add(entity_id.len() as u64 + 2)?;
@@ -3978,6 +3995,31 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
     Some(bytes)
 }
 
+/// A lifecycle event can disclose reviewer text only on these two transitions.
+/// Empty condition sets are unrestricted, as in runtime condition evaluation.
+fn request_event_may_include_review_reason(event: &crate::contract::EventSource) -> bool {
+    if event.trigger != EventTrigger::RequestLifecycle {
+        return false;
+    }
+    match event.when.as_ref() {
+        None => true,
+        Some(EventConditionSource::RequestLifecycle {
+            transitions,
+            to_states,
+            ..
+        }) => [
+            ("reject", "rejected"),
+            ("request_revision", "needs_changes"),
+        ]
+        .iter()
+        .any(|(transition, state)| {
+            (transitions.is_empty() || transitions.contains(*transition))
+                && (to_states.is_empty() || to_states.contains(*state))
+        }),
+        Some(EventConditionSource::Fields { .. }) => false,
+    }
+}
+
 fn compile_event_delivery_inventory(
     registry_id: &str,
     entities: &BTreeMap<String, CompiledEntity>,
@@ -4003,6 +4045,9 @@ fn compile_event_delivery_inventory(
                 .collect::<Vec<_>>();
             if event.trigger == EventTrigger::RequestLifecycle {
                 classifications.push(entity.classification);
+                if request_event_may_include_review_reason(event) {
+                    classifications.push(Classification::Internal);
+                }
             }
             let classification_ceiling = classifications
                 .into_iter()

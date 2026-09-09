@@ -1,0 +1,590 @@
+{
+  "metadata": {
+    "id": "test-registry",
+    "version": "1",
+    "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "metadataVersion": "1",
+    "entities": [
+      {
+        "id": "item",
+        "datasetIdentifier": "items",
+        "route": "items",
+        "schema": "/v1/schemas/item",
+        "operations": [
+          {
+            "operation": "reject_request",
+            "accessProfile": "writer"
+          },
+          {
+            "operation": "request_revision",
+            "accessProfile": "writer"
+          },
+          {
+            "operation": "approve_request",
+            "accessProfile": "writer"
+          },
+          {
+            "operation": "apply_request",
+            "accessProfile": "writer"
+          }
+        ],
+        "readableFields": []
+      }
+    ],
+    "operations": [
+      {
+        "id": "records.item.request.stages.review.reject",
+        "method": "POST",
+        "path": "/v1/records/items/{record_id}/actions/stages/review/reject",
+        "operation": "reject_request",
+        "sourceEntity": "item",
+        "responseEntity": "item",
+        "accessProfile": "writer",
+        "requiredCapabilities": [
+          "change_request_lifecycle"
+        ],
+        "entityLabel": "Item",
+        "identifier": {
+          "apiName": "id",
+          "location": "envelope"
+        },
+        "titleFields": [],
+        "fields": [],
+        "readableFields": [],
+        "createWritableFields": [],
+        "patchWritableFields": [],
+        "selectors": [],
+        "query": null,
+        "request": {
+          "fieldNames": "api",
+          "queryParameters": [],
+          "body": "change_request_action",
+          "contentType": "application/json",
+          "idempotencyKeyRequired": true,
+          "ifMatchRequired": true,
+          "mutationSemantics": "change_request_lifecycle",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "proposalVersion",
+              "effectDigest"
+            ],
+            "properties": {
+              "proposalVersion": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1,
+                "maximum": 4294967295
+              },
+              "effectDigest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "description": "Digest of the immutable proposal effects displayed to the actor."
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 4096,
+                "pattern": "^[^\\u0000]*$",
+                "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "records.item.request.stages.review.request_revision",
+        "method": "POST",
+        "path": "/v1/records/items/{record_id}/actions/stages/review/request-revision",
+        "operation": "request_revision",
+        "sourceEntity": "item",
+        "responseEntity": "item",
+        "accessProfile": "writer",
+        "requiredCapabilities": [
+          "change_request_lifecycle"
+        ],
+        "entityLabel": "Item",
+        "identifier": {
+          "apiName": "id",
+          "location": "envelope"
+        },
+        "titleFields": [],
+        "fields": [],
+        "readableFields": [],
+        "createWritableFields": [],
+        "patchWritableFields": [],
+        "selectors": [],
+        "query": null,
+        "request": {
+          "fieldNames": "api",
+          "queryParameters": [],
+          "body": "change_request_action",
+          "contentType": "application/json",
+          "idempotencyKeyRequired": true,
+          "ifMatchRequired": true,
+          "mutationSemantics": "change_request_lifecycle",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "proposalVersion",
+              "effectDigest"
+            ],
+            "properties": {
+              "proposalVersion": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1,
+                "maximum": 4294967295
+              },
+              "effectDigest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "description": "Digest of the immutable proposal effects displayed to the actor."
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 4096,
+                "pattern": "^[^\\u0000]*$",
+                "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "records.item.request.stages.review.approve",
+        "method": "POST",
+        "path": "/v1/records/items/{record_id}/actions/stages/review/approve",
+        "operation": "approve_request",
+        "sourceEntity": "item",
+        "responseEntity": "item",
+        "accessProfile": "writer",
+        "requiredCapabilities": [
+          "change_request_lifecycle"
+        ],
+        "entityLabel": "Item",
+        "identifier": {
+          "apiName": "id",
+          "location": "envelope"
+        },
+        "titleFields": [],
+        "fields": [],
+        "readableFields": [],
+        "createWritableFields": [],
+        "patchWritableFields": [],
+        "selectors": [],
+        "query": null,
+        "request": {
+          "fieldNames": "api",
+          "queryParameters": [],
+          "body": "change_request_action",
+          "contentType": "application/json",
+          "idempotencyKeyRequired": true,
+          "ifMatchRequired": true,
+          "mutationSemantics": "change_request_lifecycle",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "proposalVersion",
+              "effectDigest"
+            ],
+            "properties": {
+              "proposalVersion": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1,
+                "maximum": 4294967295
+              },
+              "effectDigest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "description": "Digest of the immutable proposal effects displayed to the actor."
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "records.item.request.apply",
+        "method": "POST",
+        "path": "/v1/records/items/{record_id}/actions/apply",
+        "operation": "apply_request",
+        "sourceEntity": "item",
+        "responseEntity": "item",
+        "accessProfile": "writer",
+        "requiredCapabilities": [
+          "change_request_lifecycle"
+        ],
+        "entityLabel": "Item",
+        "identifier": {
+          "apiName": "id",
+          "location": "envelope"
+        },
+        "titleFields": [],
+        "fields": [],
+        "readableFields": [],
+        "createWritableFields": [],
+        "patchWritableFields": [],
+        "selectors": [],
+        "query": null,
+        "request": {
+          "fieldNames": "api",
+          "queryParameters": [],
+          "body": "change_request_action",
+          "contentType": "application/json",
+          "idempotencyKeyRequired": true,
+          "ifMatchRequired": true,
+          "mutationSemantics": "change_request_lifecycle",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "proposalVersion",
+              "effectDigest"
+            ],
+            "properties": {
+              "proposalVersion": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1,
+                "maximum": 4294967295
+              },
+              "effectDigest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "description": "Digest of the immutable proposal effects displayed to the actor."
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "records": {
+    "reject_request": {
+      "data": {
+        "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+        "revisionIdentifier": "8",
+        "domainData": {},
+        "request": {
+          "bregState": "submitted",
+          "proposalVersion": 7,
+          "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "editable": false,
+          "actions": [
+            {
+              "operation": "reject_request",
+              "method": "POST",
+              "href": "/v1/records/items/00000000-0000-4000-8000-000000000001/actions/stages/review/reject?accessProfile=writer",
+              "ifMatch": "\"breg-action-1\"",
+              "proposalVersion": 7,
+              "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "stage": "review",
+              "review": {
+                "targets": []
+              }
+            }
+          ],
+          "decisions": [
+            {
+              "stageId": "review",
+              "kind": "request_revision",
+              "decidedAt": "2026-09-09T00:00:00Z",
+              "reasonPresent": true,
+              "reason": "  Please correct the values.\n\u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25 \ud83d\udcdd  "
+            },
+            {
+              "stageId": "review",
+              "kind": "reject",
+              "decidedAt": "2026-09-09T00:00:00Z",
+              "reasonPresent": true
+            }
+          ],
+          "history": {
+            "proposals": [
+              {
+                "decisions": [
+                  {
+                    "stageId": "review",
+                    "kind": "request_revision",
+                    "decidedAt": "2026-09-09T00:00:00Z",
+                    "reasonPresent": true,
+                    "reason": "  Please correct the values.\n\u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25 \ud83d\udcdd  "
+                  },
+                  {
+                    "stageId": "review",
+                    "kind": "reject",
+                    "decidedAt": "2026-09-09T00:00:00Z",
+                    "reasonPresent": true
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "meta": {
+        "registryIdentifier": "test-registry",
+        "datasetIdentifier": "items",
+        "entityTypeIdentifier": "item"
+      }
+    },
+    "request_revision": {
+      "data": {
+        "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+        "revisionIdentifier": "8",
+        "domainData": {},
+        "request": {
+          "bregState": "submitted",
+          "proposalVersion": 7,
+          "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "editable": false,
+          "actions": [
+            {
+              "operation": "request_revision",
+              "method": "POST",
+              "href": "/v1/records/items/00000000-0000-4000-8000-000000000001/actions/stages/review/request-revision?accessProfile=writer",
+              "ifMatch": "\"breg-action-1\"",
+              "proposalVersion": 7,
+              "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "stage": "review",
+              "review": {
+                "targets": []
+              }
+            }
+          ],
+          "decisions": [
+            {
+              "stageId": "review",
+              "kind": "request_revision",
+              "decidedAt": "2026-09-09T00:00:00Z",
+              "reasonPresent": true,
+              "reason": "  Please correct the values.\n\u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25 \ud83d\udcdd  "
+            },
+            {
+              "stageId": "review",
+              "kind": "reject",
+              "decidedAt": "2026-09-09T00:00:00Z",
+              "reasonPresent": true
+            }
+          ],
+          "history": {
+            "proposals": [
+              {
+                "decisions": [
+                  {
+                    "stageId": "review",
+                    "kind": "request_revision",
+                    "decidedAt": "2026-09-09T00:00:00Z",
+                    "reasonPresent": true,
+                    "reason": "  Please correct the values.\n\u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25 \ud83d\udcdd  "
+                  },
+                  {
+                    "stageId": "review",
+                    "kind": "reject",
+                    "decidedAt": "2026-09-09T00:00:00Z",
+                    "reasonPresent": true
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "meta": {
+        "registryIdentifier": "test-registry",
+        "datasetIdentifier": "items",
+        "entityTypeIdentifier": "item"
+      }
+    },
+    "approve_request": {
+      "data": {
+        "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+        "revisionIdentifier": "8",
+        "domainData": {},
+        "request": {
+          "bregState": "submitted",
+          "proposalVersion": 7,
+          "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "editable": false,
+          "actions": [
+            {
+              "operation": "approve_request",
+              "method": "POST",
+              "href": "/v1/records/items/00000000-0000-4000-8000-000000000001/actions/stages/review/approve?accessProfile=writer",
+              "ifMatch": "\"breg-action-1\"",
+              "proposalVersion": 7,
+              "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "stage": "review",
+              "review": {
+                "targets": []
+              }
+            }
+          ],
+          "decisions": [
+            {
+              "stageId": "review",
+              "kind": "request_revision",
+              "decidedAt": "2026-09-09T00:00:00Z",
+              "reasonPresent": true,
+              "reason": "  Please correct the values.\n\u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25 \ud83d\udcdd  "
+            },
+            {
+              "stageId": "review",
+              "kind": "reject",
+              "decidedAt": "2026-09-09T00:00:00Z",
+              "reasonPresent": true
+            }
+          ],
+          "history": {
+            "proposals": [
+              {
+                "decisions": [
+                  {
+                    "stageId": "review",
+                    "kind": "request_revision",
+                    "decidedAt": "2026-09-09T00:00:00Z",
+                    "reasonPresent": true,
+                    "reason": "  Please correct the values.\n\u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25 \ud83d\udcdd  "
+                  },
+                  {
+                    "stageId": "review",
+                    "kind": "reject",
+                    "decidedAt": "2026-09-09T00:00:00Z",
+                    "reasonPresent": true
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "meta": {
+        "registryIdentifier": "test-registry",
+        "datasetIdentifier": "items",
+        "entityTypeIdentifier": "item"
+      }
+    },
+    "apply_request": {
+      "data": {
+        "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+        "revisionIdentifier": "8",
+        "domainData": {},
+        "request": {
+          "bregState": "submitted",
+          "proposalVersion": 7,
+          "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "editable": false,
+          "actions": [
+            {
+              "operation": "apply_request",
+              "method": "POST",
+              "href": "/v1/records/items/00000000-0000-4000-8000-000000000001/actions/apply?accessProfile=writer",
+              "ifMatch": "\"breg-action-1\"",
+              "proposalVersion": 7,
+              "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            }
+          ],
+          "decisions": [
+            {
+              "stageId": "review",
+              "kind": "request_revision",
+              "decidedAt": "2026-09-09T00:00:00Z",
+              "reasonPresent": true,
+              "reason": "  Please correct the values.\n\u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25 \ud83d\udcdd  "
+            },
+            {
+              "stageId": "review",
+              "kind": "reject",
+              "decidedAt": "2026-09-09T00:00:00Z",
+              "reasonPresent": true
+            }
+          ],
+          "history": {
+            "proposals": [
+              {
+                "decisions": [
+                  {
+                    "stageId": "review",
+                    "kind": "request_revision",
+                    "decidedAt": "2026-09-09T00:00:00Z",
+                    "reasonPresent": true,
+                    "reason": "  Please correct the values.\n\u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25 \ud83d\udcdd  "
+                  },
+                  {
+                    "stageId": "review",
+                    "kind": "reject",
+                    "decidedAt": "2026-09-09T00:00:00Z",
+                    "reasonPresent": true
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "meta": {
+        "registryIdentifier": "test-registry",
+        "datasetIdentifier": "items",
+        "entityTypeIdentifier": "item"
+      }
+    }
+  },
+  "receipts": {
+    "reject_request": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "revision": 9,
+      "snapshot": "breg1_00000000-0000-4000-8000-000000000001",
+      "request": {
+        "bregState": "rejected",
+        "proposalVersion": 7,
+        "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "application": null
+      }
+    },
+    "request_revision": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "revision": 9,
+      "snapshot": "breg1_00000000-0000-4000-8000-000000000001",
+      "request": {
+        "bregState": "needs_changes",
+        "proposalVersion": 7,
+        "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "application": null
+      }
+    },
+    "approve_request": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "revision": 9,
+      "snapshot": "breg1_00000000-0000-4000-8000-000000000001",
+      "request": {
+        "bregState": "approved",
+        "proposalVersion": 7,
+        "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "application": null
+      }
+    },
+    "apply_request": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "revision": 9,
+      "snapshot": "breg1_00000000-0000-4000-8000-000000000001",
+      "request": {
+        "bregState": "applied",
+        "proposalVersion": 7,
+        "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "application": {
+          "applicationId": "00000000-0000-4000-8000-000000000002",
+          "proposalVersion": 7,
+          "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "appliedAt": "2026-09-09T00:00:00Z"
+        }
+      }
+    }
+  }
+}
