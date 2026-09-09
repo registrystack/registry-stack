@@ -1496,7 +1496,7 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         Ok(value) => value,
         Err(error) => return error,
     };
-    let (document, has_declared_field, has_evidence_path) = match parse_breg_problem(&body) {
+    let (document, extensions) = match parse_breg_problem(&body) {
         Ok(value) => value,
         Err(_) => return problem_failure(status, trace_id),
     };
@@ -1510,10 +1510,16 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
     let Some(code) = code else {
         return problem_failure(status, trace_id);
     };
+    let located_code = match extensions.field_path {
+        Some(BRegProblemPath::EvidenceAlias) => Some(BRegProblemCode::ActionEvidenceFailed),
+        Some(BRegProblemPath::ActionInput) => Some(BRegProblemCode::ActionRefused),
+        None => None,
+    };
     if code.status() != status.as_u16()
         || document.trace_id != trace_id
-        || (has_declared_field && code != BRegProblemCode::MutationConflict)
-        || (has_evidence_path && code != BRegProblemCode::ActionEvidenceFailed)
+        || (extensions.declared_field && code != BRegProblemCode::MutationConflict)
+        || located_code.is_some_and(|located| located != code)
+        || extensions.refusal_code.is_some() != (code == BRegProblemCode::ActionRefused)
     {
         return problem_failure(status, trace_id);
     }
@@ -1521,20 +1527,38 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         status: status.as_u16(),
         code,
         trace_id,
+        refusal_code: extensions.refusal_code,
     }
 }
 
-/// BReg owns paired field locations and Evidence capability paths; the platform parser
-/// continues to own the exact six common members. Locations are checked and
-/// discarded, never retained as response-authored error text.
-fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, bool, bool), ()> {
+/// The closed forms a Base Registry Engine problem location takes: an Evidence
+/// dependency alias and an immediate-action input.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BRegProblemPath {
+    EvidenceAlias,
+    ActionInput,
+}
+
+/// The BReg-owned members of one problem document, checked before the platform
+/// parser reads the exact six common members.
+struct BRegProblemExtensions {
+    declared_field: bool,
+    field_path: Option<BRegProblemPath>,
+    refusal_code: Option<BRegRefusalCode>,
+}
+
+/// BReg owns paired field locations, problem locations, and the declared code an
+/// immediate-action refusal names; the platform parser continues to own the
+/// exact six common members. Locations are checked and discarded, never
+/// retained as response-authored error text.
+fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtensions), ()> {
     if body.is_empty() || body.len() > MAXIMUM_PROBLEM_BYTES {
         return Err(());
     }
     let serde_json::Value::Object(mut object) = crate::strict_json::from_slice(body)? else {
         return Err(());
     };
-    let has_declared_field = match (object.remove("entityId"), object.remove("fieldId")) {
+    let declared_field = match (object.remove("entityId"), object.remove("fieldId")) {
         (None, None) => false,
         (Some(serde_json::Value::String(entity)), Some(serde_json::Value::String(field)))
             if [&entity, &field].into_iter().all(|id| {
@@ -1545,14 +1569,33 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, bool, bool), ()> 
         }
         _ => return Err(()),
     };
-    let has_evidence_path = match object.remove("fieldPath") {
-        None => false,
-        Some(serde_json::Value::String(path)) if valid_evidence_problem_path(&path) => true,
+    let field_path = match object.remove("fieldPath") {
+        None => None,
+        Some(serde_json::Value::String(path)) => Some(breg_problem_path(&path).ok_or(())?),
+        _ => return Err(()),
+    };
+    let refusal_code = match object.remove("refusalCode") {
+        None => None,
+        Some(serde_json::Value::String(code)) => Some(BRegRefusalCode::parse(&code).ok_or(())?),
         _ => return Err(()),
     };
     let common = serde_json::to_vec(&object).map_err(|_| ())?;
     let document = ProblemDocument::parse_exact(&common, MAXIMUM_PROBLEM_BYTES).map_err(|_| ())?;
-    Ok((document, has_declared_field, has_evidence_path))
+    Ok((
+        document,
+        BRegProblemExtensions {
+            declared_field,
+            field_path,
+            refusal_code,
+        },
+    ))
+}
+
+fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
+    if valid_evidence_problem_path(path) {
+        return Some(BRegProblemPath::EvidenceAlias);
+    }
+    valid_action_input_problem_path(path).then_some(BRegProblemPath::ActionInput)
 }
 
 fn valid_evidence_problem_path(path: &str) -> bool {
@@ -1565,6 +1608,18 @@ fn valid_evidence_problem_path(path: &str) -> bool {
         && bytes.all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
         })
+}
+
+/// An action input is located by its public API name, which the package
+/// declares as a bounded lower camelCase identifier.
+fn valid_action_input_problem_path(path: &str) -> bool {
+    let Some(name) = path.strip_prefix("/input/") else {
+        return false;
+    };
+    let mut bytes = name.bytes();
+    name.len() <= 64
+        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric())
 }
 
 fn body_failure(status: u16, trace_id: TraceId) -> BaseRegistryClientError {

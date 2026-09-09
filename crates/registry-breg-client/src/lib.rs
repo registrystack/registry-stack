@@ -21,7 +21,8 @@ pub use attachment::*;
 pub use client::BaseRegistryClient;
 pub use config::BaseRegistryClientConfig;
 pub use error::{
-    BRegPlanRefusal, BRegProblemCode, BRegProtocolFailure, BaseRegistryClientError, TransportKind,
+    BRegPlanRefusal, BRegProblemCode, BRegProtocolFailure, BRegRefusalCode,
+    BaseRegistryClientError, TransportKind,
 };
 pub use lifecycle::*;
 pub use metadata::*;

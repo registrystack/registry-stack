@@ -324,6 +324,7 @@ export interface BaseRegistryClientFailure extends Error {
   readonly kind: string
   readonly code?: string
   readonly planRefusal?: string
+  readonly refusalCode?: string
   readonly status?: number
   readonly traceId?: string
   readonly transportKind?: string
@@ -334,6 +335,7 @@ export declare class BaseRegistryClientError extends Error implements BaseRegist
   readonly kind: string
   readonly code?: string
   readonly planRefusal?: string
+  readonly refusalCode?: string
   readonly status?: number
   readonly traceId?: string
   readonly transportKind?: string

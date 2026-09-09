@@ -13,7 +13,7 @@ use axum::Router;
 use registry_breg_client::{
     BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey, BRegLifecycleOperation,
     BRegMetadataSelectionErrorKind, BRegPatchRequest, BRegPlanRefusal, BRegProblemCode,
-    BRegProtocolFailure, BRegRecordFormat, BRegRecordOptions, BaseRegistryClient,
+    BRegProtocolFailure, BRegRecordFormat, BRegRecordOptions, BRegRefusalCode, BaseRegistryClient,
     BaseRegistryClientConfig, BaseRegistryClientError, RegistryRecordRepresentation,
     RegistryRecordResponse, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
@@ -34,6 +34,10 @@ const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const EFFECT_DIGEST: &str =
     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const PROFILE_LINK: &str = "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </tenant/base/v1/schemas/company>; rel=\"describedby\"";
+// A package declares its own refusal catalogue, so both the code and the label
+// stand in for one declared entry rather than for fixed client-side text.
+const REFUSAL_CODE: &str = "blank-name";
+const REFUSAL_LABEL: &str = "At least one name part is required.";
 
 #[derive(Clone, Debug)]
 struct CapturedRequest {
@@ -1279,19 +1283,23 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
 }
 
 fn problem_response(code: BRegProblemCode) -> MockResponse {
+    let mut body = json!({
+        "type": format!(
+            "https://id.registrystack.org/problems/registry-breg/{}",
+            code.code().replace('.', "/")
+        ),
+        "title": problem_title(code.status()),
+        "status": code.status(),
+        "detail": problem_detail(code),
+        "code": code.code(),
+        "traceId": TRACE_ID
+    });
+    if code == BRegProblemCode::ActionRefused {
+        body["refusalCode"] = json!(REFUSAL_CODE);
+    }
     MockResponse::json(
         StatusCode::from_u16(code.status()).expect("registered status"),
-        json!({
-            "type": format!(
-                "https://id.registrystack.org/problems/registry-breg/{}",
-                code.code().replace('.', "/")
-            ),
-            "title": problem_title(code.status()),
-            "status": code.status(),
-            "detail": problem_detail(code),
-            "code": code.code(),
-            "traceId": TRACE_ID
-        }),
+        body,
     )
     .without_header("content-type")
     .with_header("content-type", "application/problem+json")
@@ -1306,6 +1314,7 @@ fn problem_title(status: u16) -> &'static str {
         409 => "Conflict",
         412 => "Precondition Failed",
         415 => "Unsupported Media Type",
+        422 => "Unprocessable Entity",
         428 => "Precondition Required",
         500 => "Internal Server Error",
         503 => "Service Unavailable",
@@ -1320,6 +1329,7 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
     match code {
         Code::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
         Code::ActionHandlerFailed => "The action handler could not produce an accepted result.",
+        Code::ActionRefused => REFUSAL_LABEL,
         Code::AuthenticationRefused => "The bearer credential is missing or refused.",
         Code::IdempotencyConflict => "The idempotency key is bound to another request.",
         Code::LookupUnresolved => "The lookup did not resolve exactly one record.",
@@ -1913,4 +1923,151 @@ async fn prepared_review_reason_survives_restart_and_exact_wire_retry() {
         }
         assert_eq!(fixture.token.0.load(Ordering::SeqCst), before);
     }
+}
+
+/// The engine answers an immediate-action business refusal with the
+/// package-declared label in `detail`, the declared reason in `refusalCode`,
+/// and, when the rule names one, the action input in `fieldPath`. The reason is
+/// the whole machine-readable outcome, so the client keeps it and refuses every
+/// document outside the published schema.
+#[tokio::test]
+async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded() {
+    let base = problem_response(BRegProblemCode::ActionRefused);
+    let document: Value = serde_json::from_slice(&base.body).unwrap();
+    let response_for = |value: Value| {
+        let mut response = base.clone();
+        response.body = serde_json::to_vec(&value).unwrap();
+        response
+    };
+    let mut accepted = vec![(base.clone(), REFUSAL_CODE.to_owned())];
+    for (path, refusal) in [
+        ("/input/givenName", REFUSAL_CODE),
+        ("/input/a", "a"),
+        ("/input/name9", "declared.reason_9-canary"),
+    ] {
+        let mut value = document.clone();
+        value["fieldPath"] = json!(path);
+        value["refusalCode"] = json!(refusal);
+        value["detail"] = json!("A declared label canary.");
+        accepted.push((response_for(value), refusal.to_owned()));
+    }
+    let mut long = document.clone();
+    long["detail"] = json!("é".repeat(256));
+    long["refusalCode"] = json!("z".repeat(128));
+    accepted.push((response_for(long), "z".repeat(128)));
+    let mut refused = Vec::new();
+    for refusal in [
+        Value::Null,
+        json!(12),
+        json!(""),
+        json!("z".repeat(129)),
+        json!("blank\nname"),
+    ] {
+        let mut value = document.clone();
+        value["refusalCode"] = refusal;
+        refused.push(response_for(value));
+    }
+    let mut absent = document.clone();
+    absent.as_object_mut().unwrap().remove("refusalCode");
+    refused.push(response_for(absent));
+    for path in [
+        json!("/input/"),
+        json!("/input/Given"),
+        json!("/input/9given"),
+        json!("/input/given-name"),
+        json!("/input/given.name"),
+        json!("/input/givenName/raw"),
+        json!("input/givenName"),
+        json!("/evidence/status"),
+        json!(format!("/input/a{}", "b".repeat(64))),
+    ] {
+        let mut value = document.clone();
+        value["fieldPath"] = path;
+        refused.push(response_for(value));
+    }
+    for detail in [json!(""), json!("é".repeat(257)), json!("label\ncanary")] {
+        let mut value = document.clone();
+        value["detail"] = detail;
+        refused.push(response_for(value));
+    }
+    let mut paired = document.clone();
+    paired["entityId"] = json!("company");
+    paired["fieldId"] = json!("registration_number");
+    refused.push(response_for(paired));
+    for code in [
+        BRegProblemCode::MutationConflict,
+        BRegProblemCode::ActionHandlerFailed,
+        BRegProblemCode::RequestInvalid,
+    ] {
+        for (member, value) in [
+            ("refusalCode", json!(REFUSAL_CODE)),
+            ("fieldPath", json!("/input/givenName")),
+        ] {
+            let mut misplaced = problem_response(code);
+            let mut body: Value = serde_json::from_slice(&misplaced.body).unwrap();
+            body[member] = value;
+            misplaced.body = serde_json::to_vec(&body).unwrap();
+            refused.push(misplaced);
+        }
+    }
+    let mut duplicate = base.clone();
+    duplicate.body = format!(
+        "{{\"refusalCode\":\"duplicate-canary\",{}",
+        &document.to_string()[1..]
+    )
+    .into_bytes();
+    refused.push(duplicate);
+    // One entry per exchange, in order: the declared code an accepted refusal
+    // must carry, and nothing for a document the client has to fail closed on.
+    let expected: Vec<Option<String>> = accepted
+        .iter()
+        .map(|(_, code)| Some(code.clone()))
+        .chain(refused.iter().map(|_| None))
+        .collect();
+    let total = expected.len();
+    let fixture = test_client(
+        std::iter::once(metadata_response())
+            .chain(accepted.into_iter().map(|(response, _)| response))
+            .chain(refused)
+            .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    for declared in &expected {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("action-refusal"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("refusal or protocol failure");
+        if let Some(code) = declared {
+            assert_eq!(error.problem_code(), Some(BRegProblemCode::ActionRefused));
+            assert_eq!(error.status(), Some(422));
+            assert_eq!(
+                error.refusal_code().map(BRegRefusalCode::as_str),
+                Some(code.as_str())
+            );
+        } else {
+            assert_eq!(error.refusal_code(), None);
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Problem,
+                    ..
+                }
+            ));
+        }
+        assert!(!format!("{error:?}: {error}").contains("canary"));
+    }
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1 + total);
 }
