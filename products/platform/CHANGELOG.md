@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.28.0 - 2026-09-09
+
+- The shared platform crates have no user-visible changes in this release.
+
 ## v0.27.0 - 2026-09-07
 
 - Runtime dependency checks can require an explicitly configured audit root.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.28.0
+
 - A field may no longer list one semantic concept twice. Two entries name one
   term when they expand to the same IRI, or when they differ only in the
   case-insensitive parts of that IRI, its scheme and host. Path, query, and
