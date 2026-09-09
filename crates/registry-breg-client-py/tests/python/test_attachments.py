@@ -35,7 +35,8 @@ class AttachmentTests(unittest.TestCase):
             def do_GET(self):
                 self.capture(b"")
                 if self.path.startswith("/v1/registry"):
-                    return self.respond_json(FIXTURE["metadata"], record=False)
+                    self.respond_json(FIXTURE["metadata"], record=False)
+                    return
                 self.send_response(200)
                 self.send_header("content-type", "application/pdf")
                 self.send_header("content-disposition", "attachment")
@@ -46,6 +47,7 @@ class AttachmentTests(unittest.TestCase):
                 self.send_header("content-length", str(len(CONTENT)))
                 self.end_headers()
                 self.wfile.write(CONTENT)
+                return
 
             def do_PATCH(self):
                 self.capture(self.rfile.read(int(self.headers["content-length"])))
