@@ -68,8 +68,8 @@
   rows:
     - ['`submit`', '`/actions/submit`', '`{}`', '`draft`; the request reaches `approved` when `review.mode` is `none`, and `applied` when the disposition is `apply`']
     - ['`approve`', '`/actions/stages/{stage}/approve`', '`{"proposalVersion", "effectDigest"}`', '`submitted`; the request reaches `approved` once every stage is satisfied, and `applied` when the disposition is `apply`']
-    - ['`reject`', '`/actions/stages/{stage}/reject`', '`{"proposalVersion", "effectDigest"}`', '`submitted`']
-    - ['`request-revision`', '`/actions/stages/{stage}/request-revision`', '`{"proposalVersion", "effectDigest"}`', '`submitted`']
+    - ['`reject`', '`/actions/stages/{stage}/reject`', '`{"proposalVersion", "effectDigest"}`, optional `reason` string', '`submitted`']
+    - ['`request-revision`', '`/actions/stages/{stage}/request-revision`', '`{"proposalVersion", "effectDigest"}`, optional `reason` string', '`submitted`']
     - ['`revise`', '`/actions/revise`', '`{"rebase": false}`', '`needs_changes`, `rejected`']
     - ['`revise` with rebase', '`/actions/revise`', '`{"rebase": true}`', '`submitted`, `approved`, `needs_changes`, `rejected`']
     - ['`cancel`', '`/actions/cancel`', '`{}`', 'Any state except `applied` and `canceled`, and only for the principal that owns the request']

@@ -91,6 +91,29 @@ acceptance fixtures keep their original behavior:
   person, creates the membership row, and patches the household contact
   reference.
 
+## Capture records created by an approved request
+
+A successful `apply_request` journey step can bind aliases to its create effects:
+
+```yaml
+captureResults:
+  person: contact-person
+  membership: contact-membership
+```
+
+Keys are the request's declared `changeRequest.effects[].id`; values are unique
+journey aliases. Only `operation: create` effects covered by the applying
+profile's `applyTargets` grant are capturable. Other lifecycle operations,
+refused steps, missing effects, and patch effects cannot bind result aliases.
+
+The schema-test runner matches each frozen effect to the committed application
+receipt in its prepared test database. It does not add result identifiers or
+fields to the public apply response. A later `get` uses the alias with a profile
+that has ordinary target read authority. Capture that GET response before using
+its `etagRef` in a patch; an application result is not a current record ETag.
+The household journey above captures both created rows, checks their values
+by alias, then updates the created contact.
+
 ## First-hour structural checks
 
 Run these from the repository root:
@@ -327,6 +350,28 @@ A fixture step for the stale precondition uses the same refusal contract:
 After revise, repeat submit, both approval stages, and apply using the new GET
 metadata. A stale proposal version, stale effect digest, or stale action
 `If-Match` is intentionally not reusable after the rebase.
+
+## Reviewer explanations
+
+The `reject_request` and `request_revision` actions accept an optional `reason`
+string beside `proposalVersion` and `effectDigest`. In an authored journey,
+place `reason` directly under `request`, beside the proposal-reference fields.
+The asset fixture requests revision with a Unicode explanation, reads the
+feedback as the submitter, then revises and resubmits before approval.
+
+Reasons preserve whitespace and Unicode exactly. Empty strings are permitted;
+null, other types, NUL, and more than 4096 Unicode characters are refused.
+Approve and apply bodies remain closed and reject `reason`. A replay must use
+the same reason and other original action input with its idempotency key.
+
+GET exposes current decisions at `data.request.decisions` and retained decisions
+at `data.request.history.proposals[].decisions`. Each carries `stageId`, `kind`,
+`decidedAt`, and `reasonPresent`, with `reason` only when its text remains retained
+and the selected profile permits it. The request grant defaults to
+`readableRequestFields: [reason]`; an explicit empty list hides reason text
+without hiding the decision facts. Anonymous profiles never receive reason text.
+Request-detail erasure removes reason text while preserving the decision and
+reason-presence flag.
 
 ## Retention operator checks
 

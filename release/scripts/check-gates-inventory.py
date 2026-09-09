@@ -688,7 +688,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "repository_dispatch:\n    types: [release_candidate]",
             "run-name: Release candidate ${{ github.event.client_payload.release_id }}",
             "REQUEST_ID: ${{ github.event.client_payload.request_id }}",
-            "name: Validate request, source, CI, and destinations",
+            "name: Validate request, source, and destinations",
             "git merge-base --is-ancestor",
             "tag_lookup_status=$?",
             'if [[ "${tag_lookup_status}" -ne 2 ]]; then',
@@ -1301,7 +1301,7 @@ def candidate_attestation_isolation_violations(
         verify_permissions not in verify
         or "id-token: write" in verify
         or "attestations: write" in verify
-        or "needs:\n      - validate\n      - assemble" not in attest
+        or "needs:\n      - validate\n      - protected-ci\n      - assemble" not in attest
         or attest_permissions not in attest
         or "packages: write" in attest
         or "name: Upload one candidate manifest and bundle" not in verify

@@ -249,6 +249,7 @@ class RegistryReleaseTest(TestCase):
             "id": 77,
             "html_url": "https://github.com/registrystack/registry-stack/actions/runs/77",
             "event": "push",
+            "head_branch": "main",
             "head_sha": source,
             "status": "in_progress",
             "conclusion": None,

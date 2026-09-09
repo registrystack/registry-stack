@@ -534,6 +534,22 @@ class GateInventoryTest(unittest.TestCase):
                     self.module.candidate_attestation_isolation_violations(mutated),
                 )
 
+    def test_candidate_attestation_requires_protected_ci(self) -> None:
+        workflow = self.module.policy_file_texts(
+            ROOT,
+            self.module.RELEASE_SECURITY_POLICY_PATHS,
+        )[".github/workflows/release-candidate.yml"]
+        attest = self.module.yaml_job_block(workflow, "attest")
+        self.assertIsNotNone(attest)
+        assert attest is not None
+        dependency = "      - protected-ci\n"
+        self.assertIn(dependency, attest)
+        mutated = workflow.replace(attest, attest.replace(dependency, "", 1), 1)
+        self.assertEqual(
+            ["Candidate verification and attestation permission isolation"],
+            self.module.candidate_attestation_isolation_violations(mutated),
+        )
+
     def test_candidate_artifact_contains_only_manifest_and_bundle(self) -> None:
         workflow = self.module.policy_file_texts(
             ROOT,

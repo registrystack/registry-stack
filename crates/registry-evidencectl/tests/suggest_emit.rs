@@ -899,41 +899,11 @@ fn write_stub_reporting(dir: &Path, version: &str, script: &str) -> PathBuf {
     path
 }
 
-/// [`emit::verify`] against a stub this process only just wrote.
-///
-/// Linux refuses to execute a file while any process holds it open for
-/// writing. Every test below writes an executable and immediately runs it, so
-/// a sibling test that forks in the window between this thread's write and its
-/// exec hands its child an inherited descriptor to the stub, and the exec
-/// fails with `ETXTBSY`. The stub is correct and the descriptor closes on the
-/// child's own exec, so the only thing to do is wait for it. macOS does not
-/// enforce this, which is why the flake only ever appeared in CI.
-///
-/// The wait belongs here rather than in `emit::verify`: a deployment runs an
-/// `evidence` binary nobody is writing, so the retry would be dead weight in
-/// the product and would mask a genuinely locked binary.
+/// Verify a freshly written stub under the shared test-only ETXTBSY bound.
 #[cfg(unix)]
 fn verify_stub(project: &Path, stub: &Path) -> CheckClassification {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        match emit::verify(project, Some(stub)) {
-            Ok(classification) => return classification,
-            Err(error) if is_executable_busy(&error) && std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(error) => panic!("verify: {error:#}"),
-        }
-    }
-}
-
-/// True when `error` was caused by an exec the kernel refused because the file
-/// is still open for writing somewhere.
-#[cfg(unix)]
-fn is_executable_busy(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-        .any(|io| io.kind() == std::io::ErrorKind::ExecutableFileBusy)
+    evidence_binary::retry_busy_stub(|| emit::verify(project, Some(stub)))
+        .unwrap_or_else(|error| panic!("verify: {error:#}"))
 }
 
 #[cfg(unix)]
@@ -952,15 +922,9 @@ fn verify_refuses_a_runtime_that_reports_another_version() {
         ),
     );
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let error = loop {
-        match emit::verify(&project, Some(&stub)) {
-            Ok(classification) => panic!("a foreign runtime was trusted: {classification:?}"),
-            Err(error) if is_executable_busy(&error) && std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(error) => break error,
-        }
+    let error = match evidence_binary::retry_busy_stub(|| emit::verify(&project, Some(&stub))) {
+        Ok(classification) => panic!("a foreign runtime was trusted: {classification:?}"),
+        Err(error) => error,
     };
 
     let rendered = format!("{error:#}");

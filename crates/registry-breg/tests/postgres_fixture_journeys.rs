@@ -68,6 +68,21 @@ const SPATIAL_MAP_LABELS_SQL: &[u8] = include_bytes!(
 );
 const SPATIAL_JOURNEY_SOURCE: &[u8] =
     include_bytes!("../../../products/breg/acceptance/spatial-service-sites/tests/journeys.yaml");
+const HOUSEHOLD_PROJECT_SOURCE: &[u8] = include_bytes!(
+    "../../../products/breg/acceptance/publicschema-household-change-requests/registry.yaml"
+);
+const HOUSEHOLD_CORE_MODULE_SOURCE: &[u8] = include_bytes!(
+    "../../../products/breg/acceptance/publicschema-household-change-requests/modules/publicschema-household-core/module.yaml"
+);
+const HOUSEHOLD_DEMOGRAPHICS_MODULE_SOURCE: &[u8] = include_bytes!(
+    "../../../products/breg/acceptance/publicschema-household-change-requests/modules/publicschema-household-demographics/module.yaml"
+);
+const HOUSEHOLD_DEMOGRAPHICS_SQL: &[u8] = include_bytes!(
+    "../../../products/breg/acceptance/publicschema-household-change-requests/modules/publicschema-household-demographics/sql/household-demographics.sql"
+);
+const HOUSEHOLD_JOURNEY_SOURCE: &[u8] = include_bytes!(
+    "../../../products/breg/acceptance/publicschema-household-change-requests/tests/journeys.yaml"
+);
 const COMPILER_SOURCE_REVISION: &str = "fixture-project-source";
 const DATABASE_ID: &str = "fixture-database";
 const INSTANCE_ID: &str = "fixture-instance";
@@ -504,6 +519,76 @@ async fn public_spatial_fixture_schema_test_runs_through_the_production_executor
     idp.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn entity_apply_result_captures_resolve_committed_records_through_the_production_executor() {
+    let (compiled, project_source, modules) = compiled_household_fixture();
+    let suite = validate_fixture_journeys(HOUSEHOLD_JOURNEY_SOURCE, &compiled)
+        .expect("household journey with entity apply result captures preflights");
+    let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
+    let package = package_fixture_with_modules(
+        &project_source,
+        &schema_fingerprint,
+        HOUSEHOLD_JOURNEY_SOURCE,
+        modules,
+    );
+    let idp = MockIdp::start().await;
+    let database = TestDatabase::create(8).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator provisions household temporal exclusion prerequisites");
+    let config_path = package.write_runtime_config(&database, &idp);
+    let config = load_runtime_config(&config_path).expect("household runtime config loads");
+    let schema_test_database = prepare_schema_test_database_with_connection_configs_for_test(
+        &config,
+        &package.prepared,
+        &database.migration_config,
+        &database.runtime_config,
+    )
+    .await
+    .expect("household schema-test database prepares");
+
+    let receipt = execute_schema_test(
+        schema_test_database,
+        &config,
+        &package.prepared,
+        &suite,
+        household_credential_bindings(&suite, &idp),
+    )
+    .await
+    .expect("submit, independent review, final approval, apply, and captured-result GETs succeed");
+    assert_eq!(
+        receipt.successful_journey_ids(),
+        ["household-contact-registration-request-flow"]
+    );
+    validate_schema_test_receipt_for_package(
+        &receipt
+            .canonical_bytes()
+            .expect("household receipt canonicalizes"),
+        &package.prepared,
+        &suite,
+    )
+    .expect("captured-result journey receipt binds the exact packaged acceptance source");
+
+    let applications = database
+        .admin
+        .query(
+            "SELECT result_count, proposal_version
+               FROM registry_internal.registry_idempotency
+              WHERE result_kind = 'application'",
+            &[],
+        )
+        .await
+        .expect("administrator inspects the committed application receipt");
+    assert_eq!(applications.len(), 1, "one reviewed proposal applied once");
+    assert_eq!(applications[0].get::<_, i16>(0), 3);
+    assert_eq!(applications[0].get::<_, i64>(1), 1);
+
+    database.cleanup().await;
+    idp.stop().await;
+}
+
 async fn prepare_runner(
     package: &PackageFixture,
     suite: &registry_breg::fixtures::ValidatedFixtureJourneys,
@@ -702,6 +787,25 @@ fn package_fixture_with_journeys(
     schema_fingerprint: &str,
     journey_source: &[u8],
 ) -> PackageFixture {
+    package_fixture_with_modules(
+        project,
+        schema_fingerprint,
+        journey_source,
+        vec![PackageModuleSource {
+            id: "fixture-core".to_owned(),
+            path: "sources/modules/fixture-core.yaml".to_owned(),
+            bytes: MODULE_SOURCE.to_vec(),
+            assets: Vec::new(),
+        }],
+    )
+}
+
+fn package_fixture_with_modules(
+    project: &[u8],
+    schema_fingerprint: &str,
+    journey_source: &[u8],
+    modules: Vec<PackageModuleSource>,
+) -> PackageFixture {
     let signing =
         generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("package signing key generates");
     let key_id = signing.public().kid.expect("package signing key has an id");
@@ -721,12 +825,7 @@ fn package_fixture_with_journeys(
             path: "sources/project.yaml".to_owned(),
             bytes: project.to_vec(),
         },
-        modules: vec![PackageModuleSource {
-            id: "fixture-core".to_owned(),
-            path: "sources/modules/fixture-core.yaml".to_owned(),
-            bytes: MODULE_SOURCE.to_vec(),
-            assets: Vec::new(),
-        }],
+        modules,
         fixture_journeys: PackageSourceFile {
             path: FIXTURE_JOURNEYS_PATH.to_owned(),
             bytes: journey_source.to_vec(),
@@ -1112,6 +1211,43 @@ fn successful_credential_bindings(
     )
 }
 
+fn household_credential_bindings(
+    suite: &registry_breg::fixtures::ValidatedFixtureJourneys,
+    idp: &MockIdp,
+) -> SchemaTestCredentialBindings {
+    let document: serde_json::Value = serde_norway::from_slice(HOUSEHOLD_JOURNEY_SOURCE)
+        .expect("validated household journeys decode for synthetic credential binding");
+    let mut bindings = Vec::new();
+    for journey in document["journeys"]
+        .as_array()
+        .expect("journeys are an array")
+    {
+        for step in journey["steps"].as_array().expect("steps are an array") {
+            let claims = &step["claims"];
+            let scope = claims["scopes"]
+                .as_array()
+                .expect("household claims declare scopes")
+                .iter()
+                .map(|scope| scope.as_str().expect("scope is text"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let token = idp.mint_token(json!({
+                "aud": AUDIENCE,
+                "registry_principal": claims["principal"],
+                "purpose": claims["purpose"],
+                "scope": scope,
+            }));
+            bindings.push(SchemaTestCredentialBinding::bearer(
+                journey["id"].as_str().expect("journey has an id"),
+                step["id"].as_str().expect("step has an id"),
+                Zeroizing::new(token),
+            ));
+        }
+    }
+    SchemaTestCredentialBindings::new(suite, bindings)
+        .expect("synthetic credentials bind every authored household step")
+}
+
 fn spatial_credential_bindings(
     suite: &registry_breg::fixtures::ValidatedFixtureJourneys,
     idp: &MockIdp,
@@ -1312,6 +1448,13 @@ fn spatial_site_token(idp: &MockIdp) -> String {
 
 async fn measure_compiled_schema_fingerprint(registry: &registry_breg::CompiledRegistry) -> String {
     let database = TestDatabase::create(2).await;
+    if registry.ddl().requires_btree_gist {
+        database
+            .admin
+            .batch_execute("CREATE EXTENSION btree_gist")
+            .await
+            .expect("administrator provisions temporal exclusion prerequisites");
+    }
     let (migration, migration_task) = database.connect_migration().await;
     let expected_catalog = ExpectedManagedCatalog::compiled(registry);
     install_compiled_schema(&migration, registry, &database.runtime_role)
@@ -1445,4 +1588,55 @@ fn compiled_spatial_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {
         compile_project_with_assets(&project, &[module], &assets, CompileProfile::Production)
             .expect("spatial fixture project compiles in Production");
     (registry, project_source)
+}
+
+fn compiled_household_fixture() -> (
+    registry_breg::CompiledRegistry,
+    Vec<u8>,
+    Vec<PackageModuleSource>,
+) {
+    let core =
+        parse_module_yaml(HOUSEHOLD_CORE_MODULE_SOURCE).expect("household core module parses");
+    let demographics = parse_module_yaml(HOUSEHOLD_DEMOGRAPHICS_MODULE_SOURCE)
+        .expect("household demographics module parses");
+    let assets = vec![ModuleAssetSource {
+        module: Some("publicschema-household-demographics".to_owned()),
+        path: "sql/household-demographics.sql".to_owned(),
+        bytes: HOUSEHOLD_DEMOGRAPHICS_SQL.to_vec(),
+    }];
+    let mut project =
+        parse_project_yaml(HOUSEHOLD_PROJECT_SOURCE).expect("household acceptance project parses");
+    let identity = project
+        .package
+        .as_mut()
+        .expect("project declares package identity");
+    identity.environment = "production".to_owned();
+    identity.instance_id = INSTANCE_ID.to_owned();
+    identity.source_revision = COMPILER_SOURCE_REVISION.to_owned();
+    let registry = compile_project_with_assets(
+        &project,
+        &[core, demographics],
+        &assets,
+        CompileProfile::Production,
+    )
+    .expect("household acceptance project compiles in Production");
+    let source = serde_json::to_vec(&project).expect("household project serializes");
+    let modules = vec![
+        PackageModuleSource {
+            id: "publicschema-household-core".to_owned(),
+            path: "sources/modules/publicschema-household-core/module.yaml".to_owned(),
+            bytes: HOUSEHOLD_CORE_MODULE_SOURCE.to_vec(),
+            assets: Vec::new(),
+        },
+        PackageModuleSource {
+            id: "publicschema-household-demographics".to_owned(),
+            path: "sources/modules/publicschema-household-demographics/module.yaml".to_owned(),
+            bytes: HOUSEHOLD_DEMOGRAPHICS_MODULE_SOURCE.to_vec(),
+            assets: vec![PackageSourceFile {
+                path: "sql/household-demographics.sql".to_owned(),
+                bytes: HOUSEHOLD_DEMOGRAPHICS_SQL.to_vec(),
+            }],
+        },
+    ];
+    (registry, source, modules)
 }

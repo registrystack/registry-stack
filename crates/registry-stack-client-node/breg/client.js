@@ -145,6 +145,16 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['lookupRecordJson', [3]], ['createRecordJson'], ['patchRecordJson'], ['executeLifecycleActionJson'],
 ]) wrapAsync(method, jsonIndexes, requiredIndexes);
 
+const withReason = native.BRegLifecycleAction.prototype.withReason;
+native.BRegLifecycleAction.prototype.withReason = function (reason) {
+  try {
+    if (typeof reason !== 'string' || !reason.isWellFormed()) throw inputError('invalid_request');
+    return withReason.call(this, reason);
+  } catch (error) {
+    throw normalize(error, 'invalid_request');
+  }
+};
+
 const lifecycleActionsJson = native.BaseRegistryClient.prototype.lifecycleActionsJson;
 native.BaseRegistryClient.prototype.lifecycleActionsJson = function (...args) {
   try { return lifecycleActionsJson.apply(this, args); }

@@ -80,6 +80,20 @@ whole-field JSON Patch paths, operation counts, I-JSON values, and encoded body
 size before token acquisition or HTTP I/O. The client never generates an
 idempotency key and never retries a mutation.
 
+For rejection and requested revision, `action.with_reason("Please correct the submitted values.")?`
+returns a copy carrying optional reviewer text. Node uses `action.withReason(text)`
+and Python uses `action.with_reason(text)`. Text is preserved exactly, including
+empty strings and whitespace; the limit is 4096 Unicode characters and NUL is
+refused. Other lifecycle actions refuse reasons. Existing actions omit `reason`.
+Persist the prepared action after adding its reason, and reuse the same action
+and idempotency key for an explicit retry.
+
+`BRegRequestMetadata::decisions()` exposes typed current-proposal decisions.
+`reason_present()` distinguishes an absent reason from one whose text is
+withheld or erased; `reason()` returns only disclosed retained text.
+`retained_history()` keeps historical decisions as inert JSON. Node and Python
+preserve both surfaces in the returned record's `request` extension.
+
 Lifecycle action ETags are not interchangeable with record ETags. After a
 success or refusal, refetch the record before deciding which transition is
 currently available.

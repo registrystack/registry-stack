@@ -56,6 +56,14 @@ ranges in `allowedPrivateCidrs`. Use `dnsFamily: ipv4Only` only on an IPv4-only 
 `tls.caBundleRef` and `tls.clientIdentityRef` name PEM secrets for a private certificate authority
 and mutual TLS. `networkProfile: loopbackDevelopmentHttp` exists for local development only.
 
+Lifecycle events whose transition and state filters permit rejection or a request for revision
+have an `internal` classification floor: their system request envelope may contain the reviewer's
+explanation. Filters excluding both outcomes retain the event's ordinary derived classification.
+The destination must permit that classification even when the record projection contains only
+public fields. Reader grants that hide reason text do not change webhook delivery authority.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs request_event_may_include_review_reason and compile_event_delivery_inventory; crates/registry-breg/src/request_events.rs. */}
+
 A binding may tighten the compiled ceilings and never widen them; the example tightens both.
 `bregctl explain events <project>` reports the compiled values per delivery: five attempts with a
 five-second timeout each, retried after 1, 2, 4, and 8 seconds, with a dead letter required when

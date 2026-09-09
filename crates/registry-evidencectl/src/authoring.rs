@@ -3912,6 +3912,7 @@ fn escape_pointer_segment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evidence_binary::retry_busy_stub;
     use std::{
         io::Write as _,
         os::unix::fs::{symlink, OpenOptionsExt as _},
@@ -6881,7 +6882,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = render_discovery_description(&evidence, &config_path)
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
             .expect_err("a rejected compilation must fail");
         let diagnostic = format!("{error:#}");
         assert!(
@@ -6898,7 +6899,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = render_discovery_description(&evidence, &config_path)
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
             .expect_err("a rejected compilation must fail");
         assert_eq!(
             format!("{error:#}"),
@@ -6937,7 +6938,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = render_discovery_description(&evidence, &config_path)
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -6962,9 +6963,10 @@ factSchema: schemas/family-facts.schema.yaml
             "#!/bin/sh\nyes 'evidence flooded standard error' | head -c 4194304 >&2\nexit 1\n",
         );
 
-        let run =
+        let run = retry_busy_stub(|| {
             run_bounded_evidence(Command::new(&evidence), StandardOutput::Discarded, "a stub")
-                .expect("the stub runs to completion");
+        })
+        .expect("the stub runs to completion");
 
         assert!(!run.status.success());
         assert!(
@@ -6985,7 +6987,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = render_discovery_description(&evidence, &config_path)
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -7014,7 +7016,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = render_discovery_description(&evidence, &config_path)
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
             .expect_err("an oversized description must be refused");
 
         assert!(format!("{error:#}").contains("longer than"), "{error:#}");
@@ -7031,7 +7033,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = render_discovery_description(&evidence, &config_path)
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -7056,7 +7058,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = render_discovery_description(&evidence, &config_path)
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -7101,7 +7103,7 @@ factSchema: schemas/family-facts.schema.yaml
         let runtime_path = root.path().join("runtime.yaml");
         fs::write(&runtime_path, "version: 1\n").expect("runtime");
 
-        let error = check_with_evidence(&evidence, &runtime_path)
+        let error = retry_busy_stub(|| check_with_evidence(&evidence, &runtime_path))
             .expect_err("a rejected generation must fail");
 
         assert_eq!(

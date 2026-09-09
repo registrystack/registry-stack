@@ -5606,6 +5606,9 @@ fn public_profile_cannot_process_an_internal_field() {
             action: None,
             operations: [Operation::Get].into_iter().collect(),
             readable_fields: ["asset-code".to_owned()].into_iter().collect(),
+            readable_request_fields: [registry_breg::contract::RequestMetadataFieldSource::Reason]
+                .into_iter()
+                .collect(),
             writable_fields: Default::default(),
             filterable_fields: Default::default(),
             sortable_fields: Default::default(),
