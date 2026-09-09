@@ -119,6 +119,30 @@ relevant product pages on this site rather than duplicating release notes.
 {/* Evidence: crates/registry-breg/src/attachment.rs, DOWNLOAD_CONTENT_DISPOSITION;
     crates/registry-breg/src/api/attachments.rs, download(). */}
 
+- The Rust, Node.js, and Python Base Registry Engine clients accept the
+  `action.refused` problem an immediate action answers a declared business rule
+  with. No client registered that code, so the one refusal a caller is meant to
+  act on arrived as an opaque protocol failure. The typed error carries the
+  package-declared reason as `refusal_code` in Rust and Python and `refusalCode`
+  in Node.js, beside the status, the code, and the trace identifier, and the
+  catalogue label stays in the detail. A reason outside the published bounds, a
+  missing one, or one attached to any other code fails closed. See
+  [client API reference](../reference/client-api/).
+
+{/* Evidence: crates/registry-breg-client/src/error.rs, BRegRefusalCode;
+    crates/registry-breg-client/src/client.rs, parse_breg_problem();
+    crates/registry-breg-client-node/client.d.ts;
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi. */}
+
+- The published problem-code table documents `action.evidence_failed`, the 503
+  an immediate action answers when a declared Evidence dependency could not be
+  acquired or accepted. The engine registers the code and answers with it, and
+  the table named every other one. See
+  [Base Registry Engine API](../reference/breg-api/).
+
+{/* Evidence: docs/site/src/data/breg-api.yaml;
+    crates/registry-breg/src/problem.rs, ActionEvidenceFailed. */}
+
 ## v0.28.0 beta-40
 
 - BREAKING: `bregctl dev` and `bregctl dev stop` take a positional project
