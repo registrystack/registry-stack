@@ -101,7 +101,7 @@ if (process.argv[1] === scriptPath) {
     const result = await migrateCliReferenceReview();
     process.stdout.write(result.migrated
       ? 'Migrated CLI review to v3; existing review date and source provenance preserved.\n'
-      : 'CLI review already uses v3 and covers the current command content.\n');
+      : 'CLI review already uses v3; publication metadata is valid.\n');
   } else {
     const digest = await cliReferenceDigest();
     process.stdout.write(
