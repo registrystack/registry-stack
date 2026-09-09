@@ -96,9 +96,12 @@ logical-ID order. It may be empty. `identifier: {apiName: "id", location:
 Request attachment slots appear in `fields` when this operation can read their
 metadata or upload to them. The logical slot ID is also the exact `apiName` under
 `domainData`. Their schema has `x-registry-fieldKind: "attachment"` and
-`x-registry-attachment` with `requiredForSubmit`, `maximumBytes`, and
-`contentTypes`. Those limits govern current uploads; retained metadata can describe
-content accepted under an earlier policy. Empty slots are null. Filled live metadata
+`x-registry-attachment` with `requiredForSubmit`, `maximumBytes`,
+`contentTypes`, and `classification`. Those limits govern current uploads;
+retained metadata can describe content accepted under an earlier policy.
+`classification` is the authored slot sensitivity, `public`, `internal` or
+`restricted`, and reaches only the callers this operation already admits to the
+slot. Empty slots are null. Filled live metadata
 includes `verificationStatus`: `notRequired`, `pending`, `approved`, or `rejected`.
 The schema extension's `verification` member names this status field and the
 release-eligible statuses. Pending and rejected slots block downloads and

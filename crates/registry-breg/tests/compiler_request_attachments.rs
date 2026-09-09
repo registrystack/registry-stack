@@ -359,6 +359,10 @@ fn generated_attachment_contract_exposes_binary_routes_and_read_only_metadata() 
         schema["properties"]["supporting-file"]["x-registry-fieldKind"],
         "attachment"
     );
+    assert_eq!(
+        schema["properties"]["supporting-file"]["x-registry-attachment"]["classification"],
+        "restricted"
+    );
     assert!(
         !schema["required"]
             .as_array()
@@ -383,6 +387,11 @@ fn generated_attachment_contract_exposes_binary_routes_and_read_only_metadata() 
         openapi["paths"]["/v1/records/requests"]["get"]["x-registry-queryProfiles"]["operator"]
             ["selectableProperties"],
         json!(["item", "label", "supporting-file"])
+    );
+    assert_eq!(
+        openapi["components"]["schemas"]["request"]["properties"]["supporting-file"]
+            ["x-registry-attachment"]["classification"],
+        "restricted"
     );
     let path = &openapi["paths"]["/v1/records/requests/{record_id}/attachments/supporting-file"];
     for method in ["get", "patch", "delete"] {

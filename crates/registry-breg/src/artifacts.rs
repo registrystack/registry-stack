@@ -411,6 +411,7 @@ pub(crate) fn attachment_metadata_schema(slot: &crate::model::CompiledAttachment
             "requiredForSubmit": slot.required,
             "maximumBytes": slot.maximum_bytes,
             "contentTypes": slot.content_types,
+            "classification": slot.classification,
             "verification": {
                 "statusField": "verificationStatus",
                 "allowedStatuses": ["notRequired", "approved"],
@@ -4893,6 +4894,10 @@ mod attachment_tests {
         assert_eq!(
             schema["x-registry-attachment"]["contentTypes"],
             json!(["application/pdf"])
+        );
+        assert_eq!(
+            schema["x-registry-attachment"]["classification"], "restricted",
+            "the authored slot classification is discoverable next to the other slot facts"
         );
         let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
         let mut retained = json!({
