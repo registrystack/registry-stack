@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-05"
+last_reviewed: "2026-09-09"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -873,6 +873,41 @@ and record, raises kind `lifecycle_promotion` with code `authority` or `binding`
 `execute_lifecycle_action(action, idempotency_key)` and
 `executeLifecycleAction(action, idempotencyKey)` return the receipt as an outcome.
 
+### Exact JSON in Node
+
+The Node methods whose names end in `Json` keep domain values on the Rust side of the JavaScript
+number boundary. `getRecordJson`, `listRecordsJson`, `continueListJson`, `lookupRecordJson`,
+`createRecordJson`, `patchRecordJson`, and `executeLifecycleActionJson` return a `JsonOutcome`: the
+validated response as JSON text in `valueJson`, with the same trace, ETag, location, and
+continuation semantics as their object counterparts. `lifecycleActionsJson` takes a complete record
+envelope as JSON text, and every action it promotes carries `bodyJson` and `reviewJson` beside
+`body` and `review`. The Python binding has no such methods.
+
+An input is the same domain data object or field-based patch array the object method takes, encoded
+as JSON text, not an arbitrary HTTP body. The client refuses duplicate members, invalid JSON, bounds
+violations, and numeric literals whose value would change during decoding, among them
+`0.10000000000000001`, `1e9999`, and `9007199254740993.0`. BReg's numeric model still governs a
+write: `9007199254740992` is a supported write, and `9007199254740993` is refused with kind
+`invalid_request` before any exchange. Do not round a refused input to make it pass.
+
+```js
+const result = await client.createRecordJson(
+  binding,
+  '{"quantity":9007199254740992,"amount":"12.3400","date":"2026-09-08"}',
+  'caller-chosen-idempotency-key',
+);
+```
+
+A response passes the same decoder and reaches the caller unchanged: a `9007199254740993` that
+arrives in a response is returned intact in `valueJson`, and a response literal that cannot
+round-trip fails with kind `protocol`. Fixed-scale decimals stay JSON strings, and a null member
+stays distinct from an absent one. JSON whitespace and equivalent number spellings may be
+canonicalized, because the promise covers values and types. Decode `valueJson` with a lossless JSON
+library to display a number outside the JavaScript safe integer range.
+
+The client never retries a mutation on its own. After an unknown outcome, the caller decides whether
+to send the same action again with the same idempotency key.
+
 ### BReg error contract
 
 `BaseRegistryClientError` is distinct from `RelayClientError`. Its public accessors expose only the
@@ -907,7 +942,12 @@ attributes are `kind`, `code`, `plan_refusal`, `status`, `trace_id`, `transport_
 {/* Evidence: crates/registry-stack-client-node/breg/client.d.ts,
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi,
     crates/registry-breg-client-py/src/lib.rs, crates/registry-breg-client-node/src/lib.rs,
-    crates/registry-breg-client-node/client.js, crates/registry-breg-client/src/error.rs */}
+    crates/registry-breg-client-node/client.js, crates/registry-breg-client/src/error.rs,
+    crates/registry-breg-client-node/client.d.ts, JsonOutcome, valueJson, bodyJson, reviewJson,
+    crates/registry-breg-client-node/README.md,
+    crates/registry-breg-client-node/__test__/exact-json.test.js,
+    crates/registry-breg-client/tests/exact_json.rs, crates/registry-breg-client/src/lib.rs,
+    decode_exact_json, crates/registry-breg-client/src/strict_json.rs, validate_number_tokens */}
 
 ## Shared implementation boundary
 

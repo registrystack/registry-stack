@@ -818,6 +818,9 @@ jobs:
       - name: Test client registry reconciliation
         run: python3 -m unittest release/scripts/test_client_registry.py
 
+      - name: Test unified Node client facade sync
+        run: python3 -m unittest release/scripts/test_sync_registry_client_node.py
+
       - name: Test unified Python wheel assembly
         run: python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py
 
