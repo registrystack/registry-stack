@@ -742,7 +742,13 @@ fn field_type_name(field_type: &FieldTypeSource) -> &'static str {
         FieldTypeSource::VocabularyCode { .. } => "string",
         FieldTypeSource::Reference { .. } => "string",
         FieldTypeSource::Crs84Point { .. } => "geometry",
-        FieldTypeSource::Structured { .. } => "object",
+        FieldTypeSource::Structured { schema, .. } => {
+            if schema.get("type").and_then(Value::as_str) == Some("array") {
+                "array"
+            } else {
+                "object"
+            }
+        }
     }
 }
 
@@ -1183,5 +1189,23 @@ accessProfiles:
         let project = parse_project_yaml(source.as_bytes()).expect("fixture parses");
         compile_project(&project, &[], CompileProfile::Authoring)
             .unwrap_or_else(|failure| panic!("fixture compiles: {:?}", failure.diagnostics()))
+    }
+
+    #[test]
+    fn structured_field_types_report_their_declared_schema_root() {
+        assert_eq!(
+            field_type_name(&FieldTypeSource::Structured {
+                max_bytes: 512,
+                schema: json!({"type": "object", "additionalProperties": false}),
+            }),
+            "object"
+        );
+        assert_eq!(
+            field_type_name(&FieldTypeSource::Structured {
+                max_bytes: 512,
+                schema: json!({"type": "array", "items": {"type": "string"}}),
+            }),
+            "array"
+        );
     }
 }

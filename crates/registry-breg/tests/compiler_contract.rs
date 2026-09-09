@@ -7128,6 +7128,8 @@ fn structured_root_arrays_preserve_schema_and_closed_nested_object_validation() 
             false,
         ),
         (json!({"type":"string"}), false),
+        (json!({"type":"array"}), false),
+        (json!({"type":"array","items":true}), false),
     ] {
         let source = json!({
             "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",

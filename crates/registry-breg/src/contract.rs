@@ -1714,7 +1714,8 @@ pub(crate) fn valid_structured_schema(schema: &Value) -> bool {
     schema.as_object().is_some_and(|object| {
         (schema_declares_object(object)
             && object.get("additionalProperties") == Some(&Value::Bool(false)))
-            || object.get("type") == Some(&Value::String("array".to_owned()))
+            || (object.get("type") == Some(&Value::String("array".to_owned()))
+                && object.get("items").is_some_and(Value::is_object))
     }) && canonicalize_json(schema).is_ok_and(|bytes| bytes.len() <= MAX_STRUCTURED_SCHEMA_BYTES)
         && schema_refs_are_local(schema)
         && object_schemas_are_closed(schema)
