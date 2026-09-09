@@ -22,7 +22,9 @@ relevant product pages on this site rather than duplicating release notes.
 
 - BREAKING: request-lifecycle webhook bodies add required
   `request.reasonPresent` and optional `request.reason`. Update strict receiver
-  schemas before activating this release. See
+  schemas before activating this release. Deliveries that can match rejection
+  or revision now need a destination `classificationCeiling` of at least
+  `internal`, or lifecycle filters that exclude both outcomes. See
   [Base Registry Engine API](../reference/breg-api/) and
   [deliver declared events](../operate/breg-webhooks/).
 
