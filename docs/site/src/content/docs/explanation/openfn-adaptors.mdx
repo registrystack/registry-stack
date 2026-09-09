@@ -22,8 +22,8 @@ does and does not establish.
 {/* TODO[evidence]: adaptor behaviour, operation lists, result branches, and pilot topology live in
 the separate registrystack/openfn-language-registry-stack repository and cannot be anchored from
 this one. The statements below were checked against that repository's README, the three package
-READMEs, deployment/README.md, pilot/agriculture/README.md, and the two service READMEs at commit
-e3083a02d60c6ed28f440d7a8117741e6c736660. Re-verify them when that repository changes. */}
+READMEs, deployment/README.md, pilot/agriculture/README.md, the two service READMEs, and
+CHANGELOG.md at that repository's v0.1.0 tag. Re-verify them when that repository changes. */}
 
 ## Three adaptors, one client underneath
 
@@ -34,7 +34,12 @@ expression. The Registry Stack adaptors add three:
 |---|---|---|
 | `@openfn/language-registry-evidence` | Evidence Gateway | `evidence` namespace of `@registrystack/client` |
 | `@openfn/language-registry-breg` | BReg | `breg` namespace of `@registrystack/client` |
-| `@openfn/language-registry-relay` | Registry Relay | Plain HTTP over the protected Relay API |
+| `@openfn/language-registry-relay` | Registry Relay V1 | Plain HTTP over the protected Relay API |
+
+A fourth package, `@openfn/language-registry-notary`, keeps an earlier name for the surface Evidence
+Gateway carries now. The 0.1.0 beta checks and packages the Evidence and BReg adaptors alone and
+places both Relay and that older package outside its scope, so use the Evidence adaptor when a
+workflow needs a trust decision.
 
 The Evidence and BReg adaptors pin `@registrystack/client` at version 0.27.0 and delegate every
 security-relevant step to it. The native client owns request preparation, nonce generation, HTTP
@@ -135,12 +140,22 @@ aggregate queries, dataset discovery, and entity schemas. Collection reads requi
 limit and at least one filter unless you opt out. Use it when the workflow needs the data itself,
 and the Evidence adaptor when the workflow needs a trust decision.
 
-The adaptor also carries an evidence-offering listing. Do not build a workflow on it: Relay V2
-claims no Evidence capability family, the V1 metadata route that served offerings is retired, and
-evidence offerings are published by Registry Manifest instead.
+:::caution[The Relay adaptor speaks the V1 route surface]
+Its requests go to `/v1/datasets/{dataset}/entities/{entity}/records` and `/metadata/...`, the
+surface the V1 runtime published and the public lab still serves. Relay V2 answers under
+`/v2/resources/{resource}` instead, so every one of these operations misses on a V2 deployment.
+Upstream places Relay outside the 0.1.0 beta, and the pilot's worker image omits the adaptor.
+:::
 
-{/* Evidence: crates/registry-relay-v2/src/artifacts.rs builds unsupported_families with evidence
-among its entries, so every V2 capability inventory reports that family as unsupported.
+The adaptor's evidence-offering listing belongs to that same V1 surface, and it has no V2
+successor. A V2 capability inventory reports `evidence` among the families the runtime does not
+support, and evidence offerings are published by Registry Manifest instead.
+
+{/* Evidence: crates/registry-relay-v2/src/server.rs routes V2 requests through routes::RESOURCES,
+routes::RECORDS, and routes::LOOKUP under a v2/resources prefix, and nothing in
+crates/registry-relay-v2 serves the V1 dataset or metadata paths.
+crates/registry-relay-v2/src/artifacts.rs builds unsupported_families with evidence among its
+entries, so every V2 capability inventory reports that family as unsupported.
 docs/site/src/lib/relay-v2-retirement-redirects.mjs lists list_metadata_evidence_offerings among the
 V1 operation slugs the V2 cutover retired. crates/registry-manifest-core/src/lib.rs holds the
 EvidenceOfferingManifest that Registry Manifest compiles and renders. */}
