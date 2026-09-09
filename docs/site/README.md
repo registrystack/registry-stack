@@ -122,6 +122,23 @@ and uses the workspace lockfile. To inspect just the generated references, run
 command definitions. The collector's determinism, schema validation, and explicit
 human review metadata remain checked; generation does not publish draft CLI pages.
 
+The v3 CLI publication record separates reviewed command content from release
+identity. A workspace-version-only bump needs no new editorial review: the
+record keeps its original `last_reviewed`, `reviewed_source_version`, and
+`reviewed_catalog_sha256`. Generated pages still identify the current source
+version and full catalog digest. Any change to commands, help, defaults,
+environment bindings, or constraints requires review and updated values from
+`npm run cli-reference:digest`, including `reviewed_content_sha256`.
+Use the actual review date, never the release date merely because it changed.
+
+To migrate a legacy v2 record, run `npm run cli-reference:digest -- --migrate`.
+It proves the current commands match the old full digest at the recorded review
+version, then adds the content digest without changing the review date or source
+provenance. It also works after a version-only bump. If content differs, migration
+fails without editing the record; review the changed reference before updating
+its review fields. Repeating migration validates v3 without rewriting it.
+Historical release source trees and published archives retain their own records.
+
 When updating an older branch, resolve authored source conflicts first. If Git
 reports modify/delete conflicts under either generated directory, accept the
 removal from version control and run `npm run generate` after resolving sources.

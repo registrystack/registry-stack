@@ -1,9 +1,12 @@
 # Human-owned publication and source-review state for the generated CLI reference.
-# Change the review fields only after a human review against the exact source
-# version and generated catalog digest. Starlight excludes unreviewed output
-# because the generator emits `draft: true` while this record remains a draft.
-schema_version: registry.cli-reference-review/v2
+# Change review provenance only after a human review of changed command content.
+# Version-only changes preserve the review date, source version, and full digest.
+# Mechanical v2 migration adds the content digest after proving equivalence.
+# Starlight excludes unreviewed output because the generator emits `draft: true`
+# while this record remains a draft.
+schema_version: registry.cli-reference-review/v3
 status: current
 last_reviewed: 2026-09-09
 reviewed_source_version: "0.28.0"
 reviewed_catalog_sha256: 963786a42fbc256e5589e2016bb90c71ec2a7d27e963a26a84622aba4b913f37
+reviewed_content_sha256: 1cbf87c23af6c3f02b4469a41d5e1e3e590ae9d267697a694da6e1a4c540b790
