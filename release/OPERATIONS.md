@@ -298,7 +298,10 @@ directory must not already exist. Keep
 `report.json`, `prepare.log`, and, on success, `artifacts/documentation.patch`
 and `artifacts/v<version>.tar.gz` for inspection. The archive is preparation
 evidence, not a publication artifact. A rerun from the same committed inputs
-verifies an existing archive lock instead of replacing it.
+verifies an existing archive lock instead of replacing it. When creating a new
+lock from a candidate tag, preparation rejects a local tag pointing to a
+different source commit before starting Docker. Existing locked archives keep
+their published tag and must reproduce their recorded digest.
 
 If a build or check fails, inspect the retained report and log, fix the owning
 source, and commit the correction before retrying in a new output directory.
@@ -306,7 +309,7 @@ For a stale CLI publication record, regenerate and review the CLI reference
 before recording its digest and actual review date. For conflicting metadata
 or an archive digest mismatch, inspect the selected source and existing frozen
 record; do not rewrite historical metadata or locks to make the check pass.
-If your source revision or documentation inputs changed during the build,
+If your source revision or any tracked input changed during the build,
 `--apply` refuses the patch. Retain it for inspection and rerun from the
 intended committed source. A failed preparation does not apply its generated
 patch.

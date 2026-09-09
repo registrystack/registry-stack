@@ -72,12 +72,38 @@ def validate_inputs(repo: Path, version: str, release_id: str, date: str) -> str
     return git(repo, "rev-parse", "HEAD")
 
 
+def validate_candidate_tag(source: Path, version: str, release_id: str, source_sha: str) -> None:
+    import yaml
+
+    tag = f"v{version}"
+    manifest = yaml.safe_load((source / f"release/manifests/registry-stack-{release_id}.yaml").read_text())
+    if manifest["stack"].get("source_ref", tag) != tag:
+        return
+    try:
+        lock = yaml.safe_load((source / DOCS_INPUTS[2]).read_text())
+    except yaml.YAMLError as exc:
+        raise PreparationError("archive lock is not valid YAML") from exc
+    if not isinstance(lock, dict) or not isinstance(lock.get("archives", {}), dict):
+        raise PreparationError("archive lock must contain an archives object")
+    # Frozen archives are verified against their existing lock and published tag.
+    if tag in lock.get("archives", {}):
+        return
+    if git(source, "tag", "--list", tag):
+        tagged_sha = git(source, "rev-parse", f"refs/tags/{tag}^{{commit}}")
+        if tagged_sha != source_sha:
+            raise PreparationError(
+                f"local candidate tag {tag} conflicts with the prepared source; "
+                "use a checkout with the intended refs before preparing a new archive lock"
+            )
+
+
 def apply_patch(repo: Path, source_sha: str, patch: Path) -> None:
     if git(repo, "rev-parse", "HEAD") != source_sha:
         raise PreparationError("source HEAD changed during preparation; review the patch against the new source")
-    # Check both staged and unstaged changes; never apply over concurrent edits.
-    if git(repo, "status", "--porcelain", "--", *DOCS_INPUTS):
-        raise PreparationError("documentation inputs changed during preparation; retain and review the patch")
+    # Every tracked file can affect archive generation. Preserve the clean-source
+    # precondition, including staged and unstaged edits outside the docs patch.
+    if git(repo, "status", "--porcelain", "--untracked-files=no"):
+        raise PreparationError("tracked source inputs changed during preparation; retain and review the patch")
     if not patch.read_bytes():
         return
     git(repo, "apply", "--check", str(patch))
@@ -109,6 +135,7 @@ def prepare_docs(
         git(repo, "clone", "--no-local", "--no-checkout", str(repo), str(source))
         git(source, "checkout", "--detach", source_sha)
         git(source, "remote", "set-url", "origin", git(repo, "remote", "get-url", "origin"))
+        validate_candidate_tag(source, version, release_id, source_sha)
         artifacts = output / "artifacts"
         artifacts.mkdir()
         command = [
