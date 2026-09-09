@@ -12,6 +12,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, KeyInit, Mac};
+use registry_breg::contract::EventTrigger;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::{json, Value};
 use sha2::Sha256;
@@ -51,7 +52,15 @@ pub(super) struct Receiver {
 struct Inbox {
     root: PathBuf,
     key: Zeroizing<Vec<u8>>,
-    deliveries: BTreeMap<(String, String), (String, String)>,
+    deliveries: BTreeMap<(String, String), Delivery>,
+}
+
+struct Delivery {
+    id: String,
+    destination_id: String,
+    trigger: EventTrigger,
+    data_schema: String,
+    projection_fields: Vec<String>,
 }
 
 impl Receiver {
@@ -71,7 +80,13 @@ impl Receiver {
             .map(|delivery| {
                 (
                     (delivery.event_id.clone(), delivery.entity_id.clone()),
-                    (delivery.id.clone(), delivery.destination_id.clone()),
+                    Delivery {
+                        id: delivery.id.clone(),
+                        destination_id: delivery.destination_id.clone(),
+                        trigger: delivery.trigger,
+                        data_schema: delivery.data_schema.clone(),
+                        projection_fields: delivery.projection_fields.clone(),
+                    },
                 )
             })
             .collect();
@@ -81,7 +96,7 @@ impl Receiver {
     fn start_with_deliveries(
         root: &Path,
         port: u16,
-        deliveries: BTreeMap<(String, String), (String, String)>,
+        deliveries: BTreeMap<(String, String), Delivery>,
     ) -> Result<Self> {
         private::check(root, true)?;
         // Runtime secret:file resolution uses the exact file bytes as the HMAC
@@ -171,7 +186,7 @@ async fn receive(
             "local webhook verification refused",
         );
     };
-    let Some((delivery_id, destination_id)) = inbox.deliveries.get(&(
+    let Some(delivery) = inbox.deliveries.get(&(
         record["eventType"].as_str().unwrap_or_default().to_owned(),
         record["entity"].as_str().unwrap_or_default().to_owned(),
     )) else {
@@ -180,8 +195,28 @@ async fn receive(
             "local webhook verification refused",
         );
     };
-    record["deliveryId"] = Value::String(delivery_id.clone());
-    record["destinationId"] = Value::String(destination_id.clone());
+    // The runtime emits every compiled projection key, including fields whose
+    // captured value is null. Signed but differently shaped packets must not
+    // become teaching receipts for the captured event contract.
+    let values = record["payload"]
+        .as_object()
+        .expect("verified projection object");
+    if serde_json::from_value::<EventTrigger>(record["trigger"].clone()).ok()
+        != Some(delivery.trigger)
+        || header(&parts.headers, "ce-dataschema").ok() != Some(delivery.data_schema.as_str())
+        || values.len() != delivery.projection_fields.len()
+        || !delivery
+            .projection_fields
+            .iter()
+            .all(|field| values.contains_key(field))
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "local webhook verification refused",
+        );
+    }
+    record["deliveryId"] = Value::String(delivery.id.clone());
+    record["destinationId"] = Value::String(delivery.destination_id.clone());
     match append(&inbox.root, &record) {
         Ok(()) => (StatusCode::NO_CONTENT, ""),
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
@@ -456,10 +491,16 @@ mod tests {
             port,
             BTreeMap::from([(
                 ("record-created-v1".into(), "record".into()),
-                (
-                    "events.record.record-created-v1.webhook".into(),
-                    "local-hook".into(),
-                ),
+                Delivery {
+                    id: "events.record.record-created-v1.webhook".into(),
+                    destination_id: "local-hook".into(),
+                    trigger: EventTrigger::Created,
+                    data_schema: format!(
+                        "urn:breg:event-schema:example:record:record-created-v1:sha256:{}",
+                        "0".repeat(64)
+                    ),
+                    projection_fields: vec!["label".into()],
+                },
             )]),
         )
         .unwrap();
@@ -653,6 +694,72 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn signed_packets_must_match_compiled_trigger_schema_and_projection() {
+        let (root, port, _receiver) = fixture();
+        for change in [
+            "trigger",
+            "schema",
+            "extra projection",
+            "missing projection",
+        ] {
+            let (mut headers, body) = signed(1, 1);
+            let mut document = parse_json_strict(&body).unwrap();
+            match change {
+                "trigger" => document["trigger"] = json!("patched"),
+                "schema" => {
+                    headers.insert(
+                        "ce-dataschema",
+                        HeaderValue::from_str(&format!(
+                            "urn:breg:event-schema:example:record:record-created-v1:sha256:{}",
+                            "f".repeat(64)
+                        ))
+                        .unwrap(),
+                    );
+                }
+                "extra projection" => {
+                    document["values"]["undeclared"] = json!("extra-value-canary")
+                }
+                "missing projection" => {
+                    document["values"].as_object_mut().unwrap().remove("label");
+                }
+                _ => unreachable!(),
+            }
+            let body = canonicalize_json(&document).unwrap();
+            sign(&mut headers, &body);
+            assert_eq!(request(port, headers, body), 401, "{change}");
+            assert_eq!(
+                report(root.path(), true).unwrap()["deliveries"],
+                json!([]),
+                "{change}"
+            );
+        }
+        let (headers, body) = signed(1, 1);
+        assert_eq!(request(port, headers, body), 204);
+        assert_eq!(
+            report(root.path(), false).unwrap()["deliveries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn projected_null_values_remain_present_in_the_exact_key_set() {
+        let (root, port, _receiver) = fixture();
+        let (mut headers, body) = signed(1, 1);
+        let mut document = parse_json_strict(&body).unwrap();
+        document["values"]["label"] = Value::Null;
+        let body = canonicalize_json(&document).unwrap();
+        sign(&mut headers, &body);
+        assert_eq!(request(port, headers, body), 204);
+        assert_eq!(
+            report(root.path(), true).unwrap()["deliveries"][0]["payload"],
+            json!({"label":null})
+        );
     }
 
     #[test]
