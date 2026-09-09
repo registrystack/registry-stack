@@ -276,6 +276,7 @@ zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 futures-core.workspace = true
+tempfile.workspace = true
 rcgen.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 registry-breg-client.workspace = true

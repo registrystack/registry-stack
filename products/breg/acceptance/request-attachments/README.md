@@ -46,7 +46,8 @@ The `--verification` path additionally needs PyYAML. It starts a controlled
 loopback HTTP verifier and a second owned BReg listener with an operator
 `attachmentVerification` configuration against the activated disposable
 database. The original development listener remains idle. The verifier secret
-lives in the native development secret directory and is never printed.
+is passed through the child process environment and is never printed or written
+to a file.
 
 This path proves that uploads acknowledge while the verifier response is held,
 that pending evidence cannot be downloaded or submitted, and that a failed
