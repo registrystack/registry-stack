@@ -64,7 +64,10 @@ def validate_inputs(repo: Path, version: str, release_id: str, date: str) -> str
         raise PreparationError("release manifest must contain a stack object")
     if manifest.get("stack", {}).get("version") != version or manifest["stack"].get("release") != release_id:
         raise PreparationError("manifest must match the selected version and release ID")
-    if manifest.get("artifacts", {}).get("registry-docs") != version:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise PreparationError("release manifest must contain an artifacts object")
+    if artifacts.get("registry-docs") != version:
         raise PreparationError("manifest must include the selected registry-docs version")
     return git(repo, "rev-parse", "HEAD")
 
