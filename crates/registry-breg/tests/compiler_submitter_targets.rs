@@ -27,6 +27,7 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
         "unreadable-reference",
         "automatic",
         "request-target",
+        "optional-reference",
     ] {
         let mut candidate = original.clone();
         let holder = candidate["accessProfiles"]
@@ -53,6 +54,9 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
             "request-target" => {
                 holder["grants"][1]["submitterTargets"] = json!(["scope-correction"]);
                 candidate["entities"][1]["fields"][0]["target"] = json!("scope-correction");
+            }
+            "optional-reference" => {
+                candidate["entities"][1]["fields"][0]["required"] = json!(false)
             }
             _ => unreachable!(),
         }

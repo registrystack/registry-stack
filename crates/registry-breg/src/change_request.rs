@@ -567,7 +567,14 @@ pub(crate) fn compile_change_requests(
                         .iter()
                         .all(|effect| match &effect.target.binding {
                             CompiledChangeRequestTargetBinding::Existing { from_field } => {
+                                // Admission reads the target identifier from the
+                                // request record, so an absent value would only
+                                // surface as a runtime refusal.
                                 profile.readable_fields.contains(from_field)
+                                    && entity
+                                        .fields
+                                        .get(from_field)
+                                        .is_some_and(|field| field.required)
                             }
                             _ => false,
                         })
@@ -588,7 +595,7 @@ pub(crate) fn compile_change_requests(
                 errors.push(Diagnostic::error(
                     "change_request.submitter_targets.invalid",
                     format!("{}.submitterTargets", profile_path(&entity.id, &profile.id)),
-                    "submitterTargets requires manual application and exactly the fixed native-reference targets; each reference must be readable and each non-request target needs a same-profile get grant without membership boundaries",
+                    "submitterTargets requires manual application and exactly the fixed native-reference targets; each reference must be readable and required, and each non-request target needs a same-profile get grant without membership boundaries",
                 ));
             }
         }
