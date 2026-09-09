@@ -5,8 +5,9 @@
 
 pub mod breg {
     pub use registry_breg_client::{
-        BRegAttachmentError, BRegAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
-        BRegAttachmentUpload, BRegAttachmentVerificationStatus, BRegComplete, BRegContinuation,
+        BRegAttachmentClassification, BRegAttachmentError, BRegAttachmentSlot,
+        BRegAttachmentSlotValue, BRegAttachmentState, BRegAttachmentUpload,
+        BRegAttachmentVerificationStatus, BRegComplete, BRegContinuation,
         BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest, BRegDirectWrite,
         BRegEtag, BRegIdempotencyKey, BRegLifecycleAction, BRegLifecycleActionReceipt,
         BRegLifecycleAuthority, BRegLifecycleOperation, BRegListRequest, BRegLookupRequest,

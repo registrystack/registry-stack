@@ -96,6 +96,7 @@ class AttachmentTests(unittest.TestCase):
         self.assertTrue(self.slot.required_for_submit)
         self.assertEqual(self.slot.maximum_bytes, 1024)
         self.assertEqual(self.slot.content_types, ["application/pdf"])
+        self.assertEqual(self.slot.classification, "restricted")
         self.assertTrue(self.slot.accepts_content_type("application/pdf"))
         self.assertFalse(self.slot.accepts_content_type("image/png"))
         self.assertEqual((self.slot.can_download, self.slot.can_upload, self.slot.can_remove), (True, True, True))

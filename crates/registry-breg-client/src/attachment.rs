@@ -68,6 +68,35 @@ impl BRegAttachmentVerificationStatus {
     }
 }
 
+/// Authored sensitivity of the content one slot holds.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum BRegAttachmentClassification {
+    Public,
+    Internal,
+    Restricted,
+}
+
+impl BRegAttachmentClassification {
+    /// All classifications, in widening-sensitivity order.
+    pub const ALL: [Self; 3] = [Self::Public, Self::Internal, Self::Restricted];
+
+    /// Exact wire member value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Internal => "internal",
+            Self::Restricted => "restricted",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == value)
+    }
+}
+
 /// A value-free reason that an attachment cannot be prepared or decoded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -140,6 +169,7 @@ pub struct BRegAttachmentSlot {
     required_for_submit: bool,
     maximum_bytes: u64,
     content_types: Vec<String>,
+    classification: BRegAttachmentClassification,
     download: bool,
     upload: bool,
     remove: bool,
@@ -198,6 +228,13 @@ impl BRegAttachmentSlot {
     #[must_use]
     pub fn content_types(&self) -> &[String] {
         &self.content_types
+    }
+
+    /// Authored sensitivity of this slot's content. It says how the bytes must
+    /// be handled once downloaded; it does not widen or narrow any route.
+    #[must_use]
+    pub const fn classification(&self) -> BRegAttachmentClassification {
+        self.classification
     }
 
     /// Whether an upload with this exact content type would be accepted. A
@@ -264,7 +301,7 @@ impl BRegAttachmentSlot {
     ) -> Result<Self, BRegAttachmentError> {
         let refuse = || BRegAttachmentError::InvalidSlotValue;
         let descriptor = descriptor.as_object().ok_or_else(refuse)?;
-        let mut seen = 4;
+        let mut seen = 5;
         let required_for_submit = descriptor
             .get("requiredForSubmit")
             .and_then(Value::as_bool)
@@ -297,6 +334,11 @@ impl BRegAttachmentSlot {
         if unique.len() != content_types.len() {
             return Err(refuse());
         }
+        let classification = descriptor
+            .get("classification")
+            .and_then(Value::as_str)
+            .and_then(BRegAttachmentClassification::parse)
+            .ok_or_else(refuse)?;
         exact_verification_policy(descriptor.get("verification").ok_or_else(refuse)?)?;
 
         let template = format!(
@@ -331,6 +373,7 @@ impl BRegAttachmentSlot {
             required_for_submit,
             maximum_bytes,
             content_types,
+            classification,
             download,
             upload,
             remove,
@@ -345,6 +388,7 @@ impl fmt::Debug for BRegAttachmentSlot {
             .field("required_for_submit", &self.required_for_submit)
             .field("maximum_bytes", &self.maximum_bytes)
             .field("content_type_count", &self.content_types.len())
+            .field("classification", &self.classification)
             .field("download", &self.download)
             .field("upload", &self.upload)
             .field("remove", &self.remove)

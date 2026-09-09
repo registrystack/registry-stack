@@ -196,6 +196,7 @@ fn attachment_capability() -> Value {
         "requiredForSubmit": true,
         "maximumBytes": 1024,
         "contentTypes": ["application/pdf"],
+        "classification": "restricted",
         "verification": {
             "statusField": "verificationStatus",
             "allowedStatuses": ["notRequired", "approved"],

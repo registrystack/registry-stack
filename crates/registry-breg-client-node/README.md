@@ -99,9 +99,9 @@ await client.deleteAttachment(slot, recordId, nextEtag, 'remove-supporting-file-
 ```
 
 `slot` carries the served policy: `slotIdentifier`, `requiredForSubmit`,
-`maximumBytes`, `contentTypes`, `acceptsContentType(type)`, and the
-`canDownload`, `canUpload`, and `canRemove` routes the caller's profile was
-granted. `prepareUpload` refuses an empty body, a body larger than
+`maximumBytes`, `contentTypes`, `classification`, `acceptsContentType(type)`,
+and the `canDownload`, `canUpload`, and `canRemove` routes the caller's profile
+was granted. `prepareUpload` refuses an empty body, a body larger than
 `maximumBytes`, and any content type outside `contentTypes` before a request is
 built, so a refused upload never leaves the process. Uploads and removals need
 the record's current ETag and a caller-chosen idempotency key, exactly like

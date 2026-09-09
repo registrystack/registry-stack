@@ -135,6 +135,7 @@ fn descriptor() -> Value {
         "requiredForSubmit": true,
         "maximumBytes": 1024,
         "contentTypes": ["application/pdf", "image/png"],
+        "classification": "restricted",
         "verification": {
             "statusField": "verificationStatus",
             "allowedStatuses": ["notRequired", "approved"],
@@ -217,6 +218,10 @@ fn exact_slot_capability_promotes_every_advertised_route() {
     assert!(slot.required_for_submit());
     assert_eq!(slot.maximum_bytes(), 1024);
     assert_eq!(slot.content_types(), ["application/pdf", "image/png"]);
+    assert_eq!(
+        slot.classification(),
+        BRegAttachmentClassification::Restricted
+    );
     assert!(slot.accepts_content_type("image/png"));
     assert!(!slot.accepts_content_type("application/zip"));
     assert!(slot.can_download() && slot.can_upload() && slot.can_remove());
@@ -342,6 +347,16 @@ fn selection_refuses_every_deviation_from_the_served_slot_contract() {
         ("an unknown capability member", &|value: &mut Value| {
             value["retentionDays"] = json!(30)
         }),
+        (
+            "a classification outside the served set",
+            &|value: &mut Value| value["classification"] = json!("secret"),
+        ),
+        (
+            "a descriptor without a classification",
+            &|value: &mut Value| {
+                value.as_object_mut().unwrap().remove("classification");
+            },
+        ),
     ] {
         let mut value = descriptor();
         mutate(&mut value);

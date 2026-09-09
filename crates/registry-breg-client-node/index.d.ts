@@ -46,6 +46,8 @@ export declare class BRegAttachmentSlot {
   /** Largest body the served slot policy accepts, in bytes. */
   get maximumBytes(): number
   get contentTypes(): Array<string>
+  /** Authored sensitivity of this slot's content. */
+  get classification(): string
   get canDownload(): boolean
   get canUpload(): boolean
   get canRemove(): boolean
