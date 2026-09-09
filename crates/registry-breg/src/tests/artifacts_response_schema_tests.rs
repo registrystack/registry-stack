@@ -273,6 +273,83 @@ fn served_field_projection_keeps_response_data_strict_but_subsettable() {
 }
 
 #[test]
+fn current_and_retained_decision_schemas_match_client_reason_and_count_bounds() {
+    let registry = compiled_registry();
+    let openapi = generated_openapi(&registry);
+    let path = route_path(&registry, "placement-correction-request", Operation::Get);
+    let request_schema = &openapi["paths"][path]["get"]["responses"]["200"]["content"]
+        ["application/json"]["schema"]["properties"]["data"]["properties"]["request"];
+    let current = &request_schema["properties"]["decisions"];
+    let retained = &request_schema["properties"]["history"]["properties"]["proposals"]["items"]
+        ["properties"]["decisions"];
+    for schema in [current, retained] {
+        let validator = inline_validator(schema);
+        assert_valid(&validator, &json!([]));
+        for kind in ["approve", "reject", "request_revision"] {
+            let mut decision = json!({
+                "stageId": "review", "kind": kind,
+                "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": false
+            });
+            assert_valid(&validator, &json!([decision.clone()]));
+            decision["reason"] = json!("explanation");
+            assert!(!validator.is_valid(&json!([decision.clone()])));
+            decision.as_object_mut().unwrap().remove("reason");
+            decision["reasonPresent"] = json!(true);
+            assert_eq!(
+                validator.is_valid(&json!([decision.clone()])),
+                kind != "approve"
+            );
+            for reason in [json!(""), json!("  ตรวจสอบ 🙂  "), json!("🙂".repeat(4096))]
+            {
+                decision["reason"] = reason;
+                assert_eq!(
+                    validator.is_valid(&json!([decision.clone()])),
+                    kind != "approve"
+                );
+            }
+            for reason in [
+                Value::Null,
+                json!(false),
+                json!(1),
+                json!([]),
+                json!({}),
+                json!("a\0b"),
+                json!("🙂".repeat(4097)),
+            ] {
+                decision["reason"] = reason;
+                assert!(!validator.is_valid(&json!([decision.clone()])));
+            }
+        }
+        let decision = json!({
+            "stageId": "review", "kind": "approve",
+            "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": false
+        });
+        let mut with_stage = decision.clone();
+        with_stage["stageId"] = json!(format!("a{}", "_".repeat(63)));
+        assert_valid(&validator, &json!([with_stage.clone()]));
+        for stage in [
+            "".to_owned(),
+            "Review".to_owned(),
+            "1review".to_owned(),
+            "review stage".to_owned(),
+            "review\n".to_owned(),
+            "review\r\n".to_owned(),
+            "review\0".to_owned(),
+            "ตรวจสอบ".to_owned(),
+            "a".repeat(65),
+        ] {
+            with_stage["stageId"] = json!(stage);
+            assert!(!validator.is_valid(&json!([with_stage.clone()])));
+        }
+        let mut with_time = decision.clone();
+        with_time["decidedAt"] = json!(format!("2026-09-09T00:00:00.{}Z", "0".repeat(110)));
+        assert!(!validator.is_valid(&json!([with_time])));
+        assert_valid(&validator, &json!(vec![decision.clone(); 1024]));
+        assert!(!validator.is_valid(&json!(vec![decision; 1025])));
+    }
+}
+
+#[test]
 fn target_get_schema_accepts_bounded_request_presence_annotations() {
     let registry = compiled_registry();
     let openapi = generated_openapi(&registry);

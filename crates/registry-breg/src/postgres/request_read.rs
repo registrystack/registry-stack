@@ -25,8 +25,8 @@ use crate::postgres::{
 };
 use crate::request_prepare::{validate_frozen_targets, RequestTargetSnapshot};
 use crate::request_retention::{
-    RetainedHistoryQuery, RetainedRequestDecision, RetainedRequestProposal,
-    RetainedRequestResultLink,
+    RetainedHistoryQuery, RetainedRequestDecision, RetainedRequestHistoryPage,
+    RetainedRequestProposal, RetainedRequestResultLink,
 };
 use crate::request_workflow::{
     FrozenPlannerDisposition, FrozenReviewPolicy, ProposalSnapshot, RequestState, RequestWorkflow,
@@ -100,8 +100,16 @@ pub(super) async fn erased_terminal_request_record(
         return Ok(None);
     }
     let revision = u64::try_from(record_revision).map_err(|_| ReadServiceError::Unavailable)?;
-    let history =
-        retained_history(transaction, registry, request, claims, entity, record_uuid).await?;
+    let history = retained_history(
+        transaction,
+        registry,
+        request,
+        claims,
+        entity,
+        record_uuid,
+        None,
+    )
+    .await?;
     let mut record = RecordEnvelope {
         id: record_id.to_owned(),
         revision,
@@ -164,9 +172,16 @@ async fn annotate_request_records(
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
         if header.current_proposal_erased && header.is_terminal() {
-            let history =
-                retained_history(transaction, registry, request, claims, entity, record_uuid)
-                    .await?;
+            let history = retained_history(
+                transaction,
+                registry,
+                request,
+                claims,
+                entity,
+                record_uuid,
+                None,
+            )
+            .await?;
             record.request = Some(bound_request_metadata(erased_terminal_request_metadata(
                 &header,
                 history,
@@ -225,8 +240,16 @@ async fn annotate_request_records(
             actor_reference.as_deref(),
         )
         .await?;
-        let history =
-            retained_history(transaction, registry, request, claims, entity, record_uuid).await?;
+        let history = retained_history(
+            transaction,
+            registry,
+            request,
+            claims,
+            entity,
+            record_uuid,
+            Some(&workflow),
+        )
+        .await?;
         let mut metadata = Map::new();
         metadata.insert(
             "bregState".to_owned(),
@@ -892,7 +915,15 @@ async fn retained_history(
     claims: &ClaimContext,
     entity: &CompiledEntity,
     request_id: Uuid,
+    loaded_workflow: Option<&RequestWorkflow>,
 ) -> Result<Option<RetainedHistoryMetadata>, ReadServiceError> {
+    if let Some(workflow) = loaded_workflow {
+        let last_visible_version = i64::from(workflow.current_version().get())
+            - i64::from(workflow.current_proposal().is_none());
+        if request.request_history_after_proposal_version.unwrap_or(0) >= last_visible_version {
+            return Ok(None);
+        }
+    }
     let authorized_target_entities = BTreeSet::new();
     let mut page = crate::request_retention::load_retained_history(
         transaction,
@@ -907,6 +938,9 @@ async fn retained_history(
     )
     .await
     .map_err(|_| ReadServiceError::Unavailable)?;
+    if let Some(workflow) = loaded_workflow {
+        bind_history_to_workflow(&mut page, workflow);
+    }
     if page.proposals.is_empty() {
         return Ok(None);
     }
@@ -933,6 +967,58 @@ async fn retained_history(
         current_effect_digest,
         current_application_id,
     }))
+}
+
+// Historical rows may be read after the workflow under READ COMMITTED. Bind
+// lifecycle facts to the workflow already used for top-level metadata; newer
+// versions or a newly submitted current draft belong to a subsequent read.
+fn bind_history_to_workflow(page: &mut RetainedRequestHistoryPage, workflow: &RequestWorkflow) {
+    let current_version = i64::from(workflow.current_version().get());
+    let current_proposal = workflow.current_proposal();
+    let last_visible_version = current_version - i64::from(current_proposal.is_none());
+    let had_newer_versions = page
+        .proposals
+        .iter()
+        .any(|proposal| proposal.proposal_version > last_visible_version);
+    page.proposals
+        .retain(|proposal| proposal.proposal_version <= last_visible_version);
+    if had_newer_versions
+        || page
+            .proposals
+            .last()
+            .is_none_or(|proposal| proposal.proposal_version == last_visible_version)
+    {
+        page.next_after_proposal_version = None;
+    }
+    for proposal in &mut page.proposals {
+        proposal.request_state = request_state_name(workflow.state()).to_owned();
+        proposal.current = proposal.proposal_version == current_version;
+        if !proposal.current {
+            continue;
+        }
+        if let Some(snapshot) = current_proposal {
+            proposal.contract_fingerprint = snapshot.contract_fingerprint().as_str().to_owned();
+            proposal.effect_digest = snapshot.effect_digest().as_str().to_owned();
+        }
+        // A workflow only restores while its current proposal detail exists.
+        proposal.detail_erased = false;
+        proposal.application_id = workflow
+            .application()
+            .map(|application| application.application_id().as_str().to_owned());
+        proposal.result_link_count = 0;
+        proposal.result_links.clear();
+        proposal.decisions = workflow
+            .decisions()
+            .iter()
+            .map(|decision| RetainedRequestDecision {
+                stage_id: decision.stage_id().to_owned(),
+                kind: decision.kind().as_storage().to_owned(),
+                decided_at: decision.decided_at().as_str().to_owned(),
+                reason_present: decision.reason_present(),
+                reason: decision.reason().map(str::to_owned),
+            })
+            .collect();
+    }
 }
 
 struct RetainedHistoryMetadata {
@@ -1651,6 +1737,100 @@ mod tests {
                 .is_some_and(|claims| claims.entity_id() == "scope-correction"),
             "a grant admitting no submitter target reads the link under its own claims"
         );
+    }
+
+    #[test]
+    fn current_history_uses_loaded_lifecycle_despite_later_review_application_or_revision() {
+        let loaded = submitted_workflow(1, false);
+        let later = loaded
+            .clone()
+            .decide_with_reason(
+                context("later-reviewer", 2),
+                "review",
+                loaded.current_version(),
+                loaded.current_proposal().unwrap().effect_digest(),
+                ReviewDecisionKind::RequestRevision,
+                Some("later-feedback-canary".to_owned()),
+            )
+            .expect("later decision")
+            .into_workflow();
+        let later_decision = &later.decisions()[0];
+        let mut page = crate::request_retention::RetainedRequestHistoryPage {
+            proposals: (1..=2)
+                .map(|version| RetainedRequestProposal {
+                    request_entity_id: "request".to_owned(),
+                    request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+                    proposal_version: version,
+                    request_state: "applied".to_owned(),
+                    current: version == 2,
+                    contract_fingerprint: "sha256:later-contract".to_owned(),
+                    effect_digest: "sha256:later-effect".to_owned(),
+                    detail_erased: true,
+                    application_id: Some("00000000-0000-4000-8000-000000000099".to_owned()),
+                    result_link_count: 1,
+                    result_links: vec![RetainedRequestResultLink {
+                        target_entity_id: "target".to_owned(),
+                        target_record_id: "later-target".to_owned(),
+                        target_revision: 9,
+                    }],
+                    decisions: vec![RetainedRequestDecision {
+                        stage_id: later_decision.stage_id().to_owned(),
+                        kind: later_decision.kind().as_storage().to_owned(),
+                        decided_at: later_decision.decided_at().as_str().to_owned(),
+                        reason_present: true,
+                        reason: Some("later-feedback-canary".to_owned()),
+                    }],
+                })
+                .collect(),
+            next_after_proposal_version: Some(2),
+        };
+        let mut submitted_page = page.clone();
+        super::bind_history_to_workflow(&mut submitted_page, &loaded);
+        assert_eq!(submitted_page.proposals.len(), 1);
+        assert_eq!(submitted_page.next_after_proposal_version, None);
+        let current = &submitted_page.proposals[0];
+        assert_eq!(current.request_state, "submitted");
+        assert!(current.current);
+        assert!(!current.detail_erased);
+        assert!(current.application_id.is_none());
+        assert_eq!(current.result_link_count, 0);
+        assert!(current.result_links.is_empty());
+        assert_eq!(
+            current.effect_digest,
+            loaded.current_proposal().unwrap().effect_digest().as_str()
+        );
+        for disclose in [true, false] {
+            let history = retained_history_value(current.clone(), true, disclose);
+            assert_eq!(
+                history["decisions"],
+                super::workflow_decisions_value(&loaded, disclose)
+            );
+            assert!(!history.to_string().contains("later-feedback-canary"));
+        }
+        super::bind_history_to_workflow(&mut page, &later);
+        for disclose in [true, false] {
+            let history = retained_history_value(page.proposals[0].clone(), true, disclose);
+            assert_eq!(
+                history["decisions"],
+                super::workflow_decisions_value(&later, disclose)
+            );
+        }
+        let draft = later
+            .revise(context("owner-ref", 3))
+            .expect("revise to next draft")
+            .into_workflow();
+        // A concurrent submission creates a proposal for this draft's version.
+        let mut later_current = page.proposals[0].clone();
+        later_current.proposal_version = 2;
+        later_current.current = true;
+        page.proposals.push(later_current);
+        page.next_after_proposal_version = Some(2);
+        super::bind_history_to_workflow(&mut page, &draft);
+        assert_eq!(page.proposals.len(), 1);
+        assert_eq!(page.proposals[0].proposal_version, 1);
+        assert_eq!(page.proposals[0].request_state, "draft");
+        assert!(!page.proposals[0].current);
+        assert_eq!(page.next_after_proposal_version, None);
     }
 
     #[test]

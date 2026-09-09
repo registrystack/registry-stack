@@ -3103,14 +3103,28 @@ fn request_application_metadata_schema(require_receipt_fields: bool) -> Value {
 fn request_decisions_schema() -> Value {
     json!({
         "type": "array",
+        "maxItems": 1024,
         "items": {
             "type": "object",
             "additionalProperties": false,
             "required": ["stageId", "kind", "decidedAt", "reasonPresent"],
+            "allOf": [
+                {
+                    "if": {"properties": {"kind": {"const": "approve"}}},
+                    "then": {"properties": {"reasonPresent": {"const": false}}}
+                },
+                {
+                    "if": {"properties": {"reasonPresent": {"const": false}}},
+                    "then": {"not": {"required": ["reason"]}}
+                }
+            ],
             "properties": {
-                "stageId": {"type": "string"},
+                "stageId": {
+                    "type": "string", "minLength": 1, "maxLength": 64,
+                    "pattern": "^[a-z]", "not": {"pattern": "[^a-z0-9_-]"}
+                },
                 "kind": {"enum": ["approve", "reject", "request_revision"]},
-                "decidedAt": {"type": "string", "format": "date-time"},
+                "decidedAt": {"type": "string", "format": "date-time", "maxLength": 128},
                 "reasonPresent": {"type": "boolean"},
                 "reason": review_reason_schema()
             }
