@@ -1220,9 +1220,9 @@ impl MutationCoordinator {
                 )
                 .as_ref(),
             )?;
-            if !request
+            if request
                 .expected_etag
-                .is_some_and(|expected| expected.as_bytes().ct_eq(etag.as_bytes()).unwrap_u8() == 1)
+                .is_none_or(|expected| expected.as_bytes().ct_eq(etag.as_bytes()).unwrap_u8() != 1)
             {
                 return Err(MutationError::PreconditionFailed);
             }

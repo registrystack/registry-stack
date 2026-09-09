@@ -43,6 +43,14 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def read_runtime_yaml(path: str) -> dict:
+    try:
+        import yaml
+    except ImportError:
+        raise RuntimeError("--verification requires PyYAML") from None
+    return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+
+
 def test_request_attachment_journey() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=ROOT / "target/debug",
@@ -52,11 +60,6 @@ def test_request_attachment_journey() -> None:
                         help="Exercise asynchronous external verification and quarantine (requires PyYAML)")
     parser.add_argument("--keep", action="store_true", help="Keep owner-only reports after success")
     args = parser.parse_args()
-    if args.verification:
-        try:
-            import yaml
-        except ImportError:
-            raise RuntimeError("--verification requires PyYAML") from None
     binaries = args.bin_dir.resolve()
     for name in ("bregctl", "breg", "mint"):
         require((binaries / name).is_file(), f"Build the matching {name} binary first")
@@ -115,7 +118,7 @@ def test_request_attachment_journey() -> None:
 
         if args.verification:
             verifier_secret = uuid.uuid4().hex
-            (token_files / "verifier-authorization").write_text(verifier_secret, encoding="utf-8")
+            environment["BREG_ACCEPTANCE_VERIFIER_AUTHORIZATION"] = verifier_secret
 
             class VerifierHandler(http.server.BaseHTTPRequestHandler):
                 def log_message(self, *_args):
@@ -143,17 +146,21 @@ def test_request_attachment_journey() -> None:
                         self.end_headers()
                         self.wfile.write(raw)
                     except (BrokenPipeError, ConnectionResetError):
-                        pass
+                        # Holding the verdict deliberately lets the worker time out.
+                        # Close that abandoned response without logging its request.
+                        self.close_connection = True
 
             verifier = http.server.ThreadingHTTPServer(("127.0.0.1", 0), VerifierHandler)
             verifier_thread = threading.Thread(target=verifier.serve_forever, daemon=True)
             verifier_thread.start()
-            configured = yaml.safe_load(Path(runtime).read_text(encoding="utf-8"))
+            configured = read_runtime_yaml(runtime)
+            configured["secretProviders"]["environment"] = {}
             configured_port = free_ports()[0]
             configured["listener"]["bind"] = f"127.0.0.1:{configured_port}"
             configured["attachmentVerification"] = {
                 "kind": "http", "endpoint": f"http://127.0.0.1:{verifier.server_port}/verify",
-                "authorizationRef": "secret:file/verifier-authorization", "policyId": "acceptance-v1",
+                "authorizationRef": "secret:env/BREG_ACCEPTANCE_VERIFIER_AUTHORIZATION",
+                "policyId": "acceptance-v1",
                 "timeoutMilliseconds": 1000}
             runtime = str(temporary / "verified-runtime.json")
             Path(runtime).write_text(json.dumps(configured), encoding="utf-8")
@@ -348,7 +355,6 @@ def test_request_attachment_journey() -> None:
                     and metadata["sha256"] in verifier_mode["hashes"],
                     "Approval was not obtained for exact replacement bytes")
             print("Replacement evidence required its own verdict; rejected content remained unavailable.", flush=True)
-        version = uploaded["data"]["request"]["proposalVersion"]
         document(action("submit_request", "owner", key="attachment-submit"), 200, "Submit complete draft")
         submitted, _ = get("reviewer")
         version = submitted["data"]["request"]["proposalVersion"]
@@ -413,7 +419,6 @@ def test_request_attachment_journey() -> None:
             try:
                 cli("dev-remove", "dev", "stop", str(project), "--remove", "--docker-bin", str(docker))
             except Exception:
-                passed = False
                 print(f"Owned development cleanup failed; private state: {temporary}")
                 raise
         if passed and not args.keep:
