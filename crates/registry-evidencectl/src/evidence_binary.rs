@@ -237,11 +237,48 @@ fn is_candidate_executable(path: &Path) -> bool {
     }
 }
 
+/// Run a freshly written executable stub, waiting only for Linux ETXTBSY.
+/// A concurrent test's fork can inherit the writer descriptor until its own
+/// exec closes it. Deployed binaries are not being written, so this bounded
+/// retry belongs exclusively to tests, never runtime delegation.
+#[cfg(test)]
+pub(crate) fn retry_busy_stub<T>(run: impl FnMut() -> Result<T>) -> Result<T> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    retry_busy_stub_while(run, || {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(10));
+        true
+    })
+}
+
+#[cfg(test)]
+fn retry_busy_stub_while<T>(
+    mut run: impl FnMut() -> Result<T>,
+    mut wait_and_retry: impl FnMut() -> bool,
+) -> Result<T> {
+    loop {
+        match run() {
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::ExecutableFileBusy)
+                }) && wait_and_retry() => {}
+            result => return result,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs::OpenOptions, io::Write as _, os::unix::fs::OpenOptionsExt as _, path::Path};
 
-    use super::{ensure_matching_version_within, reported_version, Duration};
+    use super::{
+        ensure_matching_version_within, reported_version, retry_busy_stub, retry_busy_stub_while,
+        Duration,
+    };
 
     fn write_stub(path: &Path, script: &str) {
         let mut file = OpenOptions::new()
@@ -261,8 +298,10 @@ mod tests {
         let evidence = root.path().join("evidence-stub");
         write_stub(&evidence, "#!/bin/sh\nsleep 60\n");
 
-        let error = ensure_matching_version_within(&evidence, Duration::from_millis(200))
-            .expect_err("a binary that never answers must be refused");
+        let error = retry_busy_stub(|| {
+            ensure_matching_version_within(&evidence, Duration::from_millis(200))
+        })
+        .expect_err("a binary that never answers must be refused");
 
         let diagnostic = format!("{error:#}");
         assert!(
@@ -285,8 +324,9 @@ mod tests {
             "#!/bin/sh\nyes 'evidence 0.0.0' | head -c 1048576\n",
         );
 
-        let error = ensure_matching_version_within(&evidence, Duration::from_secs(30))
-            .expect_err("a flooding binary must be refused");
+        let error =
+            retry_busy_stub(|| ensure_matching_version_within(&evidence, Duration::from_secs(30)))
+                .expect_err("a flooding binary must be refused");
 
         let diagnostic = format!("{error:#}");
         assert!(
@@ -307,8 +347,71 @@ mod tests {
             ),
         );
 
-        ensure_matching_version_within(&evidence, Duration::from_secs(30))
+        retry_busy_stub(|| ensure_matching_version_within(&evidence, Duration::from_secs(30)))
             .expect("the matching runtime is accepted");
+    }
+
+    #[test]
+    fn freshly_written_stub_retries_a_busy_error_in_its_context_chain() {
+        let mut attempts = 0;
+        let result = retry_busy_stub_while(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(anyhow::Error::new(std::io::Error::from(
+                        std::io::ErrorKind::ExecutableFileBusy,
+                    ))
+                    .context("starting test stub"))
+                } else {
+                    Ok("completed")
+                }
+            },
+            || true,
+        );
+        assert_eq!(result.unwrap(), "completed");
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn freshly_written_stub_preserves_an_unrelated_failure_without_waiting() {
+        let error = retry_busy_stub_while::<()>(
+            || {
+                Err(
+                    anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                        .context("starting test stub"),
+                )
+            },
+            || panic!("only an executable-busy failure may wait"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(error.to_string(), "starting test stub");
+    }
+
+    #[test]
+    fn freshly_written_stub_returns_the_busy_failure_when_the_wait_expires() {
+        let mut attempts = 0;
+        let mut waits = 0;
+        let error = retry_busy_stub_while::<()>(
+            || {
+                attempts += 1;
+                Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy).into())
+            },
+            || {
+                waits += 1;
+                waits < 3
+            },
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 3);
+        assert_eq!(waits, 3);
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::ExecutableFileBusy
+        );
     }
 
     #[test]
