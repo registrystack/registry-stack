@@ -35,6 +35,7 @@ use crate::contract::{
 use crate::contract::{AccessProfileSource, LookupValueOrigin, Operation};
 use crate::data::{validate_field_value, FieldValue};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
+use crate::event_destination::EventDestinationActivationError;
 use crate::model::CompiledRoute;
 use crate::model::{ActionRouteKind, CompiledAction, CompiledActionGrant, CompiledActionRoute};
 use crate::model::{CompiledQueryKind, CompiledQueryOperation, CompiledRegistry, HttpMethod};
@@ -72,6 +73,30 @@ const MAX_SUPPORTED_POSTGRES_MAJOR: u16 = 18;
 
 type CredentialMap = BTreeMap<(String, String), Option<Zeroizing<String>>>;
 
+/// Value-free failures while preparing the runtime used by schema tests.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SchemaTestRuntimeSetupError {
+    Authentication,
+    Audit,
+    Cursor,
+    EventDestinations(EventDestinationActivationError),
+    Evidence,
+}
+
+impl fmt::Display for SchemaTestRuntimeSetupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Authentication => formatter.write_str("schema-test authentication setup failed"),
+            Self::Audit => formatter.write_str("schema-test audit setup failed"),
+            Self::Cursor => formatter.write_str("schema-test cursor setup failed"),
+            Self::EventDestinations(error) => write!(formatter, "schema-test {error}"),
+            Self::Evidence => {
+                formatter.write_str("schema-test Evidence provider activation failed")
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FixtureError {
     JourneyTooLarge,
@@ -86,6 +111,7 @@ pub enum FixtureError {
     ResponseShapeRefused,
     ExpectationMismatch,
     ExecutionRefused,
+    RuntimeSetup(SchemaTestRuntimeSetupError),
     CandidateBindingRefused,
     ReceiptShapeRefused,
     ReceiptBindingRefused,
@@ -115,6 +141,9 @@ pub enum FixtureError {
 
 impl fmt::Display for FixtureError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::RuntimeSetup(error) = self {
+            return fmt::Display::fmt(error, formatter);
+        }
         if let Self::StepFailed {
             journey_index,
             step_index,
@@ -167,7 +196,8 @@ impl fmt::Display for FixtureError {
             Self::CandidateBindingRefused => "the schema test candidate binding was refused",
             Self::ReceiptShapeRefused => "the schema test receipt shape was refused",
             Self::ReceiptBindingRefused => "the schema test receipt binding was refused",
-            Self::ResponseStatusMismatch { .. }
+            Self::RuntimeSetup(_)
+            | Self::ResponseStatusMismatch { .. }
             | Self::StepFailed { .. }
             | Self::JourneyShapeInvalid { .. }
             | Self::JourneyRefused { .. }
@@ -2956,7 +2986,7 @@ pub async fn execute_schema_test(
     let key_source = config
         .oidc_key_source()
         .await
-        .map_err(|_| FixtureError::ExecutionRefused)?;
+        .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?;
     execute_schema_test_with_key_source(database, config, package, suite, credentials, key_source)
         .await
 }
@@ -3081,22 +3111,22 @@ impl SchemaTestRuntime {
         key_source
             .ensure_key_set()
             .await
-            .map_err(|_| FixtureError::ExecutionRefused)?;
+            .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?;
         let pool = database.pool();
         let registry = Arc::new(compiled);
         let audit_profile = config
             .audit_profile()
-            .map_err(|_| FixtureError::ExecutionRefused)?;
+            .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Audit))?;
         let cursor_codec = Arc::new(
             config
                 .cursor_codec()
-                .map_err(|_| FixtureError::ExecutionRefused)?,
+                .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Cursor))?,
         );
-        let event_destinations = Arc::new(
-            config
-                .activate_event_destinations(&registry)
-                .map_err(|_| FixtureError::ExecutionRefused)?,
-        );
+        let event_destinations = Arc::new(config.activate_event_destinations(&registry).map_err(
+            |error| {
+                FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::EventDestinations(error))
+            },
+        )?);
         let authenticator = Arc::new(
             RegistryAuthenticator::new(
                 &registry,
@@ -3104,7 +3134,7 @@ impl SchemaTestRuntime {
                 Arc::clone(&key_source),
                 config.authentication().authority_claim_config(),
             )
-            .map_err(|_| FixtureError::ExecutionRefused)?,
+            .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?,
         );
         let verifier = TokenVerifier::new(
             config.authentication().oidc().token_verifier_config(),
@@ -3142,7 +3172,7 @@ impl SchemaTestRuntime {
         ));
         let evidence = config
             .activate_evidence(&registry)
-            .map_err(|_| FixtureError::ExecutionRefused)?;
+            .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Evidence))?;
         let mutations = PostgresRecordMutationService::new_with_event_destinations(
             pool.clone(),
             Arc::clone(&registry),

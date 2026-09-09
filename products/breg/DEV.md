@@ -39,7 +39,7 @@ deadline fails, stops what it acquired and keeps its owner-only diagnostics.
 `dev stop` keeps everything it created: the owned container, its named data
 volume, records, audit history, keys, credentials and the built package. Add
 `--remove` to reclaim the storage as well; it removes the owned container and
-its `breg-dev-<owner>` data volume, discarding records, audit history and seed
+its `breg-dev-<owner>` data volume, discarding records, audit history, event receipts and seed
 checkpoints. For an initial package at sequence 1, the next start builds an empty
 database from the same authored project, ports, credentials and package. It also
 lets the next start take edited
@@ -54,6 +54,59 @@ runtime configuration and private credential file references. Keys and access
 tokens never appear in these reports. Tokens expire; the installed `mint token`
 command can obtain a fresh token using a reported client ID file, key file and
 token endpoint. Redirect that command's output to an owner-only file.
+
+## Observe local events
+
+Declare an event with a webhook destination in the authored project before
+the first start. `dev` binds every compiled destination to its own HMAC-verifying
+receiver on a free numeric loopback port. No separate receiver or destination
+configuration is needed. The receiver port, signing key, and bindings are
+retained across restarts; a conflicting receiver port is refused.
+
+After a seed, example scenario, or API write triggers an event, inspect receipts:
+
+```sh
+bregctl dev events ./registry
+bregctl --format json dev events ./registry
+bregctl dev events ./registry --include-payload
+```
+
+The default report shows the event UUID, authored event, entity, trigger,
+compiled delivery and destination IDs, generation, attempt and `received`
+status. Record IDs and projected values are omitted. `--include-payload`
+explicitly displays the projected values from the development receiver.
+Receipts remain available while the session is stopped. `dev stop --remove`
+erases the receipt journal along with the records, including captured payloads.
+
+The receiver keeps these development values in the owner-only
+`.breg/dev/events.jsonl` journal, outside version control. Its 16 MiB bound
+prevents unbounded storage; when full, it refuses further receipts and the
+runtime follows its normal retry/dead-letter policy. While stopped, move the
+journal to an owner-only location if it needs to be preserved, then start again
+to create an empty inbox. Treat captured values as private development data.
+
+A receipt means the receiver accepted that attempt. The runtime's pending and
+dead-letter queue is inspected separately. Supply the local PostgreSQL CA and
+the absolute runtime configuration path:
+
+```sh
+SSL_CERT_FILE="$PWD/registry/.breg/dev/tls/ca.pem" \
+  bregctl webhook list --runtime-config "$PWD/registry/.breg/dev/runtime.yaml"
+```
+
+Delivered rows leave that queue. Automatic retries keep the event UUID and
+idempotency key; an eligible operator replay increments the generation. Use
+the identifiers and generation from `webhook list` with `bregctl webhook replay
+--help`. Supply the same `SSL_CERT_FILE` and absolute runtime path for replay.
+The normal event delivery, dead-letter and replay rules also apply to
+this generated runtime. See [Events and webhooks](EVENTS-AND-WEBHOOKS.md).
+
+The supervisor starts the receiver before BReg and stops it after BReg during
+normal shutdown or failed startup. It captures runtime deliveries, including
+seed writes; the disposable schema-test rehearsal does not dispatch webhooks.
+Projects declaring no webhook destinations start without a receiver and report
+an empty inbox. These bindings are local development configuration; operated
+deployments must bind their own destinations and signing keys.
 
 ## Explicit teaching clients
 
@@ -192,7 +245,7 @@ identifiable and reclaimable once the container is gone.
 | Stop, including repeated stop | Gracefully stop owned BReg and Mint children and stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and audit history. |
 | Stop where no start ever ran | Refuse and name the absent session. Nothing is created, changed or removed, so a mistyped project path cannot read as a stopped session. |
 | Start after stop | Reuse the same container, database, and existing credentials. Preserve record edits; activate the explicitly prepared source successor when present. Obtain fresh short-lived tokens. |
-| Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
+| Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history, event receipts and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
 | Start after `--remove` | At sequence 1, create an empty container and volume, activate the initial package, and replay authored seeds. A retained successor refuses before Docker because its predecessor records were removed; use a fresh project at sequence 1 for an empty experiment. |
 | Seed request committed before checkpoint | Replay the same permanent BReg idempotency reservation. The original create result is returned without creating or overwriting a record. |
 | Partial start failure | Stop acquired service children and the owned container; retain private diagnostics and completed phases. Retry the same command after correcting the prerequisite. The separate schema-test database may be recreated for a failed rehearsal. |
@@ -225,3 +278,7 @@ credentials.
 When startup fails, the error names the retained private `logs` directory.
 Native command and service diagnostics are bounded per stream. Inspect them
 locally; do not publish logs or the generated state as a support attachment.
+Schema-test setup failures identify destination inventory or activation,
+authentication, cursor, audit, or Evidence configuration. Correct that named
+configuration before retrying; recreating the database cannot fix a missing
+destination binding or invalid secret.

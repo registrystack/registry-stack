@@ -6,6 +6,7 @@
 //! Docker ID match its private journal. There is intentionally no reset.
 
 mod config;
+mod events;
 pub mod examples;
 mod export_client;
 mod prepare_source;
@@ -81,6 +82,8 @@ enum DevAction {
     Start(StartArgs),
     /// Stop only this project's supervised services, preserving its database.
     Stop(StopArgs),
+    /// Show received local webhook deliveries, hiding projected values by default.
+    Events(EventsArgs),
     /// Copy an explicitly selected retained local client credential pair.
     ExportClient(export_client::ExportClientArgs),
     /// Review or prepare a bounded lookup successor for a stopped retained registry.
@@ -130,6 +133,16 @@ struct StopArgs {
 }
 
 #[derive(Debug, Args)]
+struct EventsArgs {
+    /// Local registry project whose retained deliveries should be inspected.
+    #[arg(value_name = "PROJECT", default_value = ".")]
+    project: PathBuf,
+    /// Explicitly show projected values captured by the development receiver.
+    #[arg(long)]
+    include_payload: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct SupervisorArgs {
     #[arg(long)]
     dev_root: PathBuf,
@@ -151,6 +164,9 @@ struct State {
     breg_port: u16,
     mint_port: u16,
     database_port: u16,
+    /// Kernel-selected loopback receiver port, retained with destination bindings.
+    #[serde(default)]
+    webhook_port: Option<u16>,
     clients_file: PathBuf,
     source_digest: String,
     sequence: u64,
@@ -245,6 +261,8 @@ impl State {
             json!({"ok":true,"command":"dev","status":self.status,"project":self.project,
             "stateFile":self.root().join("state.json"),"runtimeConfig":self.root().join("runtime.yaml"),
             "bregUrl":self.breg_origin(),"tokenEndpoint":format!("{}/token",self.mint_origin()),
+            "webhookUrl":self.webhook_port.map(|port|format!("http://127.0.0.1:{port}/events")),
+            "eventsFile":self.webhook_port.map(|_|self.root().join("events.jsonl")),
             "audience":self.audience(),"packageRevision":self.package_revision,"packageSequence":self.sequence,"activationPending":!self.activated,
             "clients":clients.clients.iter().map(|client|json!({"id":client.id,"accessProfiles":client.access_profiles,
                 "clientIdFile":client.client_id_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("client-id")),
@@ -256,6 +274,12 @@ impl State {
 pub fn run(args: DevArgs) -> Result<Value> {
     match args.action {
         Some(DevAction::Stop(args)) => stop(&args.project, args.remove, args.docker_bin.as_deref()),
+        Some(DevAction::Events(args)) => {
+            let project = project(&args.project)?;
+            private::check(&project.join(".breg"), true)?;
+            let state = read_state(&project.join(".breg/dev"))?;
+            events::report(&state.root(), args.include_payload)
+        }
         Some(DevAction::Start(args)) => start(args),
         Some(DevAction::ExportClient(args)) => export_client::run(args),
         Some(DevAction::PrepareSource(args)) => prepare_source::run(*args),
@@ -327,6 +351,11 @@ fn read_state(root: &Path) -> Result<State> {
         bail!("retained dev state ownership is invalid; no resources were changed");
     }
     ports(state.breg_port, state.mint_port, state.database_port)?;
+    if state.webhook_port.is_some_and(|port| {
+        port == 0 || [state.breg_port, state.mint_port, state.database_port].contains(&port)
+    }) {
+        bail!("retained webhook receiver needs a distinct nonzero loopback port");
+    }
     Ok(state)
 }
 
@@ -342,6 +371,55 @@ fn probe(port: u16) -> Result<()> {
     TcpListener::bind(("127.0.0.1", port))
         .map(drop)
         .context("a requested local port is already occupied; stop its owner or choose other ports")
+}
+
+fn receiver_port(state: &State) -> Result<u16> {
+    loop {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let port = listener.local_addr()?.port();
+        if ![state.breg_port, state.mint_port, state.database_port].contains(&port) {
+            return Ok(port);
+        }
+    }
+}
+
+/// Older versions could retain a failed rehearsal with declared events but
+/// no receiver binding. Repair that incomplete local setup without touching
+/// its database, credentials, or captured source.
+fn prepare_receiver(state: &mut State, clients: &Clients) -> Result<()> {
+    if state.webhook_port.is_some() {
+        return Ok(());
+    }
+    let root = state.root();
+    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+        .map_err(|_| anyhow::anyhow!("captured event project no longer compiles"))?;
+    if compiled.event_deliveries().deliveries.is_empty() {
+        return Ok(());
+    }
+    if state.package_revision.is_some() || state.activated {
+        bail!("an activated local event package lacks its retained receiver binding; preserve its state for inspection");
+    }
+    let port = receiver_port(state)?;
+    let key = root.join("secrets/webhook-key");
+    if fs::symlink_metadata(&key).is_ok() {
+        private::check(&key, false)?;
+    } else {
+        config::webhook_secret(&root)?;
+    }
+    state.webhook_port = Some(port);
+    let runtime = root.join("runtime-test.yaml");
+    if runtime.exists() {
+        private::check(&runtime, false)?;
+        fs::remove_file(runtime)?;
+    }
+    config::runtime(
+        &root,
+        state,
+        clients,
+        &format!("sha256:{}", "1".repeat(64)),
+        true,
+    )?;
+    state.save()
 }
 
 /// Name the first journey step whose access profile no local client binds.
@@ -503,7 +581,7 @@ fn start(args: StartArgs) -> Result<Value> {
             bail!("first dev start requires package.sequence: 1");
         }
         let previous = previous.as_ref();
-        let state = State {
+        let mut state = State {
             version: 1,
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
@@ -520,6 +598,7 @@ fn start(args: StartArgs) -> Result<Value> {
                 .database_port
                 .or(previous.map(|s| s.database_port))
                 .unwrap_or(55432),
+            webhook_port: None,
             clients_file,
             source_digest: digest,
             sequence: 1,
@@ -539,17 +618,24 @@ fn start(args: StartArgs) -> Result<Value> {
         for port in [state.breg_port, state.mint_port, state.database_port] {
             probe(port)?;
         }
+        if !compiled.event_deliveries().deliveries.is_empty() {
+            state.webhook_port = Some(receiver_port(&state)?);
+        }
         initialize(&root, &state, &clients, &files)?;
         read_state(&root)?
     };
     if state.sequence > 1 && state.container_id.is_none() {
         bail!("the retained successor database was explicitly removed; a successor package cannot initialize empty records. Create a fresh project with package.sequence: 1 before starting a new database");
     }
+    prepare_receiver(&mut state, &clients)?;
     verify_outputs(&state)?;
     let breg = executable("breg", args.breg_bin.as_deref())?;
     let mint = executable("mint", args.mint_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;
     for port in [state.breg_port, state.mint_port] {
+        probe(port)?;
+    }
+    if let Some(port) = state.webhook_port {
         probe(port)?;
     }
     // Verify the container before accepting a retained database port.
@@ -642,7 +728,6 @@ fn initialize(
     private::directory(&stage)?;
     let result = (|| {
         private::create(&stage.join(".gitignore"), b"*\n")?;
-        config::prepare(&stage, original, clients)?;
         private::create(&stage.join("clients.json"), &serde_json::to_vec(clients)?)?;
         private::directory(&stage.join("project"))?;
         for (relative, bytes) in files {
@@ -655,6 +740,7 @@ fn initialize(
             }
             private::create(&path, bytes)?;
         }
+        config::prepare(&stage, original, clients)?;
         let mut state = original.clone();
         for client in &clients.clients {
             for (destination, key) in [
@@ -805,6 +891,7 @@ fn reclaim(docker: &Path, state: &mut State) -> Result<()> {
         &["volume", "rm", "--force", &state.volume_name()],
         None,
     )?;
+    events::clear(&state.root())?;
     reclaimed(state);
     state.save()
 }
@@ -906,6 +993,9 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
     let mut children = Children::default();
     let result = (|| {
         ensure_active(&terminate)?;
+        if let Some(port) = state.webhook_port {
+            children.receiver = Some(events::Receiver::start(&root, port)?);
+        }
         database(&args.docker_bin, &mut state)?;
         ensure_active(&terminate)?;
         children.mint = Some(service(
@@ -1068,9 +1158,13 @@ fn read_control_command(stream: &mut impl Read) -> Result<Vec<u8>> {
 struct Children {
     breg: Option<Child>,
     mint: Option<Child>,
+    receiver: Option<events::Receiver>,
 }
 impl Children {
     fn exited(&mut self) -> Result<bool> {
+        if self.receiver.as_ref().is_some_and(events::Receiver::exited) {
+            return Ok(true);
+        }
         for child in [&mut self.breg, &mut self.mint].into_iter().flatten() {
             if child.try_wait()?.is_some() {
                 return Ok(true);
@@ -1087,6 +1181,8 @@ impl Children {
                 }
             }
         }
+        // Stop the receiver only once BReg can no longer send deliveries.
+        self.receiver.take();
         match error {
             Some(error) => Err(error),
             None => Ok(()),

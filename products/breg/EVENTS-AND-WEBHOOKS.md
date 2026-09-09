@@ -191,6 +191,11 @@ The first complete journey must be possible without reading Rust code:
   but no deployed URLs or secrets.
 - `bregctl webhook sample` writes an exact example request with
   synthetic values and a placeholder signature.
+- `bregctl dev start` binds declared destinations to an owned loopback receiver.
+  `bregctl dev events` shows received delivery metadata; `--include-payload`
+  explicitly reveals projected development values. See the
+  [native development lifecycle](DEV.md#observe-local-events) for retention
+  and runtime queue inspection.
 - `bregctl webhook list` shows value-free pending and dead-letter
   status.
 - `bregctl webhook replay` replays one eligible dead letter using

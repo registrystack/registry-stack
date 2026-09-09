@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use registry_breg::fixtures::{
     execute_schema_test, validate_fixture_journeys, FixtureError, SchemaTestCredentialBinding,
-    SchemaTestCredentialBindings,
+    SchemaTestCredentialBindings, SchemaTestRuntimeSetupError,
 };
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use registry_breg::startup;
@@ -68,6 +68,7 @@ pub(crate) enum TestLifecycleError {
     Database,
     FieldPatternSyntax { entity_id: String, field_id: String },
     Execution,
+    RuntimeSetup(SchemaTestRuntimeSetupError),
     OutputPreflight,
     OutputCommit,
     Runtime,
@@ -482,6 +483,7 @@ fn execution_error(error: FixtureError) -> TestLifecycleError {
             path: format!("journeys[{journey_index}].steps[{step_index}]"),
             message: error.to_string(),
         },
+        FixtureError::RuntimeSetup(error) => TestLifecycleError::RuntimeSetup(error),
         FixtureError::CandidateBindingRefused => TestLifecycleError::Database,
         _ => TestLifecycleError::Execution,
     }
@@ -754,6 +756,73 @@ mod tests {
             output.exists(),
             "the receipt whose identity the preflight never learned is left in place"
         );
+    }
+
+    #[test]
+    fn runtime_setup_failures_report_the_configuration_boundary_without_database_advice() {
+        use registry_breg::event_destination::EventDestinationActivationError;
+
+        let mut cases = vec![
+            (
+                SchemaTestRuntimeSetupError::Authentication,
+                "test.authentication.setup_failed",
+                "authentication",
+            ),
+            (
+                SchemaTestRuntimeSetupError::Audit,
+                "test.audit.setup_failed",
+                "audit",
+            ),
+            (
+                SchemaTestRuntimeSetupError::Cursor,
+                "test.cursor.setup_failed",
+                "cursor",
+            ),
+            (
+                SchemaTestRuntimeSetupError::Evidence,
+                "test.evidence_providers.activation_failed",
+                "evidenceProviders",
+            ),
+            (
+                SchemaTestRuntimeSetupError::EventDestinations(
+                    EventDestinationActivationError::InventoryMismatch,
+                ),
+                "test.event_destinations.inventory_mismatch",
+                "eventDestinations",
+            ),
+        ];
+        for error in [
+            EventDestinationActivationError::InvalidBinding,
+            EventDestinationActivationError::DeliveryCeilingWidening,
+            EventDestinationActivationError::Secret,
+            EventDestinationActivationError::InvalidSigningMaterial,
+            EventDestinationActivationError::InvalidTlsMaterial,
+        ] {
+            cases.push((
+                SchemaTestRuntimeSetupError::EventDestinations(error),
+                "test.event_destinations.activation_failed",
+                "eventDestinations",
+            ));
+        }
+        for (error, code, path) in cases {
+            let report =
+                crate::test_lifecycle_failure(execution_error(FixtureError::RuntimeSetup(error)));
+            let diagnostic = &report.diagnostics[0];
+            assert_eq!(diagnostic.code, code);
+            assert_eq!(diagnostic.path, path);
+            assert_eq!(
+                diagnostic.artifact,
+                crate::DiagnosticArtifact::RuntimeConfiguration
+            );
+            assert_eq!(
+                diagnostic.suggested_action,
+                crate::SuggestedAction::CorrectRuntimeConfiguration
+            );
+            assert!(!diagnostic.message.contains("recreate"));
+            assert!(diagnostic.message.contains("before retrying"));
+            let serialized = serde_json::to_string(&report).expect("failure report serializes");
+            assert!(!serialized.contains("recreate_disposable_database"));
+        }
     }
 
     #[test]

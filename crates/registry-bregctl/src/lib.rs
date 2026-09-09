@@ -3103,8 +3103,60 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
     }
 }
 
+fn schema_test_runtime_setup_failure(
+    error: registry_breg::fixtures::SchemaTestRuntimeSetupError,
+) -> FailureReport {
+    use registry_breg::event_destination::EventDestinationActivationError;
+    use registry_breg::fixtures::SchemaTestRuntimeSetupError;
+
+    let (code, path, recovery) = match &error {
+        SchemaTestRuntimeSetupError::Authentication => (
+            "test.authentication.setup_failed",
+            "authentication",
+            "check the authentication configuration, OIDC key source availability, and referenced secrets before retrying",
+        ),
+        SchemaTestRuntimeSetupError::Audit => (
+            "test.audit.setup_failed",
+            "audit",
+            "check the audit configuration and referenced key material before retrying",
+        ),
+        SchemaTestRuntimeSetupError::Cursor => (
+            "test.cursor.setup_failed",
+            "cursor",
+            "check the cursor configuration and referenced key material before retrying",
+        ),
+        SchemaTestRuntimeSetupError::EventDestinations(
+            EventDestinationActivationError::InventoryMismatch,
+        ) => (
+            "test.event_destinations.inventory_mismatch",
+            "eventDestinations",
+            "configure exactly the logical destination bindings required by the candidate event deliveries before retrying",
+        ),
+        SchemaTestRuntimeSetupError::EventDestinations(_) => (
+            "test.event_destinations.activation_failed",
+            "eventDestinations",
+            "check the destination bindings, delivery ceilings, and referenced secret, signing, and TLS material before retrying",
+        ),
+        SchemaTestRuntimeSetupError::Evidence => (
+            "test.evidence_providers.activation_failed",
+            "evidenceProviders",
+            "check the Evidence provider bindings and referenced credentials against the candidate before retrying",
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command: "test",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, &format!("{error}; {recovery}")),
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        )],
+    }
+}
+
 fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
     let error = match error {
+        TestLifecycleError::RuntimeSetup(error) => return schema_test_runtime_setup_failure(error),
         TestLifecycleError::FieldPatternSyntax {
             entity_id,
             field_id,
@@ -3192,6 +3244,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         TestLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        TestLifecycleError::RuntimeSetup(_) => unreachable!("handled before match"),
         TestLifecycleError::JourneySyntax { .. } => unreachable!("handled before match"),
         TestLifecycleError::Journeys { .. } => unreachable!("handled before match"),
         TestLifecycleError::Credentials { .. } => unreachable!("handled before match"),
@@ -5656,8 +5709,8 @@ entities:
   # An entity may also declare `events`, which project chosen fields of a
   # committed change to a webhook destination the deployment binds by name.
   # This project declares none: a package refuses to activate until the runtime
-  # configuration binds every destination its events name, so add an event and
-  # its binding together.
+  # configuration binds every destination its events name. `bregctl dev`
+  # supplies local receiver bindings; operated deployments bind their own.
   - id: record
     primaryDataset: generic-registry
     route: records
@@ -8742,6 +8795,8 @@ fn write_dev_success(
                 ("package revision", "packageRevision"),
                 ("state file", "stateFile"),
                 ("runtime config", "runtimeConfig"),
+                ("webhook receiver", "webhookUrl"),
+                ("events file", "eventsFile"),
             ]
             .into_iter()
             .filter_map(|(label, field)| {
@@ -8751,6 +8806,44 @@ fn write_dev_success(
             })
             .collect();
             lines.pairs(&pairs);
+            if let Some(deliveries) = report["deliveries"].as_array() {
+                lines.blank();
+                lines.item(&format!(
+                    "{} received.",
+                    report::counted(deliveries.len(), "delivery")
+                ));
+                for delivery in deliveries {
+                    lines.blank();
+                    let pairs: Vec<(&str, String)> = [
+                        ("event id", "eventId"),
+                        ("event", "eventType"),
+                        ("entity", "entity"),
+                        ("trigger", "trigger"),
+                        ("delivery", "deliveryId"),
+                        ("destination", "destinationId"),
+                        ("status", "status"),
+                        ("generation", "generation"),
+                        ("attempt", "attempt"),
+                    ]
+                    .into_iter()
+                    .filter_map(|(label, field)| {
+                        delivery.get(field).map(|value| {
+                            (
+                                label,
+                                value
+                                    .as_str()
+                                    .map(str::to_owned)
+                                    .unwrap_or_else(|| value.to_string()),
+                            )
+                        })
+                    })
+                    .collect();
+                    lines.pairs_at(2, &pairs);
+                    if let Some(payload) = delivery.get("payload") {
+                        lines.pairs_at(2, &[("payload", payload.to_string())]);
+                    }
+                }
+            }
             // Credential file references, never credential bytes.
             let clients = report["clients"].as_array().into_iter().flatten();
             for client in clients {
