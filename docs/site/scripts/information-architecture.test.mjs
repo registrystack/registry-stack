@@ -217,6 +217,7 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
     'tutorials/request-evidence-from-an-application',
     'tutorials/verify-an-assertion-as-a-consumer',
     'tutorials/manage-evidence-verifier-trust',
+    'explanation/openfn-adaptors',
   ]);
   assert.deepEqual(wallet.items.map((item) => item.slug), [
     'configure/enable-sd-jwt-vc',
@@ -411,6 +412,8 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'operate/breg-data',
     'tutorials/query-breg-client',
     'reference/client-api',
+    'explanation/esignet-authentication-over-breg',
+    'explanation/openfn-adaptors',
     'reference/breg-configuration',
     'reference/breg-api',
     'reference/bregctl-publicschema-wizard',

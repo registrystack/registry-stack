@@ -1,0 +1,234 @@
+---
+title: Automate registry workflows with OpenFn
+description: How the Registry Stack adaptors for OpenFn expose Evidence Gateway, Base Registry Engine, and Registry Relay to Lightning workflows, and what the synthetic agriculture pilot proves.
+status: draft
+owner: registry-docs
+source_repos: [registry-stack, openfn-language-registry-stack]
+last_reviewed: "2026-09-09"
+doc_type: explanation
+locale: en
+standards_referenced: [govstack-digital-registries]
+---
+
+You run [OpenFn](https://www.openfn.org/) Lightning to move data between government systems, and
+you want its workflows to read from and write to Evidence Gateway, Base Registry Engine (BReg), and
+Registry Relay without hand-writing HTTP calls or storing raw records in workflow state. The
+[Registry Stack adaptors for OpenFn](https://github.com/registrystack/openfn-language-registry-stack)
+give you that: three adaptor packages that wrap the maintained clients, plus a self-hosted synthetic
+pilot that shows registration, reviewed correction, and event-driven downstream updates end to end.
+This page explains what each adaptor does, how you configure it, how it fails, and what the pilot
+does and does not establish.
+
+{/* TODO[evidence]: adaptor behaviour, operation lists, result branches, and pilot topology live in
+the separate registrystack/openfn-language-registry-stack repository and cannot be anchored from
+this one. The statements below were checked against that repository's README, the three package
+READMEs, deployment/README.md, pilot/agriculture/README.md, and the two service READMEs at commit
+e3083a02d60c6ed28f440d7a8117741e6c736660. Re-verify them when that repository changes. */}
+
+## Three adaptors, one client underneath
+
+OpenFn adaptors are Node packages whose exported operations become the vocabulary of a job
+expression. The Registry Stack adaptors add three:
+
+| Adaptor | Talks to | Built on |
+|---|---|---|
+| `@openfn/language-registry-evidence` | Evidence Gateway | `evidence` namespace of `@registrystack/client` |
+| `@openfn/language-registry-breg` | BReg | `breg` namespace of `@registrystack/client` |
+| `@openfn/language-registry-relay` | Registry Relay | Plain HTTP over the protected Relay API |
+
+The Evidence and BReg adaptors pin `@registrystack/client` at version 0.27.0 and delegate every
+security-relevant step to it. The native client owns request preparation, nonce generation, HTTP
+transport, response bounds, pinned-key trust, revocation, signature verification, and the
+`private_key_jwt` token exchange. The adaptors only resolve OpenFn inputs, map typed client failures
+to workflow branches, redact selectors and credentials, and shape the result. They implement no
+authorization logic and no alternative HTTP client of their own.
+
+That client is a Node-API native binding around the Rust clients, not a WebAssembly build. It ships
+for macOS arm64, Linux amd64 with glibc, and Linux arm64 with glibc. Alpine and other musl images are
+unsupported, which is why the pilot repackages the upstream worker on a glibc base.
+
+{/* Evidence: crates/registry-stack-client-node/package.json and
+crates/registry-stack-client-node/index.js define the @registrystack/client facade and its
+discovery, evidence, relay, and breg namespaces that the adaptors import. */}
+
+## Configuring credentials
+
+Every adaptor reads its configuration from the OpenFn credential attached to the job, never from
+event data or job source. The shape differs per adaptor.
+
+**Evidence adaptor.** Use `configuration.evidence` in one of two modes:
+
+- **Explicit mode** names the service base URL, the reviewed signing keys in `trustedJwks`, any
+  `revokedKeyIds`, and exactly one token source: a `static` bearer token or a `privateKeyJwt` block
+  with the token endpoint, client ID, and a private JWK. The JWKS and revocation list are
+  relying-party trust configuration. Verification never fetches keys from Evidence Gateway and
+  never follows a key URL from a response.
+- **Profile mode** points `profilePath` at a reviewed `registry.evidence-client-profile/v1` JSON
+  file mounted into the worker, optionally with `privateKeyJwk` from the credential. The profile
+  owns service expectations, verification policy, and contracts. The two modes cannot be combined.
+
+**BReg adaptor.** Use `configuration.breg` with the registry base URL and an `authorization` block
+that is either `{ static }` or `{ privateKeyJwt }` with the same fields as above. Token and registry
+TLS trust roots and timeouts are independent settings.
+
+**Relay adaptor.** Create a credential with `relay_base_url` and `token`. The adaptor sends the
+token as a bearer credential and requires an explicit `purpose` on every read.
+
+Configuration stays available between operations inside one job so that `execute`, `each`, and
+successive requests can authenticate. The OpenFn runtime removes it from the final output by
+default. Record inputs and outputs stay in `data`, and the job is responsible for minimizing them
+before the next step.
+
+{/* Evidence: crates/registry-evidence-client-node/src/lib.rs exposes from_profile and
+crates/registry-evidence-client/src/profile.rs defines the registry.evidence-client-profile/v1
+document the adaptor's profile mode loads. */}
+
+## What each adaptor does
+
+### Evidence: one assertion, verified
+
+`requestEvidence` prepares a fixed request from the job's inputs, sends it, and returns only after
+the native client has verified the signature, the time window, and the policy expectations. On
+success the result carries the verified assertion, the exact flattened JWS bytes for retention, a
+trace ID for support, the accepted subject bindings, and explicit verification flags.
+`selectSupportedValue` picks one value by its governed concept identifier.
+
+Subject continuity is explicit. On first contact you either pass `acceptFirstUse` and persist the
+returned pinned bindings, or in profile mode you receive an opaque continuity receipt. Later requests
+pass those bindings or that receipt back, and only then does a matched result prove the assertion
+concerns the same subject as before.
+
+Selector values referenced with `valueFrom` are removed from the returned data, including on
+failure. The adaptor requests signed JWS only and publishes no native handles into workflow state.
+
+### BReg: governed reads and writes
+
+The BReg adaptor covers metadata discovery, exact lookups, single-page lists with explicit
+continuation, record creation, patching, change-request creation, and lifecycle actions. It follows
+the same rules a careful direct client would:
+
+- **Writes select their authority from metadata.** Every write fetches caller-filtered metadata
+  inside the operation and binds to the exact operation and access profile. No function accepts a
+  write URL, a serialized binding, or an arbitrary action URL as authority.
+- **Every mutation carries its own idempotency key.** Derive it from the source event and the
+  operation. A temporary failure can leave an outcome unknown, and the only safe recovery is to
+  replay the exact request with the same key and preconditions.
+- **Patches need the record's strong ETag.** Lifecycle actions need the separate action-specific
+  `ifMatch` value from the request's advertised actions, never the record ETag. The lifecycle helper
+  refetches the contract and the record and refuses to act on a changed proposal.
+- **Drafts do not submit themselves.** Creating a change request produces a draft. Submitting,
+  approving, rejecting, requesting revision, revising, cancelling, and applying are separate
+  lifecycle operations, each subject to the actor and stage that the registry's metadata advertises.
+
+Patch members are written as field operations such as replace on a named field. The native client
+builds and validates the HTTP patch document, so job authors never touch JSON Pointer paths.
+
+### Relay: protected reads
+
+The Relay adaptor is for workflows already authorized to read registry rows, metadata,
+relationships, or aggregates directly. It offers single-record reads, filtered and bounded lists,
+aggregate queries, dataset discovery, entity schemas, and evidence-offering discovery. Collection
+reads require an explicit limit and at least one filter unless you opt out. Use it when the
+workflow needs the data itself, and the Evidence adaptor when the workflow needs a trust decision.
+
+## How operations fail
+
+Every operation returns a state function that writes a result with a `branch` field. Check the
+branch before consuming a value or starting a dependent mutation.
+
+The Evidence adaptor distinguishes `invalid_request`, `authentication_failed`, `not_authorized`,
+`response_format_not_acceptable`, `evidence_not_available`, `retryable_infrastructure`, and
+`failed`. An unresolved subject is `evidence_not_available`, and the adaptor never coerces that into
+a Boolean `false`. The Evidence Gateway service reports the same condition as an
+`evidence.unavailable` problem.
+
+The BReg adaptor distinguishes `invalid_request`, `auth_failed`, `denied`, `not_found`, `conflict`,
+`retryable_infrastructure`, `protocol_failed`, and `failed`. Failures include a safe problem with a
+code, a retryable flag, and an optional HTTP status. Exception messages, response problem prose,
+credentials, and record values are excluded.
+
+Neither adaptor nor the native client retries or follows redirects. Retry policy belongs to the
+workflow, where it can be tied to the idempotency key and the source-event correlation.
+
+{/* Evidence: crates/registry-evidence/src/problem.rs and crates/registry-evidence/src/contracts.rs
+define the evidence.unavailable problem code the Evidence adaptor maps to its
+evidence_not_available branch. */}
+
+## The synthetic agriculture pilot
+
+The repository ships a complete self-hosted pilot so you can see the adaptors run against real
+services before designing your own workflows. It adapts the maintained agricultural-holdings core
+starter, keeping its Farm, holder, responsibility, and reviewed name-correction model, and runs
+upstream Lightning 2.18.2 with websocket worker 1.29.0 beside BReg, Mint, Evidence Gateway, an
+authenticated event bridge, and a small SQLite destination.
+
+Three workflows carry the story:
+
+| Workflow | What it does | Boundary it demonstrates |
+|---|---|---|
+| Registration | Creates one Farm with a stable submission key and returns its UUID. | An exact retry returns the same record. Changed content under the same key conflicts. |
+| Correction | Creates and submits a name-correction request and returns the request UUID. | A separate reviewer approves and then explicitly applies it. Submission and approval leave the Farm unchanged. |
+| Committed Farm event | Verifies an HMAC-signed registry event, requests signed registration Evidence, and updates the destination. | Only the verified Boolean, the record reference, and the revision reach the destination. |
+
+Authority is split across principals on purpose:
+
+- `openfn-service` creates farms, resolves their local identifier, and creates and submits its own
+  corrections. It cannot review, apply, patch a Farm directly, list collections, or maintain holders.
+- `reviewer` inspects, approves, and explicitly applies a proposed correction from a tools container
+  that holds its private key. OpenFn never receives that key. Approval binds to the inspected
+  proposal version, effect digest, and lifecycle ETag, and a stale snapshot is refused.
+- `evidence-source` performs one exact Farm lookup that returns only the local identifier. It
+  cannot read names, list records, or write.
+- `holding-registered` is the single Boolean concept Evidence Gateway signs. It means a unique
+  holding currently resolves in this synthetic register and claims nothing about eligibility, land
+  rights, activity, ownership, or a person's identity.
+
+The event path is where the products compose. BReg's transactional outbox delivers committed Farm
+events as CloudEvents signed under the `breg-webhook-signature-v1` HMAC contract. The event bridge
+verifies the signature in constant time, checks source, type, schema, delivery time, and payload
+shape, and only then posts a minimized envelope to a fixed OpenFn webhook protected by a separate
+API key. The destination deduplicates on source, event ID, and effect, refuses a changed payload
+under the same key, and only advances a record to a higher revision, so at-least-once delivery never
+regresses state.
+
+{/* Evidence: crates/registry-breg/src/webhook.rs defines SIGNATURE_DOMAIN as
+breg-webhook-signature-v1 and crates/registry-breg/tests/postgres_webhook_delivery.rs exercises the
+outbox delivery the pilot's event bridge verifies. products/breg/starters/agricultural-holdings/core/registry.yaml
+is the starter the pilot adapts. */}
+
+## What the pilot does not establish
+
+- **It is synthetic and local.** Every person, holding, identifier, and credential is generated for
+  an isolated pilot. Only the Lightning UI and the two pilot service ports are published, all on host
+  loopback.
+- **It runs on linux/amd64 only.** The released Lightning and worker images provide that platform
+  alone. Apple Silicon runs it under emulation. The adaptor layer loads natively on arm64, but that
+  does not establish arm64 worker support without an upstream arm64 image.
+- **The Relay adaptor is not in the worker image.** The pilot packages the Evidence and BReg
+  adaptors with the upstream `common` and `http` adaptors. Relay reads are outside its journeys.
+- **Setup is not acceptance.** Setup builds images, generates private inputs, initializes the
+  registry, and provisions the operator. The smoke run, not setup, is what proves the three
+  workflows, the reviewer path, the event-driven Evidence request, and the destination effect.
+- **Inherited learning profiles are wide.** The starter's reader, editor, and reviewer grants keep
+  registry-wide collection and history access. A production deployment reviews its population scope
+  before reusing them.
+
+## Using the adaptors in your own OpenFn
+
+To load the adaptors into another compatible OpenFn installation, point the worker at a checkout of
+the repository through its local-adaptor variables and reference the packages as
+`@openfn/language-registry-evidence@local` and `@openfn/language-registry-breg@local`. The worker
+must run Node on glibc for the native client to load. The individual adaptor READMEs carry the
+credential schemas, operation options, and standalone composition rules.
+
+## Next
+
+- [Request evidence from an application](../../tutorials/request-evidence-from-an-application/)
+  for the direct client flow the Evidence adaptor wraps.
+- [Query BReg with Python and Node](../../tutorials/query-breg-client/) for the direct client flow
+  the BReg adaptor wraps.
+- [Send registry events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) for the
+  outbox and signature contract the event bridge verifies.
+- [Integration patterns](../integration-patterns/) for where a workflow engine sits among the other
+  ways to wire Registry Stack in.
+- [Client API reference](../../reference/client-api/) for the namespaces the adaptors build on.
