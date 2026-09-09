@@ -12,7 +12,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, KeyInit, Mac};
-use registry_breg::contract::EventTrigger;
+use registry_breg::model::{CompiledEventDelivery, CompiledRegistry};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::{json, Value};
 use sha2::Sha256;
@@ -58,9 +58,30 @@ struct Inbox {
 struct Delivery {
     id: String,
     destination_id: String,
-    trigger: EventTrigger,
     data_schema: String,
-    projection_fields: Vec<String>,
+    schema: jsonschema::JSONSchema,
+}
+
+impl Delivery {
+    fn compile(registry: &CompiledRegistry, delivery: &CompiledEventDelivery) -> Result<Self> {
+        let artifact = registry
+            .artifacts()
+            .get(&delivery.data_schema_artifact_path)
+            .context("compiled local event schema is missing")?;
+        let schema =
+            parse_json_strict(&artifact.bytes).context("compiled local event schema is invalid")?;
+        let schema = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(&schema)
+            .map_err(|_| anyhow::anyhow!("compiled local event schema cannot be validated"))?;
+        Ok(Self {
+            id: delivery.id.clone(),
+            destination_id: delivery.destination_id.clone(),
+            data_schema: delivery.data_schema.clone(),
+            schema,
+        })
+    }
 }
 
 impl Receiver {
@@ -78,18 +99,12 @@ impl Receiver {
             .deliveries
             .iter()
             .map(|delivery| {
-                (
+                Ok((
                     (delivery.event_id.clone(), delivery.entity_id.clone()),
-                    Delivery {
-                        id: delivery.id.clone(),
-                        destination_id: delivery.destination_id.clone(),
-                        trigger: delivery.trigger,
-                        data_schema: delivery.data_schema.clone(),
-                        projection_fields: delivery.projection_fields.clone(),
-                    },
-                )
+                    Delivery::compile(&compiled, delivery)?,
+                ))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         Self::start_with_deliveries(root, port, deliveries)
     }
 
@@ -180,7 +195,7 @@ async fn receive(
     else {
         return (StatusCode::BAD_REQUEST, "invalid local webhook request");
     };
-    let Ok(mut record) = verify(&inbox.key, &parts.headers, &body) else {
+    let Ok((mut record, document)) = verify(&inbox.key, &parts.headers, &body) else {
         return (
             StatusCode::UNAUTHORIZED,
             "local webhook verification refused",
@@ -195,20 +210,11 @@ async fn receive(
             "local webhook verification refused",
         );
     };
-    // The runtime emits every compiled projection key, including fields whose
-    // captured value is null. Signed but differently shaped packets must not
-    // become teaching receipts for the captured event contract.
-    let values = record["payload"]
-        .as_object()
-        .expect("verified projection object");
-    if serde_json::from_value::<EventTrigger>(record["trigger"].clone()).ok()
-        != Some(delivery.trigger)
-        || header(&parts.headers, "ce-dataschema").ok() != Some(delivery.data_schema.as_str())
-        || values.len() != delivery.projection_fields.len()
-        || !delivery
-            .projection_fields
-            .iter()
-            .all(|field| values.contains_key(field))
+    // Validate the complete body against the same generated contract that
+    // supplies its signed schema identity, including nullable projected fields
+    // and the closed request metadata on lifecycle events.
+    if header(&parts.headers, "ce-dataschema").ok() != Some(delivery.data_schema.as_str())
+        || !delivery.schema.is_valid(&document)
     {
         return (
             StatusCode::UNAUTHORIZED,
@@ -257,7 +263,7 @@ fn digest(value: &str) -> bool {
     })
 }
 
-fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<Value> {
+fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)> {
     let signed = SIGNED_HEADERS
         .iter()
         .map(|name| header(headers, name))
@@ -358,12 +364,13 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<Value> {
     if !signed[5].strip_prefix(&prefix).is_some_and(digest) {
         bail!("webhook schema does not match event metadata");
     }
-    Ok(json!({
+    let record = json!({
         "eventId":signed[1],"eventType":signed[3],"entity":document["entity"],
         "trigger":document["trigger"],"deliveryId":null,"idempotencyKey":idempotency_key,
         "generation":generation,"attempt":attempt,"status":"received",
         "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":document["values"]
-    }))
+    });
+    Ok((record, document))
 }
 
 fn storage_lock(root: &Path) -> Result<File> {
@@ -472,9 +479,73 @@ pub(super) fn report(root: &Path, include_payload: bool) -> Result<Value> {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+    use registry_breg::{
+        compiler::{compile_project, CompileProfile},
+        contract::{parse_project_json, EventTrigger},
+    };
     use std::{io::Write, net::TcpStream, os::unix::fs::PermissionsExt, time::Instant};
 
     fn fixture() -> (tempfile::TempDir, u16, Receiver) {
+        fixture_with_contract(EventTrigger::Created, false)
+    }
+
+    fn fixture_with_contract(
+        trigger: EventTrigger,
+        vocabulary: bool,
+    ) -> (tempfile::TempDir, u16, Receiver) {
+        let mut field =
+            json!({"id":"label", "type":"string", "maxLength":64, "classification":"internal"});
+        if vocabulary {
+            field = json!({"id":"label", "type":"vocabulary-code", "vocabulary":"labels", "values":["projected-value-canary", "ready"], "classification":"internal"});
+        }
+        let mut project = json!({
+            "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
+            "registry":{"id":"example", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
+            "entities":[{
+                "id":"record", "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
+                "classification":"internal", "fields":[field],
+                "events":[{"id":"record-created-v1", "trigger":trigger, "projection":["label"], "webhook":{"destinationId":"local-hook"}}]
+            }]
+        });
+        if trigger == EventTrigger::RequestLifecycle {
+            project["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
+                "id":"target", "type":"reference", "target":"target-record", "required":true, "classification":"internal"
+            }));
+            project["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
+                "id":"proposed-label", "type":"string", "maxLength":64, "required":true, "classification":"internal"
+            }));
+            project["entities"][0]["changeRequest"] = json!({
+                "effects":[{"target":{"fromField":"target"}, "operation":"patch", "set":{"label":{"fromField":"proposed-label"}}}],
+                "review":{"stages":[{"id":"review", "approvals":1, "excludeSubmitter":true}]}
+            });
+            project["entities"].as_array_mut().unwrap().push(json!({
+                "id":"target-record", "primaryDataset":"test-dataset", "route":"target-records", "mutationMode":"mutable", "classification":"internal",
+                "changeControl":{"requiredFor":["patch"]},
+                "fields":[{"id":"label", "type":"string", "maxLength":64, "classification":"internal"}]
+            }));
+        }
+        if trigger == EventTrigger::RequestLifecycle {
+            project["accessProfiles"] = json!([{
+                "id":"operator", "default":true, "principalClaim":"registry_principal",
+                "grants":[{
+                    "entity":"record", "operations":["create", "get", "list", "patch", "submit_request", "approve_request", "apply_request"],
+                    "readableFields":["label", "target", "proposed-label"],
+                    "writableFields":["label", "target", "proposed-label"], "rowBoundaries":[],
+                    "reviewStages":[{"stage":"review", "targets":[{"entity":"target-record", "readableFields":["label"], "rowBoundaries":[]}]}],
+                    "applyTargets":[{"entity":"target-record", "rowBoundaries":[]}]
+                }]
+            }]);
+        }
+        let project = parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap();
+        let compiled = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+        let mut delivery =
+            Delivery::compile(&compiled, &compiled.event_deliveries().deliveries[0]).unwrap();
+        // Wire helpers use a fixed synthetic identity; the validator itself is
+        // always built from the compiler's actual generated event artifact.
+        delivery.data_schema = format!(
+            "urn:breg:event-schema:example:record:record-created-v1:sha256:{}",
+            "0".repeat(64)
+        );
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         private::directory(&root.path().join("secrets")).unwrap();
@@ -489,19 +560,7 @@ mod tests {
         let receiver = Receiver::start_with_deliveries(
             root.path(),
             port,
-            BTreeMap::from([(
-                ("record-created-v1".into(), "record".into()),
-                Delivery {
-                    id: "events.record.record-created-v1.webhook".into(),
-                    destination_id: "local-hook".into(),
-                    trigger: EventTrigger::Created,
-                    data_schema: format!(
-                        "urn:breg:event-schema:example:record:record-created-v1:sha256:{}",
-                        "0".repeat(64)
-                    ),
-                    projection_fields: vec!["label".into()],
-                },
-            )]),
+            BTreeMap::from([(("record-created-v1".into(), "record".into()), delivery)]),
         )
         .unwrap();
         (root, port, receiver)
@@ -759,6 +818,79 @@ mod tests {
         assert_eq!(
             report(root.path(), true).unwrap()["deliveries"][0]["payload"],
             json!({"label":null})
+        );
+    }
+
+    #[test]
+    fn signed_projected_values_must_match_generated_types_and_vocabulary() {
+        for vocabulary in [false, true] {
+            let (root, port, _receiver) = fixture_with_contract(EventTrigger::Created, vocabulary);
+            let mut invalid = vec![json!(7), json!({"label":"wrong-shape"})];
+            if vocabulary {
+                invalid.push(json!("undeclared-code"));
+            }
+            for value in invalid {
+                let (mut headers, body) = signed(1, 1);
+                let mut document = parse_json_strict(&body).unwrap();
+                document["values"]["label"] = value;
+                let body = canonicalize_json(&document).unwrap();
+                sign(&mut headers, &body);
+                assert_eq!(request(port, headers, body), 401);
+                assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
+            }
+            let (headers, body) = signed(1, 1);
+            assert_eq!(request(port, headers, body), 204);
+        }
+    }
+
+    #[test]
+    fn signed_lifecycle_requests_must_match_the_complete_generated_contract() {
+        let (root, port, _receiver) = fixture_with_contract(EventTrigger::RequestLifecycle, false);
+        let valid = json!({
+            "proposalVersion":1, "workflowRevision":2, "transition":"submit",
+            "fromState":"draft", "toState":"submitted", "stage":null,
+            "effectDigest":null, "deduplicationKey":"sha256:synthetic"
+        });
+        let mut invalid = vec![json!({})];
+        for (field, value) in [
+            ("proposalVersion", json!("one")),
+            ("workflowRevision", json!(0)),
+            ("transition", json!(false)),
+            ("fromState", json!(1)),
+            ("toState", json!([])),
+            ("stage", json!({})),
+            ("effectDigest", json!(7)),
+            ("deduplicationKey", Value::Null),
+            ("undeclared", json!(true)),
+        ] {
+            let mut request = valid.clone();
+            request[field] = value;
+            invalid.push(request);
+        }
+        for request_body in invalid {
+            let (mut headers, body) = signed(1, 1);
+            let mut document = parse_json_strict(&body).unwrap();
+            document["trigger"] = json!("request_lifecycle");
+            document["request"] = request_body;
+            let body = canonicalize_json(&document).unwrap();
+            sign(&mut headers, &body);
+            assert_eq!(request(port, headers, body), 401);
+            assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
+        }
+        let (mut headers, body) = signed(1, 1);
+        let mut document = parse_json_strict(&body).unwrap();
+        document["trigger"] = json!("request_lifecycle");
+        document["request"] = valid;
+        document["values"]["label"] = Value::Null;
+        let body = canonicalize_json(&document).unwrap();
+        sign(&mut headers, &body);
+        assert_eq!(request(port, headers, body), 204);
+        assert_eq!(
+            report(root.path(), true).unwrap()["deliveries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
         );
     }
 
