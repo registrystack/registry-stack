@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import release_candidate
+import release_notes
 import verify_latest_published_release
 import verify_public_release
 import prepare_release_docs
@@ -3137,6 +3138,22 @@ def main() -> int:
     bind_file_spdx_parser.add_argument("spdx", type=Path)
     bind_file_spdx_parser.add_argument("--file-name", required=True)
     bind_file_spdx_parser.add_argument("--sha256", required=True)
+    notes_parser = subparsers.add_parser(
+        "draft-notes",
+        help="collect linked release-note material for human review without publishing",
+        description=(
+            "Draft notes from an explicit local release tag and committed source, "
+            "using read-only GitHub PR queries. Compatibility and migration guidance "
+            "remain the release author's responsibility. Does not validate release readiness."
+        ),
+    )
+    notes_parser.add_argument("--version", required=True, help="intended release version")
+    notes_parser.add_argument("--release-id", required=True, help="intended release ID")
+    notes_parser.add_argument("--from-tag", required=True, help="local baseline release tag, such as v0.28.0")
+    notes_parser.add_argument("--source-ref", default="HEAD", help="committed source to compare (default: HEAD)")
+    notes_parser.add_argument("--repo", type=Path, default=ROOT)
+    notes_parser.add_argument("--repository", default="registrystack/registry-stack")
+    notes_parser.add_argument("--output", type=Path, help="create a new draft file; existing paths are refused (default: stdout)")
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("--version", required=True)
     prepare_parser.add_argument("--release-id", required=True)
@@ -3224,6 +3241,26 @@ def main() -> int:
         return bind_spdx_subject(args.spdx, args.image_name, args.digest_ref)
     if args.command == "bind-spdx-file-subject":
         return bind_spdx_file_subject(args.spdx, args.file_name, args.sha256)
+    if args.command == "draft-notes":
+        try:
+            strict_semver(args.version)
+            validate_release_id(args.release_id)
+            if args.output is not None and (args.output.exists() or args.output.is_symlink()):
+                raise release_notes.NotesError(
+                    f"draft output already exists; choose a new path: {args.output}"
+                )
+            verify_origin_repository(args.repo.resolve(), args.repository)
+            body = release_notes.build_draft(
+                args.repo.resolve(), args.repository, args.version, args.release_id,
+                args.from_tag, args.source_ref,
+            )
+            release_notes.write_draft(body, args.output)
+            if args.output is not None:
+                print(f"Draft written to {args.output}. Review compatibility and migration guidance before publishing.", file=sys.stderr)
+        except (OSError, UnicodeError, ReleasePlanError, release_notes.NotesError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "prepare":
         return run_prepare_plan(
             args.repo,
