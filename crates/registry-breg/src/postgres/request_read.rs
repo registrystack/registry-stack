@@ -253,14 +253,7 @@ async fn annotate_request_records(
         }
         metadata.insert(
             "decisions".to_owned(),
-            decision_metadata(
-                transaction,
-                entity,
-                request,
-                record_uuid,
-                i64::from(workflow.current_version().get()),
-            )
-            .await?,
+            workflow_decisions_value(&workflow, may_disclose_decision_reasons(entity, request)),
         );
         metadata.insert("editable".to_owned(), json!(editable));
         if !actions.is_empty() {
@@ -1143,26 +1136,63 @@ async fn decision_metadata(
     Ok(decisions_value(&decisions, disclose_reasons))
 }
 
+fn workflow_decisions_value(workflow: &RequestWorkflow, disclose_reasons: bool) -> Value {
+    Value::Array(
+        workflow
+            .decisions()
+            .iter()
+            .map(|decision| {
+                decision_value(
+                    decision.stage_id(),
+                    decision.kind().as_storage(),
+                    decision.decided_at().as_str(),
+                    decision.reason_present(),
+                    decision.reason(),
+                    disclose_reasons,
+                )
+            })
+            .collect(),
+    )
+}
+
 fn decisions_value(decisions: &[RetainedRequestDecision], disclose_reasons: bool) -> Value {
     Value::Array(
         decisions
             .iter()
             .map(|decision| {
-                let mut value = json!({
-                    "stageId": decision.stage_id,
-                    "kind": decision.kind,
-                    "decidedAt": decision.decided_at,
-                    "reasonPresent": decision.reason_present,
-                });
-                if disclose_reasons {
-                    if let Some(reason) = &decision.reason {
-                        value["reason"] = json!(reason);
-                    }
-                }
-                value
+                decision_value(
+                    &decision.stage_id,
+                    &decision.kind,
+                    &decision.decided_at,
+                    decision.reason_present,
+                    decision.reason.as_deref(),
+                    disclose_reasons,
+                )
             })
             .collect(),
     )
+}
+
+fn decision_value(
+    stage_id: &str,
+    kind: &str,
+    decided_at: &str,
+    reason_present: bool,
+    reason: Option<&str>,
+    disclose_reasons: bool,
+) -> Value {
+    let mut value = json!({
+        "stageId": stage_id,
+        "kind": kind,
+        "decidedAt": decided_at,
+        "reasonPresent": reason_present,
+    });
+    if disclose_reasons {
+        if let Some(reason) = reason {
+            value["reason"] = json!(reason);
+        }
+    }
+    value
 }
 
 fn may_disclose_decision_reasons(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
@@ -1621,6 +1651,50 @@ mod tests {
                 .is_some_and(|claims| claims.entity_id() == "scope-correction"),
             "a grant admitting no submitter target reads the link under its own claims"
         );
+    }
+
+    #[test]
+    fn current_decision_projection_uses_the_loaded_workflow_and_discloses_only_safe_fields() {
+        let loaded = submitted_workflow(1, false);
+        let later = loaded
+            .clone()
+            .decide_with_reason(
+                context("private-reviewer-actor-canary", 2),
+                "review",
+                loaded.current_version(),
+                loaded.current_proposal().unwrap().effect_digest(),
+                ReviewDecisionKind::RequestRevision,
+                Some("private-review-reason-canary".to_owned()),
+            )
+            .expect("a later review requests revision")
+            .into_workflow();
+        assert_eq!(
+            super::workflow_decisions_value(&loaded, true),
+            serde_json::json!([]),
+            "a subsequently decided workflow cannot alter the loaded submitted projection"
+        );
+        let disclosed = super::workflow_decisions_value(&later, true);
+        assert_eq!(
+            disclosed,
+            serde_json::json!([{
+                "stageId": "review", "kind": "request_revision",
+                "decidedAt": later.decisions()[0].decided_at().as_str(),
+                "reasonPresent": true, "reason": "private-review-reason-canary",
+            }])
+        );
+        let redacted = super::workflow_decisions_value(&later, false);
+        assert_eq!(
+            redacted,
+            serde_json::json!([{
+                "stageId": "review", "kind": "request_revision",
+                "decidedAt": later.decisions()[0].decided_at().as_str(), "reasonPresent": true,
+            }])
+        );
+        for projection in [&disclosed, &redacted] {
+            let serialized = projection.to_string();
+            assert!(!serialized.contains("private-reviewer-actor-canary"));
+            assert!(!serialized.contains(later.decisions()[0].effect_digest().as_str()));
+        }
     }
 
     #[test]
