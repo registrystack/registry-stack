@@ -790,6 +790,9 @@ jobs:
       - name: Test release helper
         run: python3 -m unittest release/scripts/test_registry_release.py
 
+      - name: Test release scheduling
+        run: python3 -m unittest release/scripts/test_release_ci_overlap.py release/scripts/test_release_docs_scheduling.py
+
       - name: Test release planning commands
         run: python3 -m unittest release/scripts/test_registry_release_plans.py
 

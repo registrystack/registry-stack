@@ -517,14 +517,16 @@ release/scripts/registry-release request-candidate \
   --version <version> \
   --release-id <release-id> \
   --source-sha "${source_sha}" \
-  --wait-for-ci \
   --wait
 ```
 
 The command prints the exact candidate run ID and URL immediately after the
-dispatch is correlated. `--wait-for-ci` waits only for protected-main `ci.yml`
-at the exact source SHA, then refreshes protected `main` again immediately
-before dispatch. `--wait` follows only that uniquely identified candidate run.
+dispatch is correlated. Candidate builds start alongside protected-main CI.
+A separate candidate job waits for successful `ci.yml` from a push to `main`
+at the exact source SHA; attestation cannot run until that job succeeds.
+Add `--wait-for-ci` only to wait locally before dispatch; this optional wait
+refreshes protected `main` again immediately before dispatch. `--wait` follows
+only that uniquely identified candidate run.
 Both waits print only workflow state changes by default. If a protected
 environment is waiting for approval, the command names the environment, links
 the exact run, and prints a read-only command for inspecting the pending
@@ -534,8 +536,10 @@ display when detailed live job output is useful.
 Omit either flag when another operator or monitor owns the corresponding wait.
 
 The request is accepted only when `source_sha` is the exact protected-main
-workflow revision and that revision has successful protected-main CI. Request
-the candidate immediately after the release PR merges. If `main` advances
+workflow revision. Builds may run while that revision's CI is pending, but a
+failed, cancelled, or timed-out CI wait prevents candidate attestation and
+publication. Only unadmitted candidate artifacts and private candidate images
+can be produced before CI passes. Request the candidate immediately after the release PR merges. If `main` advances
 before dispatch, the CLI stops without creating a candidate. Inspect the
 intervening commits, rerun `prepare` and the applicable validators and
 rehearsal against the new tip, and use the new protected-main revision only
@@ -548,8 +552,8 @@ workflow then:
 - Builds the release payloads and OCI images once. Starting with `v0.21.0`, the
   image set is Relay, Evidence Gateway, and Registry Mint. Discovery joins at
   `v0.24.0`, and Base Registry Engine joins at `v0.26.0`.
-- Builds the exact locked release documentation archive once and includes it in
-  the candidate payload closure.
+- Builds the exact locked release documentation archive once, in parallel with
+  binary and client builds, and includes it in the candidate payload closure.
 - Publishes images only to private candidate packages.
 - Generates image-specific SPDX and Syft reports, exports each exact candidate
   rootfs, and scans every image digest. A version-4 advisory exception passes

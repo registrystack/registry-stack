@@ -2249,12 +2249,15 @@ def wait_for_exact_protected_ci(
 ) -> dict[str, Any]:
     deadline = time.monotonic() + 120
     while True:
-        runs = workflow_runs(
-            repository,
-            "ci.yml",
-            event="push",
-            head_sha=source_sha,
-        )
+        runs = [
+            run for run in workflow_runs(
+                repository,
+                "ci.yml",
+                event="push",
+                head_sha=source_sha,
+            )
+            if run.get("head_branch") == "main"
+        ]
         successful = [run for run in runs if run.get("conclusion") == "success"]
         if successful:
             return max(successful, key=lambda run: int(run.get("id", 0)))
@@ -2279,7 +2282,8 @@ def wait_for_exact_protected_ci(
                 head_sha=source_sha,
             )
             successful = [
-                item for item in repeated if item.get("conclusion") == "success"
+                item for item in repeated
+                if item.get("head_branch") == "main" and item.get("conclusion") == "success"
             ]
             if successful:
                 return max(successful, key=lambda item: int(item.get("id", 0)))
@@ -2298,6 +2302,19 @@ def wait_for_exact_protected_ci(
                 f"no protected-main CI run appeared for exact source {source_sha}"
             )
         time.sleep(2)
+
+
+def wait_for_protected_ci_command(repository: str, source_sha: str) -> int:
+    try:
+        if HEX40.fullmatch(source_sha) is None:
+            raise ReleasePlanError("source-sha must be one exact commit")
+        run = wait_for_exact_protected_ci(repository, source_sha)
+        run_id, url = workflow_run_identity(run, "protected-main CI")
+        print(f"protected-main CI passed for {source_sha}: run {run_id} {url}")
+        return 0
+    except (OSError, ValueError, ReleasePlanError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 def wait_for_dispatched_run(
@@ -3159,6 +3176,11 @@ def main() -> int:
         action="store_true",
         help="show raw gh run watch output instead of compact state changes",
     )
+    ci_parser = subparsers.add_parser(
+        "wait-for-ci", help="wait for successful protected-main CI at one exact source"
+    )
+    ci_parser.add_argument("--source-sha", required=True)
+    ci_parser.add_argument("--repository", default="registrystack/registry-stack")
     verify_candidate_parser = subparsers.add_parser("verify-candidate")
     verify_candidate_parser.add_argument("--version", required=True)
     verify_candidate_parser.add_argument("--release-id", required=True)
@@ -3226,6 +3248,8 @@ def main() -> int:
             wait_for_candidate=args.wait,
             verbose_wait=args.verbose_wait,
         )
+    if args.command == "wait-for-ci":
+        return wait_for_protected_ci_command(args.repository, args.source_sha)
     if args.command == "verify-candidate":
         return verify_candidate_for_tag(
             args.repo,
