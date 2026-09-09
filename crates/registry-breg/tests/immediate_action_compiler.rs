@@ -319,6 +319,21 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
 }
 
 #[test]
+fn action_grants_refuse_request_metadata_projection_overrides() {
+    let mut source: serde_json::Value =
+        serde_json::from_str(&household_contact_project("")).unwrap();
+    compile_json(&serde_json::to_vec(&source).unwrap())
+        .expect("action grant with omitted request metadata settings compiles");
+    source["accessProfiles"][0]["grants"][0]["readableRequestFields"] = serde_json::json!([]);
+    let failure = compile_json(&serde_json::to_vec(&source).unwrap())
+        .expect_err("request metadata permissions do not apply to immediate actions");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| { diagnostic.code == "action.grant.entity_fields_forbidden" }));
+}
+
+#[test]
 fn action_grants_must_cover_every_derived_target_and_result() {
     let source = household_contact_project("").replace(
         r#""targets":[

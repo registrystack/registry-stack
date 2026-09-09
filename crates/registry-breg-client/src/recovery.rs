@@ -165,11 +165,18 @@ impl BaseRegistryClient {
         action: &BRegLifecycleAction,
         key: &BRegIdempotencyKey,
     ) -> Result<BRegPreparedLifecycle, BaseRegistryClientError> {
-        if !self
+        let reason = action.body().to_value().get("reason").cloned();
+        let candidates = self
             .lifecycle_actions(authority, record)
-            .map_err(|_| refusal())?
-            .contains(action)
-        {
+            .map_err(|_| refusal())?;
+        if !candidates.into_iter().any(|candidate| {
+            let candidate = match reason.as_ref() {
+                Some(Value::String(reason)) => candidate.with_reason(reason),
+                None => Ok(candidate),
+                _ => return false,
+            };
+            candidate.is_ok_and(|candidate| candidate == *action)
+        }) {
             return Err(refusal());
         }
         BRegPreparedLifecycle::encode(&LifecycleEvidence {
@@ -223,6 +230,13 @@ impl BaseRegistryClient {
             .next()
             .filter(|_| matches.next().is_none())
             .ok_or_else(refusal)?;
+        let body =
+            crate::strict_json::from_slice(evidence.body.as_bytes()).map_err(|_| refusal())?;
+        let action = match body.get("reason") {
+            Some(Value::String(reason)) => action.with_reason(reason).map_err(|_| refusal())?,
+            Some(_) => return Err(refusal()),
+            None => action,
+        };
         if action.if_match().as_str() != evidence.if_match
             || serde_json::to_string(action.body()).map_err(|_| refusal())? != evidence.body
         {

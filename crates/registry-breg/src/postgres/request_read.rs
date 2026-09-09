@@ -15,7 +15,7 @@ use crate::api::{
     RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRequestAction, VerifiedRequestPresence,
     VerifiedRequestTargetAuthority, VerifiedRowBoundary,
 };
-use crate::contract::Operation;
+use crate::contract::{Operation, RequestMetadataFieldSource};
 use crate::model::{CompiledEntity, CompiledRegistry, CompiledRoute, HttpMethod};
 use crate::mutation::request_action_etag;
 use crate::postgres::context::ChangeRequestPresenceContext;
@@ -25,7 +25,8 @@ use crate::postgres::{
 };
 use crate::request_prepare::{validate_frozen_targets, RequestTargetSnapshot};
 use crate::request_retention::{
-    RetainedHistoryQuery, RetainedRequestProposal, RetainedRequestResultLink,
+    RetainedHistoryQuery, RetainedRequestDecision, RetainedRequestHistoryPage,
+    RetainedRequestProposal, RetainedRequestResultLink,
 };
 use crate::request_workflow::{
     FrozenPlannerDisposition, FrozenReviewPolicy, ProposalSnapshot, RequestState, RequestWorkflow,
@@ -99,17 +100,33 @@ pub(super) async fn erased_terminal_request_record(
         return Ok(None);
     }
     let revision = u64::try_from(record_revision).map_err(|_| ReadServiceError::Unavailable)?;
-    let history =
-        retained_history(transaction, registry, request, claims, entity, record_uuid).await?;
+    let history = retained_history(
+        transaction,
+        registry,
+        request,
+        claims,
+        entity,
+        record_uuid,
+        None,
+    )
+    .await?;
     let mut record = RecordEnvelope {
         id: record_id.to_owned(),
         revision,
         data: Map::new(),
-        request: Some(erased_terminal_request_metadata(
+        request: Some(bound_request_metadata(erased_terminal_request_metadata(
             &header,
             history,
             may_disclose_effect_digests(entity, request),
-        )),
+            decision_metadata(
+                transaction,
+                entity,
+                request,
+                record_uuid,
+                header.proposal_version,
+            )
+            .await?,
+        ))?),
         request_presence: None,
     };
     annotate_attachment_metadata(
@@ -173,14 +190,29 @@ async fn annotate_request_records(
         )
         .await?;
         if header.current_proposal_erased && header.is_terminal() {
-            let history =
-                retained_history(transaction, registry, request, claims, entity, record_uuid)
-                    .await?;
-            record.request = Some(erased_terminal_request_metadata(
+            let history = retained_history(
+                transaction,
+                registry,
+                request,
+                claims,
+                entity,
+                record_uuid,
+                None,
+            )
+            .await?;
+            record.request = Some(bound_request_metadata(erased_terminal_request_metadata(
                 &header,
                 history,
                 may_disclose_effect_digests(entity, request),
-            ));
+                decision_metadata(
+                    transaction,
+                    entity,
+                    request,
+                    record_uuid,
+                    header.proposal_version,
+                )
+                .await?,
+            ))?);
             continue;
         }
         let workflow = crate::request_store::load(transaction, &entity.id, record_uuid, false)
@@ -226,8 +258,16 @@ async fn annotate_request_records(
             actor_reference.as_deref(),
         )
         .await?;
-        let history =
-            retained_history(transaction, registry, request, claims, entity, record_uuid).await?;
+        let history = retained_history(
+            transaction,
+            registry,
+            request,
+            claims,
+            entity,
+            record_uuid,
+            Some(&workflow),
+        )
+        .await?;
         let mut metadata = Map::new();
         metadata.insert(
             "bregState".to_owned(),
@@ -252,6 +292,10 @@ async fn annotate_request_records(
                 metadata.insert("proposal".to_owned(), proposal);
             }
         }
+        metadata.insert(
+            "decisions".to_owned(),
+            workflow_decisions_value(&workflow, may_disclose_decision_reasons(entity, request)),
+        );
         metadata.insert("editable".to_owned(), json!(editable));
         if !actions.is_empty() {
             metadata.insert("actions".to_owned(), Value::Array(actions));
@@ -270,7 +314,7 @@ async fn annotate_request_records(
             }
             metadata.insert("application".to_owned(), application_metadata);
         }
-        record.request = Some(Value::Object(metadata));
+        record.request = Some(bound_request_metadata(Value::Object(metadata))?);
     }
     Ok(())
 }
@@ -537,6 +581,37 @@ async fn annotate_attachment_metadata(
     Ok(())
 }
 
+// This is the maintained client decoder's maximum request-extension size.
+const MAX_REQUEST_EXTENSION_BYTES: usize = 2_097_152;
+
+fn bound_request_metadata(mut metadata: Value) -> Result<Value, ReadServiceError> {
+    while serde_json::to_vec(&metadata)
+        .map_err(|_| ReadServiceError::Unavailable)?
+        .len()
+        > MAX_REQUEST_EXTENSION_BYTES
+    {
+        let history = metadata
+            .get_mut("history")
+            .and_then(Value::as_object_mut)
+            .ok_or(ReadServiceError::Unavailable)?;
+        let proposals = history
+            .get_mut("proposals")
+            .and_then(Value::as_array_mut)
+            .ok_or(ReadServiceError::Unavailable)?;
+        if proposals.len() <= 1 {
+            return Err(ReadServiceError::Unavailable);
+        }
+        proposals.pop();
+        let cursor = proposals
+            .last()
+            .and_then(|proposal| proposal.get("proposalVersion"))
+            .cloned()
+            .ok_or(ReadServiceError::Unavailable)?;
+        history.insert("nextAfterProposalVersion".to_owned(), cursor);
+    }
+    Ok(metadata)
+}
+
 /// Caller-filtered public projection of the frozen planning binding. The
 /// source digest, ABI provenance, script identity and evaluated effects remain
 /// inside the proposal snapshot and review/action-specific projections.
@@ -568,11 +643,13 @@ fn erased_terminal_request_metadata(
     header: &crate::request_store::RequestWorkflowHeader,
     history: Option<RetainedHistoryMetadata>,
     disclose_effect_digests: bool,
+    decisions: Value,
 ) -> Value {
     let mut metadata = Map::new();
     metadata.insert("bregState".to_owned(), json!(header.state));
     metadata.insert("proposalVersion".to_owned(), json!(header.proposal_version));
     metadata.insert("detailErased".to_owned(), json!(true));
+    metadata.insert("decisions".to_owned(), decisions);
     metadata.insert("editable".to_owned(), json!(false));
     if let Some(history) = history {
         if disclose_effect_digests {
@@ -1118,7 +1195,15 @@ async fn retained_history(
     claims: &ClaimContext,
     entity: &CompiledEntity,
     request_id: Uuid,
+    loaded_workflow: Option<&RequestWorkflow>,
 ) -> Result<Option<RetainedHistoryMetadata>, ReadServiceError> {
+    if let Some(workflow) = loaded_workflow {
+        let last_visible_version = i64::from(workflow.current_version().get())
+            - i64::from(workflow.current_proposal().is_none());
+        if request.request_history_after_proposal_version.unwrap_or(0) >= last_visible_version {
+            return Ok(None);
+        }
+    }
     let authorized_target_entities = BTreeSet::new();
     let mut page = crate::request_retention::load_retained_history(
         transaction,
@@ -1128,10 +1213,14 @@ async fn retained_history(
             after_proposal_version: request.request_history_after_proposal_version,
             limit: 50,
             authorized_target_entities: &authorized_target_entities,
+            include_decision_reasons: may_disclose_decision_reasons(entity, request),
         },
     )
     .await
     .map_err(|_| ReadServiceError::Unavailable)?;
+    if let Some(workflow) = loaded_workflow {
+        bind_history_to_workflow(&mut page, workflow);
+    }
     if page.proposals.is_empty() {
         return Ok(None);
     }
@@ -1149,7 +1238,7 @@ async fn retained_history(
         "proposals": page
             .proposals
             .into_iter()
-            .map(|proposal| retained_history_value(proposal, may_disclose_effect_digests(entity, request)))
+            .map(|proposal| retained_history_value(proposal, may_disclose_effect_digests(entity, request), may_disclose_decision_reasons(entity, request)))
             .collect::<Vec<_>>(),
         "nextAfterProposalVersion": page.next_after_proposal_version,
     });
@@ -1158,6 +1247,58 @@ async fn retained_history(
         current_effect_digest,
         current_application_id,
     }))
+}
+
+// Historical rows may be read after the workflow under READ COMMITTED. Bind
+// lifecycle facts to the workflow already used for top-level metadata; newer
+// versions or a newly submitted current draft belong to a subsequent read.
+fn bind_history_to_workflow(page: &mut RetainedRequestHistoryPage, workflow: &RequestWorkflow) {
+    let current_version = i64::from(workflow.current_version().get());
+    let current_proposal = workflow.current_proposal();
+    let last_visible_version = current_version - i64::from(current_proposal.is_none());
+    let had_newer_versions = page
+        .proposals
+        .iter()
+        .any(|proposal| proposal.proposal_version > last_visible_version);
+    page.proposals
+        .retain(|proposal| proposal.proposal_version <= last_visible_version);
+    if had_newer_versions
+        || page
+            .proposals
+            .last()
+            .is_none_or(|proposal| proposal.proposal_version == last_visible_version)
+    {
+        page.next_after_proposal_version = None;
+    }
+    for proposal in &mut page.proposals {
+        proposal.request_state = request_state_name(workflow.state()).to_owned();
+        proposal.current = proposal.proposal_version == current_version;
+        if !proposal.current {
+            continue;
+        }
+        if let Some(snapshot) = current_proposal {
+            proposal.contract_fingerprint = snapshot.contract_fingerprint().as_str().to_owned();
+            proposal.effect_digest = snapshot.effect_digest().as_str().to_owned();
+        }
+        // A workflow only restores while its current proposal detail exists.
+        proposal.detail_erased = false;
+        proposal.application_id = workflow
+            .application()
+            .map(|application| application.application_id().as_str().to_owned());
+        proposal.result_link_count = 0;
+        proposal.result_links.clear();
+        proposal.decisions = workflow
+            .decisions()
+            .iter()
+            .map(|decision| RetainedRequestDecision {
+                stage_id: decision.stage_id().to_owned(),
+                kind: decision.kind().as_storage().to_owned(),
+                decided_at: decision.decided_at().as_str().to_owned(),
+                reason_present: decision.reason_present(),
+                reason: decision.reason().map(str::to_owned),
+            })
+            .collect();
+    }
 }
 
 struct RetainedHistoryMetadata {
@@ -1313,6 +1454,7 @@ async fn target_get_is_authorized(
 fn retained_history_value(
     proposal: RetainedRequestProposal,
     disclose_effect_digests: bool,
+    disclose_decision_reasons: bool,
 ) -> Value {
     let mut value = json!({
         "requestEntityId": proposal.request_entity_id,
@@ -1322,6 +1464,7 @@ fn retained_history_value(
         "current": proposal.current,
         "contractFingerprint": proposal.contract_fingerprint,
         "detailErased": proposal.detail_erased,
+        "decisions": decisions_value(&proposal.decisions, disclose_decision_reasons),
         "applicationId": proposal.application_id,
         "resultLinkCount": proposal.result_link_count,
         "resultLinks": proposal.result_links.into_iter().map(|link| {
@@ -1337,6 +1480,97 @@ fn retained_history_value(
         value["effectDigest"] = json!(proposal.effect_digest);
     }
     value
+}
+
+async fn decision_metadata(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    request: &RecordReadRequest,
+    request_id: Uuid,
+    proposal_version: i64,
+) -> Result<Value, ReadServiceError> {
+    let disclose_reasons = may_disclose_decision_reasons(entity, request);
+    let decisions = crate::request_retention::load_retained_decisions(
+        transaction,
+        &entity.id,
+        request_id,
+        proposal_version,
+        disclose_reasons,
+    )
+    .await
+    .map_err(|_| ReadServiceError::Unavailable)?;
+    Ok(decisions_value(&decisions, disclose_reasons))
+}
+
+fn workflow_decisions_value(workflow: &RequestWorkflow, disclose_reasons: bool) -> Value {
+    Value::Array(
+        workflow
+            .decisions()
+            .iter()
+            .map(|decision| {
+                decision_value(
+                    decision.stage_id(),
+                    decision.kind().as_storage(),
+                    decision.decided_at().as_str(),
+                    decision.reason_present(),
+                    decision.reason(),
+                    disclose_reasons,
+                )
+            })
+            .collect(),
+    )
+}
+
+fn decisions_value(decisions: &[RetainedRequestDecision], disclose_reasons: bool) -> Value {
+    Value::Array(
+        decisions
+            .iter()
+            .map(|decision| {
+                decision_value(
+                    &decision.stage_id,
+                    &decision.kind,
+                    &decision.decided_at,
+                    decision.reason_present,
+                    decision.reason.as_deref(),
+                    disclose_reasons,
+                )
+            })
+            .collect(),
+    )
+}
+
+fn decision_value(
+    stage_id: &str,
+    kind: &str,
+    decided_at: &str,
+    reason_present: bool,
+    reason: Option<&str>,
+    disclose_reasons: bool,
+) -> Value {
+    let mut value = json!({
+        "stageId": stage_id,
+        "kind": kind,
+        "decidedAt": decided_at,
+        "reasonPresent": reason_present,
+    });
+    if disclose_reasons {
+        if let Some(reason) = reason {
+            value["reason"] = json!(reason);
+        }
+    }
+    value
+}
+
+fn may_disclose_decision_reasons(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
+    entity
+        .access_profiles
+        .get(request.context.selected_profile())
+        .is_some_and(|profile| {
+            !profile.anonymous
+                && profile
+                    .readable_request_fields
+                    .contains(&RequestMetadataFieldSource::Reason)
+        })
 }
 
 fn may_disclose_effect_digests(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
@@ -1485,15 +1719,59 @@ impl std::fmt::Display for SqlIdent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn final_request_size_cap_keeps_whole_proposals_and_exclusive_cursor() {
+        let decisions = (0..1024)
+            .map(|index| {
+                serde_json::json!({
+                    "stageId": format!("stage-{}", index / 32), "kind": "approve",
+                    "decidedAt": "2026-09-09T12:00:00Z", "reasonPresent": false,
+                })
+            })
+            .collect::<Vec<_>>();
+        let metadata = serde_json::json!({
+            "bregState": "draft", "proposalVersion": 26, "editable": false,
+            "history": {
+                "proposals": (1..=25).map(|version| serde_json::json!({
+                    "proposalVersion": version, "decisions": decisions,
+                })).collect::<Vec<_>>(),
+                "nextAfterProposalVersion": null,
+            },
+        });
+        assert!(serde_json::to_vec(&metadata).unwrap().len() > super::MAX_REQUEST_EXTENSION_BYTES);
+        let bounded = super::bound_request_metadata(metadata).expect("whole proposals fit");
+        registry_breg_client::BRegRequestMetadata::from_value(bounded.clone(), false)
+            .expect("bounded metadata passes the real client decoder");
+        let proposals = bounded["history"]["proposals"].as_array().unwrap();
+        assert!(proposals.len() < 25);
+        assert_eq!(
+            bounded["history"]["nextAfterProposalVersion"],
+            proposals.last().unwrap()["proposalVersion"]
+        );
+        assert!(proposals
+            .iter()
+            .all(|proposal| proposal["decisions"].as_array().unwrap().len() == 1024));
+    }
+
+    #[test]
+    fn oversized_single_history_proposal_refuses_without_an_empty_cursor_loop() {
+        let metadata = serde_json::json!({
+            "history": {"proposals": [{"proposalVersion": 1, "decisions": [],
+                "oversized": "x".repeat(super::MAX_REQUEST_EXTENSION_BYTES)}],
+                "nextAfterProposalVersion": 1},
+        });
+        assert!(super::bound_request_metadata(metadata).is_err());
+    }
+
     use std::collections::{BTreeMap, BTreeSet};
 
     use serde_json::{json, Map, Value};
 
     use super::{
-        action_href, action_is_available, api_object, authorized_target_claims,
-        erased_terminal_request_metadata, retained_history_value, revise_rebase_available,
-        selected_profile_allows_draft_patch, ClaimContext, RetainedHistoryMetadata,
-        RowBoundaryContext,
+        action_href, action_is_available, api_object, authorized_target_claims, decisions_value,
+        erased_terminal_request_metadata, may_disclose_decision_reasons, retained_history_value,
+        revise_rebase_available, selected_profile_allows_draft_patch, ClaimContext,
+        RetainedHistoryMetadata, RowBoundaryContext,
     };
     use crate::api::{
         AuthorizedRequestContext, RecordReadKind, RecordReadRequest, VerifiedRequestAction,
@@ -1502,7 +1780,9 @@ mod tests {
     use crate::contract::{parse_project_json, parse_project_yaml, Operation};
     use crate::correlation::RequestCorrelation;
     use crate::model::{CompiledChangeRequestStage, HttpMethod};
-    use crate::request_retention::{RetainedRequestProposal, RetainedRequestResultLink};
+    use crate::request_retention::{
+        RetainedRequestDecision, RetainedRequestProposal, RetainedRequestResultLink,
+    };
     use crate::request_workflow::{
         ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, PackageFingerprint,
         PreparedEffect, PreparedFieldChange, PreparedProposal, PreparedTarget, ProposalVersion,
@@ -1740,6 +2020,207 @@ mod tests {
     }
 
     #[test]
+    fn current_history_uses_loaded_lifecycle_despite_later_review_application_or_revision() {
+        let loaded = submitted_workflow(1, false);
+        let later = loaded
+            .clone()
+            .decide_with_reason(
+                context("later-reviewer", 2),
+                "review",
+                loaded.current_version(),
+                loaded.current_proposal().unwrap().effect_digest(),
+                ReviewDecisionKind::RequestRevision,
+                Some("later-feedback-canary".to_owned()),
+            )
+            .expect("later decision")
+            .into_workflow();
+        let later_decision = &later.decisions()[0];
+        let mut page = crate::request_retention::RetainedRequestHistoryPage {
+            proposals: (1..=2)
+                .map(|version| RetainedRequestProposal {
+                    request_entity_id: "request".to_owned(),
+                    request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+                    proposal_version: version,
+                    request_state: "applied".to_owned(),
+                    current: version == 2,
+                    contract_fingerprint: "sha256:later-contract".to_owned(),
+                    effect_digest: "sha256:later-effect".to_owned(),
+                    detail_erased: true,
+                    application_id: Some("00000000-0000-4000-8000-000000000099".to_owned()),
+                    result_link_count: 1,
+                    result_links: vec![RetainedRequestResultLink {
+                        target_entity_id: "target".to_owned(),
+                        target_record_id: "later-target".to_owned(),
+                        target_revision: 9,
+                    }],
+                    decisions: vec![RetainedRequestDecision {
+                        stage_id: later_decision.stage_id().to_owned(),
+                        kind: later_decision.kind().as_storage().to_owned(),
+                        decided_at: later_decision.decided_at().as_str().to_owned(),
+                        reason_present: true,
+                        reason: Some("later-feedback-canary".to_owned()),
+                    }],
+                })
+                .collect(),
+            next_after_proposal_version: Some(2),
+        };
+        let mut submitted_page = page.clone();
+        super::bind_history_to_workflow(&mut submitted_page, &loaded);
+        assert_eq!(submitted_page.proposals.len(), 1);
+        assert_eq!(submitted_page.next_after_proposal_version, None);
+        let current = &submitted_page.proposals[0];
+        assert_eq!(current.request_state, "submitted");
+        assert!(current.current);
+        assert!(!current.detail_erased);
+        assert!(current.application_id.is_none());
+        assert_eq!(current.result_link_count, 0);
+        assert!(current.result_links.is_empty());
+        assert_eq!(
+            current.effect_digest,
+            loaded.current_proposal().unwrap().effect_digest().as_str()
+        );
+        for disclose in [true, false] {
+            let history = retained_history_value(current.clone(), true, disclose);
+            assert_eq!(
+                history["decisions"],
+                super::workflow_decisions_value(&loaded, disclose)
+            );
+            assert!(!history.to_string().contains("later-feedback-canary"));
+        }
+        super::bind_history_to_workflow(&mut page, &later);
+        for disclose in [true, false] {
+            let history = retained_history_value(page.proposals[0].clone(), true, disclose);
+            assert_eq!(
+                history["decisions"],
+                super::workflow_decisions_value(&later, disclose)
+            );
+        }
+        let draft = later
+            .revise(context("owner-ref", 3))
+            .expect("revise to next draft")
+            .into_workflow();
+        // A concurrent submission creates a proposal for this draft's version.
+        let mut later_current = page.proposals[0].clone();
+        later_current.proposal_version = 2;
+        later_current.current = true;
+        page.proposals.push(later_current);
+        page.next_after_proposal_version = Some(2);
+        super::bind_history_to_workflow(&mut page, &draft);
+        assert_eq!(page.proposals.len(), 1);
+        assert_eq!(page.proposals[0].proposal_version, 1);
+        assert_eq!(page.proposals[0].request_state, "draft");
+        assert!(!page.proposals[0].current);
+        assert_eq!(page.next_after_proposal_version, None);
+    }
+
+    #[test]
+    fn current_decision_projection_uses_the_loaded_workflow_and_discloses_only_safe_fields() {
+        let loaded = submitted_workflow(1, false);
+        let later = loaded
+            .clone()
+            .decide_with_reason(
+                context("private-reviewer-actor-canary", 2),
+                "review",
+                loaded.current_version(),
+                loaded.current_proposal().unwrap().effect_digest(),
+                ReviewDecisionKind::RequestRevision,
+                Some("private-review-reason-canary".to_owned()),
+            )
+            .expect("a later review requests revision")
+            .into_workflow();
+        assert_eq!(
+            super::workflow_decisions_value(&loaded, true),
+            serde_json::json!([]),
+            "a subsequently decided workflow cannot alter the loaded submitted projection"
+        );
+        let disclosed = super::workflow_decisions_value(&later, true);
+        assert_eq!(
+            disclosed,
+            serde_json::json!([{
+                "stageId": "review", "kind": "request_revision",
+                "decidedAt": later.decisions()[0].decided_at().as_str(),
+                "reasonPresent": true, "reason": "private-review-reason-canary",
+            }])
+        );
+        let redacted = super::workflow_decisions_value(&later, false);
+        assert_eq!(
+            redacted,
+            serde_json::json!([{
+                "stageId": "review", "kind": "request_revision",
+                "decidedAt": later.decisions()[0].decided_at().as_str(), "reasonPresent": true,
+            }])
+        );
+        for projection in [&disclosed, &redacted] {
+            let serialized = projection.to_string();
+            assert!(!serialized.contains("private-reviewer-actor-canary"));
+            assert!(!serialized.contains(later.decisions()[0].effect_digest().as_str()));
+        }
+    }
+
+    #[test]
+    fn decision_metadata_hides_reason_text_but_preserves_presence_and_decision_facts() {
+        let mut decision = RetainedRequestDecision {
+            stage_id: "review".to_owned(),
+            kind: "reject".to_owned(),
+            decided_at: "2026-09-09T00:00:00Z".to_owned(),
+            reason_present: true,
+            reason: Some("protected-review-reason-canary".to_owned()),
+        };
+        let disclosed = decisions_value(std::slice::from_ref(&decision), true);
+        assert_eq!(disclosed[0]["reason"], "protected-review-reason-canary");
+        let hidden = decisions_value(std::slice::from_ref(&decision), false);
+        assert_eq!(hidden[0]["reasonPresent"], true);
+        assert_eq!(hidden[0]["stageId"], "review");
+        assert_eq!(hidden[0]["kind"], "reject");
+        assert!(hidden[0].get("reason").is_none());
+        assert!(!hidden
+            .to_string()
+            .contains("protected-review-reason-canary"));
+        assert!(hidden[0].get("actor").is_none());
+        assert!(hidden[0].get("effectDigest").is_none());
+        decision.reason = None;
+        let erased = decisions_value(std::slice::from_ref(&decision), true);
+        assert_eq!(erased[0]["reasonPresent"], true);
+        assert!(erased[0].get("reason").is_none());
+    }
+
+    #[test]
+    fn decision_reason_disclosure_requires_selected_profile_permission_and_authentication() {
+        let project = parse_project_yaml(include_bytes!(
+            "../../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
+        ))
+        .expect("acceptance project parses");
+        let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("acceptance project compiles");
+        let mut entity = compiled.entities()["placement-correction-request"].clone();
+        let request = request_for_profile("correction-submitter");
+        assert!(may_disclose_decision_reasons(&entity, &request));
+        entity
+            .access_profiles
+            .get_mut("correction-submitter")
+            .expect("profile")
+            .readable_request_fields
+            .clear();
+        assert!(!may_disclose_decision_reasons(&entity, &request));
+        entity
+            .access_profiles
+            .get_mut("correction-submitter")
+            .expect("profile")
+            .readable_request_fields
+            .insert(crate::contract::RequestMetadataFieldSource::Reason);
+        entity
+            .access_profiles
+            .get_mut("correction-submitter")
+            .expect("profile")
+            .anonymous = true;
+        assert!(!may_disclose_decision_reasons(&entity, &request));
+        assert!(!may_disclose_decision_reasons(
+            &entity,
+            &request_for_profile("missing")
+        ));
+    }
+
+    #[test]
     fn retained_history_exposes_erased_detail_without_payload() {
         let proposal = RetainedRequestProposal {
             request_entity_id: "request".to_owned(),
@@ -1750,6 +2231,7 @@ mod tests {
             contract_fingerprint: "sha256:contract".to_owned(),
             effect_digest: "sha256:effect".to_owned(),
             detail_erased: true,
+            decisions: Vec::new(),
             application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
             result_link_count: 1,
             result_links: vec![RetainedRequestResultLink {
@@ -1758,7 +2240,7 @@ mod tests {
                 target_revision: 7,
             }],
         };
-        let value = retained_history_value(proposal, true);
+        let value = retained_history_value(proposal, true, true);
         assert_eq!(value["detailErased"], json!(true));
         assert_eq!(value["effectDigest"], json!("sha256:effect"));
         assert_eq!(value["resultLinkCount"], json!(1));
@@ -1780,10 +2262,12 @@ mod tests {
                 contract_fingerprint: "sha256:contract".to_owned(),
                 effect_digest: "sha256:effect".to_owned(),
                 detail_erased: true,
+                decisions: Vec::new(),
                 application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
                 result_link_count: 0,
                 result_links: Vec::new(),
             },
+            false,
             false,
         );
         assert_eq!(value["detailErased"], json!(true));
@@ -1817,6 +2301,7 @@ mod tests {
                 current_application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
             }),
             true,
+            json!([]),
         );
         assert_eq!(value["bregState"], json!("applied"));
         assert_eq!(value["proposalVersion"], json!(2));
@@ -1853,6 +2338,7 @@ mod tests {
                 current_application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
             }),
             false,
+            json!([]),
         );
         assert_eq!(value["bregState"], json!("applied"));
         assert!(value.get("effectDigest").is_none());

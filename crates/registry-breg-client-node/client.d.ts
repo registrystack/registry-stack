@@ -242,6 +242,7 @@ export declare class BRegLifecycleAuthority {
 
 /** Opaque executable action promoted from a metadata authority and one record. */
 export declare class BRegLifecycleAction {
+  withReason(reason: string): BRegLifecycleAction
   private constructor()
   private readonly __opaque: void
   readonly operation: string

@@ -1629,6 +1629,7 @@ fn validate_grant_access_requirements(
             required_purposes: profile.required_purposes.clone(),
             operations: BTreeSet::from([Operation::Invoke]),
             readable_fields: BTreeSet::new(),
+            readable_request_fields: Default::default(),
             writable_fields: BTreeSet::new(),
             filterable_fields: BTreeSet::new(),
             sortable_fields: BTreeSet::new(),
@@ -1729,6 +1730,7 @@ fn route_default_profile<'a>(
 
 fn entity_grant_fields_empty(grant: &crate::contract::AccessGrantSource) -> bool {
     grant.readable_fields.is_empty()
+        && crate::contract::is_default_readable_request_fields(&grant.readable_request_fields)
         && grant.writable_fields.is_empty()
         && grant.filterable_fields.is_empty()
         && grant.sortable_fields.is_empty()

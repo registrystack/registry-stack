@@ -1836,6 +1836,14 @@
           "type": "array",
           "uniqueItems": true
         },
+        "readableRequestFields": {
+          "description": "Readable change-request decision detail. Anonymous profiles never receive reason text.",
+          "items": {
+            "$ref": "#/$defs/RequestMetadataFieldSource"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "requestPresence": {
           "default": [],
           "items": {
@@ -3321,6 +3329,13 @@
         "canonicalBaseIri"
       ],
       "type": "object"
+    },
+    "RequestMetadataFieldSource": {
+      "description": "Fields of request decision metadata governed separately from stored record fields.",
+      "enum": [
+        "reason"
+      ],
+      "type": "string"
     },
     "RequestPresenceGrantSource": {
       "additionalProperties": false,

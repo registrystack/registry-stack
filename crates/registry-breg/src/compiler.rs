@@ -1659,6 +1659,7 @@ fn expand_project_access(
                 required_purposes: profile.required_purposes.clone(),
                 operations: grant.operations.clone(),
                 readable_fields: grant.readable_fields.clone(),
+                readable_request_fields: grant.readable_request_fields.clone(),
                 writable_fields: grant.writable_fields.clone(),
                 filterable_fields: grant.filterable_fields.clone(),
                 sortable_fields: grant.sortable_fields.clone(),
@@ -2962,6 +2963,15 @@ fn validate_profiles(
                 "bulk data export requires an authenticated list profile with a readable projection",
             ));
         }
+        if entity.change_request.is_none()
+            && !crate::contract::is_default_readable_request_fields(&access.readable_request_fields)
+        {
+            errors.push(Diagnostic::error(
+                "access_profile.request_fields.invalid",
+                "entities[].accessProfiles[].readableRequestFields",
+                "request metadata field permissions require a change-request entity",
+            ));
+        }
         if access.request_visibility.is_some()
             && (entity.change_request.is_none()
                 || access.anonymous
@@ -3532,12 +3542,11 @@ fn validate_events(
                 "an event projection refers to an unknown field",
             ));
         }
-        let maximum_payload_bytes =
-            maximum_event_payload_bytes(&entity.id, event.trigger, &event.projection, |field| {
-                fields
-                    .get(field)
-                    .map(|field| (&field.field_type, field.required))
-            });
+        let maximum_payload_bytes = maximum_event_payload_bytes(&entity.id, event, |field| {
+            fields
+                .get(field)
+                .map(|field| (&field.field_type, field.required))
+        });
         if matches!(
             event.trigger,
             EventTrigger::Patched | EventTrigger::Tombstoned
@@ -3823,11 +3832,11 @@ fn valid_logical_destination_id(value: &str) -> bool {
 
 fn maximum_event_payload_bytes<'a>(
     entity_id: &str,
-    trigger: EventTrigger,
-    projection: &BTreeSet<String>,
+    event: &crate::contract::EventSource,
     field: impl Fn(&str) -> Option<(&'a FieldTypeSource, bool)>,
 ) -> Option<u64> {
-    let values = maximum_event_values_bytes(projection, field)?;
+    let trigger = event.trigger;
+    let values = maximum_event_values_bytes(&event.projection, field)?;
     let fixed_keys: &[&str] = if trigger == EventTrigger::RequestLifecycle {
         &[
             "entity",
@@ -3868,6 +3877,7 @@ fn maximum_event_payload_bytes<'a>(
             "stage",
             "effectDigest",
             "deduplicationKey",
+            "reasonPresent",
         ];
         total = total
             .checked_add(2)?
@@ -3883,7 +3893,18 @@ fn maximum_event_payload_bytes<'a>(
             .checked_add(16)?
             .checked_add(258)?
             .checked_add(73)?
-            .checked_add(512)?;
+            .checked_add(512)?
+            .checked_add(5)?;
+        if request_event_may_include_review_reason(event) {
+            // Include the comma, key, and worst-case escaped Unicode text only
+            // when the event can carry a rejection or revision reason.
+            total = total
+                .checked_add(1 + "reason".len() as u64 + 3)?
+                .checked_add(
+                    (crate::request_workflow::MAX_REVIEW_REASON_CHARS as u64).checked_mul(6)?,
+                )?
+                .checked_add(2)?;
+        }
     }
     // Entity ids and triggers use the compiler's closed ASCII grammars.
     total = total.checked_add(entity_id.len() as u64 + 2)?;
@@ -3937,13 +3958,12 @@ pub(crate) fn maximum_compiled_event_payload_bytes(
     entity: &CompiledEntity,
     event: &crate::contract::EventSource,
 ) -> Option<u32> {
-    let maximum =
-        maximum_event_payload_bytes(&entity.id, event.trigger, &event.projection, |field| {
-            entity
-                .fields
-                .get(field)
-                .map(|field| (&field.field_type, field.required))
-        })?;
+    let maximum = maximum_event_payload_bytes(&entity.id, event, |field| {
+        entity
+            .fields
+            .get(field)
+            .map(|field| (&field.field_type, field.required))
+    })?;
     u32::try_from(maximum).ok()
 }
 
@@ -3985,6 +4005,31 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
     Some(bytes)
 }
 
+/// A lifecycle event can disclose reviewer text only on these two transitions.
+/// Empty condition sets are unrestricted, as in runtime condition evaluation.
+fn request_event_may_include_review_reason(event: &crate::contract::EventSource) -> bool {
+    if event.trigger != EventTrigger::RequestLifecycle {
+        return false;
+    }
+    match event.when.as_ref() {
+        None => true,
+        Some(EventConditionSource::RequestLifecycle {
+            transitions,
+            to_states,
+            ..
+        }) => [
+            ("reject", "rejected"),
+            ("request_revision", "needs_changes"),
+        ]
+        .iter()
+        .any(|(transition, state)| {
+            (transitions.is_empty() || transitions.contains(*transition))
+                && (to_states.is_empty() || to_states.contains(*state))
+        }),
+        Some(EventConditionSource::Fields { .. }) => false,
+    }
+}
+
 fn compile_event_delivery_inventory(
     registry_id: &str,
     entities: &BTreeMap<String, CompiledEntity>,
@@ -4010,6 +4055,9 @@ fn compile_event_delivery_inventory(
                 .collect::<Vec<_>>();
             if event.trigger == EventTrigger::RequestLifecycle {
                 classifications.push(entity.classification);
+                if request_event_may_include_review_reason(event) {
+                    classifications.push(Classification::Internal);
+                }
             }
             let classification_ceiling = classifications
                 .into_iter()

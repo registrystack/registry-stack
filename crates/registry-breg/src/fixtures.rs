@@ -332,6 +332,8 @@ enum ActionSource {
         effect_digest: Option<String>,
         #[serde(default)]
         effect_digest_ref: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_review_reason")]
+        reason: Option<String>,
     },
     RequestRevision {
         stage: String,
@@ -345,6 +347,8 @@ enum ActionSource {
         effect_digest: Option<String>,
         #[serde(default)]
         effect_digest_ref: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_review_reason")]
+        reason: Option<String>,
     },
     ReviseRequest {
         record_ref: String,
@@ -493,6 +497,21 @@ impl DirectClaimSource {
 enum ExpectedOutcome {
     Success,
     Refusal,
+}
+
+fn deserialize_review_reason<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let reason = String::deserialize(deserializer)?;
+    if reason.chars().count() > crate::request_workflow::MAX_REVIEW_REASON_CHARS
+        || reason.contains('\0')
+    {
+        return Err(serde::de::Error::custom(
+            "review reason exceeds its text bounds",
+        ));
+    }
+    Ok(Some(reason))
 }
 
 #[derive(Clone, Deserialize)]
@@ -1249,6 +1268,7 @@ fn action_profile_from_grant(grant: &CompiledActionGrant) -> AccessProfileSource
         required_purposes: grant.required_purposes.clone(),
         operations: grant.operations.clone(),
         readable_fields: BTreeSet::new(),
+        readable_request_fields: Default::default(),
         writable_fields: BTreeSet::new(),
         filterable_fields: BTreeSet::new(),
         sortable_fields: BTreeSet::new(),
@@ -2046,6 +2066,7 @@ fn internalize_entity_action(
             proposal_version_ref,
             effect_digest,
             effect_digest_ref,
+            reason,
         } => ActionSource::RejectRequest {
             stage: stage.clone(),
             record_ref: record_ref.clone(),
@@ -2054,6 +2075,7 @@ fn internalize_entity_action(
             proposal_version_ref: proposal_version_ref.clone(),
             effect_digest: effect_digest.clone(),
             effect_digest_ref: effect_digest_ref.clone(),
+            reason: reason.clone(),
         },
         ActionSource::RequestRevision {
             stage,
@@ -2063,6 +2085,7 @@ fn internalize_entity_action(
             proposal_version_ref,
             effect_digest,
             effect_digest_ref,
+            reason,
         } => ActionSource::RequestRevision {
             stage: stage.clone(),
             record_ref: record_ref.clone(),
@@ -2071,6 +2094,7 @@ fn internalize_entity_action(
             proposal_version_ref: proposal_version_ref.clone(),
             effect_digest: effect_digest.clone(),
             effect_digest_ref: effect_digest_ref.clone(),
+            reason: reason.clone(),
         },
         ActionSource::ReviseRequest {
             record_ref,
@@ -2292,6 +2316,7 @@ fn externalize_action(
             proposal_version_ref,
             effect_digest,
             effect_digest_ref,
+            reason,
         } => ActionSource::RejectRequest {
             stage: stage.clone(),
             record_ref: record_ref.clone(),
@@ -2300,6 +2325,7 @@ fn externalize_action(
             proposal_version_ref: proposal_version_ref.clone(),
             effect_digest: effect_digest.clone(),
             effect_digest_ref: effect_digest_ref.clone(),
+            reason: reason.clone(),
         },
         ActionSource::RequestRevision {
             stage,
@@ -2309,6 +2335,7 @@ fn externalize_action(
             proposal_version_ref,
             effect_digest,
             effect_digest_ref,
+            reason,
         } => ActionSource::RequestRevision {
             stage: stage.clone(),
             record_ref: record_ref.clone(),
@@ -2317,6 +2344,7 @@ fn externalize_action(
             proposal_version_ref: proposal_version_ref.clone(),
             effect_digest: effect_digest.clone(),
             effect_digest_ref: effect_digest_ref.clone(),
+            reason: reason.clone(),
         },
         ActionSource::ReviseRequest {
             record_ref,
@@ -3753,10 +3781,22 @@ fn request_action_body(
                 _ => return Err(FixtureError::RequestConstructionRefused),
             };
             validate_digest(&digest)?;
-            Ok(json!({
+            let mut body = json!({
                 "proposalVersion": version,
                 "effectDigest": digest,
-            }))
+            });
+            if let ActionSource::RejectRequest {
+                reason: Some(reason),
+                ..
+            }
+            | ActionSource::RequestRevision {
+                reason: Some(reason),
+                ..
+            } = action
+            {
+                body["reason"] = json!(reason);
+            }
+            Ok(body)
         }
         _ => Err(FixtureError::RequestConstructionRefused),
     }
@@ -4677,6 +4717,8 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
                 | "actions"
                 | "history"
                 | "application"
+                | "decisions"
+                | "detailErased"
         )
     }) || !["bregState", "proposalVersion"]
         .iter()
@@ -4707,6 +4749,9 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
     }
     if let Some(history) = request.get("history") {
         assert_request_history_shape(history)?;
+    }
+    if let Some(decisions) = request.get("decisions") {
+        assert_request_decisions_shape(decisions)?;
     }
     if let Some(application) = request.get("application") {
         assert_request_application_shape(application)?;
@@ -4817,6 +4862,46 @@ fn assert_request_action_link_shape(value: &Value) -> Result<(), FixtureError> {
     Ok(())
 }
 
+fn assert_request_decisions_shape(value: &Value) -> Result<(), FixtureError> {
+    let decisions = value.as_array().ok_or(FixtureError::ResponseShapeRefused)?;
+    for decision in decisions {
+        let decision = decision
+            .as_object()
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        if decision.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "stageId" | "kind" | "decidedAt" | "reasonPresent" | "reason"
+            )
+        }) || decision
+            .get("stageId")
+            .and_then(Value::as_str)
+            .is_none_or(|stage| !valid_stable_id(stage))
+            || !matches!(
+                decision.get("kind").and_then(Value::as_str),
+                Some("approve" | "reject" | "request_revision")
+            )
+            || decision.get("decidedAt").and_then(Value::as_str).is_none()
+            || decision
+                .get("reasonPresent")
+                .and_then(Value::as_bool)
+                .is_none()
+        {
+            return Err(FixtureError::ResponseShapeRefused);
+        }
+        if let Some(reason) = decision.get("reason") {
+            let reason = reason.as_str().ok_or(FixtureError::ResponseShapeRefused)?;
+            if decision.get("reasonPresent") != Some(&json!(true))
+                || reason.chars().count() > crate::request_workflow::MAX_REVIEW_REASON_CHARS
+                || reason.contains('\0')
+            {
+                return Err(FixtureError::ResponseShapeRefused);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn assert_request_history_shape(value: &Value) -> Result<(), FixtureError> {
     let history = exact_object(value, &["proposals", "nextAfterProposalVersion"])?;
     let proposals = history
@@ -4827,6 +4912,9 @@ fn assert_request_history_shape(value: &Value) -> Result<(), FixtureError> {
         let proposal = proposal
             .as_object()
             .ok_or(FixtureError::ResponseShapeRefused)?;
+        if let Some(decisions) = proposal.get("decisions") {
+            assert_request_decisions_shape(decisions)?;
+        }
         if !proposal.contains_key("proposalVersion")
             || !proposal.contains_key("bregState")
             || proposal
@@ -6003,6 +6091,61 @@ mod tests {
         PackageIntent, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
         PackageSourceFile, SignaturePolicy,
     };
+
+    #[test]
+    fn review_reason_fixture_parsing_and_wire_forwarding_are_exact() {
+        for operation in ["reject_request", "request_revision"] {
+            let mut source = json!({"operation":operation, "stage":"review", "recordRef":"record", "etagRef":"record", "proposalVersion":1, "effectDigest":format!("sha256:{}", "a".repeat(64))});
+            let action: ActionSource = serde_json::from_value(source.clone()).unwrap();
+            assert!(request_action_body(&action, &BTreeMap::new())
+                .unwrap()
+                .get("reason")
+                .is_none());
+            for reason in [
+                "".to_owned(),
+                "  Please clarify.\nสาเหตุ 🙂  ".to_owned(),
+                "🙂".repeat(4096),
+            ] {
+                source["reason"] = json!(reason);
+                let action: ActionSource = serde_json::from_value(source.clone()).unwrap();
+                assert_eq!(
+                    request_action_body(&action, &BTreeMap::new()).unwrap()["reason"],
+                    json!(reason)
+                );
+            }
+            for reason in [
+                Value::Null,
+                json!(1),
+                json!(false),
+                json!([]),
+                json!({}),
+                json!("🙂".repeat(4097)),
+                json!("a\0b"),
+            ] {
+                source["reason"] = reason;
+                assert!(serde_json::from_value::<ActionSource>(source.clone()).is_err());
+            }
+            source["reason"] = json!("clarify");
+            source["operation"] = json!("approve_request");
+            assert!(serde_json::from_value::<ActionSource>(source.clone()).is_err());
+            source["operation"] = json!("apply_request");
+            source.as_object_mut().unwrap().remove("stage");
+            assert!(serde_json::from_value::<ActionSource>(source).is_err());
+        }
+    }
+
+    #[test]
+    fn fixture_decisions_allow_redacted_presence_and_refuse_private_fields() {
+        let mut decisions = json!([{"stageId":"review", "kind":"request_revision", "decidedAt":"2026-09-09T00:00:00Z", "reasonPresent":true}]);
+        assert!(assert_request_decisions_shape(&decisions).is_ok());
+        decisions[0]["reason"] = json!(" สาเหตุ ");
+        assert!(assert_request_decisions_shape(&decisions).is_ok());
+        decisions[0]["actor"] = json!("private");
+        assert!(assert_request_decisions_shape(&decisions).is_err());
+        decisions[0].as_object_mut().unwrap().remove("actor");
+        decisions[0]["reasonPresent"] = json!(false);
+        assert!(assert_request_decisions_shape(&decisions).is_err());
+    }
 
     #[test]
     fn fixture_direct_claims_preserve_bounded_verified_claim_shapes() {

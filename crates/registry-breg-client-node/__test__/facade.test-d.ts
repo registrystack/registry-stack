@@ -71,3 +71,8 @@ action.reviewJson?.toUpperCase()
 metadata.operations.map(operation => operation.query?.filterableFields.map(field => field.apiName))
 // @ts-expect-error Exact JSON methods require text, not already coerced JavaScript values.
 client.createRecordJson(create, { wide: 9007199254740992 }, 'exact-create')
+
+const reasonAction: BRegLifecycleAction = action.withReason("Please revise the submitted values.")
+client.executeLifecycleAction(reasonAction, "request-revision-1")
+// @ts-expect-error review reasons must be strings
+action.withReason(null)

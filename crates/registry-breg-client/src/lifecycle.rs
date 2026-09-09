@@ -14,6 +14,9 @@ use serde_json::{json, Map, Value};
 use url::Url;
 use uuid::Uuid;
 
+/// Maximum Unicode characters in a rejection or revision reason.
+pub const MAX_BREG_REVIEW_REASON_CHARACTERS: usize = 4_096;
+
 /// Maximum actor-action links accepted on one record.
 pub const MAX_BREG_REQUEST_ACTIONS: usize = 64;
 /// Maximum lifecycle operation bindings in metadata. Thirty-two review stages
@@ -490,6 +493,107 @@ pub enum BRegReviewOperation {
     Patch,
 }
 
+/// An inert retained reviewer decision; it grants no action authority.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegRequestDecision {
+    stage_id: String,
+    kind: BRegRequestDecisionKind,
+    decided_at: String,
+    reason_present: bool,
+    reason: Option<String>,
+}
+
+impl BRegRequestDecision {
+    #[must_use]
+    pub fn stage_id(&self) -> &str {
+        &self.stage_id
+    }
+    #[must_use]
+    pub const fn kind(&self) -> BRegRequestDecisionKind {
+        self.kind
+    }
+    #[must_use]
+    pub fn decided_at(&self) -> &str {
+        &self.decided_at
+    }
+    /// Whether a reason was supplied, including when its text is withheld or erased.
+    #[must_use]
+    pub const fn reason_present(&self) -> bool {
+        self.reason_present
+    }
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+}
+
+impl fmt::Debug for BRegRequestDecision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegRequestDecision(<redacted>)")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BRegRequestDecisionKind {
+    Approve,
+    Reject,
+    RequestRevision,
+}
+
+fn decode_decisions(value: Value) -> Result<Vec<BRegRequestDecision>, BRegLifecycleDecodeError> {
+    let Value::Array(values) = value else {
+        return Err(BRegLifecycleDecodeError::Profile);
+    };
+    if values.len() > 1024 {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    values
+        .into_iter()
+        .map(|value| {
+            let mut object = exact_object(
+                value,
+                &["stageId", "kind", "decidedAt", "reasonPresent"],
+                &["reason"],
+            )?;
+            let stage_id = take_string(&mut object, "stageId")?;
+            validate_identifier(&stage_id)?;
+            let kind = match take_string(&mut object, "kind")?.as_str() {
+                "approve" => BRegRequestDecisionKind::Approve,
+                "reject" => BRegRequestDecisionKind::Reject,
+                "request_revision" => BRegRequestDecisionKind::RequestRevision,
+                _ => return Err(BRegLifecycleDecodeError::Profile),
+            };
+            let decided_at = take_string(&mut object, "decidedAt")?;
+            validate_timestamp(&decided_at)?;
+            let reason_present = object
+                .remove("reasonPresent")
+                .and_then(|v| v.as_bool())
+                .ok_or(BRegLifecycleDecodeError::Profile)?;
+            if kind == BRegRequestDecisionKind::Approve && reason_present {
+                return Err(BRegLifecycleDecodeError::Profile);
+            }
+            let reason = match object.remove("reason") {
+                None => None,
+                Some(Value::String(reason))
+                    if reason_present
+                        && !reason.contains('\0')
+                        && reason.chars().count() <= MAX_BREG_REVIEW_REASON_CHARACTERS =>
+                {
+                    Some(reason)
+                }
+                _ => return Err(BRegLifecycleDecodeError::Profile),
+            };
+            Ok(BRegRequestDecision {
+                stage_id,
+                kind,
+                decided_at,
+                reason_present,
+                reason,
+            })
+        })
+        .collect()
+}
+
 /// Validated but inert change-request metadata extracted from a Registry
 /// Record. Its action links cannot be executed until promoted.
 #[derive(Clone, PartialEq)]
@@ -503,6 +607,7 @@ pub struct BRegRequestMetadata {
     actions: Vec<InertBRegLifecycleAction>,
     application: Option<BRegRecordApplication>,
     retained_history: Option<Value>,
+    decisions: Vec<BRegRequestDecision>,
 }
 
 impl BRegRequestMetadata {
@@ -545,6 +650,7 @@ impl BRegRequestMetadata {
                 "actions",
                 "application",
                 "history",
+                "decisions",
             ],
         )?;
 
@@ -596,9 +702,22 @@ impl BRegRequestMetadata {
                 decode_retained_application(value)?,
             )),
         };
+        let decisions = match object.remove("decisions") {
+            None => Vec::new(),
+            Some(value) => decode_decisions(value)?,
+        };
         let retained_history = match object.remove("history") {
             None => None,
-            Some(Value::Object(history)) => Some(Value::Object(history)),
+            Some(Value::Object(history)) => {
+                if let Some(Value::Array(proposals)) = history.get("proposals") {
+                    for proposal in proposals {
+                        if let Some(decisions) = proposal.get("decisions") {
+                            decode_decisions(decisions.clone())?;
+                        }
+                    }
+                }
+                Some(Value::Object(history))
+            }
             Some(_) => return Err(BRegLifecycleDecodeError::Profile),
         };
 
@@ -612,6 +731,7 @@ impl BRegRequestMetadata {
             actions,
             application,
             retained_history,
+            decisions,
         })
     }
 
@@ -649,6 +769,13 @@ impl BRegRequestMetadata {
     #[must_use]
     pub fn application(&self) -> Option<&BRegRecordApplication> {
         self.application.as_ref()
+    }
+
+    /// Caller-visible decisions for the current proposal, including reason text
+    /// only when the runtime discloses and retains it.
+    #[must_use]
+    pub fn decisions(&self) -> &[BRegRequestDecision] {
+        &self.decisions
     }
 
     /// Returns retained history as inert JSON. It is never consulted for
@@ -952,12 +1079,14 @@ impl BRegLifecycleAuthority {
                         BRegLifecycleActionBody::RejectRequest {
                             proposal_version,
                             effect_digest,
+                            reason: None,
                         }
                     }
                     BRegLifecycleOperation::RequestRevision => {
                         BRegLifecycleActionBody::RequestRevision {
                             proposal_version,
                             effect_digest,
+                            reason: None,
                         }
                     }
                     BRegLifecycleOperation::ApplyRequest => BRegLifecycleActionBody::ApplyRequest {
@@ -1217,6 +1346,25 @@ impl BRegLifecycleAction {
         &self.body
     }
 
+    /// Return a copy carrying a reason for rejection or requested revision.
+    /// Empty text is permitted; all text is preserved exactly for explicit retry.
+    /// Validation performs no token acquisition or I/O.
+    pub fn with_reason(&self, reason: impl Into<String>) -> Result<Self, BRegLifecycleActionError> {
+        let reason = reason.into();
+        if reason.contains('\0') || reason.chars().count() > MAX_BREG_REVIEW_REASON_CHARACTERS {
+            return Err(BRegLifecycleActionError::Reason);
+        }
+        let mut action = self.clone();
+        match &mut action.body {
+            BRegLifecycleActionBody::RejectRequest { reason: value, .. }
+            | BRegLifecycleActionBody::RequestRevision { reason: value, .. } => {
+                *value = Some(reason)
+            }
+            _ => return Err(BRegLifecycleActionError::Reason),
+        }
+        Ok(action)
+    }
+
     #[must_use]
     pub fn review(&self) -> Option<&BRegRequestReview> {
         self.review.as_ref()
@@ -1338,10 +1486,12 @@ pub enum BRegLifecycleActionBody {
     RejectRequest {
         proposal_version: BRegProposalVersion,
         effect_digest: BRegEffectDigest,
+        reason: Option<String>,
     },
     RequestRevision {
         proposal_version: BRegProposalVersion,
         effect_digest: BRegEffectDigest,
+        reason: Option<String>,
     },
     ReviseRequest {
         rebase: bool,
@@ -1360,15 +1510,24 @@ impl BRegLifecycleActionBody {
         match self {
             Self::SubmitRequest | Self::CancelRequest => json!({}),
             Self::ReviseRequest { rebase } => json!({"rebase": rebase}),
-            Self::ApproveRequest {
+            Self::RejectRequest {
                 proposal_version,
                 effect_digest,
-            }
-            | Self::RejectRequest {
-                proposal_version,
-                effect_digest,
+                reason,
             }
             | Self::RequestRevision {
+                proposal_version,
+                effect_digest,
+                reason,
+            } => {
+                let mut body =
+                    json!({"proposalVersion": proposal_version, "effectDigest": effect_digest});
+                if let Some(reason) = reason {
+                    body["reason"] = Value::String(reason.clone());
+                }
+                body
+            }
+            Self::ApproveRequest {
                 proposal_version,
                 effect_digest,
             }
@@ -1543,6 +1702,13 @@ pub enum BRegLifecycleDecodeError {
     Json,
     #[error("Base Registry Engine lifecycle response does not conform")]
     Profile,
+}
+
+/// Coarse, value-free lifecycle action input failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum BRegLifecycleActionError {
+    #[error("Base Registry Engine reason requires rejection or revision, no NUL, and at most 4096 Unicode characters")]
+    Reason,
 }
 
 /// Coarse, value-free action promotion failure.

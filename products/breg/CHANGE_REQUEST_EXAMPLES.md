@@ -351,6 +351,28 @@ After revise, repeat submit, both approval stages, and apply using the new GET
 metadata. A stale proposal version, stale effect digest, or stale action
 `If-Match` is intentionally not reusable after the rebase.
 
+## Reviewer explanations
+
+The `reject_request` and `request_revision` actions accept an optional `reason`
+string beside `proposalVersion` and `effectDigest`. In an authored journey,
+place `reason` directly under `request`, beside the proposal-reference fields.
+The asset fixture requests revision with a Unicode explanation, reads the
+feedback as the submitter, then revises and resubmits before approval.
+
+Reasons preserve whitespace and Unicode exactly. Empty strings are permitted;
+null, other types, NUL, and more than 4096 Unicode characters are refused.
+Approve and apply bodies remain closed and reject `reason`. A replay must use
+the same reason and other original action input with its idempotency key.
+
+GET exposes current decisions at `data.request.decisions` and retained decisions
+at `data.request.history.proposals[].decisions`. Each carries `stageId`, `kind`,
+`decidedAt`, and `reasonPresent`, with `reason` only when its text remains retained
+and the selected profile permits it. The request grant defaults to
+`readableRequestFields: [reason]`; an explicit empty list hides reason text
+without hiding the decision facts. Anonymous profiles never receive reason text.
+Request-detail erasure removes reason text while preserving the decision and
+reason-presence flag.
+
 ## Retention operator checks
 
 Use the retention operator CLI only for requests with retained detail, including

@@ -40,6 +40,120 @@ const PACKAGE_REVISION: &str =
 const TENANT: &str = "tenant-a";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn heavy_retained_history_pages_decode_without_skipping_proposals_or_decisions() {
+    let database = TestDatabase::create(6).await;
+    let registry = Arc::new(compiled_registry());
+    let identity = install_registry(&database, &registry).await;
+    let app = request_router(&database, registry, identity);
+    let operator = claims("operator", "operator-principal");
+    let site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=operator",
+        operator.clone(),
+        "history-site",
+        json!({"tenant": TENANT, "name": "site"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=operator",
+        operator.clone(),
+        "history-placement",
+        json!({"tenant": TENANT, "site": site.id}),
+    )
+    .await;
+    let request = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=operator",
+        operator.clone(),
+        "history-request",
+        json!({"tenant": TENANT, "placement": placement.id,
+            "proposedSite": site.id, "reason": "request intake"}),
+    )
+    .await;
+    let request_id = Uuid::parse_str(&request.id).unwrap();
+    let (migration, task) = database.connect_migration().await;
+    // Each historical version models 32 stages with 32 reviewers: 1023
+    // approvals followed by a revision request with maximum escaped reason text.
+    let reason = "\u{1}".repeat(4096);
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_request_proposals
+             (request_entity_id, request_id, proposal_version, request_record_revision,
+              contract_fingerprint, effect_digest, snapshot)
+         SELECT 'correction-request', $1, version, 1, $2, $2, '{}'::jsonb
+           FROM generate_series(1, 50) version",
+            &[&request_id, &PACKAGE_REVISION],
+        )
+        .await
+        .expect("heavy historical versions insert");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_request_decisions
+             (request_entity_id, request_id, proposal_version, decision_index, stage_id,
+              actor_reference, decision, effect_digest, decided_at, reason, reason_present)
+         SELECT 'correction-request', $1, version, i, 'stage-' || (i / 32)::text,
+                'reviewer-' || i::text,
+                CASE WHEN i = 1023 THEN 'request_revision' ELSE 'approve' END,
+                $2, transaction_timestamp(), CASE WHEN i = 1023 THEN $3 ELSE NULL END, i = 1023
+           FROM generate_series(1, 50) version CROSS JOIN generate_series(0, 1023) i",
+            &[&request_id, &PACKAGE_REVISION, &reason],
+        )
+        .await
+        .expect("bounded complete decision histories insert");
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_request_state SET proposal_version = 51
+          WHERE request_entity_id = 'correction-request' AND request_id = $1",
+            &[&request_id],
+        )
+        .await
+        .expect("current draft follows historical versions");
+    let mut after = None;
+    let mut versions = Vec::new();
+    let mut page_count = 0;
+    loop {
+        let mut uri = format!(
+            "/v1/records/correction-requests/{}?accessProfile=operator",
+            request.id
+        );
+        if let Some(after) = after {
+            uri.push_str(&format!("&requestHistoryAfterProposalVersion={after}"));
+        }
+        let response = get_record(&app, &uri, operator.clone()).await;
+        assert_eq!(response.status, StatusCode::OK);
+        let metadata = &response.body["data"]["request"];
+        registry_breg_client::BRegRequestMetadata::from_value(metadata.clone(), false)
+            .expect("the maintained client accepts every complete history page");
+        assert!(serde_json::to_vec(metadata).unwrap().len() <= 2_097_152);
+        let proposals = metadata["history"]["proposals"]
+            .as_array()
+            .expect("nonempty history page");
+        assert!(!proposals.is_empty());
+        for proposal in proposals {
+            versions.push(proposal["proposalVersion"].as_i64().unwrap());
+            let decisions = proposal["decisions"].as_array().unwrap();
+            assert_eq!(decisions.len(), 1024);
+            assert_eq!(decisions[0]["stageId"], "stage-0");
+            assert_eq!(decisions[1023]["stageId"], "stage-31");
+            assert_eq!(decisions[1023]["reason"], reason);
+            assert_eq!(decisions[1023]["reasonPresent"], true);
+        }
+        page_count += 1;
+        after = metadata["history"]["nextAfterProposalVersion"].as_i64();
+        if after.is_none() {
+            break;
+        }
+        assert_eq!(after, versions.last().copied());
+        assert!(page_count < 50, "cursor must make forward progress");
+    }
+    assert!(page_count > 1, "byte budget splits heavy history");
+    assert_eq!(versions, (1..=50).collect::<Vec<_>>());
+    task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_target_get() {
     let database = TestDatabase::create(6).await;
     let registry = Arc::new(compiled_registry());
