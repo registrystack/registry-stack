@@ -1,7 +1,7 @@
 ---
 title: Authenticate citizens with eSignet over Base Registry Engine (BReg)
 description: How the eSignet Base Registry Engine provider turns a governed population registry lookup into a verified OpenID Connect login, what it discloses, and where its boundaries lie.
-status: draft
+status: current
 owner: registry-docs
 source_repos: [registry-stack, esignet-relay-authenticator]
 last_reviewed: "2026-09-09"
@@ -16,14 +16,14 @@ authentication service from the MOSIP project. The eSignet BReg provider is the 
 the two. It lets eSignet resolve a verified identifier against your registry through one governed
 lookup, and release only the demographic claims each citizen approves. This page explains what the
 provider does, what your registry must grant it, and what it deliberately leaves out. It is the
-adopter-facing account of version 0.3.0 of
-[registrystack/esignet-relay-authenticator](https://github.com/registrystack/esignet-relay-authenticator).
+adopter-facing account of
+[registrystack/esignet-relay-authenticator v0.3.0](https://github.com/registrystack/esignet-relay-authenticator/releases/tag/v0.3.0).
 
 {/* TODO[evidence]: provider behaviour (challenge verifier interface, PSUT derivation, claim
 mapping, error codes, build outputs) lives in the separate registrystack/esignet-relay-authenticator
 repository and cannot be anchored from this one. Re-verify the statements below against that
-repository's README, docs/esignet-configuration.md, and docs/breg-lookup-contract.md when it
-changes. */}
+repository's README, docs/esignet-configuration.md, and docs/breg-lookup-contract.md at the next
+release tag. */}
 
 ## Who owns what
 
@@ -139,15 +139,28 @@ a code change. The provider needs:
   `lookup` operation and only the fields the provider may ever project. Leave `get`, `list`, and all
   write operations out of it. The provider never lists or writes, so a profile that permits either is
   wider than the integration needs.
+- **A required scope only the provider holds.** `accessProfile` is a request parameter, so the
+  profile's name isolates nothing on its own: any authenticated caller whose token satisfies the
+  profile's principal claim, purposes, and row boundaries can select it. Give the profile a
+  `requiredScopes` entry, for example `registry:esignet:lookup`. A profile with no required scope
+  raises `access.profile.no_required_scope` when you check the project.
 - **A field list that mirrors the profile.** The provider's `provisioned_fields` must match what the
   profile grants, and `account_check_fields` must be a non-empty subset of it that contains the
   selector field. Keep the account check to the identifier and a status field.
 - **A separate administrative client** for anyone who edits records. The eSignet client's key is
   lookup-only by construction, and it stays that way only if nobody reuses it for change requests.
 
-On the Mint side, register the provider as a `private_key_jwt` client with an ES256 or RS256 key.
-Mint issues tokens the BReg access profile trusts, and the provider caches each one for at most
-five minutes.
+{/* Evidence: crates/registry-breg/src/api/mod.rs, authorize_profile_claims: the selected profile
+admits a request when every entry in required_scopes is present in the verified token, so an empty
+set admits any caller that satisfies the principal claim and the row boundaries.
+crates/registry-breg/src/access.rs raises access.profile.no_required_scope for that case.
+crates/registry-mint/src/token.rs joins a client's registered scopes into the minted scope claim. */}
+
+On the Mint side, register the provider as a `private_key_jwt` client with an ES256 or RS256 key,
+and put the profile's required scope in that client's `authorization.scopes` and nowhere else. The
+provider's token request carries no scope of its own, so the registration is the only thing that
+lets it select the profile. Mint issues tokens the BReg access profile trusts, and the provider
+caches each one for at most five minutes.
 
 The pages on [BReg access profiles](../../configure/breg-access/),
 [Registry Mint](../../configure/mint/), and
@@ -169,13 +182,15 @@ rules shape it:
 - **eSignet signs, the provider does not.** The provider returns plain claims and the subject.
   Signing, JWE encryption for relying parties that request it, and key rotation are eSignet's.
 
-Registry Stack's own OIDC verifier already accounts for eSignet's token shape. Evidence Gateway and
-BReg accept eSignet-issued ID Tokens and UserInfo JWTs that omit the `typ` header, which is how
-eSignet emits them, without relaxing any other check.
+An eSignet ID Token or UserInfo JWT authenticates a citizen to a relying party. It is not a registry
+credential. BReg and Evidence Gateway verify access tokens against their configured issuer and
+required token type, so forwarding a citizen's ID Token to either one is rejected. The only
+credential that reaches the registry is the provider's own Mint access token.
 
-{/* Evidence: crates/registry-platform-oidc/src/lib.rs, enforce_optional_typ: the shared OIDC
-verifier accepts JWTs without a typ header because eSignet omits it on ID Token and UserInfo JWTs,
-while still enforcing every other header and claim check. */}
+{/* Evidence: crates/registry-breg/src/runtime_config.rs and crates/registry-evidence/src/auth.rs
+both build TokenVerifierConfig::access_token_profile, whose allowed_typ list is required and fails
+closed when empty (crates/registry-platform-oidc/src/lib.rs, access_token_profile). Neither runtime
+calls verify_id_token or verify_userinfo_jwt. */}
 
 ## Failure behaviour
 
