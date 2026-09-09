@@ -36,6 +36,20 @@ prerequisite command may run for 120 seconds, and the owned database and each
 started service have 45 seconds to answer as ready. A start that passes a
 deadline fails, stops what it acquired and keeps its owner-only diagnostics.
 
+Before it inspects the owned container or launches the supervisor, a start runs
+each resolved `breg`, `mint` and `docker` with `--version` and records what they
+answer. `breg` and `mint` ship in the same release as `bregctl` and share a
+package format, a token shape and a schema, so a `breg` or `mint` reporting
+another version than this `bregctl` is refused by name: the refusal gives the
+file that answered, the version it reported and the version `bregctl` reports.
+Without that comparison the mismatch surfaces much later as a refused package or
+an unready database, which reads as a fault in the authored project. Docker
+belongs to no release of this stack and is never compared, and a prerequisite
+that reports no version at all still serves the session. No flag skips the
+comparison: install `breg`, `mint` and `bregctl` from the same release, or put
+the matching build first on `PATH`. `--breg-bin` and `--mint-bin` choose which
+file is resolved, and the resolved file is the one compared.
+
 `dev stop` keeps everything it created: the owned container, its named data
 volume, records, audit history, keys, credentials and the built package. Add
 `--remove` to reclaim the storage as well; it removes the owned container and
@@ -248,6 +262,7 @@ identifiable and reclaimable once the container is gone.
 | Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history, event receipts and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
 | Start after `--remove` | At sequence 1, create an empty container and volume, activate the initial package, and replay authored seeds. A retained successor refuses before Docker because its predecessor records were removed; use a fresh project at sequence 1 for an empty experiment. |
 | Seed request committed before checkpoint | Replay the same permanent BReg idempotency reservation. The original create result is returned without creating or overwriting a record. |
+| `breg` or `mint` from another release | Refuse before the owned container is inspected and before the supervisor launches, naming the file that answered, the version it reported and the version `bregctl` reports. Nothing is created, changed or removed. |
 | Partial start failure | Stop acquired service children and the owned container; retain private diagnostics and completed phases. Retry the same command after correcting the prerequisite. The separate schema-test database may be recreated for a failed rehearsal. |
 | Missing or mismatched owned container | Refuse. Never silently initialize an empty replacement or stop another container. |
 | Unreachable supervisor with an occupied service port | Refuse. Never signal a stored PID that could belong to another process. Inspect the process owning the port before recovery. |

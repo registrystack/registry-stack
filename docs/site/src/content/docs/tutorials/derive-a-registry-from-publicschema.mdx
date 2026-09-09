@@ -287,12 +287,12 @@ reaches `ready` because Docker is not running.
 
 | Symptom | Next move |
 | --- | --- |
-| `bregctl dev` reports `dev.failed` with `local start failed` | `breg --version` and `bregctl --version` must match; a `breg` a version behind the `bregctl` that compiled the project fails at start. `bregctl dev` records both versions in `household-registry/.breg/dev/state.json` and never compares them, so nothing warns you. Install matching binaries, or put a matching build first on `PATH`. |
+| `bregctl dev` refuses with `dev.failed` over a reported version | The installed `breg` or `mint` comes from another release than this `bregctl`. The refusal names the file that answered, the version it reported, and the version this `bregctl` reports. Install all three from the same release, or put the matching build first on `PATH`. |
 | `init --from publicschema` refuses with `init.selection.missing` | No terminal is attached, so the wizard cannot ask its questions. Pass `--starter household` or `--selection <FILE>` instead. |
 | `init --from publicschema --selection <FILE>` refuses over the file | `<FILE>` is a symbolic link, or larger than 256 KiB. Point `--selection` at an ordinary file under that size. |
 | `bregctl init` cannot parse the edited `model/selection.yaml` | Compare the indentation of the lines you changed with the rest of the file; a selection is a plain YAML list of entities, each with a `properties` list under it. |
 
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, State and binary();
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, binary() and matching_versions();
     crates/registry-bregctl/src/init_from_model/mod.rs, MAX_SELECTION_FILE_BYTES and read_selection_file(). */}
 
 ## Next
