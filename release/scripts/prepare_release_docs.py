@@ -106,8 +106,6 @@ def prepare_docs(
         git(repo, "clone", "--no-local", "--no-checkout", str(repo), str(source))
         git(source, "checkout", "--detach", source_sha)
         git(source, "remote", "set-url", "origin", git(repo, "remote", "get-url", "origin"))
-        baseline = git(repo, "rev-parse", "origin/main")
-        git(source, "update-ref", "refs/remotes/origin/main", baseline)
         artifacts = output / "artifacts"
         artifacts.mkdir()
         command = [
