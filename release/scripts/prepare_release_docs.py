@@ -73,7 +73,7 @@ def apply_patch(repo: Path, source_sha: str, patch: Path) -> None:
     if git(repo, "rev-parse", "HEAD") != source_sha:
         raise PreparationError("source HEAD changed during preparation; review the patch against the new source")
     # Check both staged and unstaged changes; never apply over concurrent edits.
-    if git(repo, "diff", "--name-only", source_sha, "--", *DOCS_INPUTS):
+    if git(repo, "status", "--porcelain", "--", *DOCS_INPUTS):
         raise PreparationError("documentation inputs changed during preparation; retain and review the patch")
     if not patch.read_bytes():
         return
