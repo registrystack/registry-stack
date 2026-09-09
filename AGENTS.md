@@ -387,10 +387,10 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
   build artifacts; commit their sources and generators, not rendered copies.
   If you change an HTTP endpoint, regenerating and committing the OpenAPI
   documents is part of the change, not a follow-up. If you change a binary's
-  clap definitions or the workspace version, re-stamping the CLI reference
-  publication record `docs/site/src/data/cli-reference.yaml` is part of the
-  change as well; `docs/site/AGENTS.md` gives the command that prints the
-  values to record.
+  clap definitions or other public command content, review and update the CLI
+  publication record `docs/site/src/data/cli-reference.yaml` as part of the
+  change. A workspace-version-only change preserves an existing v3 review;
+  `docs/site/AGENTS.md` gives the digest and legacy migration commands.
 - Suspected vulnerabilities (minimum-disclosure failure, auth bypass, audit
   redaction failure, connector data leakage, signing key handling) go through
   `SECURITY.md`, never public issues or PRs.

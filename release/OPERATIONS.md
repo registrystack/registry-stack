@@ -205,14 +205,38 @@ git fetch origin main
 git switch -c release/v<version> origin/main
 ```
 
+Collect a release-note draft from the previous published tag and the intended
+committed source before editing release metadata:
+
+```sh
+release/scripts/registry-release draft-notes \
+  --version <version> --release-id <release-id> \
+  --from-tag v<previous-version> --source-ref HEAD \
+  --output /tmp/registry-stack-v<version>-notes.md
+```
+
+The command uses read-only GitHub queries to collect associated merged PRs,
+direct commits, exact comparison links, and changed component paths. It refuses
+an existing output file and does not fetch refs, edit release metadata, or
+publish anything. Omit `--output` to print the draft. Review the linked changes
+and replace the draft's compatibility and migration placeholders when authoring
+`release/notes/v<version>.md`; titles and paths alone do not establish behavior.
+
 Update and commit the version metadata, workspace package versions in current
-lockfiles, changelogs, release notes, manifest, and generated inputs. The version
-bump changes the value the CLI reference collector reports, so review the
-regenerated CLI reference and update `docs/site/src/data/cli-reference.yaml`
-in the same commit. Run `npm run cli-reference:digest` from `docs/site` and
-record the printed `reviewed_source_version` and `reviewed_catalog_sha256`
-with the actual source-review date in `last_reviewed`; stale publication
-metadata makes the docs build fail.
+lockfiles, changelogs, release notes, manifest, and generated inputs. The CLI
+publication record uses schema v3 to distinguish command content from its
+top-level release version. A version-only bump preserves the original review
+date and provenance without editing `docs/site/src/data/cli-reference.yaml`.
+When commands, defaults, help, or other public reference content changes, review
+the generated reference and run `npm run cli-reference:digest` from `docs/site`.
+Record all three printed source/content digest fields with the actual review
+date. Content changes still fail the docs build until reviewed.
+
+For a legacy v2 record, run `npm run cli-reference:digest -- --migrate` once
+from `docs/site`. Migration verifies the existing full digest at its recorded
+source version before adding the content digest. It preserves the review date,
+source version, and full digest, and refuses changed content. Existing v3
+records are checked without rewriting them. Published archives are unchanged.
 
 Then run `registry-release prepare-docs` as described below. It derives the
 candidate docset and mirrored-page metadata and prepares the archive lock from
