@@ -18,17 +18,17 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
-- The Rust, Node.js, and Python Base Registry Engine clients select governed
-  request attachment slots from caller-filtered registry metadata and run the
-  upload, download, and delete exchanges. A slot carries the served size limit,
-  the accepted content types, and the route authority, so an empty body, an
-  oversize body, or an unaccepted media type refuses before any request. Raise
-  the client's maximum response bytes when a slot serves more than the 8 MiB
-  default read bound. See [client API reference](../reference/client-api/).
-
-{/* Evidence: crates/registry-breg-client/src/attachment.rs;
-    crates/registry-breg-client-node/client.d.ts;
-    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi. */}
+- `bregctl dev` reports the check that refused a start instead of only the
+  private log directory. The rehearsal, package build, activation, and
+  verification run inside a detached supervisor, so a refused journey step now
+  reaches your terminal with its code, its `journeys[i].steps[j]` path, and its
+  own message. See
+  [author journeys](../configure/breg-journeys/#troubleshooting).
+- A refused fixture logical reference names its class: a field the entity does
+  not declare, a field the access profile grant does not make writable, a
+  request body with no field, a step identifier that is not stable, a step
+  naming both an entity and an action or neither, or a capture no earlier step
+  declares. The sentence still carries no authored value.
 
 - `bregctl check` no longer tells you to drop a row boundary field from
   `writableFields` on a grant that also creates. The boundary compiles to an
@@ -43,6 +43,18 @@ relevant product pages on this site rather than duplicating release notes.
 {/* Evidence: crates/registry-breg/src/access.rs, access_findings();
     crates/registry-breg/src/{generated_ddl,fixtures}.rs;
     crates/registry-breg/tests/access_configuration.rs. */}
+
+- The Rust, Node.js, and Python Base Registry Engine clients select governed
+  request attachment slots from caller-filtered registry metadata and run the
+  upload, download, and delete exchanges. A slot carries the served size limit,
+  the accepted content types, and the route authority, so an empty body, an
+  oversize body, or an unaccepted media type refuses before any request. Raise
+  the client's maximum response bytes when a slot serves more than the 8 MiB
+  default read bound. See [client API reference](../reference/client-api/).
+
+{/* Evidence: crates/registry-breg-client/src/attachment.rs;
+    crates/registry-breg-client-node/client.d.ts;
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi. */}
 
 ## v0.28.0 beta-40
 

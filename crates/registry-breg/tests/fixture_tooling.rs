@@ -4,7 +4,7 @@
 
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_json, parse_project_yaml};
-use registry_breg::fixtures::{validate_fixture_journeys, FixtureError};
+use registry_breg::fixtures::{validate_fixture_journeys, FixtureError, LogicalReferenceRefusal};
 
 const PROJECT_TEMPLATE: &[u8] = include_bytes!("fixtures/fixture-tooling/project.yaml");
 const MODULE_SOURCE: &[u8] = include_bytes!("fixtures/fixture-tooling/module.yaml");
@@ -62,6 +62,7 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
             FixtureError::JourneyShapeRefused
                 | FixtureError::JourneyShapeInvalid { .. }
                 | FixtureError::LogicalReferenceRefused
+                | FixtureError::LogicalReference(_)
         ));
         assert!(!format!("{error:?}").contains(to));
     }
@@ -70,6 +71,68 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
     assert_eq!(
         validate_fixture_journeys(&oversized, &registry).unwrap_err(),
         FixtureError::JourneyTooLarge
+    );
+}
+
+#[test]
+fn fixture_tooling_refused_logical_references_name_their_cause() {
+    let registry = compiled_fixture();
+    let source = String::from_utf8(JOURNEY_SOURCE.to_vec()).expect("fixture is UTF-8");
+
+    for (label, from, to, refusal) in [
+        (
+            "field the entity does not declare",
+            "data: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}",
+            "data: {jurisdiction: zone-a, label: first, canary-field: initial, quantity: 1}",
+            LogicalReferenceRefusal::UnknownField,
+        ),
+        (
+            "request body without a field",
+            "data: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}",
+            "data: {}",
+            LogicalReferenceRefusal::EmptyRequestBody,
+        ),
+        (
+            "step identifier that is not stable",
+            "- id: create-widget",
+            "- id: Create Widget canary",
+            LogicalReferenceRefusal::StepIdentifier,
+        ),
+        (
+            "step naming an entity and an action",
+            "entity: widget\n        accessProfile: operator",
+            "entity: widget\n        action: canary-action\n        accessProfile: operator",
+            LogicalReferenceRefusal::EntityOrAction,
+        ),
+        (
+            "capture no earlier step declares",
+            "recordRef: first-widget}",
+            "recordRef: canary-widget}",
+            LogicalReferenceRefusal::CaptureSource,
+        ),
+    ] {
+        let changed = source.replacen(from, to, 1);
+        assert_ne!(changed, source, "{label} mutation did not apply");
+        let error = validate_fixture_journeys(changed.as_bytes(), &registry)
+            .expect_err("a refused logical reference is reported");
+        assert_eq!(
+            underlying_fixture_error(&error),
+            &FixtureError::LogicalReference(refusal),
+            "{label} returned {error:?}"
+        );
+        assert!(
+            !format!("{error:?}").contains("canary"),
+            "{label} echoed an authored value: {error:?}"
+        );
+    }
+
+    let concealed = compiled_fixture_without_writable_note();
+    let error = validate_fixture_journeys(JOURNEY_SOURCE, &concealed)
+        .expect_err("a field the grant cannot write is refused");
+    assert_eq!(
+        underlying_fixture_error(&error),
+        &FixtureError::LogicalReference(LogicalReferenceRefusal::FieldNotWritable),
+        "{error:?}"
     );
 }
 
@@ -242,7 +305,7 @@ journeys:
         assert!(
             matches!(
                 underlying_fixture_error(&error),
-                FixtureError::LogicalReferenceRefused
+                FixtureError::LogicalReferenceRefused | FixtureError::LogicalReference(_)
             ),
             "{label} returned {error:?}"
         );
@@ -826,6 +889,21 @@ fn compiled_fixture_with_project(
     let project = parse_project_yaml(&project_source).expect("project fixture parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture project compiles in Production")
+}
+
+fn compiled_fixture_without_writable_note() -> registry_breg::CompiledRegistry {
+    let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
+    let project_source = String::from_utf8(PROJECT_TEMPLATE.to_vec())
+        .expect("project fixture is UTF-8")
+        .replace("MODULE_DIGEST", &module_digest(&module))
+        .replace(
+            "writableFields: [jurisdiction, label, note, quantity]",
+            "writableFields: [jurisdiction, label, quantity]",
+        )
+        .into_bytes();
+    let project = parse_project_yaml(&project_source).expect("project fixture parses");
+    compile_project(&project, &[module], CompileProfile::Production)
+        .expect("fixture project without a writable note compiles in Production")
 }
 
 fn compiled_contact_request_fixture() -> registry_breg::CompiledRegistry {

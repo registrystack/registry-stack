@@ -232,6 +232,8 @@ Running the journeys needs more than the project: an empty PostgreSQL database, 
 | `generate` fails with `output.destination.invalid`. | The output directory already exists, or the path contains `..`. Give a new path; remove the old directory first if you meant to regenerate. |
 | A journey step fails with 404 where you expected data. | The profile's row boundary or purpose excluded the caller. Compare the step's `claims` with the grant, or preview them with `explain access --scenario` ([control access per profile](../breg-access/)). |
 | A journey filters or sorts on a field and is refused. | The profile's `filterableFields` or `sortableFields` do not list it. Check `explain queries` for the forms the profile may use. |
+| `bregctl dev` refuses the start with `test.step.failed` at `journeys[0].steps[2]`. | The rehearsal ran your journeys and that step failed. The refusal carries the step's own message; correct the step and start again. The full report stays in the project's private `.breg/dev/logs`. |
+| A step is refused because a logical reference was refused. | The refusal names the class: a field the entity does not declare, a field the grant does not make writable, a request body with no field, a step identifier that is not stable, a step naming both an entity and an action or neither, or a capture no earlier step declares. It never repeats the value you wrote. |
 
 ## Next
 

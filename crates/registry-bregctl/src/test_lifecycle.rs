@@ -847,6 +847,29 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_logical_reference_reports_which_reference_and_why() {
+        use registry_breg::fixtures::LogicalReferenceRefusal;
+
+        let error = execution_error(FixtureError::StepFailed {
+            journey_index: 0,
+            step_index: 3,
+            error: Box::new(FixtureError::LogicalReference(
+                LogicalReferenceRefusal::FieldNotWritable,
+            )),
+        });
+        let report = serde_json::to_value(crate::test_lifecycle_failure(error))
+            .expect("step failure report serializes");
+        assert_eq!(report["diagnostics"][0]["code"], "test.step.failed");
+        assert_eq!(report["diagnostics"][0]["path"], "journeys[0].steps[3]");
+        assert_eq!(
+            report["diagnostics"][0]["message"],
+            "the fixture logical reference was refused: the request writes a field the access profile grant does not make writable"
+        );
+        // The named cause carries no authored field, value or profile.
+        assert!(!report.to_string().contains("recreate"));
+    }
+
+    #[test]
     fn revise_request_data_body_reports_field_path() {
         let source = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
 journeys:

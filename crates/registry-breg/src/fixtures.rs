@@ -97,6 +97,38 @@ impl fmt::Display for SchemaTestRuntimeSetupError {
     }
 }
 
+/// Value-free classes of refused fixture logical reference.
+///
+/// One refusal sentence stood for every logical lookup, so a reader could not
+/// tell an undeclared field from one the grant cannot write. These are the
+/// classes that can be named without echoing an authored value; the remaining
+/// lookups keep [`FixtureError::LogicalReferenceRefused`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LogicalReferenceRefusal {
+    UnknownField,
+    FieldNotWritable,
+    EmptyRequestBody,
+    StepIdentifier,
+    EntityOrAction,
+    CaptureSource,
+}
+
+impl fmt::Display for LogicalReferenceRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("the fixture logical reference was refused: ")?;
+        formatter.write_str(match self {
+            Self::UnknownField => "the request names a field the entity does not declare",
+            Self::FieldNotWritable => {
+                "the request writes a field the access profile grant does not make writable"
+            }
+            Self::EmptyRequestBody => "the request body declares no field",
+            Self::StepIdentifier => "the step identifier is not a stable identifier",
+            Self::EntityOrAction => "the step names both an entity and an action, or neither",
+            Self::CaptureSource => "the request names a capture no earlier step declares",
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FixtureError {
     JourneyTooLarge,
@@ -105,6 +137,7 @@ pub enum FixtureError {
     JourneyBoundsRefused,
     DuplicateIdentifier,
     LogicalReferenceRefused,
+    LogicalReference(LogicalReferenceRefusal),
     /// A create names a row boundary field the profile cannot write. The INSERT
     /// policy pins that field to the caller's claim, so it has to stay writable.
     CreateRowBoundaryNotWritable,
@@ -158,6 +191,9 @@ impl fmt::Display for FixtureError {
                 "journeys[{journey_index}].steps[{step_index}]: {error}"
             );
         }
+        if let Self::LogicalReference(refusal) = self {
+            return write!(formatter, "{refusal}");
+        }
         if let Self::ResponseStatusMismatch { expected, actual } = self {
             return write!(
                 formatter,
@@ -203,6 +239,7 @@ impl fmt::Display for FixtureError {
             Self::ReceiptShapeRefused => "the schema test receipt shape was refused",
             Self::ReceiptBindingRefused => "the schema test receipt binding was refused",
             Self::RuntimeSetup(_)
+            | Self::LogicalReference(_)
             | Self::ResponseStatusMismatch { .. }
             | Self::StepFailed { .. }
             | Self::JourneyShapeInvalid { .. }
@@ -715,13 +752,15 @@ pub fn validate_fixture_journeys(
                     return Err(if valid_stable_id(&step.id) {
                         FixtureError::DuplicateIdentifier
                     } else {
-                        FixtureError::LogicalReferenceRefused
+                        FixtureError::LogicalReference(LogicalReferenceRefusal::StepIdentifier)
                     });
                 }
                 let step_entity = (!step.entity.is_empty()).then_some(step.entity.as_str());
                 let step_action = step.action.as_deref();
                 if step_entity.is_some() == step_action.is_some() {
-                    return Err(FixtureError::LogicalReferenceRefused);
+                    return Err(FixtureError::LogicalReference(
+                        LogicalReferenceRefusal::EntityOrAction,
+                    ));
                 }
                 validate_action_references(&step.request, &capture_sources, step_entity)?;
                 let capture = step.capture.clone();
@@ -1014,13 +1053,18 @@ fn validate_action_references(
         | ActionSource::TargetConditions { .. }
         | ActionSource::Invoke { .. } => &[],
     };
-    if references.iter().any(|identifier| {
-        !valid_stable_id(identifier)
-            || captures
-                .get(*identifier)
-                .is_none_or(|source| source.entity.as_deref() != step_entity)
-    }) {
-        return Err(FixtureError::LogicalReferenceRefused);
+    for identifier in references {
+        let Some(source) = captures
+            .get(*identifier)
+            .filter(|_| valid_stable_id(identifier))
+        else {
+            return Err(FixtureError::LogicalReference(
+                LogicalReferenceRefusal::CaptureSource,
+            ));
+        };
+        if source.entity.as_deref() != step_entity {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
     }
     for reference in etag_references(action) {
         let Some(source) = captures.get(reference) else {
@@ -1550,12 +1594,24 @@ fn validate_action_fields(
         }) {
             return Err(FixtureError::CreateRowBoundaryNotWritable);
         }
-        if data.is_empty()
-            || data.keys().any(|field| {
-                !entity.fields.contains_key(field) || !profile.writable_fields.contains(field)
-            })
-            || canonical_size(&Value::Object(data.clone()))? > MAX_BODY_BYTES
-        {
+        if data.is_empty() {
+            return Err(FixtureError::LogicalReference(
+                LogicalReferenceRefusal::EmptyRequestBody,
+            ));
+        }
+        for field in data.keys() {
+            if !entity.fields.contains_key(field) {
+                return Err(FixtureError::LogicalReference(
+                    LogicalReferenceRefusal::UnknownField,
+                ));
+            }
+            if !profile.writable_fields.contains(field) {
+                return Err(FixtureError::LogicalReference(
+                    LogicalReferenceRefusal::FieldNotWritable,
+                ));
+            }
+        }
+        if canonical_size(&Value::Object(data.clone()))? > MAX_BODY_BYTES {
             return Err(FixtureError::LogicalReferenceRefused);
         }
         Ok(())
@@ -1597,11 +1653,18 @@ fn validate_action_fields(
             }
             let mut fields = BTreeSet::new();
             for change in changes {
-                if !fields.insert(change.field.as_str())
-                    || !entity.fields.contains_key(&change.field)
-                    || !profile.writable_fields.contains(&change.field)
-                {
+                if !fields.insert(change.field.as_str()) {
                     return Err(FixtureError::LogicalReferenceRefused);
+                }
+                if !entity.fields.contains_key(&change.field) {
+                    return Err(FixtureError::LogicalReference(
+                        LogicalReferenceRefusal::UnknownField,
+                    ));
+                }
+                if !profile.writable_fields.contains(&change.field) {
+                    return Err(FixtureError::LogicalReference(
+                        LogicalReferenceRefusal::FieldNotWritable,
+                    ));
                 }
             }
             let document = Value::Array(
@@ -1948,7 +2011,9 @@ fn source_field_id(
         .chain(entity.derived_fields.values().map(|field| &field.logical))
         .find(|field| field.api_name == field_name)
         .map(|field| field.id.clone())
-        .ok_or(FixtureError::LogicalReferenceRefused)
+        .ok_or(FixtureError::LogicalReference(
+            LogicalReferenceRefusal::UnknownField,
+        ))
 }
 
 fn internalize_field_set(

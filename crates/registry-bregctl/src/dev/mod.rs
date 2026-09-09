@@ -184,6 +184,13 @@ struct State {
     /// A state document written by an earlier session records none.
     #[serde(default)]
     binaries: BTreeMap<String, Binary>,
+    /// Why the detached supervisor stopped, recorded so the terminal that
+    /// asked for the start can report it. The supervisor writes both its
+    /// streams to a private log, so this is the only path a refusal has back
+    /// to the owner. A state document written by an earlier session, and a
+    /// session that has not failed, record none.
+    #[serde(default)]
+    failure: Option<String>,
 }
 
 /// One resolved prerequisite as the session found it. The path resolves
@@ -613,6 +620,7 @@ fn start(args: StartArgs) -> Result<Value> {
             seeded: BTreeSet::new(),
             outputs: vec![],
             binaries: BTreeMap::new(),
+            failure: None,
         };
         ports(state.breg_port, state.mint_port, state.database_port)?;
         for port in [state.breg_port, state.mint_port, state.database_port] {
@@ -665,6 +673,7 @@ fn start(args: StartArgs) -> Result<Value> {
         ("docker".into(), binary(&root, &docker)?),
     ]);
     state.status = Status::Starting;
+    state.failure = None;
     state.save()?;
     let log = log_file(&root, "supervisor")?;
     let mut supervisor = Command::new(std::env::current_exe()?)
@@ -691,10 +700,13 @@ fn start(args: StartArgs) -> Result<Value> {
             return state.report();
         }
         if supervisor.try_wait()?.is_some() || matches!(state.status, Status::Failed) {
-            let mut failed = state;
+            // Read once more: a supervisor that exited between this poll's
+            // read and its own last save has the recorded cause on disk.
+            let mut failed = read_state(&root)?;
+            let cause = failed.failure.clone();
             failed.status = Status::Failed;
             failed.save()?;
-            bail!("local start failed; private diagnostics are in {}. Retry the same command after correcting the cause; retained data is preserved",root.join("logs").display());
+            return Err(start_failure(cause.as_deref(), &root));
         }
         if Instant::now() > deadline {
             signal(&mut supervisor)?;
@@ -1120,6 +1132,18 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         || socket_cleanup.is_err()
     {
         state.status = Status::Failed;
+        // Both supervisor streams go to a private log, so record the cause in
+        // the state document the waiting terminal reads.
+        state.failure = [
+            result.as_ref().err(),
+            child_cleanup.as_ref().err(),
+            database_cleanup.as_ref().err(),
+            socket_cleanup.as_ref().err(),
+        ]
+        .into_iter()
+        .flatten()
+        .next()
+        .map(|error| format!("{error:#}").chars().take(MAX_REFUSAL).collect());
         state.save()?;
         result?;
         child_cleanup?;
@@ -1458,6 +1482,27 @@ fn output(
     }
     Ok((status.success(), bytes))
 }
+/// Longest refusal carried out of a native child or out of the supervisor.
+/// One named check is a sentence; a report that runs longer stays in the
+/// retained log rather than filling the owner's terminal.
+const MAX_REFUSAL: usize = 400;
+
+/// Name the first failing check from the machine-readable report a native
+/// command writes to stdout. The first diagnostic is the check an author
+/// corrects first, and the retained report holds every later one. Output in
+/// any other shape names nothing, so the caller keeps the logs pointer.
+fn refused_check(report: &[u8]) -> Option<String> {
+    let report: Value = serde_json::from_slice(report).ok()?;
+    let first = report["diagnostics"].as_array()?.first()?;
+    let named = format!(
+        "{} at {}: {}",
+        first["code"].as_str()?,
+        first["path"].as_str()?,
+        first["message"].as_str()?
+    );
+    Some(named.chars().take(MAX_REFUSAL).collect())
+}
+
 fn command(
     command: &mut Command,
     root: &Path,
@@ -1466,12 +1511,38 @@ fn command(
 ) -> Result<Vec<u8>> {
     let (success, bytes) = output(command, root, name, input)?;
     if !success {
-        bail!(
-            "native {name} failed; inspect owner-only diagnostics in {}",
-            root.join("logs").display()
-        );
+        let logs = root.join("logs").display().to_string();
+        match refused_check(&bytes) {
+            // The child named which check failed. Report it here: the schema
+            // test runs inside the detached supervisor, so a refusal that
+            // stays in the log never reaches the terminal that asked.
+            Some(check) => bail!(
+                "native {name} refused: {check}. The full report and owner-only diagnostics are in {logs}"
+            ),
+            None => bail!("native {name} failed; inspect owner-only diagnostics in {logs}"),
+        }
     }
     Ok(bytes)
+}
+
+/// The refusal a failed start reports, naming the supervisor's own cause when
+/// it recorded one.
+fn start_failure(cause: Option<&str>, root: &Path) -> anyhow::Error {
+    let logs = root.join("logs");
+    let logs = logs.display().to_string();
+    match cause {
+        // A cause carried out of a named check already points at the retained
+        // log directory, and reading the same path twice teaches nothing.
+        Some(cause) if cause.contains(&logs) => anyhow::anyhow!(
+            "local start failed: {cause}. Retry the same command after correcting the cause; retained data is preserved"
+        ),
+        Some(cause) => anyhow::anyhow!(
+            "local start failed: {cause}. Private diagnostics are in {logs}. Retry the same command after correcting the cause; retained data is preserved"
+        ),
+        None => anyhow::anyhow!(
+            "local start failed; private diagnostics are in {logs}. Retry the same command after correcting the cause; retained data is preserved"
+        ),
+    }
 }
 #[derive(Debug, Eq, PartialEq)]
 enum Activation {
