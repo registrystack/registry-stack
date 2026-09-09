@@ -49,6 +49,7 @@ seed: []
         seeded: BTreeSet::new(),
         outputs: vec![],
         binaries: BTreeMap::new(),
+        failure: None,
     };
     (
         temporary,
@@ -493,6 +494,116 @@ fn only_an_unready_database_classifies_a_doctor_refusal_as_not_activated() {
     assert!(activation(false, br#"{"ok":false,"diagnostics":[]}"#).is_err());
 }
 
+fn schema_test_refusal(message: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({"ok":false,"command":"test","diagnostics":[
+        {"severity":"error","code":"test.step.failed","artifact":"fixtureJourneys",
+         "path":"journeys[0].steps[1]","message":message,
+         "suggestedAction":"correctFixtureJourneys"}]}))
+    .unwrap()
+}
+
+#[test]
+fn a_refused_native_command_names_its_first_failing_check_within_a_bound() {
+    let message =
+        "the fixture logical reference was refused: the request names a capture no earlier step declares";
+    let named =
+        refused_check(&schema_test_refusal(message)).expect("the report names its first check");
+    assert!(named.contains("test.step.failed"), "{named}");
+    assert!(named.contains("journeys[0].steps[1]"), "{named}");
+    assert!(named.contains(message), "{named}");
+
+    // A long refusal is bounded like every other captured output; the
+    // retained report keeps the rest.
+    let long = "x".repeat(MAX_REFUSAL * 2);
+    let bounded =
+        refused_check(&schema_test_refusal(&long)).expect("a long refusal is still named");
+    assert!(bounded.chars().count() <= MAX_REFUSAL, "{}", bounded.len());
+
+    // Output that names no diagnostic leaves the logs pointer as the answer.
+    assert_eq!(refused_check(b"not a report"), None);
+    assert_eq!(refused_check(br#"{"ok":false,"diagnostics":[]}"#), None);
+}
+
+#[test]
+fn a_refused_schema_test_reports_the_check_that_failed_beside_the_report_log() {
+    let (_temporary, state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let message = "journeys[0].steps[1]: the fixture expectation did not match";
+    let report = String::from_utf8(schema_test_refusal(message)).unwrap();
+    let refusing = state.project.join("refusing-test");
+    script(
+        &refusing,
+        &format!("cat <<'REPORT'\n{report}\nREPORT\nexit 1"),
+    );
+    let error = command(&mut Command::new(&refusing), &root, "schema-test", None)
+        .expect_err("a refused schema test stops the start");
+    let error = format!("{error:#}");
+    assert!(error.contains(message), "{error}");
+    assert!(error.contains("test.step.failed"), "{error}");
+    assert!(
+        error.contains(&root.join("logs").display().to_string()),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_supervisor_refusal_reaches_the_owner_who_asked_for_the_start() {
+    let (_temporary, state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let mut recorded = read_state(&root).unwrap();
+    assert_eq!(recorded.failure, None);
+
+    // The supervisor runs detached with both streams in a private log, so the
+    // cause only reaches the terminal through the state document.
+    recorded.status = Status::Failed;
+    recorded.failure = Some("native schema-test refused: test.step.failed".to_owned());
+    recorded.save().unwrap();
+    let read = read_state(&root).unwrap();
+    assert_eq!(
+        read.failure.as_deref(),
+        Some("native schema-test refused: test.step.failed")
+    );
+    let reported = format!("{:#}", start_failure(read.failure.as_deref(), &root));
+    assert!(reported.contains("test.step.failed"), "{reported}");
+    assert!(
+        reported.contains(&root.join("logs").display().to_string()),
+        "{reported}"
+    );
+    // A start that failed without a recorded cause still names the logs.
+    let silent = format!("{:#}", start_failure(None, &root));
+    assert!(
+        silent.contains(&root.join("logs").display().to_string()),
+        "{silent}"
+    );
+
+    // A cause that already names the retained log directory does not have it
+    // repeated back to the reader.
+    let logs = root.join("logs").display().to_string();
+    let named = format!(
+        "{:#}",
+        start_failure(
+            Some(&format!(
+                "native schema-test refused: test.step.failed at journeys[0].steps[1]: the fixture expectation did not match. The full report and owner-only diagnostics are in {logs}"
+            )),
+            &root
+        )
+    );
+    assert_eq!(named.matches(&logs).count(), 1, "{named}");
+    assert!(named.contains("Retry the same command"), "{named}");
+
+    // A state document written before this record stays readable.
+    let mut document = serde_json::to_value(&read).unwrap();
+    document.as_object_mut().unwrap().remove("failure");
+    private::replace(
+        &root.join("state.json"),
+        &serde_json::to_vec(&document).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(read_state(&root).unwrap().failure, None);
+}
+
 #[test]
 fn redaction_hides_whole_and_truncated_secret_runs() {
     let secret = b"6f0a1b2c3d4e5f60718293a4b5c6d7e8";
@@ -669,6 +780,7 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         seeded: BTreeSet::new(),
         outputs: vec![],
         binaries: BTreeMap::new(),
+        failure: None,
     };
     initialize(&state.root(), &state, &clients, &captured.files).unwrap();
     read_state(&state.root()).unwrap()

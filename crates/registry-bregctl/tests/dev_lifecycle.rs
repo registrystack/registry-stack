@@ -601,6 +601,16 @@ seed:
         "/usr/bin/false",
     ]);
     assert!(!failed.status.success());
+    // The supervisor is detached with both streams in a private log, so the
+    // terminal that asked for the start only learns the cause if the start
+    // reports what the supervisor recorded.
+    let refused: Value =
+        serde_json::from_slice(&failed.stdout).expect("a refused start reports machine-readable");
+    let refusal = refused["diagnostics"][0]["message"]
+        .as_str()
+        .expect("the refusal carries a message");
+    assert!(refusal.contains("local start failed:"), "{refusal}");
+    assert!(refusal.contains("exited before readiness"), "{refusal}");
     let state_file = project.join(".breg/dev/state.json");
     let failed_state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
     assert_eq!(failed_state["status"], "failed");

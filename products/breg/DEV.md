@@ -275,10 +275,24 @@ Source and token HTTP clients use numeric loopback, disable ambient proxies and
 refuse redirects. Local synthetic credentials must not become operated service
 credentials.
 
-When startup fails, the error names the retained private `logs` directory.
-Native command and service diagnostics are bounded per stream. Inspect them
-locally; do not publish logs or the generated state as a support attachment.
-Schema-test setup failures identify destination inventory or activation,
-authentication, cursor, audit, or Evidence configuration. Correct that named
-configuration before retrying; recreating the database cannot fix a missing
-destination binding or invalid secret.
+When startup fails, the error names the check that failed and the retained
+private `logs` directory. Native command and service diagnostics are bounded
+per stream. Inspect them locally; do not publish logs or the generated state
+as a support attachment. Schema-test setup failures identify destination
+inventory or activation, authentication, cursor, audit, or Evidence
+configuration. Correct that named configuration before retrying; recreating
+the database cannot fix a missing destination binding or invalid secret.
+
+The rehearsal, the package build, activation and verification all run inside
+the detached supervisor, whose own streams go to a private log. A phase that
+refuses records its first failing diagnostic in the private state document,
+and the start reports that diagnostic on the terminal that asked for it:
+its code, the path it names, and its message, bounded to one sentence. The
+retained report log holds every later diagnostic. A refused journey step is
+reported as `test.step.failed` at `journeys[<i>].steps[<j>]`, carrying the
+fixture's own refusal sentence. A refused logical reference names its class:
+a field the entity does not declare, a field the access profile grant does
+not make writable, a request body with no field, a step identifier that is
+not stable, a step naming both an entity and an action or neither, or a
+capture no earlier step declares. None of those sentences carries an authored
+value.
