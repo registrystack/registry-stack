@@ -113,8 +113,13 @@ test('current docs stay under /dev/ while v0.26.1 remains the released archive',
       continue;
     }
     assert.equal(docset.status, 'archived', `${docset.id} must expose its release-train status`);
+    // The publication boundary is historical. Every later preparation is a
+    // candidate until promotion deliberately updates the release assertions.
+    const version = /^v(\d+)\.(\d+)\.(\d+)$/.exec(docset.id)?.slice(1).map(Number);
+    const afterPublishedRelease = version && (version[0] > 0 || version[1] > 26 ||
+      (version[1] === 26 && version[2] > 1));
     const expectedAvailability =
-      ['v0.28.0', 'v0.27.0', 'v0.26.0', 'v0.24.0', 'v0.23.0', 'v0.22.0', 'v0.21.0', 'v0.20.1', 'v0.20.0', 'v0.18.0', 'v0.17.0', 'v0.16.3', 'v0.15.1', 'v0.15.0'].includes(docset.id)
+      afterPublishedRelease || ['v0.26.0', 'v0.24.0', 'v0.23.0', 'v0.22.0', 'v0.21.0', 'v0.20.1', 'v0.20.0', 'v0.18.0', 'v0.17.0', 'v0.16.3', 'v0.15.1', 'v0.15.0'].includes(docset.id)
         ? 'candidate'
         : docset.id.startsWith('v')
           ? 'released'

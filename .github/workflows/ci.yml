@@ -793,6 +793,9 @@ jobs:
       - name: Test release planning commands
         run: python3 -m unittest release/scripts/test_registry_release_plans.py
 
+      - name: Test documentation release preparation
+        run: python3 -m unittest release/scripts/test_prepare_release_docs.py
+
       - name: Test release candidate manifest and promotion verifier
         run: python3 -m unittest release/scripts/test_release_candidate.py
 

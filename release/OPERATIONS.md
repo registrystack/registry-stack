@@ -206,16 +206,22 @@ git switch -c release/v<version> origin/main
 ```
 
 Update and commit the version metadata, workspace package versions in current
-lockfiles, changelogs, release notes, manifest, candidate docset, and generated
-inputs. The version bump changes the value the CLI reference collector reports,
-so re-stamp `docs/site/src/data/cli-reference.yaml` in the same commit: run
-`npm run cli-reference:digest` from `docs/site` and record the printed
-`reviewed_source_version` and `reviewed_catalog_sha256` with a fresh
-`last_reviewed` date, or the docs build refuses the release tree.
-Prepare the documentation archive lock from those committed inputs as described
-below. `registry-release prepare` validates the prepared tree; it does not edit
-these files and cannot pass until the new archive lock exists. Do not mix
-release-workflow or release-tool implementation changes into this PR. Merge
+lockfiles, changelogs, release notes, manifest, and generated inputs. The version
+bump changes the value the CLI reference collector reports, so review the
+regenerated CLI reference and update `docs/site/src/data/cli-reference.yaml`
+in the same commit. Run `npm run cli-reference:digest` from `docs/site` and
+record the printed `reviewed_source_version` and `reviewed_catalog_sha256`
+with the actual source-review date in `last_reviewed`; stale publication
+metadata makes the docs build fail.
+
+Then run `registry-release prepare-docs` as described below. It derives the
+candidate docset and mirrored-page metadata and prepares the archive lock from
+those committed inputs. You do not need to add a version to the docset or
+mirror metadata by hand. Review release notes and migration guidance before
+running it: the command preserves human review dates and the CLI publication
+record. `registry-release prepare` remains the final planner; it validates the
+prepared tree without editing it and cannot pass until the archive lock exists.
+Do not mix release-workflow or release-tool implementation changes into this PR. Merge
 after the rehearsal and protected checks pass. The merge commit is the intended
 candidate source. The exact protected-main revision accepted by
 `request-candidate` becomes the candidate source and future tag target. There is no finalization or closeout PR.
@@ -235,98 +241,80 @@ planner rejects a prepared tree that binds those versions.
 
 ### Prepare the documentation archive lock
 
-Prepare a new, unpublished candidate archive on Ubuntu 24.04, Linux x64, with
-Node 22.12.0 and `npm ci`, matching the candidate and rehearsal docs jobs.
-Pagefind's platform packages can contain different WebAssembly bytes on macOS
-and Linux. Gzip normalization does not make those payloads identical, so a
-macOS archive digest is not a substitute for the Ubuntu lock.
-
-Start from a commit containing the prepared version, candidate docset, release
-notes, and generator inputs. Source-generated CLI references require the Rust
-toolchain in `rust-toolchain.toml` and native build dependencies, installed below.
-The new candidate must not yet have an archive
-lock entry. This procedure adds that one entry; it never replaces an existing
-entry. Run the following from the prepared repository with Docker available:
+Run the maintained preparation command from your clean, committed release
+branch with Docker available and PyYAML installed in the Python environment
+used by `registry-release`. The workspace version and selected release manifest
+must match your arguments. Keep `origin/main` from the fetch above available
+for the archive checks.
 
 ```sh
-archive_version="<version>"
-archive_source="$(git rev-parse --show-toplevel)"
-archive_revision="$(git rev-parse HEAD)"
-archive_directory="$(mktemp -d "${TMPDIR:-/tmp}/registry-docs-prepare.XXXXXX")"
-
-git clone --no-local --no-checkout "${archive_source}" "${archive_directory}/source"
-git -C "${archive_directory}/source" checkout --detach "${archive_revision}"
-git -C "${archive_directory}/source" remote set-url origin \
-  https://github.com/registrystack/registry-stack.git
-git -C "${archive_directory}/source" fetch --no-tags origin main
-mkdir "${archive_directory}/output"
-
-docker run --rm --platform linux/amd64 \
-  --mount "type=bind,src=${archive_directory}/source,dst=/input,readonly" \
-  --mount "type=bind,src=${archive_directory}/output,dst=/output" \
-  --workdir /workspace \
-  --env "DOCS_DOCSET=v${archive_version}" \
-  ubuntu:24.04 bash -euc '
-set -euo pipefail
-cp -R /input/. /workspace
-apt-get update -qq
-apt-get install -y -qq ca-certificates curl git python3 xz-utils \
-  build-essential pkg-config libssl-dev libclang-dev protobuf-compiler
-curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh
-sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
-export PATH="/root/.cargo/bin:${PATH}"
-rustup show active-toolchain
-cd /tmp
-curl -fsSLO https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz
-curl -fsSLO https://nodejs.org/dist/v22.12.0/SHASUMS256.txt
-grep "  node-v22.12.0-linux-x64.tar.xz$" SHASUMS256.txt | sha256sum -c -
-tar -xJf node-v22.12.0-linux-x64.tar.xz
-export PATH="/tmp/node-v22.12.0-linux-x64/bin:${PATH}"
-cd /workspace/docs/site
-npm ci
-npm run build:archive
-npm run archive:snapshot -- "${DOCS_DOCSET}" --write-lock
-npm run archive:snapshot -- "${DOCS_DOCSET}" --verify-lock
-npm run check:archive-lock -- --base-ref origin/main
-cp src/data/archive-lock.yaml /output/archive-lock.yaml
-cp ".archive-bundles/${DOCS_DOCSET}.tar.gz" /output/
-'
+release/scripts/registry-release prepare-docs \
+  --version "<version>" \
+  --release-id "<release-id>" \
+  --date "YYYY-MM-DD" \
+  --apply
 ```
 
-The fresh clone includes committed inputs only. It excludes local dependencies,
-uncommitted edits, and ignored generated assets. Docker mounts it read-only and
-builds a container-owned copy, avoiding Git ownership mismatches on Linux hosts.
-Archive builds stage their owned generated inputs from the docset's source ref.
-Refs declaring `generate:source` generate CLI, configuration, and starter outputs
-in a clean export using that ref's dependency lock. Historical refs use their
-committed CLI and starter outputs with the current renderer's configuration data.
-A local starter archive absent from a historical ref is omitted during the build
-and restored afterward.
-This also covers archive bootstrap after current-site generation. Other local
-files are not cleared, so use the fresh checkout for canonical preparation.
+Use the intended candidate documentation date for `--date`. It supplies the
+candidate's `published_at` field, not a human review date. The command derives
+product pins from the current docset and selected manifest, adds missing
+candidate metadata, and snapshots each applicable mirrored page's current
+standards and review metadata. It preserves the development and released
+selectors and every historical record. Conflicting existing candidate metadata
+or changes to a frozen archive stop preparation.
 
-If the command fails, resolve the failure before copying its result. On success,
-review the new lock entry and apply only that change to the prepared branch:
+The command builds a committed-source clone in Ubuntu 24.04 on Linux AMD64,
+with Node 22.12.0, `npm ci`, and the repository's Rust toolchain. It excludes
+local dependencies, uncommitted files, and ignored generated assets. It runs
+`npm test`, draft-link checks, and evidence-anchor checks before building the
+archive, adds a missing lock entry or verifies an existing one, then runs
+`npm run check` and verifies historical lock immutability. Pagefind's macOS
+and Linux packages can contain different WebAssembly bytes, so a local macOS
+archive cannot substitute for this canonical build.
+
+Without `--apply`, preparation returns a patch for inspection and leaves your
+checkout unchanged. With `--apply`, it applies only the verified changes to
+`docs/site/src/data/docsets.yaml`, `docs/site/src/data/repo-docs.yaml`, and
+`docs/site/src/data/archive-lock.yaml`, after all checks pass and the source
+revision and those inputs still match the starting state. Review the applied
+patch and validate the complete release plan:
 
 ```sh
-cp "${archive_directory}/output/archive-lock.yaml" \
-  "${archive_directory}/source/docs/site/src/data/archive-lock.yaml"
-git -C "${archive_directory}/source" diff -- \
-  docs/site/src/data/archive-lock.yaml > "${archive_directory}/archive-lock.patch"
-cat "${archive_directory}/archive-lock.patch"
-git -C "${archive_source}" apply --check "${archive_directory}/archive-lock.patch"
-git -C "${archive_source}" apply "${archive_directory}/archive-lock.patch"
+git diff -- docs/site/src/data/docsets.yaml \
+  docs/site/src/data/repo-docs.yaml docs/site/src/data/archive-lock.yaml
 
 release/scripts/registry-release prepare \
-  --version "${archive_version}" \
+  --version "<version>" \
   --release-id "<release-id>"
+
+git add docs/site/src/data/docsets.yaml docs/site/src/data/repo-docs.yaml \
+  docs/site/src/data/archive-lock.yaml
+git commit -s -m "Prepare v<version> documentation archive"
 ```
 
-Commit the validated lock change. Keep the temporary clone and its
-`output/v<version>.tar.gz` for inspection; neither is a publication artifact.
-The independent rehearsal must reproduce the lock from a clean checkout. The candidate later builds and verifies its own archive from
-the accepted protected-main source; publication promotes those candidate bytes
-without rebuilding. Historical locks and published archives remain unchanged.
+After validating the committed source, preparation prints its output directory.
+Pass `--output-dir <new-directory>` to choose a persistent location; the
+directory must not already exist. Keep
+`report.json`, `prepare.log`, and, on success, `artifacts/documentation.patch`
+and `artifacts/v<version>.tar.gz` for inspection. The archive is preparation
+evidence, not a publication artifact. A rerun from the same committed inputs
+verifies an existing archive lock instead of replacing it.
+
+If a build or check fails, inspect the retained report and log, fix the owning
+source, and commit the correction before retrying in a new output directory.
+For a stale CLI publication record, regenerate and review the CLI reference
+before recording its digest and actual review date. For conflicting metadata
+or an archive digest mismatch, inspect the selected source and existing frozen
+record; do not rewrite historical metadata or locks to make the check pass.
+If your source revision or documentation inputs changed during the build,
+`--apply` refuses the patch. Retain it for inspection and rerun from the
+intended committed source. A failed preparation does not apply its generated
+patch.
+
+The independent rehearsal must still reproduce the lock from a clean checkout.
+The candidate later builds and verifies its own archive from the accepted
+protected-main source; publication promotes those candidate bytes without
+rebuilding. Historical locks and published archives remain unchanged.
 
 ### Rehearse the prepared branch
 
