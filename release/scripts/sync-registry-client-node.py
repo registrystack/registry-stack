@@ -16,6 +16,21 @@ PRODUCTS = {
     "relay": ROOT / "crates" / "registry-relay-client-node",
     "breg": ROOT / "crates" / "registry-breg-client-node",
 }
+# napi-rs platform package name to the Rust target triple it carries, following the
+# convention swc, rolldown, and oxc use for their own platform package READMEs.
+PLATFORM_TRIPLES = {
+    "darwin-arm64": "aarch64-apple-darwin",
+    "linux-arm64-gnu": "aarch64-unknown-linux-gnu",
+    "linux-x64-gnu": "x86_64-unknown-linux-gnu",
+}
+PLATFORM_README = """# `@registrystack/client-{platform}`
+
+This is the **{triple}** native binary package for
+[`@registrystack/client`](https://www.npmjs.com/package/@registrystack/client).
+It is installed automatically as an optional dependency of that package at the
+same version. Do not depend on it directly. See
+https://github.com/registrystack/registry-stack for details.
+"""
 
 
 def expected_files() -> dict[Path, bytes]:
@@ -31,6 +46,12 @@ def expected_files() -> dict[Path, bytes]:
         ROOT / "crates" / "registry-stack-client-py",
     ):
         files[destination / "LICENSE"] = license_text
+    # The root TARGET README is authored by hand; only the platform packages, which
+    # npm always includes a README.md for regardless of `files`, get one generated.
+    for platform, triple in PLATFORM_TRIPLES.items():
+        files[TARGET / "npm" / platform / "README.md"] = PLATFORM_README.format(
+            platform=platform, triple=triple
+        ).encode()
     for product, source in PRODUCTS.items():
         destination = TARGET / product
         files[destination / "client.js"] = (source / "client.js").read_bytes()
