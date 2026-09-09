@@ -12,7 +12,7 @@ standards_referenced: [govstack-digital-registries]
 
 You run [OpenFn](https://www.openfn.org/) Lightning to move data between government systems, and
 you want its workflows to read from and write to Evidence Gateway, Base Registry Engine (BReg), and
-Registry Relay without hand-writing HTTP calls or storing raw records in workflow state. The
+Registry Relay without hand-writing HTTP calls or minting tokens in job code. The
 [Registry Stack adaptors for OpenFn](https://github.com/registrystack/openfn-language-registry-stack)
 give you that: three adaptor packages that wrap the maintained clients, plus a self-hosted synthetic
 pilot that shows registration, reviewed correction, and event-driven downstream updates end to end.
@@ -117,8 +117,12 @@ the same rules a careful direct client would:
   `ifMatch` value from the request's advertised actions, never the record ETag. The lifecycle helper
   refetches the contract and the record and refuses to act on a changed proposal.
 - **Drafts do not submit themselves.** Creating a change request produces a draft. Submitting,
-  approving, rejecting, requesting revision, revising, cancelling, and applying are separate
-  lifecycle operations, each subject to the actor and stage that the registry's metadata advertises.
+  approving, rejecting, requesting revision, revising, and cancelling are separate lifecycle
+  operations, each subject to the actor and stage that the registry's metadata advertises. Whether
+  application is also a separate step is the registry's decision: `application.mode: manual` waits
+  for an applier, `automatic` applies inside the submit or the final approval, and `planner` lets a
+  script return an `apply` disposition. Follow the actions the registry advertises after each call
+  rather than assuming a fixed sequence.
 
 Patch members are written as field operations such as replace on a named field. The native client
 builds and validates the HTTP patch document, so job authors never touch JSON Pointer paths.
@@ -127,9 +131,18 @@ builds and validates the HTTP patch document, so job authors never touch JSON Po
 
 The Relay adaptor is for workflows already authorized to read registry rows, metadata,
 relationships, or aggregates directly. It offers single-record reads, filtered and bounded lists,
-aggregate queries, dataset discovery, entity schemas, and evidence-offering discovery. Collection
-reads require an explicit limit and at least one filter unless you opt out. Use it when the
-workflow needs the data itself, and the Evidence adaptor when the workflow needs a trust decision.
+aggregate queries, dataset discovery, and entity schemas. Collection reads require an explicit
+limit and at least one filter unless you opt out. Use it when the workflow needs the data itself,
+and the Evidence adaptor when the workflow needs a trust decision.
+
+The adaptor also carries an evidence-offering listing. Do not build a workflow on it: Relay V2
+claims no Evidence capability family, the V1 metadata route that served offerings is retired, and
+evidence offerings are published by Registry Manifest instead.
+
+{/* Evidence: docs/site/src/content/docs/products/registry-relay/index.md states that Relay V2 does
+not claim the Evidence family, and docs/site/src/lib/relay-v2-retirement-redirects.mjs lists
+list_metadata_evidence_offerings among the V1 operation slugs retired by the V2 cutover.
+crates/registry-manifest-core/src/lib.rs renders evidence offerings from the manifest. */}
 
 ## How operations fail
 

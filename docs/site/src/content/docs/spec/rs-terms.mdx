@@ -123,7 +123,7 @@ The registry stack comprises four formal products: Registry Platform, Registry R
 
 **OID4VCI**: OpenID for Verifiable Credential Issuance. The Evidence Gateway runtime implements it in no part, and OID4VCI in any part is a frozen Evidence Gateway Version 1 non-goal under both subject binding modes, so no serialization has a credential offer, pre-authorized code, authorization or token endpoint, `c_nonce`, credential endpoint, deferred issuance, or wallet grant. The separate `registry-evidence-oid4vci` front end speaks it, which is why it is a separate service.
 
-**eSignet**: Open-source identity and authentication service (part of MOSIP). No current stack service integrates with it. Evidence Gateway authenticates callers against one configured OIDC issuer and key set named in its immutable bundle and names no specific identity product. Not a Registry Stack product term.
+**eSignet**: Open-source identity and authentication service (part of MOSIP). No stack service calls it. Evidence Gateway authenticates callers against one configured OIDC issuer and key set named in its immutable bundle and names no specific identity product. The integration runs the other way: a separately maintained eSignet provider authenticates a citizen against a Base Registry Engine (BReg) registry through one governed lookup carrying a Registry Mint token, which makes eSignet an ordinary governed client of a registry. See [Authenticate citizens with eSignet](../../explanation/esignet-authentication-over-breg/). Not a Registry Stack product term.
 
 ## 3. Metadata and standards terms
 
