@@ -115,9 +115,11 @@ The schema's attachment extension adds `download`, `upload`, and `remove` only
 when the same caller/profile has the corresponding GET or PATCH slot authority.
 Each descriptor contains `method`, exact `path`, `accessProfile`,
 `authorizationOperation`, `queryParameters`, `body`, `ifMatchRequired`, and
-`idempotencyKeyRequired`. Download requires `proposalVersion`; upload uses raw
-binary bytes; remove uses an empty body. Upload and remove require the draft
-state. These are separate HTTP requests, not generic JSON field mutations.
+`idempotencyKeyRequired`. The download descriptor adds
+`proposalVersionRequired: true`: exactly one canonical nonzero `proposalVersion`
+query parameter is mandatory, and there is no default. Upload uses raw binary
+bytes and remove uses an empty body; both add `requiredState: "draft"`. These
+are separate HTTP requests, not generic JSON field mutations.
 A descriptor is advisory: the runtime rechecks current record/version authority,
 owner, state, and concurrency preconditions on use.
 
