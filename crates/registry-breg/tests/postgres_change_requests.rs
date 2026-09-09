@@ -55,6 +55,1638 @@ const REVIEWER: &str = "reviewer-principal";
 const APPLIER: &str = "applier-principal";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_attachment_downloads_bind_owner_projection_version_and_terminal_audit() {
+    attachment_download_journey(registry_breg::attachment_storage::AttachmentStorage::Database)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires disposable PostgreSQL and BREG_TEST_S3_ENDPOINT/BREG_TEST_S3_BUCKET"]
+async fn real_s3_http_attachments_preserve_proposals_and_complete_operator_erasure() {
+    let (_cleanup_secrets, cleanup_storage) = attachment_s3_storage().await;
+    s3_cleanup_with_all_requests_retained(cleanup_storage).await;
+    let (_secrets, storage) = attachment_s3_storage().await;
+    attachment_download_journey(storage).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survives_worker_failures(
+) {
+    use registry_breg::attachment_storage::AttachmentStorage;
+    use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mode = Arc::new(AtomicUsize::new(0));
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let observed = Arc::new(std::sync::Mutex::new(
+        Vec::<(String, String, Vec<u8>)>::new(),
+    ));
+    let hook = axum::Router::new().route(
+        "/verify",
+        axum::routing::post({
+            let (calls, mode, entered, resume, observed) = (
+                calls.clone(),
+                mode.clone(),
+                entered.clone(),
+                resume.clone(),
+                observed.clone(),
+            );
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let (calls, mode, entered, resume, observed) = (
+                    calls.clone(),
+                    mode.clone(),
+                    entered.clone(),
+                    resume.clone(),
+                    observed.clone(),
+                );
+                async move {
+                    assert_eq!(headers["authorization"], "Bearer synthetic-verifier-token");
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    observed.lock().unwrap().push((
+                        headers["content-type"].to_str().unwrap().to_owned(),
+                        headers["x-content-sha256"].to_str().unwrap().to_owned(),
+                        body.to_vec(),
+                    ));
+                    let mode = mode.load(Ordering::SeqCst);
+                    if mode == 3 {
+                        entered.notify_one();
+                        resume.notified().await;
+                    }
+                    if mode == 2 {
+                        (StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({})))
+                    } else {
+                        (
+                            StatusCode::OK,
+                            axum::Json(
+                                json!({"verdict": if mode == 1 {"rejected"} else {"approved"}}),
+                            ),
+                        )
+                    }
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/verify", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, hook).await.unwrap();
+    });
+    let secrets = tempfile::tempdir().unwrap();
+    let root = secrets.path().canonicalize().unwrap();
+    std::fs::write(root.join("verifier"), "synthetic-verifier-token").unwrap();
+    std::fs::set_permissions(
+        root.join("verifier"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let mut raw = attachment_runtime_config(&root);
+    raw["attachmentVerification"] = json!({"kind":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
+        .unwrap()
+        .activate_attachment_verification()
+        .unwrap();
+    let database = TestDatabase::create(8).await;
+    let mut project = attachment_project();
+    project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == "correction-request")
+        .unwrap()
+        .attachments[0]
+        .content_types
+        .push("application/pdf".to_owned());
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let app = router(change_request_service_with_attachment_verification(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        PACKAGE_ID,
+        None,
+        None,
+        AttachmentStorage::Database,
+        None,
+        verification.clone(),
+    ));
+    let verification_policy = verification.binding_digest();
+    let worker = AttachmentVerificationWorker::new(
+        database.runtime_config.build_pool().unwrap(),
+        identity.clone(),
+        RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+        Duration::from_secs(2),
+        AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
+        AttachmentStorage::Database,
+        verification,
+    );
+    let steward = claims("steward", "verification-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "verification-site",
+        json!({"tenant":TENANT,"name":"site"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "verification-placement",
+        json!({"tenant":TENANT,"site":site.id}),
+    )
+    .await;
+    let draft = create_record(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        submitter.clone(),
+        "verification-draft",
+        json!({"tenant":TENANT,"placement":placement.id,"proposedSite":site.id,"reason":"verify"}),
+    )
+    .await;
+    let record_uri = format!(
+        "/v1/records/correction-requests/{}?accessProfile=submitter",
+        draft.id
+    );
+    let upload_uri = format!(
+        "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+        draft.id
+    );
+    let download_uri = format!("{upload_uri}&proposalVersion=1");
+    let bytes = vec![0, 1, 2, 255];
+    let upload = |mime: &'static str, bytes: Vec<u8>, key: &'static str| {
+        let (app, record_uri, upload_uri, submitter) = (
+            app.clone(),
+            record_uri.clone(),
+            upload_uri.clone(),
+            submitter.clone(),
+        );
+        async move {
+            let before = get_record(&app, &record_uri, submitter.clone()).await;
+            let response = response_parts(
+                send(
+                    &app,
+                    Method::PATCH,
+                    &upload_uri,
+                    Some(submitter.clone()),
+                    &[
+                        ("content-type", mime),
+                        ("idempotency-key", key),
+                        ("if-match", &before.etag),
+                    ],
+                    bytes,
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+            let current = get_record(&app, &record_uri, submitter).await;
+            assert_eq!(response.etag, current.etag);
+            current
+        }
+    };
+    let pending = upload(
+        "application/octet-stream",
+        bytes.clone(),
+        "verification-upload",
+    )
+    .await;
+    assert_eq!(
+        pending.body["data"]["evidence"]["verificationStatus"],
+        "pending"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "upload never contacts the verifier"
+    );
+    assert_eq!(
+        send(
+            &app,
+            Method::GET,
+            &download_uri,
+            Some(submitter.clone()),
+            &[],
+            vec![]
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let submit_action = action(&pending.body, "submit_request", None);
+    assert_eq!(
+        send(
+            &app,
+            Method::POST,
+            &submit_action.href,
+            Some(submitter.clone()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "verification-pending-submit"),
+                ("if-match", &submit_action.if_match)
+            ],
+            b"{}".to_vec()
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    // An audit attempt refusal prevents the first outbound byte and rolls back
+    // the lease, so an ordinary restarted worker can immediately claim it.
+    database.admin.batch_execute("CREATE FUNCTION public.refuse_verifier_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF convert_from(NEW.envelope,'UTF8')::jsonb #>> '{record,kind}' = 'attachmentVerification' THEN RAISE EXCEPTION 'synthetic audit fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER refuse_verifier_audit BEFORE INSERT ON registry_internal.registry_audit FOR EACH ROW EXECUTE FUNCTION public.refuse_verifier_audit()").await.unwrap();
+    assert!(worker.run_once().await.is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    database
+        .admin
+        .batch_execute("DROP TRIGGER refuse_verifier_audit ON registry_internal.registry_audit")
+        .await
+        .unwrap();
+    assert!(worker.clone().run_once().await.unwrap());
+    let approved = get_record(&app, &record_uri, submitter.clone()).await;
+    assert_eq!(
+        approved.body["data"]["evidence"]["verificationStatus"],
+        "approved"
+    );
+    assert_ne!(
+        approved.etag, pending.etag,
+        "verification changes strong representation ETag"
+    );
+    assert_eq!(approved.body["revision"], pending.body["revision"]);
+    let response = send(
+        &app,
+        Method::GET,
+        &download_uri,
+        Some(submitter.clone()),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 1024).await.unwrap().to_vec(),
+        bytes
+    );
+
+    // Approval is bound to MIME as well as bytes and the configured policy.
+    let pending = upload("application/pdf", bytes.clone(), "verification-new-mime").await;
+    assert_eq!(
+        pending.body["data"]["evidence"]["verificationStatus"],
+        "pending"
+    );
+    mode.store(1, Ordering::SeqCst);
+    assert!(worker.run_once().await.unwrap());
+    let rejected = get_record(&app, &record_uri, submitter.clone()).await;
+    assert_eq!(
+        rejected.body["data"]["evidence"]["verificationStatus"],
+        "rejected"
+    );
+    assert_eq!(
+        send(
+            &app,
+            Method::GET,
+            &download_uri,
+            Some(submitter.clone()),
+            &[],
+            vec![]
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let submit_action = action(&rejected.body, "submit_request", None);
+    assert_eq!(
+        send(
+            &app,
+            Method::POST,
+            &submit_action.href,
+            Some(submitter.clone()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "verification-rejected-submit"),
+                ("if-match", &submit_action.if_match)
+            ],
+            b"{}".to_vec()
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    let replacement = vec![3, 4, 5, 6];
+    let pending = upload(
+        "application/octet-stream",
+        replacement.clone(),
+        "verification-replacement",
+    )
+    .await;
+    assert_eq!(
+        pending.body["data"]["evidence"]["verificationStatus"],
+        "pending"
+    );
+    let replacement_hash = pending.body["data"]["evidence"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // A crash-held lease is durable and becomes reclaimable after expiry.
+    database.admin.execute("UPDATE registry_internal.registry_attachment_verification SET lease_id=$1,lease_expires_at=transaction_timestamp()-interval '1 second' WHERE verdict='pending'", &[&Uuid::new_v4()]).await.unwrap();
+    mode.store(0, Ordering::SeqCst);
+    database.admin.batch_execute("CREATE OR REPLACE FUNCTION public.refuse_verifier_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF convert_from(NEW.envelope,'UTF8')::jsonb #>> '{record,kind}' = 'attachmentVerification' AND convert_from(NEW.envelope,'UTF8')::jsonb #>> '{record,phase}' = 'terminal' THEN RAISE EXCEPTION 'synthetic terminal audit fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER refuse_verifier_audit BEFORE INSERT ON registry_internal.registry_audit FOR EACH ROW EXECUTE FUNCTION public.refuse_verifier_audit()").await.unwrap();
+    assert!(worker.run_once().await.is_err());
+    assert_eq!(
+        get_record(&app, &record_uri, submitter.clone()).await.body["data"]["evidence"]
+            ["verificationStatus"],
+        "pending"
+    );
+    assert_eq!(
+        send(
+            &app,
+            Method::GET,
+            &download_uri,
+            Some(submitter.clone()),
+            &[],
+            vec![]
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    database.admin.batch_execute("DROP TRIGGER refuse_verifier_audit ON registry_internal.registry_audit; UPDATE registry_internal.registry_attachment_verification SET lease_expires_at=transaction_timestamp()-interval '1 second' WHERE lease_id IS NOT NULL").await.unwrap();
+    assert!(worker.clone().run_once().await.unwrap());
+    assert_eq!(
+        get_record(&app, &record_uri, submitter.clone()).await.body["data"]["evidence"]
+            ["verificationStatus"],
+        "approved"
+    );
+    let captured = observed.lock().unwrap().clone();
+    assert_eq!(captured[0].0, "application/octet-stream");
+    assert_eq!(captured[0].2, bytes);
+    assert_eq!(captured[1].0, "application/pdf");
+    assert_eq!(captured.last().unwrap().1, replacement_hash);
+    assert_eq!(captured.last().unwrap().2, replacement);
+
+    // Retention can finish while the verifier is out of process. Its late
+    // approved verdict is discarded and cannot recreate an erased reference.
+    upload(
+        "application/octet-stream",
+        vec![9, 8, 7],
+        "verification-erasure",
+    )
+    .await;
+    run_action(
+        &app,
+        &draft.id,
+        "correction-requests",
+        "submitter",
+        submitter.clone(),
+        "verification-cancel",
+        "cancel_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+    mode.store(3, Ordering::SeqCst);
+    let running_worker = worker.clone();
+    let pending_worker = tokio::spawn(async move { running_worker.run_once().await });
+    tokio::time::timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    let retention =
+        registry_breg::request_retention::RequestRetentionOperatorService::new_for_test(
+            registry.as_ref().clone(),
+            identity,
+            registry_breg::postgres::ExpectedManagedCatalog::compiled(&registry),
+            RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+            database.migration_config.clone(),
+            database.migration_role.clone(),
+            database.runtime_role.clone(),
+            AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
+        )
+        .with_verification_policy_for_test(verification_policy);
+    let erased = retention
+        .erase(
+            registry_breg::request_retention::RequestDetailErasureScope {
+                request_entity_id: "correction-request",
+                request_id: Uuid::parse_str(&draft.id).unwrap(),
+                proposal_version: 1,
+            },
+        )
+        .await;
+    resume.notify_one();
+    assert_eq!(erased.unwrap().erasure.attachment_references, 1);
+    assert!(pending_worker.await.unwrap().unwrap());
+    assert_eq!(
+        send(
+            &app,
+            Method::GET,
+            &download_uri,
+            Some(submitter),
+            &[],
+            vec![]
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(database.admin.query_one("SELECT count(*) FROM registry_internal.registry_attachment_verification WHERE verdict='pending'", &[]).await.unwrap().get::<_,i64>(0),0);
+    server.abort();
+    database.cleanup().await;
+}
+
+async fn s3_cleanup_with_all_requests_retained(
+    storage: registry_breg::attachment_storage::AttachmentStorage,
+) {
+    use sha2::{Digest, Sha256};
+    let registry_breg::attachment_storage::AttachmentStorage::S3(store) = &storage else {
+        unreachable!()
+    };
+    let database = TestDatabase::create(8).await;
+    let mut project = attachment_project();
+    for entity in &mut project.entities {
+        if let Some(request) = &mut entity.change_request {
+            request.retention.mode =
+                registry_breg::contract::ChangeRequestRetentionModeSource::Retain;
+        }
+    }
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let app = router(change_request_service_with_attachment_storage(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        PACKAGE_ID,
+        None,
+        None,
+        storage.clone(),
+    ));
+    let steward = claims("steward", "cleanup-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "cleanup-site",
+        json!({"tenant":TENANT,"name":"site"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "cleanup-placement",
+        json!({"tenant":TENANT,"site":site.id}),
+    )
+    .await;
+    let mut drafts = Vec::new();
+    let bytes = b"shared retained content".to_vec();
+    let live_hash = hex::encode(Sha256::digest(&bytes));
+    for key in ["cleanup-first", "cleanup-second"] {
+        let draft = create_record(&app, "/v1/records/correction-requests?accessProfile=submitter", submitter.clone(), key, json!({"tenant":TENANT,"placement":placement.id,"proposedSite":site.id,"reason":"retain"})).await;
+        let uri = format!(
+            "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+            draft.id
+        );
+        let response = send(
+            &app,
+            Method::PATCH,
+            &uri,
+            Some(submitter.clone()),
+            &[
+                ("content-type", "application/octet-stream"),
+                ("idempotency-key", &format!("{key}-upload")),
+                ("if-match", &draft.etag),
+            ],
+            bytes.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        drafts.push(draft);
+    }
+    assert_eq!(database.admin.query_one("SELECT count(*) FROM registry_internal.registry_request_attachments WHERE sha256=$1 AND erased_at IS NULL", &[&live_hash]).await.unwrap().get::<_,i64>(0),2,"two live references share one object");
+    let record_uri = format!(
+        "/v1/records/correction-requests/{}?accessProfile=submitter",
+        drafts[0].id
+    );
+    let upload_uri = format!(
+        "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+        drafts[0].id
+    );
+    let before = get_record(&app, &record_uri, submitter.clone()).await;
+    let orphan = b"replaced and removed draft bytes".to_vec();
+    let orphan_hash = hex::encode(Sha256::digest(&orphan));
+    let response = send(
+        &app,
+        Method::PATCH,
+        &upload_uri,
+        Some(submitter.clone()),
+        &[
+            ("content-type", "application/octet-stream"),
+            ("idempotency-key", "cleanup-orphan"),
+            ("if-match", &before.etag),
+        ],
+        orphan,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let before = get_record(&app, &record_uri, submitter.clone()).await;
+    assert_eq!(
+        send(
+            &app,
+            Method::DELETE,
+            &upload_uri,
+            Some(submitter.clone()),
+            &[
+                ("idempotency-key", "cleanup-remove-body-refused"),
+                ("if-match", &before.etag)
+            ],
+            vec![1]
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        get_record(&app, &record_uri, submitter.clone()).await.etag,
+        before.etag
+    );
+    assert_eq!(
+        send(
+            &app,
+            Method::DELETE,
+            &upload_uri,
+            Some(submitter.clone()),
+            &[
+                ("idempotency-key", "cleanup-remove"),
+                ("if-match", &before.etag)
+            ],
+            vec![]
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let staged = b"interrupted staged object".to_vec();
+    let staged_hash = hex::encode(Sha256::digest(&staged));
+    let (migration, migration_task) = database.connect_migration().await;
+    registry_breg::attachment_store::test_support::stage(
+        &migration,
+        &staged_hash,
+        staged.len() as u64,
+        &storage.binding_digest(),
+    )
+    .await
+    .unwrap();
+    store.put(&staged_hash, staged).await.unwrap();
+    database.admin.execute("UPDATE registry_internal.registry_attachment_blobs SET created_at=transaction_timestamp()-interval '11 minutes' WHERE sha256=$1",&[&staged_hash]).await.unwrap();
+    drop(migration);
+    migration_task.abort();
+    let cleanup = registry_breg::request_retention::RequestRetentionOperatorService::new_for_test(
+        registry.as_ref().clone(),
+        identity,
+        registry_breg::postgres::ExpectedManagedCatalog::compiled(&registry),
+        RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+        database.migration_config.clone(),
+        database.migration_role.clone(),
+        database.runtime_role.clone(),
+        AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
+    )
+    .with_attachment_storage_for_test(storage.clone());
+    assert_eq!(
+        cleanup
+            .erase(
+                registry_breg::request_retention::RequestDetailErasureScope {
+                    request_entity_id: "correction-request",
+                    request_id: Uuid::parse_str(&drafts[0].id).unwrap(),
+                    proposal_version: 1
+                }
+            )
+            .await
+            .unwrap_err(),
+        registry_breg::request_retention::RequestRetentionError::RetainMode
+    );
+    let cleaned = cleanup.cleanup_attachments().await.unwrap();
+    assert_eq!(cleaned.pending_external_deletions, 0);
+    assert!(cleaned.external_deletion_tombstones >= 2);
+    for hash in [&orphan_hash, &staged_hash] {
+        assert!(matches!(
+            store.get(hash, 1024).await,
+            Err(registry_breg::attachment_storage::AttachmentStorageError::Missing)
+        ));
+    }
+    assert_eq!(
+        store.get(&live_hash, bytes.len() as u64).await.unwrap(),
+        bytes
+    );
+    let live_uri = format!("/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter&proposalVersion=1",drafts[1].id);
+    let response = send(
+        &app,
+        Method::GET,
+        &live_uri,
+        Some(submitter.clone()),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 1024).await.unwrap().to_vec(),
+        bytes
+    );
+    let current = get_record(&app, &record_uri, submitter).await;
+    assert_eq!(current.body["request"]["bregState"], "draft");
+    assert!(current.body["data"]["evidence"].is_null());
+    database.cleanup().await;
+}
+
+async fn attachment_s3_storage() -> (
+    tempfile::TempDir,
+    registry_breg::attachment_storage::AttachmentStorage,
+) {
+    use std::os::unix::fs::PermissionsExt;
+    let secrets = tempfile::tempdir().unwrap();
+    let root = secrets.path().canonicalize().unwrap();
+    for (file, variable) in [
+        ("access", "BREG_TEST_S3_ACCESS_KEY"),
+        ("secret", "BREG_TEST_S3_SECRET_KEY"),
+    ] {
+        let value = std::env::var(variable).expect("synthetic S3 credentials required");
+        let path = root.join(file);
+        std::fs::write(&path, value).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let mut raw = attachment_runtime_config(&root);
+    raw["attachmentStorage"] = json!({"kind":"s3","endpoint":std::env::var("BREG_TEST_S3_ENDPOINT").expect("disposable S3 endpoint required"),"bucket":std::env::var("BREG_TEST_S3_BUCKET").expect("precreated disposable unversioned S3 bucket required"),"region":"us-east-1","accessKeyIdRef":"secret:file/access","secretAccessKeyRef":"secret:file/secret"});
+    let config = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
+        .expect("operator S3 runtime configuration validates");
+    let storage = config
+        .activate_attachment_storage("attachment-http")
+        .await
+        .expect("real configured S3 backend activates");
+    (secrets, storage)
+}
+
+fn attachment_runtime_config(root: &std::path::Path) -> Value {
+    json!({
+        "apiVersion":registry_breg::runtime_config::RUNTIME_CONFIG_API_VERSION,
+        "kind":registry_breg::runtime_config::RUNTIME_CONFIG_KIND,
+        "listener":{"bind":"127.0.0.1:8080"},
+        "identity":{"environment":"local","instanceId":"attachment-http-test","databaseId":Uuid::new_v4().to_string(),"databaseInitializationEnvironment":"local"},
+        "secretProviders":{"file":{"root":root}},
+        "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/migration","pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
+        "package":{"root":root,"trustAnchorPath":root.join("anchor"),"compilerSourceRevision":"test-source","activeRevision":PACKAGE_REVISION,"activeSequence":1},
+        "authentication":{"oidc":{"issuer":"https://issuer.example","audience":"urn:breg:test","allowedAlgorithm":"EdDSA","accessTokenType":"JWT","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["registry-client"],"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":60000,"jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maxDocumentBytes":65536,"requestTimeoutMilliseconds":5000,"outageToleranceSeconds":900}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+        "audit":{"hashKeyRef":"secret:file/audit"},
+        "cursor":{"secretRef":"secret:file/cursor","maxAgeSeconds":300},
+        "eventDestinations":{},
+        "operationalTimeouts":{"httpRequestMilliseconds":10000,"shutdownGraceMilliseconds":30000,"recordLockMilliseconds":5000,"migrationLockMilliseconds":30000,"migrationStatementMilliseconds":60000}
+    })
+}
+
+fn attachment_project() -> registry_breg::contract::RegistryProject {
+    let mut project = two_stage_project();
+    project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == "correction-request")
+        .unwrap()
+        .change_request
+        .as_mut()
+        .unwrap()
+        .retention
+        .mode = registry_breg::contract::ChangeRequestRetentionModeSource::OperatorErase;
+
+    project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == "correction-request")
+        .unwrap()
+        .attachments
+        .push(registry_breg::contract::AttachmentSlotSource {
+            id: "evidence".to_owned(),
+            required: true,
+            maximum_bytes: 1024,
+            content_types: vec!["application/octet-stream".to_owned()],
+            classification: registry_breg::contract::Classification::Internal,
+        });
+    for profile in &mut project.access_profiles {
+        for grant in profile
+            .grants
+            .iter_mut()
+            .filter(|grant| grant.entity == "correction-request")
+        {
+            grant.readable_fields.insert("evidence".to_owned());
+            if profile.id == "submitter" {
+                grant.writable_fields.insert("evidence".to_owned());
+                grant.request_visibility =
+                    Some(registry_breg::contract::RequestVisibilitySource::Owner);
+            }
+        }
+    }
+    let mut hidden = project
+        .access_profiles
+        .iter()
+        .find(|profile| profile.id == "submitter")
+        .unwrap()
+        .clone();
+    hidden.id = "hidden-owner".to_owned();
+    hidden.grants[0].readable_fields.remove("evidence");
+    hidden.grants[0].writable_fields.remove("evidence");
+    project.access_profiles.push(hidden);
+    let mut other_target = project
+        .access_profiles
+        .iter()
+        .find(|profile| profile.id == "reviewer")
+        .unwrap()
+        .clone();
+    other_target.id = "other-target-reviewer".to_owned();
+    other_target.default = false;
+    other_target.grants[0].review_stages[0].targets[0].row_boundaries[0].claim =
+        "target_tenant_claim".to_owned();
+    project.access_profiles.push(other_target);
+
+    project
+}
+
+async fn attachment_download_journey(
+    storage: registry_breg::attachment_storage::AttachmentStorage,
+) {
+    let database = TestDatabase::create(8).await;
+    let project = attachment_project();
+
+    let registry = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("attachment fixture compiles"),
+    );
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let app = router(change_request_service_with_attachment_storage(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        PACKAGE_ID,
+        None,
+        None,
+        storage.clone(),
+    ));
+    let steward = claims("steward", "attachment-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let old_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "attachment-site-old",
+        json!({"tenant":TENANT,"name":"old"}),
+    )
+    .await;
+    let new_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "attachment-site-new",
+        json!({"tenant":TENANT,"name":"new"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "attachment-placement",
+        json!({"tenant":TENANT,"site":old_site.id}),
+    )
+    .await;
+    let draft = create_record(&app, "/v1/records/correction-requests?accessProfile=submitter", submitter.clone(), "attachment-draft", json!({"tenant":TENANT,"placement":placement.id,"proposedSite":new_site.id,"reason":"attachment test"})).await;
+    let record_uri = format!(
+        "/v1/records/correction-requests/{}?accessProfile=submitter",
+        draft.id
+    );
+    let before = get_record(&app, &record_uri, submitter.clone()).await;
+    assert!(before.body["data"]["evidence"].is_null());
+    let submit_action = action(&before.body, "submit_request", None);
+    let incomplete = send(
+        &app,
+        Method::POST,
+        &submit_action.href,
+        Some(submitter.clone()),
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "attachment-incomplete"),
+            ("if-match", &submit_action.if_match),
+        ],
+        b"{}".to_vec(),
+    )
+    .await;
+    assert_eq!(incomplete.status(), StatusCode::PRECONDITION_FAILED);
+    let upload_uri = format!(
+        "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+        draft.id
+    );
+    for (mime, body, status, key) in [
+        (
+            "text/plain",
+            vec![1],
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "attachment-wrong-mime",
+        ),
+        (
+            "application/octet-stream",
+            vec![1; 1025],
+            StatusCode::BAD_REQUEST,
+            "attachment-too-large",
+        ),
+    ] {
+        let refused = send(
+            &app,
+            Method::PATCH,
+            &upload_uri,
+            Some(submitter.clone()),
+            &[
+                ("content-type", mime),
+                ("content-length", "1"),
+                ("idempotency-key", key),
+                ("if-match", &before.etag),
+            ],
+            body,
+        )
+        .await;
+        assert_eq!(refused.status(), status);
+    }
+    struct InterruptedUpload(bool);
+    impl futures_core::Stream for InterruptedUpload {
+        type Item = Result<Vec<u8>, std::io::Error>;
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            std::task::Poll::Ready(Some(if self.0 {
+                Err(std::io::Error::other("synthetic upload interruption"))
+            } else {
+                self.0 = true;
+                Ok(vec![1, 2, 3])
+            }))
+        }
+    }
+    let mut interrupted = Request::builder()
+        .method(Method::PATCH)
+        .uri(&upload_uri)
+        .header("content-type", "application/octet-stream")
+        .header("idempotency-key", "attachment-interrupted")
+        .header("if-match", &before.etag)
+        .body(Body::from_stream(InterruptedUpload(false)))
+        .unwrap();
+    interrupted.extensions_mut().insert(submitter.clone());
+    assert_eq!(
+        app.clone().call(interrupted).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    let forged =
+        json!([{"op":"add","path":"/data/evidence","value":{"sha256":"forged","byteSize":1}}]);
+    let refused = send(
+        &app,
+        Method::PATCH,
+        &record_uri,
+        Some(submitter.clone()),
+        &[
+            ("content-type", "application/json-patch+json"),
+            ("idempotency-key", "attachment-forged-patch"),
+            ("if-match", &before.etag),
+        ],
+        serde_json::to_vec(&forged).unwrap(),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let mut forged_create = before.body["data"].clone();
+    forged_create["evidence"] = json!({"sha256":"forged","byteSize":1});
+    let refused = send(
+        &app,
+        Method::POST,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        Some(submitter.clone()),
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "attachment-forged-create"),
+        ],
+        serde_json::to_vec(&json!({"data":forged_create})).unwrap(),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        get_record(&app, &record_uri, submitter.clone()).await.etag,
+        before.etag,
+        "refusals preserve the request revision"
+    );
+    assert_eq!(
+        database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_attachment_blobs",
+                &[]
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        0,
+        "refusals never stage or persist blobs"
+    );
+    let bytes = vec![0, 255, 13, 10, 42, 1];
+    let uploaded = response_parts(
+        send(
+            &app,
+            Method::PATCH,
+            &upload_uri,
+            Some(submitter.clone()),
+            &[
+                ("content-type", "application/octet-stream"),
+                ("idempotency-key", "attachment-upload"),
+                ("if-match", &before.etag),
+            ],
+            bytes.clone(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(uploaded.status, StatusCode::OK, "{}", uploaded.body);
+    let replayed = response_parts(
+        send(
+            &app,
+            Method::PATCH,
+            &upload_uri,
+            Some(submitter.clone()),
+            &[
+                ("content-type", "application/octet-stream"),
+                ("idempotency-key", "attachment-upload"),
+                ("if-match", &before.etag),
+            ],
+            bytes.clone(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(replayed.status, StatusCode::OK);
+    assert_eq!(replayed.body, uploaded.body);
+    assert_eq!(replayed.etag, uploaded.etag);
+    let conflicting = send(
+        &app,
+        Method::PATCH,
+        &upload_uri,
+        Some(submitter.clone()),
+        &[
+            ("content-type", "application/octet-stream"),
+            ("idempotency-key", "attachment-upload"),
+            ("if-match", &before.etag),
+        ],
+        vec![9; bytes.len()],
+    )
+    .await;
+    assert_eq!(conflicting.status(), StatusCode::CONFLICT);
+
+    let current = get_record(&app, &record_uri, submitter.clone()).await;
+    assert_eq!(current.body["data"]["evidence"]["byteSize"], bytes.len());
+    assert_eq!(current.body["data"]["evidence"]["proposalVersion"], 1);
+    assert_ne!(current.etag, before.etag);
+    let (upload_race, patch_race) = tokio::time::timeout(Duration::from_secs(5), async {
+        let upload_headers = [
+            ("content-type", "application/octet-stream"),
+            ("idempotency-key", "attachment-cross-route-race"),
+            ("if-match", current.etag.as_str()),
+        ];
+        let patch_headers = [
+            ("content-type", "application/json-patch+json"),
+            ("idempotency-key", "attachment-cross-route-race"),
+            ("if-match", current.etag.as_str()),
+        ];
+        tokio::join!(
+            send(
+                &app,
+                Method::PATCH,
+                &upload_uri,
+                Some(submitter.clone()),
+                &upload_headers,
+                bytes.clone()
+            ),
+            send(
+                &app,
+                Method::PATCH,
+                &record_uri,
+                Some(submitter.clone()),
+                &patch_headers,
+                serde_json::to_vec(
+                    &json!([{"op":"replace","path":"/data/reason","value":"same-key race"}])
+                )
+                .unwrap()
+            )
+        )
+    })
+    .await
+    .expect("same-key cross-route operations must not deadlock");
+    let mut statuses = [upload_race.status().as_u16(), patch_race.status().as_u16()];
+    statuses.sort();
+    assert_eq!(statuses, [200, 409]);
+    let original_hash = current.body["data"]["evidence"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Pause after the typed row query. A writer must remain blocked until the
+    // metadata and its ETag have been materialized from that same row revision.
+    for (index, uri) in [
+        record_uri.as_str(),
+        "/v1/records/correction-requests?accessProfile=submitter&$select=evidence",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let snapshot = get_record(&app, &record_uri, submitter.clone()).await;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let resume = Arc::new(tokio::sync::Notify::new());
+        let paused = router(change_request_service_with_attachment_pause(
+            &database,
+            registry.clone(),
+            identity.clone(),
+            PACKAGE_ID,
+            None,
+            None,
+            storage.clone(),
+            Some((entered.clone(), resume.clone())),
+        ));
+        let read_claims = submitter.clone();
+        let read_uri = uri.to_owned();
+        let reader = tokio::spawn(async move {
+            response_parts(
+                send(
+                    &paused,
+                    Method::GET,
+                    &read_uri,
+                    Some(read_claims),
+                    &[],
+                    vec![],
+                )
+                .await,
+            )
+            .await
+        });
+        if tokio::time::timeout(Duration::from_secs(3), entered.notified())
+            .await
+            .is_err()
+        {
+            resume.notify_one();
+            let early = reader.await.unwrap();
+            panic!(
+                "read {index} missed metadata barrier: {} {}",
+                early.status, early.body
+            );
+        }
+        let write_app = app.clone();
+        let write_uri = upload_uri.clone();
+        let write_claims = submitter.clone();
+        let write_etag = snapshot.etag.clone();
+        let write_bytes = bytes.clone();
+        let writer = tokio::spawn(async move {
+            response_parts(
+                send(
+                    &write_app,
+                    Method::PATCH,
+                    &write_uri,
+                    Some(write_claims),
+                    &[
+                        ("content-type", "application/octet-stream"),
+                        (
+                            "idempotency-key",
+                            &format!("attachment-consistency-{index}"),
+                        ),
+                        ("if-match", &write_etag),
+                    ],
+                    write_bytes,
+                )
+                .await,
+            )
+            .await
+        });
+        let blocked = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let blocked: bool = database.admin.query_one(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid <> pg_backend_pid() AND cardinality(pg_blocking_pids(pid)) > 0)", &[]
+                ).await.unwrap().get(0);
+                if blocked { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await;
+        resume.notify_one();
+        let observed = reader.await.unwrap();
+        let written = writer.await.unwrap();
+        blocked.expect("attachment write waits for the request-state read lock");
+        assert_eq!(observed.status, StatusCode::OK, "{}", observed.body);
+        assert_eq!(written.status, StatusCode::OK, "{}", written.body);
+        let observed_data = if index == 0 {
+            &observed.body["data"]
+        } else {
+            &observed.body["items"][0]["data"]
+        };
+        assert_eq!(observed_data["evidence"], snapshot.body["data"]["evidence"]);
+        if index == 0 {
+            assert_eq!(observed.etag, snapshot.etag);
+        }
+        assert_ne!(written.etag, snapshot.etag);
+    }
+
+    let list = response_parts(
+        send(
+            &app,
+            Method::GET,
+            "/v1/records/correction-requests?accessProfile=submitter&$select=evidence",
+            Some(submitter.clone()),
+            &[],
+            vec![],
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        list.status,
+        StatusCode::OK,
+        "attachment-only list projection {}",
+        list.body
+    );
+    assert_eq!(
+        list.body["items"][0]["data"]["evidence"]["byteSize"],
+        bytes.len()
+    );
+    assert!(list.body["items"][0]["data"].get("reason").is_none());
+
+    let download_uri = format!("/v1/records/correction-requests/{}/attachments/evidence?proposalVersion=1&accessProfile=submitter",draft.id);
+    let downloaded = send(
+        &app,
+        Method::GET,
+        &download_uri,
+        Some(submitter.clone()),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(downloaded.status(), StatusCode::OK);
+    assert_eq!(
+        downloaded.headers()["content-type"],
+        "application/octet-stream"
+    );
+    assert_eq!(downloaded.headers()["cache-control"], "no-store");
+    assert_eq!(downloaded.headers()["x-content-type-options"], "nosniff");
+    assert!(downloaded.headers()["content-disposition"]
+        .to_str()
+        .unwrap()
+        .starts_with("attachment"));
+    assert_eq!(
+        to_bytes(downloaded.into_body(), 1024)
+            .await
+            .unwrap()
+            .as_ref(),
+        bytes
+    );
+    let audit: Value = database.admin.query_one(
+        "SELECT convert_from(envelope, 'UTF8')::jsonb -> 'record' FROM registry_internal.registry_audit WHERE convert_from(envelope, 'UTF8')::jsonb #>> '{record,attachment,slotId}' = 'evidence' AND convert_from(envelope, 'UTF8')::jsonb #>> '{record,method}' = 'GET' LIMIT 1", &[]
+    ).await.unwrap().get(0);
+    assert_eq!(
+        audit["attachment"],
+        json!({"slotId":"evidence","proposalVersion":1})
+    );
+    assert_eq!(audit["entityId"], "correction-request");
+    assert!(audit.get("actionId").is_none());
+    assert_eq!(audit["outcome"], "returned");
+    for (uri, actor) in [
+        (
+            download_uri.clone(),
+            Some(claims("submitter", OTHER_SUBMITTER, None)),
+        ),
+        (download_uri.clone(), None),
+        (
+            download_uri.replace("accessProfile=submitter", "accessProfile=hidden-owner"),
+            Some(submitter.clone()),
+        ),
+        (
+            download_uri.replace("proposalVersion=1", "proposalVersion=2"),
+            Some(submitter.clone()),
+        ),
+        (
+            download_uri.replace("/evidence?", "/undeclared?"),
+            Some(submitter.clone()),
+        ),
+    ] {
+        let denied = send(&app, Method::GET, &uri, actor, &[], vec![]).await;
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    }
+    let submitted = run_action(
+        &app,
+        &draft.id,
+        "correction-requests",
+        "submitter",
+        submitter.clone(),
+        "attachment-submit",
+        "submit_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+    assert_eq!(submitted["request"]["proposalVersion"], 1);
+    for (profile, principal, purpose) in [
+        ("reviewer", REVIEWER, "review"),
+        ("applier", APPLIER, "apply"),
+    ] {
+        let uri = download_uri.replace(
+            "accessProfile=submitter",
+            &format!("accessProfile={profile}"),
+        );
+        let response = send(
+            &app,
+            Method::GET,
+            &uri,
+            Some(claims(profile, principal, Some(purpose))),
+            &[],
+            vec![],
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{profile} exact frozen target grant permits download"
+        );
+        assert_eq!(
+            to_bytes(response.into_body(), 1024).await.unwrap().as_ref(),
+            bytes
+        );
+    }
+    let wrong_target_claims = VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        REVIEWER,
+        BTreeSet::new(),
+        Some("review".to_owned()),
+        BTreeMap::from([
+            (
+                "tenant_claim".to_owned(),
+                VerifiedClaimValue::direct_string(TENANT).unwrap(),
+            ),
+            (
+                "target_tenant_claim".to_owned(),
+                VerifiedClaimValue::direct_string("tenant-b").unwrap(),
+            ),
+        ]),
+    )
+    .unwrap();
+    let denied = send(
+        &app,
+        Method::GET,
+        &download_uri.replace(
+            "accessProfile=submitter",
+            "accessProfile=other-target-reviewer",
+        ),
+        Some(wrong_target_claims.clone()),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        denied.status(),
+        StatusCode::NOT_FOUND,
+        "request GET cannot bypass target grant boundaries"
+    );
+    let revised = run_action(
+        &app,
+        &draft.id,
+        "correction-requests",
+        "submitter",
+        submitter.clone(),
+        "attachment-revise",
+        "revise_request",
+        None,
+        |_| json!({"rebase":true}),
+    )
+    .await;
+    assert_eq!(revised["request"]["proposalVersion"], 2);
+    let current = get_record(&app, &record_uri, submitter.clone()).await;
+    let replacement = vec![1, 2, 3, 4, 5];
+    let replaced = response_parts(
+        send(
+            &app,
+            Method::PATCH,
+            &upload_uri,
+            Some(submitter.clone()),
+            &[
+                ("content-type", "application/octet-stream"),
+                ("idempotency-key", "attachment-replace"),
+                ("if-match", &current.etag),
+            ],
+            replacement.clone(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(replaced.status, StatusCode::OK, "{}", replaced.body);
+    for (version, expected) in [(1, bytes.as_slice()), (2, replacement.as_slice())] {
+        let uri = download_uri.replace("proposalVersion=1", &format!("proposalVersion={version}"));
+        let response = send(
+            &app,
+            Method::GET,
+            &uri,
+            Some(submitter.clone()),
+            &[],
+            vec![],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), 1024).await.unwrap().as_ref(),
+            expected,
+            "replacement preserves the frozen prior version"
+        );
+    }
+    run_action(
+        &app,
+        &draft.id,
+        "correction-requests",
+        "submitter",
+        submitter.clone(),
+        "attachment-resubmit",
+        "submit_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+    let previous = send(
+        &app,
+        Method::GET,
+        &download_uri.replace("accessProfile=submitter", "accessProfile=reviewer"),
+        Some(claims("reviewer", REVIEWER, Some("review"))),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        previous.status(),
+        StatusCode::OK,
+        "reviewer can reauthorize the exact prior frozen targets"
+    );
+    assert_eq!(
+        to_bytes(previous.into_body(), 1024).await.unwrap().as_ref(),
+        bytes
+    );
+    if matches!(
+        storage,
+        registry_breg::attachment_storage::AttachmentStorage::Database
+    ) {
+        let corrupt = vec![7u8; bytes.len()];
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_attachment_blobs SET content=$1 WHERE sha256=$2",
+                &[&corrupt, &original_hash],
+            )
+            .await
+            .unwrap();
+        let withheld_corrupt = send(
+            &app,
+            Method::GET,
+            &download_uri,
+            Some(submitter.clone()),
+            &[],
+            vec![],
+        )
+        .await;
+        assert_eq!(
+            withheld_corrupt.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "stored hash mismatch never releases a successful binary response"
+        );
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_attachment_blobs SET content=$1 WHERE sha256=$2",
+                &[&bytes, &original_hash],
+            )
+            .await
+            .unwrap();
+    }
+    let faulty = router(change_request_service_with_attachment_storage(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        PACKAGE_ID,
+        None,
+        Some(registry_breg::postgres::ReadFaultPoint::BeforeTerminalAudit),
+        storage.clone(),
+    ));
+    let withheld = send(
+        &faulty,
+        Method::GET,
+        &download_uri,
+        Some(submitter.clone()),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(withheld.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!to_bytes(withheld.into_body(), 1024 * 1024)
+        .await
+        .unwrap()
+        .windows(bytes.len())
+        .any(|window| window == bytes));
+    drop(faulty);
+    run_action(
+        &app,
+        &draft.id,
+        "correction-requests",
+        "submitter",
+        submitter.clone(),
+        "attachment-cancel",
+        "cancel_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+    // A same-schema successor may narrow future uploads after the active
+    // proposal becomes terminal. Its current read grant still admits the
+    // immutable bytes accepted by the earlier proposal declaration.
+    let mut successor_project = project.clone();
+    let mut successor_identity = identity.clone();
+    let mut successor_registry = registry.clone();
+    for (index, narrow_mime) in [false, true].into_iter().enumerate() {
+        let slot = &mut successor_project
+            .entities
+            .iter_mut()
+            .find(|entity| entity.id == "correction-request")
+            .unwrap()
+            .attachments[0];
+        slot.maximum_bytes = 1;
+        if narrow_mime {
+            slot.content_types = vec!["application/pdf".to_owned()];
+        }
+        successor_registry =
+            Arc::new(compile_project(&successor_project, &[], CompileProfile::Authoring).unwrap());
+        let (migration, migration_task) = database.connect_migration().await;
+        registry_breg::request_retention::guard_successor_activation(
+            &migration,
+            &successor_registry,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            registry_breg::postgres::managed_schema_fingerprint(
+                &migration,
+                &database.runtime_role,
+                &registry_breg::postgres::ExpectedManagedCatalog::compiled(&successor_registry)
+            )
+            .await
+            .unwrap(),
+            identity.schema_fingerprint,
+            "attachment upload policy narrowing preserves installed scalar schema"
+        );
+        drop(migration);
+        migration_task.abort();
+        successor_identity.package_revision = format!("attachment-policy-successor-{index}");
+        successor_identity.package_sequence += 1;
+        database.admin.execute("UPDATE registry_internal.registry_state SET active_package_revision=$1, package_sequence=$2 WHERE singleton", &[&successor_identity.package_revision, &successor_identity.package_sequence]).await.unwrap();
+        let successor = router(change_request_service_with_attachment_storage(
+            &database,
+            successor_registry.clone(),
+            successor_identity.clone(),
+            PACKAGE_ID,
+            None,
+            None,
+            storage.clone(),
+        ));
+        for (version, expected) in [(1, bytes.as_slice()), (2, replacement.as_slice())] {
+            let uri =
+                download_uri.replace("proposalVersion=1", &format!("proposalVersion={version}"));
+            for (profile, actor) in [
+                ("submitter", submitter.clone()),
+                ("reviewer", claims("reviewer", REVIEWER, Some("review"))),
+                ("applier", claims("applier", APPLIER, Some("apply"))),
+            ] {
+                let uri = uri.replace(
+                    "accessProfile=submitter",
+                    &format!("accessProfile={profile}"),
+                );
+                let response = send(&successor, Method::GET, &uri, Some(actor), &[], vec![]).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::OK,
+                    "retained version {version} remains readable after policy narrowing {index}"
+                );
+                assert_eq!(
+                    response.headers()["content-type"],
+                    "application/octet-stream"
+                );
+                assert_eq!(
+                    to_bytes(response.into_body(), 1024).await.unwrap().as_ref(),
+                    expected
+                );
+            }
+            let denied = send(
+                &successor,
+                Method::GET,
+                &uri.replace(
+                    "accessProfile=submitter",
+                    "accessProfile=other-target-reviewer",
+                ),
+                Some(wrong_target_claims.clone()),
+                &[],
+                vec![],
+            )
+            .await;
+            assert_eq!(denied.status(), StatusCode::NOT_FOUND, "historical attachment authorization still requires exact selected target boundaries");
+            assert_eq!(
+                send(
+                    &successor,
+                    Method::GET,
+                    &uri.replace("accessProfile=submitter", "accessProfile=hidden-owner"),
+                    Some(submitter.clone()),
+                    &[],
+                    vec![]
+                )
+                .await
+                .status(),
+                StatusCode::NOT_FOUND,
+                "successor still enforces current selected slot readability"
+            );
+        }
+    }
+    let registry = successor_registry;
+    let identity = successor_identity;
+    let app = router(change_request_service_with_attachment_storage(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        PACKAGE_ID,
+        None,
+        None,
+        storage.clone(),
+    ));
+    let retention =
+        registry_breg::request_retention::RequestRetentionOperatorService::new_for_test(
+            registry.as_ref().clone(),
+            identity,
+            registry_breg::postgres::ExpectedManagedCatalog::compiled(&registry),
+            RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+            database.migration_config.clone(),
+            database.migration_role.clone(),
+            database.runtime_role.clone(),
+            AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
+        )
+        .with_attachment_storage_for_test(storage.clone());
+    for version in [1, 2] {
+        let scope = registry_breg::request_retention::RequestDetailErasureScope {
+            request_entity_id: "correction-request",
+            request_id: Uuid::parse_str(&draft.id).unwrap(),
+            proposal_version: version,
+        };
+        assert_eq!(
+            retention
+                .dry_run(scope.clone())
+                .await
+                .unwrap()
+                .erasure
+                .attachment_references,
+            1
+        );
+        let erased = retention.erase(scope).await.unwrap();
+        assert_eq!(erased.erasure.attachment_references, 1);
+        assert_eq!(erased.pending_external_deletions, 0);
+        if let registry_breg::attachment_storage::AttachmentStorage::S3(store) = &storage {
+            assert!(erased.external_deletion_tombstones >= 1);
+            if version == 1 {
+                assert_eq!(
+                    store
+                        .get(&original_hash, bytes.len() as u64)
+                        .await
+                        .unwrap_err(),
+                    registry_breg::attachment_storage::AttachmentStorageError::Missing
+                );
+            }
+        }
+        let uri = download_uri.replace("proposalVersion=1", &format!("proposalVersion={version}"));
+        assert_eq!(
+            send(
+                &app,
+                Method::GET,
+                &uri,
+                Some(submitter.clone()),
+                &[],
+                vec![]
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    let erased = get_record(&app, &record_uri, submitter).await;
+    let metadata = &erased.body["data"]["evidence"];
+    assert_eq!(metadata["erased"], true);
+    assert!(metadata.get("uploadedBy").is_none());
+    assert!(metadata.get("uploadedAt").is_none());
+    assert_eq!(metadata["byteSize"], replacement.len());
+    drop(app);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_http_change_request_correction_uses_frozen_review_and_apply_path() {
     let database = TestDatabase::create(8).await;
     let registry = Arc::new(compiled_registry());
@@ -3151,6 +4783,78 @@ fn change_request_service(
     package_id: &str,
     fault: Option<MutationFaultPoint>,
 ) -> Arc<HttpService> {
+    change_request_service_with_read_fault(database, registry, identity, package_id, fault, None)
+}
+
+fn change_request_service_with_read_fault(
+    database: &TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    package_id: &str,
+    fault: Option<MutationFaultPoint>,
+    read_fault: Option<registry_breg::postgres::ReadFaultPoint>,
+) -> Arc<HttpService> {
+    change_request_service_with_attachment_storage(
+        database,
+        registry,
+        identity,
+        package_id,
+        fault,
+        read_fault,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+    )
+}
+
+fn change_request_service_with_attachment_storage(
+    database: &TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    package_id: &str,
+    fault: Option<MutationFaultPoint>,
+    read_fault: Option<registry_breg::postgres::ReadFaultPoint>,
+    storage: registry_breg::attachment_storage::AttachmentStorage,
+) -> Arc<HttpService> {
+    change_request_service_with_attachment_pause(
+        database, registry, identity, package_id, fault, read_fault, storage, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn change_request_service_with_attachment_pause(
+    database: &TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    package_id: &str,
+    fault: Option<MutationFaultPoint>,
+    read_fault: Option<registry_breg::postgres::ReadFaultPoint>,
+    storage: registry_breg::attachment_storage::AttachmentStorage,
+    pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+) -> Arc<HttpService> {
+    change_request_service_with_attachment_verification(
+        database,
+        registry,
+        identity,
+        package_id,
+        fault,
+        read_fault,
+        storage,
+        pause,
+        registry_breg::attachment_verification::AttachmentVerification::Disabled,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn change_request_service_with_attachment_verification(
+    database: &TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    package_id: &str,
+    fault: Option<MutationFaultPoint>,
+    read_fault: Option<registry_breg::postgres::ReadFaultPoint>,
+    storage: registry_breg::attachment_storage::AttachmentStorage,
+    pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    verification: registry_breg::attachment_verification::AttachmentVerification,
+) -> Arc<HttpService> {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(package_id).expect("lock key derives");
     let audit = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
@@ -3159,7 +4863,7 @@ fn change_request_service(
         CursorCodec::new(Zeroizing::new(vec![0x49; 32]), Duration::from_secs(300))
             .expect("cursor codec builds"),
     );
-    let reads = Arc::new(PostgresRecordReadService::new(
+    let reads = PostgresRecordReadService::new(
         pool.clone(),
         registry.clone(),
         identity.clone(),
@@ -3167,7 +4871,18 @@ fn change_request_service(
         Duration::from_secs(2),
         audit.clone(),
         cursors.clone(),
-    ));
+    );
+    let reads = reads
+        .with_attachment_storage(storage.clone())
+        .with_attachment_verification(verification.clone());
+    let reads = match pause {
+        Some((entered, resume)) => reads.with_attachment_metadata_pause_for_test(entered, resume),
+        None => reads,
+    };
+    let reads = Arc::new(match read_fault {
+        Some(fault) => reads.with_fault_for_test(fault),
+        None => reads,
+    });
     let revisions = Arc::new(PostgresRevisionReadService::new(
         pool.clone(),
         registry.clone(),
@@ -3184,6 +4899,9 @@ fn change_request_service(
         Duration::from_secs(2),
         audit,
     );
+    let mutations = mutations
+        .with_attachment_storage(storage)
+        .with_attachment_verification(verification);
     let mutations = match fault {
         Some(fault) => mutations.with_fault_for_test(fault),
         None => mutations,

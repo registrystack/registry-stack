@@ -683,3 +683,68 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
         "a limit the JavaScript number boundary cannot carry exactly must be refused"
     );
 }
+
+#[test]
+fn attachment_schema_capabilities_are_preserved_without_granting_json_writes() {
+    let mut source = fixture();
+    let descriptor = json!({
+        "requiredForSubmit": true, "maximumBytes": 1024, "contentTypes": ["application/pdf"],
+        "verification": {"statusField": "verificationStatus", "allowedStatuses": ["notRequired", "approved"],
+            "pendingOrRejectedBlocks": ["download", "submit"]},
+        "remove": {"method": "DELETE", "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
+            "accessProfile": "company-writer", "authorizationOperation": "patch", "queryParameters": [],
+            "body": "none", "ifMatchRequired": true, "idempotencyKeyRequired": true, "requiredState": "draft"},
+        "upload": {"method": "PATCH", "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
+            "accessProfile": "company-writer", "authorizationOperation": "patch", "queryParameters": [],
+            "body": "binary", "ifMatchRequired": true, "idempotencyKeyRequired": true, "requiredState": "draft"},
+        "download": {"method": "GET", "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
+            "accessProfile": "company-writer", "authorizationOperation": "get", "queryParameters": ["proposalVersion"],
+            "body": "none", "ifMatchRequired": false, "idempotencyKeyRequired": false, "proposalVersionRequired": true}
+    });
+    let mut slot = field("supporting-file", "supporting-file");
+    slot["required"] = json!(false);
+    slot["nullable"] = json!(true);
+    slot["readOnly"] = json!(true);
+    slot["schema"] = json!({"anyOf": [{"type": "object"}, {"type": "null"}], "readOnly": true,
+        "x-registry-fieldKind": "attachment", "x-registry-attachment": descriptor});
+    for operation in source["operations"].as_array_mut().unwrap() {
+        operation["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(slot.clone());
+        operation["readableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("supporting-file"));
+    }
+    let metadata = parse(&source);
+    let slot = &metadata.operations()[1].fields()[1];
+    assert!(slot.read_only());
+    assert!(!slot.required());
+    assert!(!slot.removable());
+    assert_eq!(slot.schema()["x-registry-attachment"], descriptor);
+    let BRegDirectWrite::Patch(patch) = metadata
+        .select_direct_write("records.company.patch", "company-writer")
+        .unwrap()
+    else {
+        panic!("patch binding")
+    };
+    assert!(!patch.writable_api_names().contains("supporting-file"));
+    let BRegDirectWrite::Create(create) = metadata
+        .select_direct_write("records.company.create", "company-writer")
+        .unwrap()
+    else {
+        panic!("create binding")
+    };
+    assert!(!create.writable_api_names().contains("supporting-file"));
+    source["operations"][1]["patchWritableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("supporting-file"));
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&source).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
+}

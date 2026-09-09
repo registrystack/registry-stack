@@ -41,11 +41,33 @@ fn operation(
     } else {
         &empty
     };
+    // Attachment authority uses the patch grant but never authorizes JSON Patch slot values.
+    let create = create
+        .iter()
+        .filter(|id| !surface.entity.attachments.contains_key(*id))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let patch = patch
+        .iter()
+        .filter(|id| !surface.entity.attachments.contains_key(*id))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let attachment_writable = if surface.route.operation == Operation::Patch {
+        profile
+            .writable_fields
+            .iter()
+            .filter(|id| surface.entity.attachments.contains_key(*id))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    } else {
+        BTreeSet::new()
+    };
     let fields = surface
         .readable_fields
         .iter()
-        .chain(create)
-        .chain(patch)
+        .chain(&create)
+        .chain(&patch)
+        .chain(&attachment_writable)
         .cloned()
         .collect::<BTreeSet<_>>();
     let query = surface
@@ -64,7 +86,7 @@ fn operation(
         "entityLabel": entity_label(service, surface),
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": title_fields(service, surface),
-        "fields": fields.iter().filter_map(|id| field(service, surface, surfaces, id, patch)).collect::<Vec<_>>(),
+        "fields": fields.iter().filter_map(|id| field(service, surface, surfaces, id, &patch)).collect::<Vec<_>>(),
         "readableFields": surface.readable_fields,
         "createWritableFields": create,
         "patchWritableFields": patch,
@@ -76,6 +98,69 @@ fn operation(
         value["readPath"] = json!({"id": path.id, "label": humanize(&path.id)});
     }
     value
+}
+
+fn attachment_request(surface: &AuthorizedSurface<'_>, slot_id: &str, method: &str) -> Value {
+    let mut request = json!({
+        "method": method,
+        "path": crate::artifacts::attachment_path(surface.entity, slot_id),
+        "accessProfile": surface.context.selected_profile(),
+        "authorizationOperation": if method == "GET" { "get" } else { "patch" },
+        "queryParameters": if method == "GET" { vec!["proposalVersion"] } else { Vec::<&str>::new() },
+        "body": if method == "PATCH" { "binary" } else { "none" },
+        "ifMatchRequired": method != "GET",
+        "idempotencyKeyRequired": method != "GET",
+    });
+    if method == "GET" {
+        request["proposalVersionRequired"] = json!(true);
+    } else {
+        request["requiredState"] = json!("draft");
+    }
+    request
+}
+
+pub(super) fn append_attachment_openapi(
+    service: &HttpService,
+    surfaces: &[AuthorizedSurface<'_>],
+    paths: &mut Map<String, Value>,
+) {
+    for surface in surfaces
+        .iter()
+        .filter(|surface| surface.read_path.is_none() && surface.context.principal().is_some())
+    {
+        let profile = &surface.entity.access_profiles[surface.context.selected_profile()];
+        for slot in surface.entity.attachments.values() {
+            let methods = match surface.route.operation {
+                Operation::Get if surface.readable_fields.contains(&slot.id) => &["get"][..],
+                Operation::Patch if profile.writable_fields.contains(&slot.id) => {
+                    &["patch", "delete"][..]
+                }
+                _ => continue,
+            };
+            let path = paths
+                .entry(crate::artifacts::attachment_path(surface.entity, &slot.id))
+                .or_insert_with(|| json!({}));
+            for method in methods {
+                path[*method] = crate::artifacts::openapi_attachment_operation(
+                    OpenApiOperationSpec {
+                        registry_identifier: service.registry.registry_id(),
+                        route: surface.route,
+                        entity: surface.entity,
+                        response_entity: surface.entity,
+                        query: service.registry.queries(),
+                        schema_ref: &surface.entity.id,
+                        request_schema_ref: &surface.entity.id,
+                        readable_fields: Some(&surface.readable_fields),
+                        access_profiles: OpenApiAccessProfiles::Selected(
+                            surface.context.selected_profile(),
+                        ),
+                    },
+                    slot,
+                    method,
+                );
+            }
+        }
+    }
 }
 
 fn required_capabilities(operation: Operation) -> Vec<&'static str> {
@@ -103,6 +188,29 @@ fn field(
     patch: &BTreeSet<String>,
 ) -> Option<Value> {
     let entity = surface.response_entity;
+    if let Some(slot) = entity.attachments.get(id) {
+        let mut schema = crate::artifacts::attachment_metadata_schema(slot);
+        let capability = &mut schema["x-registry-attachment"];
+        for candidate in surfaces.iter().filter(|candidate| {
+            candidate.context.principal().is_some()
+                && candidate.entity.id == entity.id
+                && candidate.read_path.is_none()
+                && candidate.context.selected_profile() == surface.context.selected_profile()
+        }) {
+            let profile = &candidate.entity.access_profiles[candidate.context.selected_profile()];
+            if candidate.route.operation == Operation::Get && candidate.readable_fields.contains(id)
+            {
+                capability["download"] = attachment_request(candidate, id, "GET");
+            }
+            if candidate.route.operation == Operation::Patch && profile.writable_fields.contains(id)
+            {
+                capability["upload"] = attachment_request(candidate, id, "PATCH");
+                capability["remove"] = attachment_request(candidate, id, "DELETE");
+            }
+        }
+        return Some(json!({"id": id, "apiName": id, "label": humanize(id),
+            "schema": schema, "required": false, "nullable": true, "readOnly": true, "removable": false}));
+    }
     let logical = logical_field(entity, id)?;
     let stored = entity
         .stored_fields

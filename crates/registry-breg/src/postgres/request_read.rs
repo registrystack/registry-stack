@@ -112,6 +112,15 @@ pub(super) async fn erased_terminal_request_record(
         )),
         request_presence: None,
     };
+    annotate_attachment_metadata(
+        transaction,
+        entity,
+        request,
+        record_uuid,
+        header.proposal_version,
+        &mut record.data,
+    )
+    .await?;
     if !request.context.request_presence().is_empty() {
         annotate_target_presence(
             transaction,
@@ -154,6 +163,15 @@ async fn annotate_request_records(
         let header = crate::request_store::load_header(transaction, &entity.id, record_uuid, false)
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
+        annotate_attachment_metadata(
+            transaction,
+            entity,
+            request,
+            record_uuid,
+            header.proposal_version,
+            &mut record.data,
+        )
+        .await?;
         if header.current_proposal_erased && header.is_terminal() {
             let history =
                 retained_history(transaction, registry, request, claims, entity, record_uuid)
@@ -253,6 +271,209 @@ async fn annotate_request_records(
             metadata.insert("application".to_owned(), application_metadata);
         }
         record.request = Some(Value::Object(metadata));
+    }
+    Ok(())
+}
+
+/// Exact request GET authorization is established before this helper. An owner
+/// retains access to retained versions; a reviewer or applier must additionally
+/// satisfy one complete current grant against the requested frozen targets.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn attachment_version_is_authorized(
+    transaction: &Transaction<'_>,
+    registry: &CompiledRegistry,
+    expected: &ExpectedRegistryIdentity,
+    audit_profile: &AuditProfile,
+    request: &RecordReadRequest,
+    claims: &ClaimContext,
+    entity: &CompiledEntity,
+    record_id: Uuid,
+    proposal_version: i64,
+) -> Result<bool, ReadServiceError> {
+    let header = crate::request_store::load_header(transaction, &entity.id, record_id, false)
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    let proposal = transaction.query_opt(
+        "SELECT snapshot FROM registry_internal.registry_request_proposals WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3 AND erased_at IS NULL",
+        &[&entity.id, &record_id, &proposal_version],
+    ).await.map_err(|_| ReadServiceError::Unavailable)?;
+    let unsubmitted = proposal.is_none()
+        && proposal_version == header.proposal_version
+        && !header.current_proposal_erased
+        && matches!(header.state.as_str(), "draft" | "canceled");
+    if proposal.is_none() && !unsubmitted {
+        return Ok(false);
+    }
+    let principal = claims.principal().ok_or(ReadServiceError::Unavailable)?;
+    let actor = audit_profile
+        .key_hasher()
+        .audit_reference_hash("breg-request-actor-v1", &expected.database_id, principal)
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    if actor == header.owner_reference {
+        return Ok(true);
+    }
+    let profile = entity
+        .access_profiles
+        .get(request.context.selected_profile())
+        .ok_or(ReadServiceError::Unavailable)?;
+    let target_role = profile.operations.iter().any(|operation| {
+        matches!(
+            operation,
+            Operation::ApproveRequest
+                | Operation::RejectRequest
+                | Operation::RequestRevision
+                | Operation::ApplyRequest
+        )
+    });
+    if !target_role {
+        // A separately authored direct GET grant has already passed its own
+        // typed row boundary. It does not acquire any review/apply powers.
+        return Ok(true);
+    }
+    let Some(row) = proposal else {
+        return Ok(false);
+    };
+    let snapshot: Value = row.try_get(0).map_err(|_| ReadServiceError::Unavailable)?;
+    let proposal: ProposalSnapshot =
+        serde_json::from_value(snapshot).map_err(|_| ReadServiceError::Unavailable)?;
+    if i64::from(proposal.version().get()) != proposal_version {
+        return Err(ReadServiceError::Unavailable);
+    }
+    let targets =
+        crate::request_store::load_targets(transaction, &entity.id, record_id, proposal_version)
+            .await
+            .map_err(|_| ReadServiceError::Unavailable)?;
+    validate_frozen_targets(&proposal, &targets).map_err(|_| ReadServiceError::Unavailable)?;
+    for action in request.context.request_actions().iter().filter(|action| {
+        matches!(
+            action.operation(),
+            Operation::ApproveRequest
+                | Operation::RejectRequest
+                | Operation::RequestRevision
+                | Operation::ApplyRequest
+        )
+    }) {
+        if attachment_targets_are_authorized(
+            registry, expected, claims, entity, record_id, &actor, &proposal, &targets, action,
+        )? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attachment_targets_are_authorized(
+    registry: &CompiledRegistry,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ClaimContext,
+    entity: &CompiledEntity,
+    record_id: Uuid,
+    actor: &str,
+    proposal: &ProposalSnapshot,
+    targets: &[RequestTargetSnapshot],
+    action: &VerifiedRequestAction,
+) -> Result<bool, ReadServiceError> {
+    for effect in proposal.effects() {
+        let target_entity_id = effect.target().entity_id().as_str();
+        let target_record = effect
+            .target()
+            .existing_record_id()
+            .or_else(|| effect.target().reserved_record_id())
+            .ok_or(ReadServiceError::Unavailable)?;
+        let target_id = parse_uuid(target_record.as_str())?;
+        let target = targets
+            .iter()
+            .find(|target| target.entity_id == target_entity_id && target.record_id == target_id)
+            .ok_or(ReadServiceError::Unavailable)?;
+        let Some(authority) = action
+            .target_authority()
+            .iter()
+            .find(|authority| authority.target_entity_id() == target_entity_id)
+        else {
+            return Ok(false);
+        };
+        let binding = ChangeRequestTargetBinding {
+            request_entity_id: entity.id.clone(),
+            request_id: record_id,
+            proposal_version: i64::from(proposal.version().get()),
+            actor_reference: actor.to_owned(),
+            contract_fingerprint: proposal.contract_fingerprint().as_str().to_owned(),
+            effect_digest: proposal.effect_digest().as_str().to_owned(),
+            active_package_revision: expected.package_revision.clone(),
+            effect_id: effect.id().as_str().to_owned(),
+            target_entity_id: target_entity_id.to_owned(),
+            target_record_id: target_id,
+            operation: effect.operation(),
+            fields: effect
+                .field_changes()
+                .iter()
+                .map(|change| change.field().as_str().to_owned())
+                .collect(),
+            expected_revision: target.expected_revision,
+        };
+        let review_stage = if action.operation() == Operation::ApplyRequest {
+            None
+        } else {
+            let Some(stage) = action.review_stage() else {
+                return Ok(false);
+            };
+            Some(stage)
+        };
+        let target_entity = registry
+            .entities()
+            .get(target_entity_id)
+            .ok_or(ReadServiceError::Unavailable)?;
+        if ChangeRequestTargetContext::authorize_retained_attachment_rows(
+            registry,
+            claims,
+            review_stage,
+            row_boundaries(authority)?,
+            binding,
+            target_entity,
+            target.before.as_ref(),
+            &target.after,
+            target_id,
+        )
+        .is_err()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn annotate_attachment_metadata(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    request: &RecordReadRequest,
+    record_id: Uuid,
+    proposal_version: i64,
+    data: &mut Map<String, Value>,
+) -> Result<(), ReadServiceError> {
+    let selected = request
+        .selected_fields
+        .iter()
+        .filter(|field| entity.attachments.contains_key(*field))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if selected.is_empty() {
+        return Ok(());
+    }
+    let metadata = crate::attachment_store::metadata_for_read(
+        transaction,
+        &entity.id,
+        record_id,
+        proposal_version,
+        &selected,
+    )
+    .await
+    .map_err(|_| ReadServiceError::Unavailable)?;
+    for slot in selected {
+        data.insert(
+            slot.clone(),
+            metadata.get(&slot).cloned().unwrap_or(Value::Null),
+        );
     }
     Ok(())
 }

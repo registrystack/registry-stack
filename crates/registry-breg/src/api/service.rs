@@ -28,11 +28,25 @@ use crate::record_profile::RecordRepresentation;
 
 pub type ServiceFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct HeldReadResponse {
     body: Vec<u8>,
     content_type: ReadResponseContentType,
     strong_etag: Option<Vec<u8>>,
+}
+
+impl fmt::Debug for HeldReadResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HeldReadResponse")
+            .field("body_bytes", &self.body.len())
+            .field("content_type", &self.content_type)
+            .field(
+                "strong_etag",
+                &self.strong_etag.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 impl HeldReadResponse {
@@ -56,6 +70,32 @@ impl HeldReadResponse {
 
     pub fn from_geojson(value: &Value) -> Result<Self, ReadServiceError> {
         Self::from_value(value, ReadResponseContentType::GeoJson)
+    }
+
+    /// Hold complete, integrity-checked attachment bytes until the audit gate.
+    pub fn from_attachment(body: Vec<u8>, content_type: String) -> Result<Self, ReadServiceError> {
+        let Some((kind, subtype)) = content_type.split_once('/') else {
+            return Err(ReadServiceError::Unavailable);
+        };
+        if ![kind, subtype].into_iter().all(|part| {
+            !part.is_empty()
+                && part.len() <= 127
+                && part.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(
+                            byte,
+                            b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-'
+                        )
+                })
+        }) {
+            return Err(ReadServiceError::Unavailable);
+        }
+        Ok(Self {
+            body,
+            content_type: ReadResponseContentType::Binary(content_type),
+            strong_etag: None,
+        })
     }
 
     fn from_value(
@@ -82,7 +122,7 @@ impl HeldReadResponse {
     }
 
     #[must_use]
-    pub fn content_type(&self) -> &'static str {
+    pub fn content_type(&self) -> &str {
         self.content_type.as_str()
     }
 
@@ -92,19 +132,21 @@ impl HeldReadResponse {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ReadResponseContentType {
     Json,
     JsonLd,
     GeoJson,
+    Binary(String),
 }
 
 impl ReadResponseContentType {
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &str {
         match self {
             Self::Json => "application/json",
             Self::JsonLd => "application/ld+json",
             Self::GeoJson => "application/geo+json",
+            Self::Binary(content_type) => content_type,
         }
     }
 }
@@ -752,6 +794,16 @@ pub trait RecordReadService: Send + Sync {
         request: RecordReadRequest,
     ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>>;
 
+    /// Download one exact retained request proposal attachment under current GET authority.
+    fn attachment(
+        &self,
+        _request: RecordReadRequest,
+        _slot_id: String,
+        _proposal_version: u32,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        Box::pin(async { Err(ReadServiceError::Unavailable) })
+    }
+
     fn list(
         &self,
         request: RecordReadRequest,
@@ -890,5 +942,34 @@ impl HttpService {
     pub fn with_snapshots(mut self, snapshots: Arc<dyn SnapshotReadService>) -> Self {
         self.snapshots = Some(snapshots);
         self
+    }
+}
+
+#[cfg(test)]
+mod attachment_response_tests {
+    use super::HeldReadResponse;
+
+    #[test]
+    fn attachment_bytes_remain_exact_and_content_type_cannot_inject_headers() {
+        let bytes = vec![0, 255, 13, 10, 1];
+        let held =
+            HeldReadResponse::from_attachment(bytes.clone(), "application/octet-stream".to_owned())
+                .unwrap();
+        assert_eq!(held.body(), bytes);
+        assert_eq!(held.content_type(), "application/octet-stream");
+        for value in [
+            "text/plain\r\nX-Injected: yes",
+            "text/html; charset=utf-8",
+            "image/*",
+            "plain",
+            "text/plain/extra",
+            "/plain",
+            "text/",
+        ] {
+            assert!(
+                HeldReadResponse::from_attachment(vec![1], value.to_owned()).is_err(),
+                "invalid content type accepted"
+            );
+        }
     }
 }

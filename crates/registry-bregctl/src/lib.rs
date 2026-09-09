@@ -503,6 +503,15 @@ enum RequestRetentionCommand {
     DryRun(RequestRetentionExactArgs),
     /// Erase eligible payload detail for one exact request proposal version.
     Erase(RequestRetentionExactArgs),
+    /// Retry deletion of unreferenced external attachments without erasing request detail.
+    CleanupAttachments(AttachmentCleanupArgs),
+}
+
+#[derive(Debug, Args)]
+struct AttachmentCleanupArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, visible_alias = "config", value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -1329,6 +1338,15 @@ struct RequestRetentionEraseSuccessReport {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AttachmentCleanupSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: registry_breg::request_retention::AttachmentCleanup,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AuditVerifySuccessReport {
     ok: bool,
     command: &'static str,
@@ -1848,6 +1866,29 @@ where
                     }
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
+                RequestRetentionCommand::CleanupAttachments(args) => {
+                    match request_retention::cleanup_attachments(&args.runtime_config) {
+                        Ok(outcome) => write_attachment_cleanup_success(
+                            &AttachmentCleanupSuccessReport {
+                                ok: true,
+                                command: "request-retention cleanup-attachments",
+                                outcome,
+                            },
+                            format,
+                            stdout,
+                            stderr,
+                        ),
+                        Err(error) => write_failure(
+                            &request_retention_failure(
+                                "request-retention cleanup-attachments",
+                                error,
+                            ),
+                            format,
+                            stdout,
+                            stderr,
+                        ),
+                    }
+                }
             };
         }
         Command::Audit(args) => {
@@ -1941,6 +1982,10 @@ fn request_retention_failure(
         RequestRetentionCliError::RetainMode => (
             "request_retention.mode.retain",
             "the request retention policy does not permit operator erasure",
+        ),
+        RequestRetentionCliError::AttachmentStorageBindingMismatch => (
+            "request_retention.attachment_storage.binding_mismatch",
+            "restore the original attachment storage binding and verification policy before retrying; the registry pin, retained content, or deletion tombstones still require them",
         ),
     };
     FailureReport {
@@ -9614,6 +9659,35 @@ fn write_request_retention_dry_run_success(
     write_result(result, stderr)
 }
 
+fn write_attachment_cleanup_success(
+    report: &AttachmentCleanupSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        render_report(
+            "Retried unreferenced attachment cleanup.",
+            &[
+                (
+                    "pending external deletions",
+                    report.outcome.pending_external_deletions.to_string(),
+                ),
+                (
+                    "external deletion tombstones",
+                    report.outcome.external_deletion_tombstones.to_string(),
+                ),
+            ],
+            stdout,
+        )
+    };
+    write_result(result, stderr)
+}
+
 fn write_request_retention_erase_success(
     report: &RequestRetentionEraseSuccessReport,
     format: OutputFormat,
@@ -9984,6 +10058,53 @@ fn write_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_retention_cleanup_accepts_config_without_request_scope() {
+        for flag in ["--runtime-config", "--config"] {
+            let parsed = Cli::try_parse_from([
+                "bregctl",
+                "request-retention",
+                "cleanup-attachments",
+                flag,
+                "/tmp/runtime.yaml",
+            ])
+            .unwrap();
+            assert!(matches!(
+                parsed.command,
+                Command::RequestRetention(RequestRetentionArgs {
+                    command: RequestRetentionCommand::CleanupAttachments(_)
+                })
+            ));
+        }
+        let report = AttachmentCleanupSuccessReport {
+            ok: true,
+            command: "request-retention cleanup-attachments",
+            outcome: registry_breg::request_retention::AttachmentCleanup {
+                pending_external_deletions: 2,
+                external_deletion_tombstones: 3,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(report).unwrap(),
+            serde_json::json!({
+                "ok":true, "command":"request-retention cleanup-attachments",
+                "pendingExternalDeletions":2, "externalDeletionTombstones":3,
+            })
+        );
+    }
+
+    #[test]
+    fn request_retention_binding_diagnostic_identifies_recovery() {
+        let report = request_retention_failure(
+            "request-retention erase",
+            RequestRetentionCliError::AttachmentStorageBindingMismatch,
+        );
+        let value = serde_json::to_value(report).unwrap();
+        let encoded = value.to_string();
+        assert!(encoded.contains("request_retention.attachment_storage.binding_mismatch"));
+        assert!(encoded.contains("restore the original attachment storage binding"));
+    }
 
     use registry_breg::compile_project;
 

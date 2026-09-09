@@ -1,0 +1,314 @@
+{
+  "apiVersion": "registry.registrystack.org/v1alpha1",
+  "kind": "RegistryProject",
+  "registry": {
+    "id": "request-attachments",
+    "canonicalBaseIri": "https://request-attachments.example.test",
+    "version": "0.1.0",
+    "defaultLanguage": "en"
+  },
+  "package": {
+    "environment": "local",
+    "instanceId": "request-attachments-local",
+    "sequence": 1,
+    "sourceRevision": "request-attachments-acceptance-0.1.0"
+  },
+  "entities": [
+    {
+      "id": "record",
+      "primaryDataset": "request-attachments",
+      "route": "records",
+      "mutationMode": "mutable",
+      "changeControl": {
+        "requiredFor": [
+          "patch"
+        ]
+      },
+      "fields": [
+        {
+          "id": "label",
+          "type": "string",
+          "maxLength": 64,
+          "required": true,
+          "classification": "internal"
+        }
+      ]
+    },
+    {
+      "id": "correction-request",
+      "primaryDataset": "request-attachments",
+      "route": "correction-requests",
+      "mutationMode": "mutable",
+      "classification": "internal",
+      "fields": [
+        {
+          "id": "record",
+          "type": "reference",
+          "target": "record",
+          "required": true,
+          "classification": "internal"
+        },
+        {
+          "id": "label",
+          "type": "string",
+          "maxLength": 64,
+          "required": true,
+          "classification": "internal"
+        }
+      ],
+      "attachments": [
+        {
+          "id": "supporting-file",
+          "required": true,
+          "maximumBytes": 1048576,
+          "contentTypes": [
+            "application/pdf"
+          ],
+          "classification": "restricted"
+        }
+      ],
+      "changeRequest": {
+        "effects": [
+          {
+            "id": "correct-label",
+            "target": {
+              "fromField": "record"
+            },
+            "operation": "patch",
+            "set": {
+              "label": {
+                "fromField": "label"
+              }
+            }
+          }
+        ],
+        "review": {
+          "stages": [
+            {
+              "id": "review",
+              "approvals": 1
+            }
+          ]
+        },
+        "retention": {
+          "mode": "operator_erase"
+        }
+      }
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "operator",
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "attachments:operate"
+      ],
+      "grants": [
+        {
+          "entity": "record",
+          "operations": [
+            "create",
+            "get",
+            "list"
+          ],
+          "readableFields": [
+            "label"
+          ],
+          "writableFields": [
+            "label"
+          ],
+          "rowBoundaries": []
+        }
+      ],
+      "requiredPurposes": [
+        "attachment-acceptance"
+      ]
+    },
+    {
+      "id": "owner",
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "attachments:submit"
+      ],
+      "grants": [
+        {
+          "entity": "correction-request",
+          "operations": [
+            "create",
+            "patch",
+            "get",
+            "list",
+            "submit_request",
+            "cancel_request"
+          ],
+          "readableFields": [
+            "record",
+            "label",
+            "supporting-file"
+          ],
+          "writableFields": [
+            "record",
+            "label",
+            "supporting-file"
+          ],
+          "rowBoundaries": [],
+          "requestVisibility": "owner"
+        }
+      ],
+      "requiredPurposes": [
+        "attachment-acceptance"
+      ]
+    },
+    {
+      "id": "other-owner",
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "attachments:submit"
+      ],
+      "grants": [
+        {
+          "entity": "correction-request",
+          "operations": [
+            "create",
+            "patch",
+            "get",
+            "list",
+            "submit_request",
+            "cancel_request"
+          ],
+          "readableFields": [
+            "record",
+            "label",
+            "supporting-file"
+          ],
+          "writableFields": [
+            "record",
+            "label",
+            "supporting-file"
+          ],
+          "rowBoundaries": [],
+          "requestVisibility": "owner"
+        }
+      ],
+      "requiredPurposes": [
+        "attachment-acceptance"
+      ]
+    },
+    {
+      "id": "reviewer",
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "attachments:review"
+      ],
+      "grants": [
+        {
+          "entity": "correction-request",
+          "operations": [
+            "get",
+            "approve_request",
+            "reject_request",
+            "request_revision"
+          ],
+          "readableFields": [
+            "record",
+            "label",
+            "supporting-file"
+          ],
+          "writableFields": [],
+          "rowBoundaries": [],
+          "reviewStages": [
+            {
+              "stage": "review",
+              "targets": [
+                {
+                  "entity": "record",
+                  "readableFields": [
+                    "label"
+                  ],
+                  "rowBoundaries": []
+                },
+                {
+                  "entity": "correction-request",
+                  "readableFields": [
+                    "supporting-file"
+                  ],
+                  "rowBoundaries": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "requiredPurposes": [
+        "attachment-acceptance"
+      ]
+    },
+    {
+      "id": "applier",
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "attachments:apply"
+      ],
+      "grants": [
+        {
+          "entity": "correction-request",
+          "operations": [
+            "get",
+            "apply_request"
+          ],
+          "readableFields": [
+            "record",
+            "label",
+            "supporting-file"
+          ],
+          "writableFields": [],
+          "rowBoundaries": [],
+          "applyTargets": [
+            {
+              "entity": "record",
+              "rowBoundaries": []
+            }
+          ]
+        }
+      ],
+      "requiredPurposes": [
+        "attachment-acceptance"
+      ]
+    }
+  ],
+  "manifestProjection": {
+    "accessProfile": "operator",
+    "classificationCeiling": "internal",
+    "catalog": {
+      "baseUrl": "https://request-attachments.example.test",
+      "title": "Synthetic Request Attachment Catalog",
+      "publisher": {
+        "id": "request-attachments-authority",
+        "name": "Synthetic Request Attachment Authority",
+        "iri": "https://request-attachments.example.test/authority"
+      }
+    },
+    "datasets": [
+      {
+        "id": "request-attachments",
+        "title": "Synthetic Request Attachment Registry",
+        "description": "Synthetic records and governed correction requests for executable attachment acceptance."
+      }
+    ],
+    "dataServices": [
+      {
+        "id": "request-attachments-api",
+        "title": "Request Attachment API",
+        "endpointUrl": "https://request-attachments.example.test",
+        "servesDatasets": [
+          "request-attachments"
+        ]
+      }
+    ],
+    "publicService": {
+      "id": "request-attachments-service",
+      "title": "Synthetic Correction Service"
+    },
+    "distributions": []
+  }
+}

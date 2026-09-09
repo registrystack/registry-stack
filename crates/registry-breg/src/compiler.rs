@@ -50,6 +50,8 @@ use crate::physical_names::{
     hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
 };
 
+mod attachments;
+
 pub const AUTHORING_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
 pub const MAX_BATCH_ITEMS: u16 = 100;
 pub const MAX_BATCH_BYTES: u32 = 2_097_152;
@@ -1800,6 +1802,7 @@ fn validate_entities(
             _ => {}
         }
         validate_entity_fields(entity, entities, errors);
+        attachments::validate(entity, errors);
         validate_geojson(entity, errors);
         validate_derived(entity, errors);
         validate_logical_names(entity, errors);
@@ -2973,6 +2976,7 @@ fn validate_profiles(
                 "owner-scoped request visibility requires an authenticated change-request profile with get or list access",
             ));
         }
+        attachments::validate_profile(entity, access, errors);
         validate_spatial_queries(access, entity, &fields, errors);
         let mut read_processed = access.readable_fields.clone();
         read_processed.extend(access.filterable_fields.iter().cloned());
@@ -2985,11 +2989,14 @@ fn validate_profiles(
                 .map(|boundary| boundary.field.clone()),
         );
         if read_processed.iter().any(|field| {
-            !fields.contains_key(field.as_str()) && !derived.contains_key(field.as_str())
-        }) || stored_processed
-            .iter()
-            .any(|field| field != "id" && !fields.contains_key(field.as_str()))
-        {
+            !fields.contains_key(field.as_str())
+                && !derived.contains_key(field.as_str())
+                && !entity.attachments.iter().any(|slot| &slot.id == field)
+        }) || stored_processed.iter().any(|field| {
+            field != "id"
+                && !fields.contains_key(field.as_str())
+                && !entity.attachments.iter().any(|slot| &slot.id == field)
+        }) {
             errors.push(Diagnostic::error(
                 "access_profile.field.unknown",
                 "entities[].accessProfiles[]",
@@ -4416,6 +4423,7 @@ fn compile_entities(
                 }),
                 change_request: None,
                 fields,
+                attachments: attachments::compile(source),
                 constraints,
                 indexes,
                 access_profiles: profiles,
@@ -5161,6 +5169,7 @@ fn query_operation(
     let mut projection_fields = profile
         .readable_fields
         .iter()
+        .filter(|field| !entity.attachments.contains_key(field.as_str()))
         .filter(|field| !stored_only || entity.fields.contains_key(field.as_str()))
         .cloned()
         .collect::<Vec<String>>();

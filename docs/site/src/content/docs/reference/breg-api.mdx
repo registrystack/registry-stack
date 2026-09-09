@@ -413,6 +413,66 @@ the application policy with its allowed dispositions and queue reasons.
     products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
     products/breg/acceptance/person-name-change-rhai/registry.yaml. */}
 
+### Request attachments
+
+A request entity can declare up to eight `attachments[]` slots. Each slot holds
+one file and declares `id`, `required`, `maximumBytes` (1 to 16,777,216),
+`contentTypes` (concrete lowercase media types), and `classification`. An
+incomplete draft is allowed; submission refuses a missing required slot with
+`412 Precondition Failed`.
+
+| Method and route | Request | Authority and preconditions |
+| --- | --- | --- |
+| `PATCH /v1/records/{route}/{record_id}/attachments/{slot_id}` | Raw nonempty bytes with an allowed `Content-Type` | Draft owner, selected profile's request `patch` grant and slot `writableFields`, row boundary, record `If-Match`, `Idempotency-Key` |
+| `DELETE /v1/records/{route}/{record_id}/attachments/{slot_id}` | Empty body | Same as upload |
+| `GET /v1/records/{route}/{record_id}/attachments/{slot_id}?proposalVersion=N` | No body | Authenticated current request GET authority for the exact proposal version and slot `readableFields` |
+
+All three accept `accessProfile`. Discover concrete slot paths from caller-filtered
+OpenAPI or the field schema's `x-registry-attachment` extension in `/v1/registry`.
+Upload and removal return the ordinary record mutation response. Refetch the
+request to obtain its updated attachment metadata and record ETag. A slot is
+engine-owned and cannot be set by ordinary create, JSON Patch, or request effects.
+
+A selected slot appears under `domainData` using its slot ID verbatim. It is null
+when empty. Filled metadata contains `slotId`, `proposalVersion`, `filled`,
+`erased`, `byteSize`, `sha256`, `contentType`, `uploadedAt`, `uploadedBy`, and
+`verificationStatus`.
+BReg computes size and SHA-256 from the received bytes. `requiredForSubmit` in
+discovery is independent of the ordinary create-field `required` flag. Current
+upload limits and allowed media types do not rewrite retained metadata: older
+proposals can describe content accepted under an earlier slot policy.
+
+`verificationStatus` is `notRequired` when external verification is disabled.
+When configured, an upload is quarantined as `pending` until the asynchronous
+verifier returns `approved` or `rejected`. Pending and rejected content cannot be
+downloaded (`404 Not Found`) and blocks submission with `412 Precondition Failed`, including a
+filled optional slot. Refetch the request to observe the result. External service
+failure leaves the status pending for retry. Replacing content requires approval
+for the exact hash, media type, and policy; an existing matching approval can be
+reused. With verification configured, submission binds the verification policy
+digest into the frozen manifest.
+
+Upload, replacement, and removal advance request concurrency state. Submission
+binds the slot manifest into proposal integrity. Revision and rebase carry slot
+references into the next draft; editing that draft preserves earlier submitted
+manifests. Downloads use the explicit proposal version, never a hash or storage
+URL. Owner, stage reviewer, and applier access use their current compiled request
+read authority, including request entries in `reviewStages[].targets[]` and
+`applyTargets`. Slot classification and field projection also apply.
+
+Downloads return complete, integrity-verified bytes with attachment disposition,
+`Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`. Hidden requests,
+slots, versions, and erased content do not become discoverable through a download.
+Erasure retains slot ID, proposal version, filled/erased state, size, and hash;
+it removes content type, verification status, and uploading actor/time from the
+projected metadata.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, AttachmentSlotSource;
+    crates/registry-breg/src/artifacts.rs, attachment_metadata_schema() and openapi_attachment_operation();
+    crates/registry-breg/src/api/metadata.rs, attachment_request();
+    crates/registry-breg/src/attachment_store.rs;
+    crates/registry-breg/src/request_workflow.rs, AttachmentManifestEntry. */}
+
 ## Immediate actions
 
 An action declared under `actions[]` applies its effects in one request. Call

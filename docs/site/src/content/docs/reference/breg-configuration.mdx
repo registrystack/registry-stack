@@ -54,6 +54,96 @@ declared field type and that the condition is valid for the event trigger.
     crates/registry-breg/src/compiler.rs;
     docs/site/scripts/configuration-reference.mjs, collectFields(). */}
 
+## Attachment storage
+
+Portable request entities declare `attachments[]`; deployment storage is selected
+only in `runtime.yaml`. Omit `attachmentStorage` or use `{kind: database}` to keep
+content in PostgreSQL without another service. The optional `kind: s3` binding
+requires `endpoint`, `bucket`, `region`, `accessKeyIdRef`, and
+`secretAccessKeyRef`. `sessionTokenRef` and `caBundleRef` are optional secret
+references. `pathStyle` defaults to true. `timeoutMilliseconds` defaults to 10,000
+and accepts 100 to 60,000. Secret references use the configured file or environment
+provider; inline credentials are refused.
+
+S3 endpoints are canonical root HTTPS URLs; numeric loopback HTTP is accepted
+for local development. Virtual-host addressing requires a DNS endpoint. Give the
+runtime permission to inspect bucket versioning and get, put, and delete objects.
+Keep bucket versioning disabled throughout operation. Enabled or suspended
+versioning is refused because a delete marker does not physically erase older
+object versions. Backup and replication expiry remain the operator's responsibility.
+
+Give each independent database a distinct `identity.databaseId`. Content deduplicates
+by SHA-256 within the database and registry's storage namespace; request
+and proposal references remain independent authorization boundaries. Erasing
+one reference preserves bytes required by another retained reference. External
+deletions are durably retried, and physical deletion is complete only after
+confirmation. Use [attachment cleanup](../../operate/breg-retention/#retry-external-attachment-cleanup)
+to retry pending external deletions independently of request retention eligibility.
+Its `pendingExternalDeletions` count covers the registry; a scoped request erasure
+separately reports `attachmentReferences`. Confirmed S3 deletions retain durable
+tombstones, reported as `externalDeletionTombstones`, so later cleanup runs can
+recheck for a delayed remote write and remove any orphan bytes. These
+rechecks never restore an erased request reference. The first stored attachment pins
+the storage and verification bindings for the database and registry. Configure both
+before that first upload. Changing either binding afterward is unsupported, even
+after content erasure; rotating secrets preserves the binding.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, activate_attachment_storage();
+    crates/registry-breg/src/attachment_storage.rs;
+    crates/registry-breg/src/attachment_store.rs. */}
+
+## External attachment verification
+
+`attachmentVerification` is an operator binding. Omit it or use `{kind: disabled}`
+to accept attachments without an external verdict. Use `kind: http` to quarantine
+uploads until a verifier approves them. Configure `endpoint`, `authorizationRef`,
+and `policyId`; `timeoutMilliseconds` defaults to 10,000 and accepts 100 to 60,000.
+The endpoint is a full HTTPS URL, with numeric loopback HTTP allowed for local
+verification. A fixed query is allowed; user information and fragments are refused.
+The token referenced by `authorizationRef` is sent as a Bearer credential.
+`policyId` is a nonsecret, 1 to 128 character visible-ASCII identifier for the
+verifier's rules generation.
+
+The asynchronous worker posts the complete file as raw bytes with its retained
+`Content-Type`, `Accept: application/json`, and lowercase digest in
+`X-Content-SHA256`. The verifier must return
+HTTP 200 with one of these closed JSON responses:
+
+```json
+{"verdict":"approved"}
+```
+
+```json
+{"verdict":"rejected"}
+```
+
+The response is bounded to 1,024 bytes. Duplicate or unknown members, invalid
+verdicts, other status codes, timeouts, and unavailable responses leave the file
+pending for retry. The transport follows no redirects and uses no ambient proxy.
+The registry enforces the verdict; the external service owns its content inspection rules.
+The request sends file bytes to that service. Configure its access and retention
+policy separately: registry erasure does not delete verifier logs or retained copies,
+and this hook provides no remote copy-deletion operation.
+
+A filled pending or rejected slot blocks both content download and request
+submission, including optional slots. Approval is reused only for the exact file
+hash, content type, and policy binding. The binding includes the endpoint and
+`policyId`; token rotation and timeout changes preserve it. Storage and verification
+configuration are pinned on the first upload, so enable verification before storing
+attachments. Changing the endpoint, policy generation, or enabled/disabled mode
+afterward is unsupported. Slot metadata reports progress without exposing the
+verifier URL or credential. Failed attempts retry automatically and emit the
+value-free operational code `attachment_verification.retry_pending`. Restore service
+availability or rotate the credential to recover from transport or authentication
+failures. Replace rejected content; reuploading identical bytes with the same
+content type reuses a retained rejection rather than requesting another verdict.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, activate_attachment_verification();
+    crates/registry-breg/src/attachment_verification.rs;
+    crates/registry-breg/src/attachment_verification_worker.rs;
+    crates/registry-breg/src/startup.rs, AttachmentVerificationRetryPending;
+    crates/registry-breg/src/attachment_store.rs. */}
+
 ## Regeneration
 
 The source schemas live under `products/breg/generated/authoring/` and

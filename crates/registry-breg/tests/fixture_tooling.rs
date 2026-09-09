@@ -1174,3 +1174,20 @@ fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contrac
         assert!(validate_fixture_journeys(changed.as_bytes(), &registry).is_err());
     }
 }
+
+#[test]
+fn attachment_profile_projection_is_valid_without_permitting_fixture_scalar_input() {
+    let project = parse_project_json(include_bytes!(
+        "../../../products/breg/acceptance/request-attachments/registry.yaml"
+    ))
+    .unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let bytes =
+        include_bytes!("../../../products/breg/acceptance/request-attachments/tests/journeys.yaml");
+    let suite = validate_fixture_journeys(bytes, &registry).unwrap();
+    assert_eq!(suite.journey_ids(), ["attachment-draft-authoring"]);
+    let mut forged: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    forged["journeys"][0]["steps"][1]["request"]["data"]["supporting-file"] =
+        serde_json::json!({"sha256": "forged"});
+    assert!(validate_fixture_journeys(&serde_json::to_vec(&forged).unwrap(), &registry).is_err());
+}

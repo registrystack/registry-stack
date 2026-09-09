@@ -29,8 +29,8 @@ WAVE = re.compile(r"^W[0-9]+$")
 PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
-ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 20))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 50))
+ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 21))
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 58))
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -40,6 +40,7 @@ ACCEPTANCE_FIXTURES = {
     "BREG-J06": ("business", "acceptance/business"),
     "BREG-J18": ("asset-registration-actions", "fixtures/asset-registration-actions"),
     "BREG-J19": ("household-contact-actions", "fixtures/household-contact-actions"),
+    "BREG-J20": ("request-attachments", "acceptance/request-attachments"),
 }
 RUST_TEST = re.compile(
     r"#\[(?:tokio::)?test(?:\([^\]]*\))?\]"
@@ -382,7 +383,7 @@ def validate_acceptance(errors: list[str]) -> set[str]:
     identifiers = unique_ids(scenarios, "acceptance matrix.scenarios", errors)
     ordered_identifiers = [item.get("id") for item in scenarios if isinstance(item, dict)]
     if ordered_identifiers != list(ACCEPTANCE_JOURNEY_IDS):
-        errors.append("acceptance matrix: must contain BREG-J01 through BREG-J19 exactly once in order")
+        errors.append("acceptance matrix: must contain BREG-J01 through BREG-J20 exactly once in order")
     for index, raw in enumerate(scenarios):
         item = as_mapping(raw, f"acceptance matrix.scenarios[{index}]", errors)
         identifier = item.get("id")

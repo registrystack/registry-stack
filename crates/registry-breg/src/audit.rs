@@ -408,6 +408,30 @@ pub(crate) async fn append_terminal_audit(
     .await
 }
 
+/// Bind an attachment outcome to its exact request proposal without treating
+/// the slot as an independently declared action.
+pub(crate) async fn append_attachment_terminal_audit(
+    transaction: &Transaction<'_>,
+    profile: &AuditProfile,
+    terminal: TerminalAudit,
+    slot: &str,
+    proposal_version: i64,
+) -> Result<(), RegistryAuditError> {
+    if terminal.entity_id.as_deref().is_none_or(str::is_empty)
+        || terminal.action_id.is_some()
+        || slot.is_empty()
+        || proposal_version <= 0
+    {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    let mut record = terminal_record(terminal);
+    record.insert(
+        "attachment".to_owned(),
+        serde_json::json!({"slotId": slot, "proposalVersion": proposal_version}),
+    );
+    append_envelope(transaction, profile, Value::Object(record)).await
+}
+
 /// Link an action commit or replay to its retained application provenance.
 /// The reference is derived by the server, never copied from an HTTP input.
 pub(crate) async fn append_action_terminal_audit(

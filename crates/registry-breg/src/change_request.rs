@@ -1855,11 +1855,11 @@ fn validate_target_fields(
     errors: &mut Vec<Diagnostic>,
 ) {
     for field in fields {
-        if !entity.fields.contains_key(field) {
+        if !entity.fields.contains_key(field) && !entity.attachments.contains_key(field) {
             errors.push(Diagnostic::error(
                 "change_request.grant.field_unknown",
                 path,
-                "a change-request grant refers to an unknown stored target field",
+                "a change-request grant refers to an unknown target field or attachment slot",
             ));
         }
     }
@@ -2102,7 +2102,7 @@ fn entity_contract_payload(entity: &CompiledEntity) -> serde_json::Value {
             (field_id.clone(), payload)
         })
         .collect::<BTreeMap<_, _>>();
-    json!({
+    let mut payload = json!({
         "id": entity.id,
         "route": entity.route,
         "mutationMode": entity.mutation_mode,
@@ -2112,7 +2112,11 @@ fn entity_contract_payload(entity: &CompiledEntity) -> serde_json::Value {
         "fields": fields,
         "constraints": entity.constraints,
         "changeControl": entity.change_control,
-    })
+    });
+    if !entity.attachments.is_empty() {
+        payload["attachments"] = json!(entity.attachments);
+    }
+    payload
 }
 
 fn authority_payload<const N: usize>(

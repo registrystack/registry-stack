@@ -10,6 +10,7 @@ fixtures=(
   acceptance/publicschema-household-change-requests
   acceptance/person-name-change-rhai
   acceptance/person-registration-rhai
+  acceptance/request-attachments
   fixtures/asset-registration-actions
   fixtures/household-contact-actions
 )

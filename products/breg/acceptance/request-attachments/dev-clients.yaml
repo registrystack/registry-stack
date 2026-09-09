@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "clients": [
+    {
+      "id": "operator",
+      "accessProfiles": [
+        "operator"
+      ],
+      "scopes": [
+        "attachments:operate"
+      ],
+      "claims": {
+        "registry_principal": "attachment-operator",
+        "registry_purpose": "attachment-acceptance"
+      }
+    },
+    {
+      "id": "owner",
+      "accessProfiles": [
+        "owner"
+      ],
+      "scopes": [
+        "attachments:submit"
+      ],
+      "claims": {
+        "registry_principal": "attachment-owner",
+        "registry_purpose": "attachment-acceptance"
+      }
+    },
+    {
+      "id": "other-owner",
+      "accessProfiles": [
+        "other-owner"
+      ],
+      "scopes": [
+        "attachments:submit"
+      ],
+      "claims": {
+        "registry_principal": "attachment-other-owner",
+        "registry_purpose": "attachment-acceptance"
+      }
+    },
+    {
+      "id": "reviewer",
+      "accessProfiles": [
+        "reviewer"
+      ],
+      "scopes": [
+        "attachments:review"
+      ],
+      "claims": {
+        "registry_principal": "attachment-reviewer",
+        "registry_purpose": "attachment-acceptance"
+      }
+    },
+    {
+      "id": "applier",
+      "accessProfiles": [
+        "applier"
+      ],
+      "scopes": [
+        "attachments:apply"
+      ],
+      "claims": {
+        "registry_principal": "attachment-applier",
+        "registry_purpose": "attachment-acceptance"
+      }
+    }
+  ]
+}

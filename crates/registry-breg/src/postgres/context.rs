@@ -1038,12 +1038,66 @@ impl ChangeRequestTargetContext {
         Ok(())
     }
 
+    /// Reauthorize retained attachment targets without issuing a context that
+    /// could be installed for approval or mutation. An older proposal may keep
+    /// its bytes after a successor narrows attachment upload policy; every
+    /// current effect, field, stage/apply grant and row boundary still applies.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn authorize_retained_attachment_rows(
+        registry: &CompiledRegistry,
+        request_claims: &ClaimContext,
+        review_stage: Option<&str>,
+        target_boundaries: Vec<RowBoundaryContext>,
+        binding: ChangeRequestTargetBinding,
+        target_entity: &crate::model::CompiledEntity,
+        before: Option<&serde_json::Map<String, Value>>,
+        after: &serde_json::Map<String, Value>,
+        record_id: Uuid,
+    ) -> Result<()> {
+        let phase = match review_stage {
+            Some(stage) => {
+                validate_required_context_value(stage)?;
+                ChangeRequestTargetPhase::Review {
+                    stage: stage.to_owned(),
+                }
+            }
+            None => ChangeRequestTargetPhase::Application,
+        };
+        let context = Self::for_compiled_with_contract_binding(
+            registry,
+            request_claims,
+            phase,
+            target_boundaries,
+            binding,
+            false,
+        )?;
+        context.authorize_rows(target_entity, before, after, record_id)
+    }
+
     fn for_compiled(
         registry: &CompiledRegistry,
         request_claims: &ClaimContext,
         phase: ChangeRequestTargetPhase,
         target_boundaries: Vec<RowBoundaryContext>,
         binding: ChangeRequestTargetBinding,
+    ) -> Result<Self> {
+        Self::for_compiled_with_contract_binding(
+            registry,
+            request_claims,
+            phase,
+            target_boundaries,
+            binding,
+            true,
+        )
+    }
+
+    fn for_compiled_with_contract_binding(
+        registry: &CompiledRegistry,
+        request_claims: &ClaimContext,
+        phase: ChangeRequestTargetPhase,
+        target_boundaries: Vec<RowBoundaryContext>,
+        binding: ChangeRequestTargetBinding,
+        require_current_contract: bool,
     ) -> Result<Self> {
         request_claims.validate()?;
         binding.validate_basic()?;
@@ -1062,7 +1116,7 @@ impl ChangeRequestTargetContext {
             .change_request
             .as_ref()
             .ok_or_else(invalid_context)?;
-        if plan.contract_fingerprint != binding.contract_fingerprint {
+        if require_current_contract && plan.contract_fingerprint != binding.contract_fingerprint {
             return Err(invalid_context());
         }
         if let Some(planner) = &plan.planner {
@@ -3091,6 +3145,7 @@ mod tests {
             manifest_projection: None,
             modules: Vec::new(),
             entities: vec![EntitySource {
+                attachments: Default::default(),
                 id: "entry".to_owned(),
                 primary_dataset: "context-test".to_owned(),
                 route: "entries".to_owned(),

@@ -21,6 +21,15 @@ pub mod action_handler;
 #[cfg(feature = "runtime")]
 pub mod api;
 pub mod artifacts;
+pub mod attachment;
+#[cfg(feature = "runtime")]
+pub mod attachment_storage;
+#[cfg(feature = "runtime")]
+pub mod attachment_store;
+#[cfg(feature = "runtime")]
+pub mod attachment_verification;
+#[cfg(feature = "runtime")]
+pub mod attachment_verification_worker;
 #[cfg(feature = "runtime")]
 pub mod audit;
 #[cfg(all(feature = "runtime", feature = "tooling"))]

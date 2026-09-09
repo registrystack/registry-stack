@@ -2107,8 +2107,11 @@ fn externalize_field_set(
     fields
         .iter()
         .map(|field| {
-            field_api_name(entity, field)
-                .map(str::to_owned)
+            entity
+                .attachments
+                .get(field)
+                .map(|slot| slot.id.clone())
+                .or_else(|| field_api_name(entity, field).map(str::to_owned))
                 .ok_or(FixtureError::LogicalReferenceRefused)
         })
         .collect()

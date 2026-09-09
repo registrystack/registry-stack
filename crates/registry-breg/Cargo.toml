@@ -200,6 +200,8 @@ runtime = [
     "dep:hmac",
     "dep:ipnet",
     "dep:jsonwebtoken",
+    "dep:quick-xml",
+    "dep:reqwest",
     "dep:registry-platform-audit",
     "dep:registry-platform-authcommon",
     "dep:registry-platform-buildinfo",
@@ -236,6 +238,8 @@ hex = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
 ipnet = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
+quick-xml = { version = "0.42", optional = true }
+reqwest = { workspace = true, optional = true }
 registry-platform-canonical-json.workspace = true
 registry-manifest-core.workspace = true
 registry-platform-audit = { workspace = true, optional = true }
@@ -271,6 +275,7 @@ uuid.workspace = true
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+futures-core.workspace = true
 rcgen.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 registry-breg-client.workspace = true

@@ -739,9 +739,54 @@ impl FrozenPlanningBinding {
     }
 }
 
+/// Immutable value-free attachment binding retained in a proposal digest.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AttachmentManifestEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_policy: Option<String>,
+    pub sha256: String,
+    pub content_type: String,
+    pub byte_size: u64,
+}
+
+fn validate_attachment_manifest(
+    manifest: &BTreeMap<String, AttachmentManifestEntry>,
+) -> Result<(), WorkflowError> {
+    if manifest.len() > crate::contract::MAX_ATTACHMENT_SLOTS {
+        return Err(WorkflowError::InvalidRestoredState);
+    }
+    for (slot, entry) in manifest {
+        if slot.is_empty()
+            || slot.len() > 128
+            || slot.chars().any(char::is_control)
+            || entry.sha256.len() != 64
+            || !entry
+                .sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || entry.content_type.is_empty()
+            || entry.content_type.len() > 255
+            || entry.content_type.chars().any(char::is_control)
+            || entry.byte_size > u64::from(crate::contract::MAX_ATTACHMENT_BYTES)
+            || entry.verification_policy.as_ref().is_some_and(|policy| {
+                policy.is_empty()
+                    || policy == "disabled"
+                    || policy.len() > 1024
+                    || policy.chars().any(char::is_control)
+            })
+        {
+            return Err(WorkflowError::InvalidRestoredState);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PreparedProposal {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    attachments: BTreeMap<String, AttachmentManifestEntry>,
     request_record_revision: RecordRevision,
     contract_fingerprint: ContractFingerprint,
     originating_package: PackageFingerprint,
@@ -774,6 +819,7 @@ impl PreparedProposal {
             combined_snapshot_bytes,
             planning_binding: None,
             review_policy: None,
+            attachments: BTreeMap::new(),
         })
     }
 
@@ -804,7 +850,18 @@ impl PreparedProposal {
             combined_snapshot_bytes,
             planning_binding: Some(planning_binding),
             review_policy: Some(review_policy),
+            attachments: BTreeMap::new(),
         })
+    }
+
+    /// Binds exact evidence bytes and media interpretation to this proposal.
+    pub fn with_attachments(
+        mut self,
+        attachments: BTreeMap<String, AttachmentManifestEntry>,
+    ) -> Result<Self, WorkflowError> {
+        validate_attachment_manifest(&attachments)?;
+        self.attachments = attachments;
+        Ok(self)
     }
 
     pub fn request_record_revision(&self) -> RecordRevision {
@@ -845,6 +902,7 @@ impl PreparedProposal {
         version: ProposalVersion,
         context: TrustedTransitionContext,
     ) -> Result<ProposalSnapshot, WorkflowError> {
+        validate_attachment_manifest(&self.attachments)?;
         let effect_digest = proposal_digest(ProposalDigestInput {
             request,
             version,
@@ -855,6 +913,7 @@ impl PreparedProposal {
             effects: &self.effects,
             planning_binding: self.planning_binding.as_ref(),
             review_policy: self.review_policy,
+            attachments: &self.attachments,
         })?;
         Ok(ProposalSnapshot {
             version,
@@ -867,6 +926,7 @@ impl PreparedProposal {
             planning_binding: self.planning_binding,
             review_policy: self.review_policy,
             effect_digest,
+            attachments: self.attachments,
             submitted_by: context.actor,
             submitted_at: context.now,
         })
@@ -876,6 +936,8 @@ impl PreparedProposal {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProposalSnapshot {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    attachments: BTreeMap<String, AttachmentManifestEntry>,
     version: ProposalVersion,
     request_record_revision: RecordRevision,
     contract_fingerprint: ContractFingerprint,
@@ -893,6 +955,10 @@ pub struct ProposalSnapshot {
 }
 
 impl ProposalSnapshot {
+    pub fn attachments(&self) -> &BTreeMap<String, AttachmentManifestEntry> {
+        &self.attachments
+    }
+
     pub fn version(&self) -> ProposalVersion {
         self.version
     }
@@ -952,6 +1018,7 @@ impl ProposalSnapshot {
             effects: &self.effects,
             planning_binding: self.planning_binding.as_ref(),
             review_policy: self.review_policy,
+            attachments: &self.attachments,
         })?;
         if actual.matches(&self.effect_digest) {
             Ok(())
@@ -962,6 +1029,7 @@ impl ProposalSnapshot {
 
     fn validate_restored(&self, request: &RequestKey) -> Result<(), WorkflowError> {
         self.version.validate()?;
+        validate_attachment_manifest(&self.attachments)?;
         self.request_record_revision.validate()?;
         self.contract_fingerprint.validate()?;
         self.originating_package.validate()?;
@@ -2524,6 +2592,7 @@ fn validate_effects(
 }
 
 struct ProposalDigestInput<'a> {
+    attachments: &'a BTreeMap<String, AttachmentManifestEntry>,
     request: &'a RequestKey,
     version: ProposalVersion,
     request_record_revision: RecordRevision,
@@ -2537,6 +2606,7 @@ struct ProposalDigestInput<'a> {
 
 fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, WorkflowError> {
     let ProposalDigestInput {
+        attachments,
         request,
         version,
         request_record_revision,
@@ -2547,7 +2617,7 @@ fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, Wor
         planning_binding,
         review_policy,
     } = input;
-    let value = match (planning_binding, review_policy) {
+    let mut value = match (planning_binding, review_policy) {
         (None, None) => json!({
             "schema": "breg.change-request.proposal.v1",
             "request": request,
@@ -2572,6 +2642,10 @@ fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, Wor
         }),
         _ => return Err(WorkflowError::InvalidPlanningBinding),
     };
+    if !attachments.is_empty() {
+        value["attachments"] =
+            serde_json::to_value(attachments).map_err(|_| WorkflowError::Canonicalization)?;
+    }
     let canonical = canonicalize_json(&value).map_err(|_| WorkflowError::Canonicalization)?;
     ProposalDigest::new(format!("sha256:{}", hex_lower(&Sha256::digest(canonical))))
 }
@@ -2752,6 +2826,64 @@ mod tests {
             )
             .expect("submit")
             .into_workflow()
+    }
+
+    #[test]
+    fn proposal_digest_binds_attachment_hash_type_size_and_slot() {
+        let manifest = BTreeMap::from([(
+            "evidence".to_owned(),
+            AttachmentManifestEntry {
+                verification_policy: None,
+                sha256: "a".repeat(64),
+                content_type: "application/pdf".to_owned(),
+                byte_size: 10,
+            },
+        )]);
+        let prepared = proposal(vec![patch_effect("site-b", 3)], one_stage());
+        let frozen = workflow()
+            .submit(
+                context("submitter", 1),
+                prepared.clone().with_attachments(manifest.clone()).unwrap(),
+            )
+            .unwrap()
+            .into_workflow();
+        let snapshot = frozen.current_proposal().unwrap();
+        snapshot.verify_digest(frozen.request()).unwrap();
+        assert_eq!(snapshot.attachments(), &manifest);
+        let original = snapshot.effect_digest().clone();
+        for mutation in 0..5 {
+            let mut changed = manifest.clone();
+            match mutation {
+                0 => changed.get_mut("evidence").unwrap().sha256 = "b".repeat(64),
+                1 => changed.get_mut("evidence").unwrap().content_type = "image/png".to_owned(),
+                2 => changed.get_mut("evidence").unwrap().byte_size = 11,
+                3 => {
+                    changed.get_mut("evidence").unwrap().verification_policy =
+                        Some("policy-a".to_owned())
+                }
+                _ => {
+                    let entry = changed.remove("evidence").unwrap();
+                    changed.insert("other".to_owned(), entry);
+                }
+            }
+            let result = workflow()
+                .submit(
+                    context("submitter", 1),
+                    prepared.clone().with_attachments(changed).unwrap(),
+                )
+                .unwrap()
+                .into_workflow();
+            assert_ne!(
+                result.current_proposal().unwrap().effect_digest(),
+                &original
+            );
+        }
+        let mut tampered = snapshot.clone();
+        tampered.attachments.get_mut("evidence").unwrap().sha256 = "c".repeat(64);
+        assert_eq!(
+            tampered.verify_digest(frozen.request()),
+            Err(WorkflowError::DigestMismatch)
+        );
     }
 
     fn approve_current(workflow: RequestWorkflow, actor_ref: &str, second: u8) -> RequestWorkflow {

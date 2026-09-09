@@ -46,6 +46,23 @@ pub struct PostgresRecordMutationService {
 }
 
 impl PostgresRecordMutationService {
+    #[must_use]
+    pub fn with_attachment_storage(
+        mut self,
+        storage: crate::attachment_storage::AttachmentStorage,
+    ) -> Self {
+        self.coordinator = self.coordinator.with_attachment_storage(storage);
+        self
+    }
+    #[must_use]
+    pub fn with_attachment_verification(
+        mut self,
+        verification: crate::attachment_verification::AttachmentVerification,
+    ) -> Self {
+        self.coordinator = self.coordinator.with_attachment_verification(verification);
+        self
+    }
+
     /// Bind operator-approved Evidence clients for v2 immediate action handlers.
     #[must_use]
     pub fn with_evidence_evaluator(
@@ -436,6 +453,15 @@ impl PostgresRecordMutationService {
             .await
     }
 
+    pub async fn attachment(
+        &self,
+        input: ConditionalMutationInput<'_>,
+        attachment: crate::attachment::AttachmentMutation,
+    ) -> Result<MutationOutcome, MutationError> {
+        self.conditional_mutation(input, MutationBody::Attachment(attachment))
+            .await
+    }
+
     pub async fn batch(
         &self,
         input: BatchMutationInput<'_>,
@@ -487,6 +513,12 @@ impl PostgresRecordMutationService {
             .map_err(|_| MutationError::Unavailable)?;
         let claims = strict_claim_context(&self.registry, input.context, input.entity_id)?;
         let plan = MutationPlan::from_compiled(&self.registry, input.route_id)?;
+        let plan = match &body {
+            MutationBody::Attachment(attachment) => {
+                plan.attachment(&attachment.slot_id, attachment.bytes.is_none())?
+            }
+            _ => plan,
+        };
         self.execute_request(
             &mut client,
             MutationRequest {

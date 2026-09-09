@@ -61,6 +61,10 @@ pub struct PostgresRecordReadService {
     audit_profile: AuditProfile,
     cursors: Arc<CursorCodec>,
     fault: ReadFaultControl,
+    attachment_storage: crate::attachment_storage::AttachmentStorage,
+    attachment_verification: crate::attachment_verification::AttachmentVerification,
+    #[cfg(feature = "postgres-test")]
+    metadata_pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     #[cfg(feature = "postgres-test")]
     query_plan: Option<Arc<std::sync::Mutex<Vec<Value>>>>,
 }
@@ -85,9 +89,44 @@ impl PostgresRecordReadService {
             audit_profile,
             cursors,
             fault: ReadFaultControl::Disabled,
+            attachment_storage: crate::attachment_storage::AttachmentStorage::Database,
+            attachment_verification:
+                crate::attachment_verification::AttachmentVerification::Disabled,
+            #[cfg(feature = "postgres-test")]
+            metadata_pause: None,
             #[cfg(feature = "postgres-test")]
             query_plan: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_attachment_storage(
+        mut self,
+        storage: crate::attachment_storage::AttachmentStorage,
+    ) -> Self {
+        self.attachment_storage = storage;
+        self
+    }
+
+    #[must_use]
+    pub fn with_attachment_verification(
+        mut self,
+        verification: crate::attachment_verification::AttachmentVerification,
+    ) -> Self {
+        self.attachment_verification = verification;
+        self
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[must_use]
+    #[doc(hidden)]
+    pub fn with_attachment_metadata_pause_for_test(
+        mut self,
+        entered: Arc<tokio::sync::Notify>,
+        resume: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.metadata_pause = Some((entered, resume));
+        self
     }
 
     #[cfg(feature = "postgres-test")]
@@ -216,6 +255,9 @@ impl PostgresRecordReadService {
                 return Err(error);
             }
         };
+        let attachment_verification = materialized.rows.first().and_then(|record| {
+            crate::mutation::attachment_verification_etag_fields(&plan.entity, &record.data)
+        });
         let mut held =
             match ReadResult::from_materialized(&self.registry, &request, &plan, materialized)
                 .and_then(|result| result.enforce_spatial_response_budget(&request))
@@ -260,6 +302,7 @@ impl PostgresRecordReadService {
                 record_revision,
                 &request.selected_fields,
                 representation,
+                attachment_verification.as_ref(),
             )
             .map_err(|_| ReadServiceError::Unavailable)?;
             held.response = Some(response.with_strong_etag(etag));
@@ -286,6 +329,210 @@ impl PostgresRecordReadService {
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
         Ok(held)
+    }
+
+    async fn execute_attachment(
+        &self,
+        request: RecordReadRequest,
+        slot_id: String,
+        proposal_version: u32,
+    ) -> Result<Option<HeldReadResponse>, ReadServiceError> {
+        if !profile_is_keyed(&self.audit_profile) {
+            return Err(ReadServiceError::Unavailable);
+        }
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        let claims = strict_claim_context(&self.registry, &request.context, &request.entity_id)?;
+        let plan = ReadPlan::from_request(&self.registry, &self.expected, &self.cursors, &request);
+        let valid = plan.as_ref().is_ok_and(|plan| {
+            plan.operation == Operation::Get
+                && plan.entity.change_request.is_some()
+                && plan.entity.attachments.contains_key(&slot_id)
+                && request.selected_fields.contains(&slot_id)
+                && claims.principal().is_some()
+                && plan
+                    .entity
+                    .access_profiles
+                    .get(claims.access_profile())
+                    .is_some_and(|profile| !profile.anonymous)
+                && proposal_version > 0
+                && request.request_history_after_proposal_version.is_none()
+                && request.adapter == CursorAdapter::Native
+                && request.representation == CursorRepresentation::Json
+        });
+        record_pre_io_audit(
+            &mut client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            &claims,
+            &self.audit_profile,
+            PreIoAudit {
+                kind: if valid {
+                    PreIoAuditKind::Attempt
+                } else {
+                    PreIoAuditKind::Refusal
+                },
+                method: request.method,
+                operation_id: &request.operation_id,
+                target_record: target_record(&request.kind),
+                refusal_reason: None,
+                correlation: &request.correlation,
+            },
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+        if !valid {
+            return Ok(None);
+        }
+        let plan = plan.map_err(|_| ReadServiceError::Unavailable)?;
+        let transaction = begin_record_transaction(
+            &mut client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            &claims,
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+        let loaded = self
+            .load_authorized_attachment(
+                transaction.transaction(),
+                &request,
+                &claims,
+                &plan,
+                &slot_id,
+                proposal_version,
+            )
+            .await;
+        let (outcome, count, revision) = match &loaded {
+            Ok(Some((_, revision))) => (TerminalAuditOutcome::Returned, 1, Some(*revision)),
+            Ok(None) => (TerminalAuditOutcome::Empty, 0, None),
+            Err(_) => (TerminalAuditOutcome::Refused, 0, None),
+        };
+        let terminal = self.terminal(&request, &claims, &plan, outcome, count, revision)?;
+        self.fault.fail_at(ReadFaultPoint::BeforeTerminalAudit)?;
+        crate::audit::append_attachment_terminal_audit(
+            transaction.transaction(),
+            &self.audit_profile,
+            terminal,
+            &slot_id,
+            i64::from(proposal_version),
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ReadServiceError::Unavailable)?;
+        loaded.map(|response| response.map(|(response, _)| response))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn load_authorized_attachment(
+        &self,
+        transaction: &tokio_postgres::Transaction<'_>,
+        request: &RecordReadRequest,
+        claims: &ClaimContext,
+        plan: &ReadPlan,
+        slot_id: &str,
+        proposal_version: u32,
+    ) -> Result<Option<(HeldReadResponse, i64)>, ReadServiceError> {
+        crate::mutation::install_request_visibility_context(
+            transaction,
+            &plan.entity,
+            claims,
+            &self.audit_profile,
+            &self.expected.database_id,
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+        let record_id = target_record(&request.kind).ok_or(ReadServiceError::Unavailable)?;
+        let record_uuid = Uuid::parse_str(record_id).map_err(|_| ReadServiceError::Unavailable)?;
+        // Stabilize request state without imposing a typed UPDATE policy on
+        // readers. The following plain SELECT remains the authoritative GET RLS.
+        if !lock_attachment_request_states(transaction, &plan.entity.id, &[record_uuid]).await? {
+            return Ok(None);
+        }
+        let sql = format!("SELECT record_revision FROM registry_data.{} WHERE record_id=$1 AND record_lifecycle='active'",
+            quote_identifier(&plan.entity.physical_table));
+        let Some(row) = transaction
+            .query_opt(&sql, &[&record_uuid])
+            .await
+            .map_err(|_| ReadServiceError::Unavailable)?
+        else {
+            return Ok(None);
+        };
+        let revision: i64 = row.try_get(0).map_err(|_| ReadServiceError::Unavailable)?;
+        if !request_read::attachment_version_is_authorized(
+            transaction,
+            &self.registry,
+            &self.expected,
+            &self.audit_profile,
+            request,
+            claims,
+            &plan.entity,
+            record_uuid,
+            i64::from(proposal_version),
+        )
+        .await?
+        {
+            return Ok(None);
+        }
+        crate::attachment_store::verify_backend_binding(
+            transaction,
+            &self.attachment_storage.binding_digest(),
+            &self.attachment_verification.binding_digest(),
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+        let Some(stored) = crate::attachment_store::load(
+            transaction,
+            &plan.entity.id,
+            record_uuid,
+            i64::from(proposal_version),
+            slot_id,
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?
+        else {
+            return Ok(None);
+        };
+        // Retained proposal bytes keep their accepted size and MIME after a
+        // successor narrows its upload policy. Current slot/read authority,
+        // quarantine and exact stored integrity still gate this download.
+        if stored.metadata.byte_size > u64::from(crate::contract::MAX_ATTACHMENT_BYTES) {
+            return Err(ReadServiceError::Unavailable);
+        }
+        let bytes = match (
+            &self.attachment_storage,
+            stored.backend_id.as_str(),
+            stored.content,
+        ) {
+            (crate::attachment_storage::AttachmentStorage::Database, "database", Some(bytes)) => {
+                bytes
+            }
+            (crate::attachment_storage::AttachmentStorage::S3(store), backend, None)
+                if backend == self.attachment_storage.binding_digest() =>
+            {
+                store
+                    .get(&stored.metadata.sha256, stored.metadata.byte_size)
+                    .await
+                    .map_err(|_| ReadServiceError::Unavailable)?
+            }
+            _ => return Err(ReadServiceError::Unavailable),
+        };
+        use sha2::{Digest, Sha256};
+        if u64::try_from(bytes.len()).ok() != Some(stored.metadata.byte_size)
+            || hex::encode(Sha256::digest(&bytes)) != stored.metadata.sha256
+        {
+            return Err(ReadServiceError::Unavailable);
+        }
+        let response = HeldReadResponse::from_attachment(bytes, stored.metadata.content_type)?;
+        Ok(Some((response, revision)))
     }
 
     #[cfg(feature = "postgres-test")]
@@ -390,7 +637,12 @@ impl PostgresRecordReadService {
                 .map(|field| field.field_id.clone())
                 .collect::<Vec<_>>()
         } else {
-            request.selected_fields.iter().cloned().collect::<Vec<_>>()
+            request
+                .selected_fields
+                .iter()
+                .filter(|field| !plan.entity.attachments.contains_key(*field))
+                .cloned()
+                .collect::<Vec<_>>()
         };
         let relations = if let Some(path) = &plan.read_path {
             let root_id = match &request.kind {
@@ -418,7 +670,7 @@ impl PostgresRecordReadService {
                      FROM {}
                      WHERE {} = $1::text::uuid
                      LIMIT 1",
-                    relations.from_sql, relations.id_expression
+                    relations.from_sql, relations.id_expression,
                 );
                 let record_id =
                     target_record(&request.kind).ok_or(ReadServiceError::Unavailable)?;
@@ -499,6 +751,14 @@ impl PostgresRecordReadService {
             }
             _ => return Err(ReadServiceError::Unavailable),
         };
+        stabilize_attachment_read_rows(transaction.transaction(), &plan.entity, &rows).await?;
+        #[cfg(feature = "postgres-test")]
+        if !plan.entity.attachments.is_empty() {
+            if let Some((entered, resume)) = &self.metadata_pause {
+                entered.notify_one();
+                resume.notified().await;
+            }
+        }
         let page_size = query.map_or(request.maximum_records, |query| {
             usize::from(query.page_size)
         });
@@ -700,6 +960,15 @@ impl RecordReadService for PostgresRecordReadService {
             let result = self.execute(request).await?;
             Ok(result.response)
         })
+    }
+
+    fn attachment(
+        &self,
+        request: RecordReadRequest,
+        slot_id: String,
+        proposal_version: u32,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        Box::pin(self.execute_attachment(request, slot_id, proposal_version))
     }
 
     fn list(
@@ -1318,10 +1587,10 @@ impl ReadPlan {
             || !valid_entity_inventory(registry, source_entity)
             || !valid_entity_inventory(registry, entity)
             || (read_path.is_none() && !request.selected_fields.is_subset(&profile.readable_fields))
-            || request
-                .selected_fields
-                .iter()
-                .any(|field| compiled_field_type(entity, field).is_none())
+            || request.selected_fields.iter().any(|field| {
+                compiled_field_type(entity, field).is_none()
+                    && !entity.attachments.contains_key(field)
+            })
         {
             return Err(());
         }
@@ -1422,10 +1691,15 @@ fn validate_compiled_query_request(
         || !valid_cursor_reference(&query.cursor_binding.sort_reference)
         || !valid_cursor_reference(&query.cursor_binding.scope_reference)
         || !valid_optional_cursor_reference(query.cursor_binding.spatial_reference.as_deref())
-        || !request
-            .selected_fields
-            .iter()
-            .all(|field| operation.projection_fields.contains(field))
+        || !request.selected_fields.iter().all(|field| {
+            operation.projection_fields.contains(field)
+                || (query.kind == CompiledQueryKind::List
+                    && entity.attachments.contains_key(field)
+                    && entity
+                        .access_profiles
+                        .get(request.context.selected_profile())
+                        .is_some_and(|profile| profile.readable_fields.contains(field)))
+        })
         || !operation
             .projection_fields
             .iter()
@@ -1452,7 +1726,24 @@ fn validate_compiled_query_request(
             }
         }
     }
-    validate_projection(entity, operation, &query.projection)?;
+    let scalar_fields = request
+        .selected_fields
+        .iter()
+        .filter(|field| !entity.attachments.contains_key(*field))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if query
+        .projection
+        .iter()
+        .map(|field| field.field_id.clone())
+        .collect::<BTreeSet<_>>()
+        != scalar_fields
+    {
+        return Err(());
+    }
+    if !query.projection.is_empty() || request.selected_fields.is_empty() {
+        validate_projection(entity, operation, &query.projection)?;
+    }
     if let Some(filter) = &query.filter {
         let mut stats = FilterStats::default();
         validate_filter_expr(entity, operation, filter, &mut stats)?;
@@ -2428,7 +2719,7 @@ fn list_sql(
              WHERE {where_sql}
              ORDER BY {order}
              LIMIT ${limit_parameter}::bigint",
-            relations.from_sql
+            relations.from_sql,
         ),
         count_sql: format!(
             "SELECT count(*)::bigint
@@ -2439,6 +2730,62 @@ fn list_sql(
         count_parameters,
         values,
     })
+}
+
+async fn lock_attachment_request_states(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity_id: &str,
+    ids: &[Uuid],
+) -> Result<bool, ReadServiceError> {
+    let rows = transaction.query(
+        "SELECT request_id FROM registry_internal.registry_request_state WHERE request_entity_id=$1 AND request_id=ANY($2) ORDER BY request_id FOR SHARE",
+        &[&entity_id, &ids],
+    ).await.map_err(|_| ReadServiceError::Unavailable)?;
+    Ok(rows.len() == ids.len())
+}
+
+async fn stabilize_attachment_read_rows(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity: &CompiledEntity,
+    rows: &[tokio_postgres::Row],
+) -> Result<(), ReadServiceError> {
+    if entity.attachments.is_empty() || rows.is_empty() {
+        return Ok(());
+    }
+    let expected = rows
+        .iter()
+        .map(|row| {
+            let id: String = row.try_get(0).map_err(|_| ReadServiceError::Unavailable)?;
+            let revision: i64 = row.try_get(1).map_err(|_| ReadServiceError::Unavailable)?;
+            Ok((
+                Uuid::parse_str(&id).map_err(|_| ReadServiceError::Unavailable)?,
+                revision,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, ReadServiceError>>()?;
+    let ids = expected.keys().copied().collect::<Vec<_>>();
+    if !lock_attachment_request_states(transaction, &entity.id, &ids).await? {
+        return Err(ReadServiceError::Unavailable);
+    }
+    // An upload may commit between the source SELECT and these state locks.
+    // Refuse that read rather than combine its old scalar revision with new
+    // metadata. Plain SELECT preserves exactly the reader's typed GET policy.
+    let sql = format!(
+        "SELECT record_id, record_revision FROM registry_data.{} WHERE record_id=ANY($1)",
+        quote_identifier(&entity.physical_table)
+    );
+    let current = transaction
+        .query(&sql, &[&ids])
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    if current.len() != expected.len()
+        || current
+            .iter()
+            .any(|row| expected.get(&row.get::<_, Uuid>(0)) != Some(&row.get::<_, i64>(1)))
+    {
+        return Err(ReadServiceError::Unavailable);
+    }
+    Ok(())
 }
 
 fn where_clause(predicates: &[String]) -> String {
