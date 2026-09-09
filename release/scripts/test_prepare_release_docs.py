@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+from contextlib import redirect_stdout
 import json
 import subprocess
 import tempfile
@@ -146,6 +148,24 @@ class PreparationTest(TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.prepare(output_dir=self.root / "not-created")
         self.assertFalse((self.root / "not-created").exists())
+
+    def test_malformed_artifact_maps_report_validation_error_before_build(self):
+        manifest = self.repo / "release/manifests/registry-stack-beta-41.yaml"
+        for value in ("null", "[]", "invalid"):
+            with self.subTest(artifacts=value):
+                manifest.write_text(
+                    "stack: {version: 0.29.0, release: beta-41}\n"
+                    f"artifacts: {value}\n"
+                )
+                self.commit()
+                output = self.root / "not-created"
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    result = prep.run(self.repo, "0.29.0", "beta-41", "2026-09-10", output, False)
+                self.assertEqual(result, 1)
+                self.assertIn("error: release manifest must contain an artifacts object", stdout.getvalue())
+                self.assertFalse(output.exists())
+                self.assertEqual(prep.git(self.repo, "status", "--porcelain"), "")
 
     def test_existing_output_is_never_overwritten(self):
         output = self.root / "existing"
