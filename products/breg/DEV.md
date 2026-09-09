@@ -39,7 +39,7 @@ deadline fails, stops what it acquired and keeps its owner-only diagnostics.
 `dev stop` keeps everything it created: the owned container, its named data
 volume, records, audit history, keys, credentials and the built package. Add
 `--remove` to reclaim the storage as well; it removes the owned container and
-its `breg-dev-<owner>` data volume, discarding records, audit history and seed
+its `breg-dev-<owner>` data volume, discarding records, audit history, event receipts and seed
 checkpoints. For an initial package at sequence 1, the next start builds an empty
 database from the same authored project, ports, credentials and package. It also
 lets the next start take edited
@@ -75,7 +75,8 @@ The default report shows the event UUID, authored event, entity, trigger,
 compiled delivery and destination IDs, generation, attempt and `received`
 status. Record IDs and projected values are omitted. `--include-payload`
 explicitly displays the projected values from the development receiver.
-Receipts remain available while the session is stopped.
+Receipts remain available while the session is stopped. `dev stop --remove`
+erases the receipt journal along with the records, including captured payloads.
 
 The receiver keeps these development values in the owner-only
 `.breg/dev/events.jsonl` journal, outside version control. Its 16 MiB bound
@@ -244,7 +245,7 @@ identifiable and reclaimable once the container is gone.
 | Stop, including repeated stop | Gracefully stop owned BReg and Mint children and stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and audit history. |
 | Stop where no start ever ran | Refuse and name the absent session. Nothing is created, changed or removed, so a mistyped project path cannot read as a stopped session. |
 | Start after stop | Reuse the same container, database, and existing credentials. Preserve record edits; activate the explicitly prepared source successor when present. Obtain fresh short-lived tokens. |
-| Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
+| Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history, event receipts and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
 | Start after `--remove` | At sequence 1, create an empty container and volume, activate the initial package, and replay authored seeds. A retained successor refuses before Docker because its predecessor records were removed; use a fresh project at sequence 1 for an empty experiment. |
 | Seed request committed before checkpoint | Replay the same permanent BReg idempotency reservation. The original create result is returned without creating or overwriting a record. |
 | Partial start failure | Stop acquired service children and the owned container; retain private diagnostics and completed phases. Retry the same command after correcting the prerequisite. The separate schema-test database may be recreated for a failed rehearsal. |

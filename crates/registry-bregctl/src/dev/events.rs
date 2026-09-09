@@ -436,6 +436,21 @@ fn append(root: &Path, record: &Value) -> Result<()> {
     private::replace(&path, &bytes)
 }
 
+/// Reclaim received payloads with the disposable database, retaining secrets
+/// and the stable storage lock for a subsequent local start.
+pub(super) fn clear(root: &Path) -> Result<()> {
+    let _lock = storage_lock(root)?;
+    let path = root.join("events.jsonl");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => private::check_metadata(&metadata, false)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    fs::remove_file(&path).context("cannot reclaim the local event inbox")?;
+    File::open(root)?.sync_all()?;
+    Ok(())
+}
+
 pub(super) fn report(root: &Path, include_payload: bool) -> Result<Value> {
     let _lock = storage_lock(root)?;
     let path = root.join("events.jsonl");
@@ -999,6 +1014,29 @@ mod tests {
     }
 
     #[test]
+    fn clearing_received_payloads_is_idempotent_and_preserves_local_keys() {
+        let (root, port, receiver) = fixture();
+        let key_path = root.path().join("secrets/webhook-key");
+        let key = private::read(&key_path, 128).unwrap();
+        let (headers, body) = signed(1, 1);
+        assert_eq!(request(port, headers, body), 204);
+        drop(receiver);
+        assert_eq!(
+            report(root.path(), true).unwrap()["deliveries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        clear(root.path()).unwrap();
+        clear(root.path()).unwrap();
+        assert!(!root.path().join("events.jsonl").exists());
+        assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
+        assert_eq!(private::read(&key_path, 128).unwrap(), key);
+        private::check(&root.path().join("events.lock"), false).unwrap();
+    }
+
+    #[test]
     fn symbolic_link_and_hard_link_storage_are_refused() {
         let (root, _port, receiver) = fixture();
         drop(receiver);
@@ -1007,8 +1045,12 @@ mod tests {
         fs::rename(&path, &target).unwrap();
         std::os::unix::fs::symlink(&target, &path).unwrap();
         assert!(report(root.path(), false).is_err());
+        assert!(clear(root.path()).is_err());
+        assert!(target.exists());
         fs::remove_file(&path).unwrap();
         fs::hard_link(&target, &path).unwrap();
         assert!(report(root.path(), false).is_err());
+        assert!(clear(root.path()).is_err());
+        assert!(target.exists());
     }
 }

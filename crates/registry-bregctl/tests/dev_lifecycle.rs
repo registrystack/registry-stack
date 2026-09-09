@@ -490,8 +490,36 @@ seed:
             "restart must not reseed"
         );
     });
+    fs::set_permissions(&inbox, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!session.dev(&["stop", "--remove"]).status.success());
+    let incomplete: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
+    assert_eq!(incomplete["containerId"], retained["containerId"]);
+    fs::set_permissions(&inbox, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(
+        !session.dev(&[]).status.success(),
+        "incomplete receipt reclamation must prevent a fresh database"
+    );
     session.remove();
     assert!(std::net::TcpStream::connect(receiver_address).is_err());
+    assert_eq!(events()["deliveries"], json!([]));
+    assert!(!inbox.exists(), "removal erases captured event payloads");
+    session.remove();
+    assert_eq!(events()["deliveries"], json!([]));
+    session.start();
+    let fresh = poll_report(events, |report| {
+        report["deliveries"].as_array().unwrap().len() == 2
+    });
+    for receipt in fresh["deliveries"].as_array().unwrap() {
+        assert!(
+            recovered["deliveries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|previous| previous["eventId"] != receipt["eventId"]),
+            "fresh database receipts must not contain removed record events"
+        );
+    }
+    session.remove();
     std::mem::forget(session);
     fs::remove_dir_all(parent).unwrap();
 }

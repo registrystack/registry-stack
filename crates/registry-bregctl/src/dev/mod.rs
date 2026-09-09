@@ -891,6 +891,7 @@ fn reclaim(docker: &Path, state: &mut State) -> Result<()> {
         &["volume", "rm", "--force", &state.volume_name()],
         None,
     )?;
+    events::clear(&state.root())?;
     reclaimed(state);
     state.save()
 }
