@@ -579,3 +579,82 @@ fn a_pending_or_rejected_verification_does_not_release_content() {
         "notRequired"
     );
 }
+
+/// A list surface repeats the slot in its selectable fields, where the slot
+/// identifier is the verbatim API property name.
+fn list_operation(descriptor: &Value, api_name: &str) -> Value {
+    let mut value = operation(
+        "records.company.list",
+        "GET",
+        "/v1/records/companies",
+        "list",
+        json!({"fieldNames": "api", "queryParameters": ["$select", "$top"]}),
+        (json!([]), json!([])),
+    );
+    value["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(slot_field(descriptor));
+    value["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(SLOT));
+    value["query"] = json!({
+        "kind": "list",
+        "selectableFields": [
+            {"id": "legal-name", "apiName": "legalName"},
+            {"id": SLOT, "apiName": api_name}
+        ],
+        "filterableFields": [],
+        "sortableFields": [],
+        "allowCount": false,
+        "defaultPageSize": 100,
+        "maxPageSize": 100,
+        "maxFilterClauses": 32,
+        "maxInValues": 100,
+        "pagination": {
+            "parameter": "$skiptoken",
+            "responsePath": "pageInfo.nextCursor",
+            "exclusive": true
+        },
+        "temporal": null
+    });
+    value
+}
+
+fn fixture_with_list(api_name: &str) -> Value {
+    let descriptor = descriptor();
+    let mut value = fixture_with(descriptor.clone());
+    value["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(list_operation(&descriptor, api_name));
+    value["entities"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"operation": "list", "accessProfile": "company-writer"}));
+    value
+}
+
+#[test]
+fn a_listed_slot_keeps_its_verbatim_api_property_name() {
+    let slots = parse(&fixture_with_list(SLOT))
+        .select_attachments("company", "company-writer")
+        .expect("a list surface repeats the same slot capability");
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0].slot_identifier(), SLOT);
+}
+
+#[test]
+fn a_listed_field_that_is_not_a_slot_keeps_strict_api_naming() {
+    let mut value = fixture_with_list(SLOT);
+    value["operations"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap()["query"]["selectableFields"][0]["apiName"] = json!("legal-name");
+    assert!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err(),
+        "an ordinary field must not borrow the verbatim slot naming"
+    );
+}
