@@ -137,9 +137,10 @@ The remaining grant members:
 | `allowDataExport` | Enables bulk export through the profile. `check` reports `access.profile.data_export`, because disabling it later cannot recall downloaded data. |
 | `requestPresence` | Lets a reader of a target entity see that a change request of the named `requestType` is pending against a record. |
 | `reviewStages`, `applyTargets` | Which review stages a reviewer may decide, and which target entities an applier may write. |
+| `submitterTargets` | Requires the submitter to currently hold same-profile `get` authority over every native-reference target a change request names. |
 | `action`, `targets`, `results` | An action grant instead of an entity grant. |
 
-The last three rows belong to [Declare change requests and actions](../breg-change-control/).
+The last four rows belong to [Declare change requests and actions](../breg-change-control/).
 
 The operations a grant may list:
 
@@ -153,7 +154,7 @@ The operations a grant may list:
 | `apply_request` | Applying an approved request, limited by `applyTargets`. |
 | `invoke` | Invoking an immediate action. |
 
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; products/breg/acceptance/business-establishments/registry.yaml; crates/registry-breg/src/auth.rs; crates/registry-breg/src/contract.rs, AccessProfileSource and AccessGrantSource; crates/registry-breg/src/access.rs. */}
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; products/breg/acceptance/business-establishments/registry.yaml; products/breg/starters/professional-licences/core/registry.yaml; crates/registry-breg/src/auth.rs; crates/registry-breg/src/contract.rs, AccessProfileSource and AccessGrantSource; crates/registry-breg/src/access.rs; crates/registry-breg/src/change_request.rs. */}
 
 ## Access requirements
 

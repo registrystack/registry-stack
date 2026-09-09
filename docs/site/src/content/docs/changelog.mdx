@@ -143,6 +143,35 @@ relevant product pages on this site rather than duplicating release notes.
 - Added the adopter-owned accepted-service handoff and explicit online renewal
   workflow. Credentials and native Evidence or Relay input and output remain
   outside Discovery and follow local acceptance.
+- Added `submitterTargets` to a change-request grant, which requires the submitter
+  to currently hold same-profile `get` authority over every native-reference
+  target the request names, rechecked at create, each draft patch, submit,
+  revise, and exact replay. A target the caller can no longer read answers
+  `412`; a claim that could never yield target authority answers `404`. See
+  [control access per profile](../configure/breg-access/) and
+  [declare change requests and actions](../configure/breg-change-control/).
+- Allowed a `structured` field's root JSON Schema to declare `type: array`
+  alongside the existing closed-object root, provided it declares `items`; a
+  nested object schema anywhere in the schema still closes with
+  `additionalProperties: false`. See
+  [author a registry project](../configure/breg/).
+- Exposed a change-request entity's `list` operation filtering and sorting on
+  `bregState`, `proposalVersion`, and `effectDigest`, reserved query field names
+  no ordinary field's API name may reuse. An anonymous profile's list omits
+  `effectDigest`, because a proposal digest commits to the full frozen packet.
+  See [declare change requests and actions](../configure/breg-change-control/).
+- Gave the Node.js Base Registry Engine client exact-JSON entry points, such as
+  `getRecordJson`, `listRecordsJson`, `createRecordJson`, `patchRecordJson`, and
+  `executeLifecycleActionJson`, which pass serialized JSON instead of
+  JavaScript numbers so a record's exact numbers survive the JavaScript number
+  boundary. The Rust client gained the shared strict decoder those bindings
+  build on, which rejects a duplicate JSON member and a numeric literal it
+  cannot represent exactly, rather than a parallel set of Rust entry points.
+- Changed the `professional-licences` starter's `scope-correction` request to
+  freeze `licensedActivities` and `authorizationConditions` in place of the
+  single `practiceScope` field it previously froze. A project copied from an
+  earlier version of that starter has no migration path and must be
+  initialized again.
 
 ## 2026-08-20
 
