@@ -325,6 +325,7 @@ export default defineConfig({
                 { label: 'Request an assertion', slug: 'tutorials/request-evidence-from-an-application' },
                 { label: 'Verify and retain assertions', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
+                { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
               ],
             },
             {
@@ -409,6 +410,7 @@ export default defineConfig({
               items: [
                 { label: 'Query with Python', slug: 'tutorials/query-relay-client' },
                 { label: 'Client API reference', slug: 'reference/client-api' },
+                { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
               ],
             },
             { label: 'Run a deployment', slug: 'operate/relay' },
@@ -474,6 +476,8 @@ export default defineConfig({
               items: [
                 { label: 'Query with Python and Node', slug: 'tutorials/query-breg-client' },
                 { label: 'Client API reference', slug: 'reference/client-api' },
+                { label: 'Authenticate with eSignet', slug: 'explanation/esignet-authentication-over-breg' },
+                { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
               ],
             },
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },
