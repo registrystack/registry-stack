@@ -34,6 +34,7 @@ seed: []
         breg_port: 8094,
         mint_port: 8095,
         database_port: 55448,
+        webhook_port: None,
         clients_file: project.join("clients.yaml"),
         source_digest: "a".repeat(64),
         sequence: 1,
@@ -653,6 +654,7 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         breg_port: 8094,
         mint_port: 8095,
         database_port: 55448,
+        webhook_port: None,
         clients_file: project.join("dev-clients.yaml"),
         source_digest: captured.digest,
         sequence: 1,
@@ -1131,4 +1133,125 @@ fn every_published_starter_carries_the_clients_file_a_first_start_reads() {
     }
     // Naming the starters here would hold their subjects in shipped source.
     assert_eq!(covered, 4, "every published starter is covered");
+}
+
+#[test]
+fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
+    let (_project_temp, project) = write_init_project();
+    let module = project.join("registry.yaml");
+    let mut source: Value = serde_norway::from_slice(&fs::read(&module).unwrap()).unwrap();
+    let entity = source["entities"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entity| entity["id"] == "record")
+        .unwrap();
+    entity["events"] = json!([
+        {"id":"record-created-v1","trigger":"created","projection":["code"],"webhook":{"destinationId":"local-hook"}},
+        {"id":"record-patched-v1","trigger":"patched","projection":["label"],"webhook":{"destinationId":"local-hook"}},
+        {"id":"record-second-v1","trigger":"created","projection":["code"],"webhook":{"destinationId":"second-hook"}}
+    ]);
+    fs::write(&module, serde_norway::to_string(&source).unwrap()).unwrap();
+    let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let clients = config::clients(&bytes).unwrap();
+    let captured = capture(&project, &bytes).unwrap();
+    let (_temp, mut state, _, _) = fixture();
+    state.webhook_port = Some(18996);
+    initialize(&state.root(), &state, &clients, &captured.files).unwrap();
+    let root = state.root();
+    private::directory(&root.join("build")).unwrap();
+    private::directory(&root.join("build/package")).unwrap();
+    config::runtime(
+        &root,
+        &state,
+        &clients,
+        &format!("sha256:{}", "1".repeat(64)),
+        false,
+    )
+    .unwrap();
+    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+        .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+    for filename in ["runtime-test.yaml", "runtime.yaml"] {
+        let runtime =
+            registry_breg::runtime_config::load_runtime_config(&root.join(filename)).unwrap();
+        let activated = runtime
+            .activate_event_destinations(&compiled)
+            .expect("all declared destinations activate");
+        assert!(activated.lookup("local-hook").is_some());
+        assert!(activated.lookup("second-hook").is_some());
+        assert!(activated.lookup("undeclared").is_none());
+        let value: Value =
+            serde_norway::from_slice(&fs::read(root.join(filename)).unwrap()).unwrap();
+        assert_eq!(value["eventDestinations"].as_object().unwrap().len(), 2);
+        for binding in value["eventDestinations"].as_object().unwrap().values() {
+            assert_eq!(binding["origin"], "http://127.0.0.1:18996");
+            assert_eq!(binding["networkProfile"], "loopbackDevelopmentHttp");
+            assert_eq!(binding["classificationCeiling"], "internal");
+            assert_eq!(binding["deliveryCeilings"]["maximumAttempts"], 5);
+            assert_eq!(
+                binding["deliveryCeilings"]["attemptTimeoutMilliseconds"],
+                5000
+            );
+        }
+    }
+    private::validate_tree(&root).unwrap();
+    let saved = read_state(&root).unwrap();
+    assert_eq!(saved.webhook_port, Some(18996));
+    // Reproduce an older failed first start: owned database and credentials,
+    // but empty destination bindings and no retained receiver state/key.
+    let credentials = fs::read(root.join("credentials/operator/assertion-key.jwk")).unwrap();
+    let mut old = saved.clone();
+    old.webhook_port = None;
+    old.container_id = Some("a".repeat(64));
+    old.status = Status::Failed;
+    fs::remove_file(root.join("secrets/webhook-key")).unwrap();
+    fs::remove_file(root.join("runtime-test.yaml")).unwrap();
+    config::runtime(
+        &root,
+        &old,
+        &clients,
+        &format!("sha256:{}", "1".repeat(64)),
+        true,
+    )
+    .unwrap();
+    old.save().unwrap();
+    prepare_receiver(&mut old, &clients).unwrap();
+    let retained_port = old.webhook_port.unwrap();
+    let retained_key = fs::read(root.join("secrets/webhook-key")).unwrap();
+    prepare_receiver(&mut old, &clients).unwrap();
+    assert_eq!(old.webhook_port, Some(retained_port));
+    assert_eq!(old.container_id.as_deref(), Some("a".repeat(64).as_str()));
+    assert_eq!(
+        fs::read(root.join("secrets/webhook-key")).unwrap(),
+        retained_key
+    );
+    assert_eq!(
+        fs::read(root.join("credentials/operator/assertion-key.jwk")).unwrap(),
+        credentials
+    );
+    registry_breg::runtime_config::load_runtime_config(&root.join("runtime-test.yaml"))
+        .unwrap()
+        .activate_event_destinations(&compiled)
+        .unwrap();
+    let mut invalid = saved;
+    invalid.webhook_port = Some(invalid.breg_port);
+    invalid.save().unwrap();
+    assert!(read_state(&root).is_err());
+}
+
+#[test]
+fn old_event_free_sessions_keep_working_without_receiver_state() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let mut value = serde_json::to_value(&state).unwrap();
+    value.as_object_mut().unwrap().remove("webhookPort");
+    private::replace(
+        &state.root().join("state.json"),
+        &serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(read_state(&state.root()).unwrap().webhook_port, None);
+    assert!(!state.root().join("secrets/webhook-key").exists());
+    let report = events::report(&state.root(), false).unwrap();
+    assert_eq!(report["deliveries"], json!([]));
 }

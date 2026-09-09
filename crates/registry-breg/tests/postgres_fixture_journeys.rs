@@ -25,7 +25,8 @@ use registry_breg::contract::{parse_module_yaml, parse_project_yaml, ModuleAsset
 use registry_breg::fixtures::{
     execute_schema_test, validate_fixture_journeys, validate_schema_test_receipt_for_package,
     FixtureError, FixtureModuleSource, FixtureSourceFile, PostgresFixtureTestRunner,
-    SchemaTestCredentialBinding, SchemaTestCredentialBindings, SchemaTestSources,
+    SchemaTestCredentialBinding, SchemaTestCredentialBindings, SchemaTestRuntimeSetupError,
+    SchemaTestSources,
 };
 use registry_breg::package::{
     load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
@@ -169,6 +170,79 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
     idp.stop().await;
     drop(package);
     database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn production_schema_test_setup_failures_identify_configuration_without_secret_values() {
+    use registry_breg::event_destination::EventDestinationActivationError;
+
+    let (compiled, project_source) = compiled_fixture();
+    let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
+    let package = package_fixture(&project_source, &schema_fingerprint);
+    let suite = validate_fixture_journeys(JOURNEY_SOURCE, &compiled).expect("journeys preflight");
+    let idp = MockIdp::start().await;
+    for (secret_file, expected) in [
+        (Some("cursor-key"), SchemaTestRuntimeSetupError::Cursor),
+        (Some("audit-key"), SchemaTestRuntimeSetupError::Audit),
+        (
+            Some("oidc-jwks"),
+            SchemaTestRuntimeSetupError::Authentication,
+        ),
+        (
+            None,
+            SchemaTestRuntimeSetupError::EventDestinations(
+                EventDestinationActivationError::InventoryMismatch,
+            ),
+        ),
+    ] {
+        let database = TestDatabase::create(8).await;
+        let config_path = package.write_runtime_config(&database, &idp);
+        if let Some(secret_file) = secret_file {
+            write_private(
+                &package.directory.join("secrets").join(secret_file),
+                b"bad-canary",
+            );
+        } else {
+            let mut source = fs::read_to_string(&config_path).expect("runtime config reads");
+            source.push_str(
+                r#"eventDestinations:
+  destination-canary:
+    origin: https://receiver-canary.example
+    path: /payload-canary
+    networkProfile: productionHttps
+    dnsFamily: dualStackStrict
+    allowedPrivateCidrs: []
+    hmacSha256KeyRef: secret:file/key-canary
+    classificationCeiling: restricted
+    deliveryCeilings:
+      attemptTimeoutMilliseconds: 1000
+      maximumAttempts: 1
+"#,
+            );
+            fs::write(&config_path, source).expect("extra destination config writes");
+        }
+        let config = load_runtime_config(&config_path).expect("runtime config shape is valid");
+        let prepared_database = prepare_schema_test_database_with_connection_configs_for_test(
+            &config,
+            &package.prepared,
+            &database.migration_config,
+            &database.runtime_config,
+        )
+        .await
+        .expect("database prepares before runtime setup");
+        let error = execute_schema_test(
+            prepared_database,
+            &config,
+            &package.prepared,
+            &suite,
+            successful_credential_bindings(&suite, &idp),
+        )
+        .await
+        .expect_err("invalid runtime setup refuses fixture execution");
+        assert_eq!(error, FixtureError::RuntimeSetup(expected));
+        assert!(!format!("{error:?}: {error}").contains("canary"));
+        database.cleanup().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

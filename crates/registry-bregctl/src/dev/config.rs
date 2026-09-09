@@ -196,6 +196,9 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         let encoded = Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref()));
         private::create(&root.join("secrets").join(filename), encoded.as_bytes())?;
     }
+    if state.webhook_port.is_some() {
+        webhook_secret(root)?;
+    }
     private::create(
         &root.join("secrets/mint-jwks"),
         &serde_json::to_vec(&json!({"keys":[mint_public]}))?,
@@ -305,6 +308,13 @@ pub(super) fn runtime(
 ) -> Result<()> {
     let final_root = state.root();
     let prefix = if test { "test-" } else { "" };
+    let destinations = if let Some(port) = state.webhook_port {
+        let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+            .map_err(|_| anyhow::anyhow!("captured event project no longer compiles"))?;
+        event_destinations(&compiled, port)
+    } else {
+        json!({})
+    };
     write_yaml(
         &root.join(if test {
             "runtime-test.yaml"
@@ -319,9 +329,42 @@ pub(super) fn runtime(
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
             "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
             "authentication":{"oidc":{"issuer":state.mint_origin(),"audience":state.audience(),"allowedAlgorithm":"ES256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":clients.clients.iter().map(|c|&c.id).collect::<Vec<_>>(),"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/mint-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
-            "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":{}
+            "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations
         }),
     )
+}
+
+pub(super) fn webhook_secret(root: &Path) -> Result<()> {
+    let mut bytes = Zeroizing::new([0u8; 32]);
+    getrandom::fill(bytes.as_mut()).context("cannot generate local webhook secret")?;
+    let encoded = Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref()));
+    private::create(&root.join("secrets/webhook-key"), encoded.as_bytes())
+}
+
+/// Use the same compiled inventory as `explain events`. Shared destinations
+/// use the tightest attempt ceilings and the highest projected classification.
+fn event_destinations(compiled: &registry_breg::CompiledRegistry, port: u16) -> Value {
+    let mut destinations = BTreeMap::new();
+    for delivery in &compiled.event_deliveries().deliveries {
+        let (classification, timeout, attempts) =
+            destinations.entry(&delivery.destination_id).or_insert((
+                delivery.classification_ceiling,
+                delivery.attempt_timeout_ms,
+                delivery.maximum_attempts,
+            ));
+        *classification = (*classification).max(delivery.classification_ceiling);
+        *timeout = (*timeout).min(delivery.attempt_timeout_ms);
+        *attempts = (*attempts).min(delivery.maximum_attempts);
+    }
+    Value::Object(destinations.into_iter().map(|(id, (classification, timeout, attempts))| {
+        (id.clone(), json!({
+            "origin":format!("http://127.0.0.1:{port}"),"path":"/events",
+            "networkProfile":"loopbackDevelopmentHttp","dnsFamily":"dualStackStrict",
+            "allowedPrivateCidrs":[],"hmacSha256KeyRef":"secret:file/webhook-key",
+            "classificationCeiling":classification,
+            "deliveryCeilings":{"attemptTimeoutMilliseconds":timeout,"maximumAttempts":attempts}
+        }))
+    }).collect())
 }
 
 pub(super) fn write_yaml(path: &Path, value: &Value) -> Result<()> {

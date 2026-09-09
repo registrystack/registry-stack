@@ -150,6 +150,352 @@ fn write(path: &Path, bytes: &[u8]) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let report = read();
+        if ready(&report) {
+            return report;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "local event lifecycle did not reach the expected state"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+#[test]
+#[ignore = "requires matching installed breg/mint binaries and Docker; runs a retained local database"]
+fn installed_dev_receives_retries_replays_and_retains_authored_events() {
+    let temporary = tempfile::Builder::new()
+        .prefix("breg-native-events-test-")
+        .tempdir()
+        .unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let parent = fs::canonicalize(temporary.keep()).unwrap();
+    let project = parent.join("registry");
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let session = Session {
+        project: project.clone(),
+        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
+        docker: installed("docker"),
+    };
+    session.success(&["init", project.to_str().unwrap()]);
+    let mut registry: Value =
+        serde_norway::from_slice(&fs::read(project.join("registry.yaml")).unwrap()).unwrap();
+    let record = registry["entities"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entity| entity["id"] == "record")
+        .unwrap();
+    record["events"] = json!([
+        {"id":"record-created-a", "trigger":"created", "projection":["status"],
+         "webhook":{"destinationId":"receiver-a"}},
+        {"id":"record-created-b", "trigger":"created", "projection":["status"],
+         "webhook":{"destinationId":"receiver-b"}}
+    ]);
+    write(
+        &project.join("registry.yaml"),
+        serde_norway::to_string(&registry).unwrap().as_bytes(),
+    );
+    let clients = parent.join("clients.yaml");
+    write(
+        &clients,
+        br#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims:
+      registry_principal: generic-registry-operator
+      registry_purpose: registry-operations
+  - id: reader
+    accessProfiles: [record-reader]
+    scopes: [registry:generic:read]
+    claims:
+      registry_principal: generic-registry-reader
+      registry_purpose: registry-reporting
+      registry_record_status: active
+  - id: source
+    accessProfiles: [evidence-source]
+    scopes: [registry:evidence:lookup]
+    claims:
+      registry_principal: generic-registry-source
+      registry_purpose: evidence-source-read
+seed:
+  - id: event-seed
+    client: operator
+    entity: record
+    accessProfile: operator
+    data: {code: synthetic-event-seed, label: Synthetic event seed, status: active}
+"#,
+    );
+    let [database_port, breg_port, mint_port] = free_ports();
+    let first = session.report(session.dev(&[
+        "start",
+        "--clients-file",
+        clients.to_str().unwrap(),
+        "--database-port",
+        &database_port.to_string(),
+        "--breg-port",
+        &breg_port.to_string(),
+        "--mint-port",
+        &mint_port.to_string(),
+    ]));
+    assert_eq!(first["status"], "ready");
+    let dev = project.join(".breg/dev");
+    let state_file = dev.join("state.json");
+    let state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
+    let webhook_port = u16::try_from(state["webhookPort"].as_u64().unwrap()).unwrap();
+    assert_ne!(webhook_port, 0);
+    assert!(![database_port, breg_port, mint_port].contains(&webhook_port));
+    let receiver_address = std::net::SocketAddr::from(([127, 0, 0, 1], webhook_port));
+    assert!(std::net::TcpStream::connect(receiver_address).is_ok());
+    let runtime_file = dev.join("runtime.yaml");
+    let configuration: Value = serde_norway::from_slice(&fs::read(&runtime_file).unwrap()).unwrap();
+    let destinations = configuration["eventDestinations"].as_object().unwrap();
+    assert_eq!(destinations.len(), 2);
+    for destination in ["receiver-a", "receiver-b"] {
+        assert_eq!(
+            destinations[destination]["origin"],
+            format!("http://127.0.0.1:{webhook_port}")
+        );
+    }
+    let events = || session.success(&["dev", "events", project.to_str().unwrap()]);
+    let pending = || {
+        session.success(&[
+            "webhook",
+            "list",
+            "--runtime-config",
+            runtime_file.to_str().unwrap(),
+        ])
+    };
+    let delivered = || {
+        let output = Command::new(&session.docker)
+            .args([
+                "exec",
+                state["containerId"].as_str().unwrap(),
+                "psql",
+                "-X",
+                "-A",
+                "-t",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-U",
+                "postgres",
+                "-d",
+                "breg_dev",
+                "-c",
+                "SELECT count(*) FROM registry_internal.registry_webhook_delivery_state WHERE state = 'delivered'",
+            ])
+            .output()
+            .expect("owned database state query launches");
+        assert!(
+            output.status.success(),
+            "owned database state query succeeds"
+        );
+        json!(String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .parse::<u64>()
+            .unwrap())
+    };
+    let received = poll_report(events, |report| {
+        report["deliveries"].as_array().unwrap().len() == 2
+    });
+    let encoded = serde_json::to_string(&received).unwrap();
+    for absent in [
+        "payload",
+        "active",
+        "synthetic-event-seed",
+        "Synthetic event seed",
+        "recordId",
+    ] {
+        assert!(
+            !encoded.contains(absent),
+            "default receipt disclosed {absent}"
+        );
+    }
+    for receipt in received["deliveries"].as_array().unwrap() {
+        uuid::Uuid::parse_str(receipt["eventId"].as_str().unwrap()).unwrap();
+        let event_type = receipt["eventType"].as_str().unwrap();
+        let destination = match event_type {
+            "record-created-a" => "receiver-a",
+            "record-created-b" => "receiver-b",
+            _ => panic!("receipt did not name an authored event"),
+        };
+        assert_eq!(receipt["entity"], "record");
+        assert_eq!(receipt["trigger"], "created");
+        assert_eq!(
+            receipt["deliveryId"],
+            format!("events.record.{event_type}.webhook")
+        );
+        assert_eq!(receipt["destinationId"], destination);
+        assert_eq!(receipt["status"], "received");
+        assert!(receipt["generation"].as_u64().unwrap() > 0);
+        assert_eq!(receipt["attempt"], 1);
+    }
+    let payloads = session.success(&[
+        "dev",
+        "events",
+        project.to_str().unwrap(),
+        "--include-payload",
+    ]);
+    for receipt in payloads["deliveries"].as_array().unwrap() {
+        assert_eq!(receipt["payload"], json!({"status":"active"}));
+    }
+    poll_report(delivered, |count| count.as_u64() == Some(2));
+    poll_report(pending, |report| {
+        report["deliveries"].as_array().unwrap().is_empty()
+    });
+
+    // A receipt must be persisted privately before acknowledgement. Refusing
+    // unsafe inbox permissions gives the real worker a retryable 503 response.
+    let inbox = dev.join("events.jsonl");
+    fs::set_permissions(&inbox, fs::Permissions::from_mode(0o644)).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let origin = format!("http://127.0.0.1:{breg_port}");
+    runtime.block_on(async {
+        let token = fs::read_to_string(dev.join("secrets/operator-token")).unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let response = client
+            .post(format!(
+                "{origin}/v1/records/records?accessProfile=operator"
+            ))
+            .bearer_auth(&token)
+            .header("Idempotency-Key", "synthetic-event-retry")
+            .json(&json!({"data":{
+                "code":"synthetic-event-retry", "label":"Synthetic retry record", "status":"retired"
+            }}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 201);
+    });
+    let retrying = poll_report(pending, |report| {
+        let deliveries = report["deliveries"].as_array().unwrap();
+        deliveries.len() == 2
+            && deliveries.iter().all(|delivery| {
+                delivery["state"] == "pending" && delivery["attempt"].as_u64().unwrap() >= 2
+            })
+    });
+    let dead = poll_report(pending, |report| {
+        let deliveries = report["deliveries"].as_array().unwrap();
+        deliveries.len() == 2
+            && deliveries
+                .iter()
+                .all(|delivery| delivery["state"] == "dead_lettered")
+    });
+    fs::set_permissions(&inbox, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        events(),
+        received,
+        "failed appends must not create receipts"
+    );
+    for delivery in dead["deliveries"].as_array().unwrap() {
+        assert_eq!(delivery["attempt"], 5);
+        assert_eq!(delivery["replayEligible"], true);
+        assert_eq!(delivery["payloadAvailable"], true);
+        assert!(retrying["deliveries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|earlier| {
+                earlier["eventId"] == delivery["eventId"]
+                    && earlier["deliveryId"] == delivery["deliveryId"]
+                    && earlier["generation"] == delivery["generation"]
+            }));
+        let replay = session.success(&[
+            "webhook",
+            "replay",
+            "--runtime-config",
+            runtime_file.to_str().unwrap(),
+            "--event-id",
+            delivery["eventId"].as_str().unwrap(),
+            "--delivery-id",
+            delivery["deliveryId"].as_str().unwrap(),
+            "--expected-generation",
+            &delivery["generation"].to_string(),
+        ]);
+        assert_eq!(replay["eventId"], delivery["eventId"]);
+        assert_eq!(
+            replay["generation"].as_u64().unwrap(),
+            delivery["generation"].as_u64().unwrap() + 1
+        );
+    }
+    let recovered = poll_report(events, |report| {
+        report["deliveries"].as_array().unwrap().len() == 4
+    });
+    for delivery in dead["deliveries"].as_array().unwrap() {
+        let receipt = recovered["deliveries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|receipt| {
+                receipt["eventId"] == delivery["eventId"]
+                    && receipt["deliveryId"] == delivery["deliveryId"]
+            })
+            .expect("replay has an authenticated receipt for the same event");
+        assert_eq!(
+            receipt["generation"].as_u64().unwrap(),
+            delivery["generation"].as_u64().unwrap() + 1
+        );
+        assert_eq!(receipt["attempt"], 1);
+        assert_eq!(receipt["status"], "received");
+    }
+    // The operator queue also omits leased attempts. Check the durable terminal
+    // state directly before asserting that both recovered deliveries leave it.
+    poll_report(delivered, |count| count.as_u64() == Some(4));
+    poll_report(pending, |report| {
+        report["deliveries"].as_array().unwrap().is_empty()
+    });
+    let receipts_before = fs::read(&inbox).unwrap();
+    let webhook_key = fs::read(dev.join("secrets/webhook-key")).unwrap();
+    let assertion_key = fs::read(dev.join("credentials/operator/assertion-key.jwk")).unwrap();
+    session.stop();
+    assert!(std::net::TcpStream::connect(receiver_address).is_err());
+    assert_eq!(events(), recovered, "stopped inbox remains inspectable");
+    let restarted = session.start();
+    assert_eq!(restarted["packageRevision"], first["packageRevision"]);
+    let retained: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
+    for field in ["owner", "containerId", "webhookPort", "seeded"] {
+        assert_eq!(retained[field], state[field]);
+    }
+    assert!(std::net::TcpStream::connect(receiver_address).is_ok());
+    assert!(fs::read(dev.join("secrets/webhook-key")).unwrap() == webhook_key);
+    assert!(fs::read(dev.join("credentials/operator/assertion-key.jwk")).unwrap() == assertion_key);
+    assert_eq!(fs::read(&inbox).unwrap(), receipts_before);
+    assert_eq!(events(), recovered);
+    runtime.block_on(async {
+        let token = fs::read_to_string(dev.join("secrets/operator-token")).unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let response = client
+            .get(format!(
+                "{origin}/v1/records/records?accessProfile=operator"
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let records: Value = response.json().await.unwrap();
+        assert_eq!(
+            records["items"].as_array().unwrap().len(),
+            2,
+            "restart must not reseed"
+        );
+    });
+    session.remove();
+    assert!(std::net::TcpStream::connect(receiver_address).is_err());
+    std::mem::forget(session);
+    fs::remove_dir_all(parent).unwrap();
+}
+
 #[test]
 #[ignore = "requires matching installed breg/mint binaries and Docker; runs a retained local database"]
 fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {

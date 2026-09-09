@@ -20,9 +20,11 @@ workspace = true
 anstream.workspace = true
 anstyle.workspace = true
 anyhow.workspace = true
+axum.workspace = true
 base64.workspace = true
 clap.workspace = true
 getrandom.workspace = true
+hmac.workspace = true
 inquire.workspace = true
 jsonschema.workspace = true
 p256.workspace = true
@@ -43,6 +45,7 @@ sha2.workspace = true
 signal-hook.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
