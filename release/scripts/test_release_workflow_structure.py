@@ -348,7 +348,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         candidate = step_run(
             candidate_document,
             "validate",
-            "Validate request, source, CI, and destinations",
+            "Validate request, source, and destinations",
         )
         self.assertIn(
             "pre-v0.19 releases are immutable historical evidence",
@@ -383,8 +383,10 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             list(document["jobs"]),
             [
                 "validate",
+                "protected-ci",
                 "build-canonical-binaries",
                 "build-canonical",
+                "build-docs",
                 "build-platforms",
                 "build-macos-platforms",
                 "clients",
@@ -393,8 +395,10 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             ],
         )
         for job in (
+            "protected-ci",
             "build-canonical-binaries",
             "build-canonical",
+            "build-docs",
             "build-platforms",
             "build-macos-platforms",
             "clients",
@@ -412,7 +416,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         validation = step_run(
             document,
             "validate",
-            "Validate request, source, CI, and destinations",
+            "Validate request, source, and destinations",
         )
         self.assertIn(
             '[[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]', validation
@@ -420,7 +424,15 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("github.event.client_payload.request_id", text)
         self.assertIn('[[ ! "${REQUEST_ID}" =~ ^[0-9a-f]{32}$ ]]', validation)
         self.assertIn("refs/remotes/origin/main", validation)
-        self.assertIn("actions/workflows/ci.yml/runs", validation)
+        ci = document["jobs"]["protected-ci"]
+        self.assertEqual(ci["needs"], "validate")
+        _, protected_workflow = workflow("ci.yml")
+        longest_ci_job = max(job.get("timeout-minutes", 0) for job in protected_workflow["jobs"].values())
+        self.assertGreater(ci["timeout-minutes"], longest_ci_job)
+        self.assertIn("protected-ci", document["jobs"]["attest"]["needs"])
+        self.assertNotIn("if", document["jobs"]["attest"])
+        self.assertIn("registry-release wait-for-ci", ci["steps"][-1]["run"])
+        self.assertIn("needs.validate.outputs.source_sha", ci["steps"][-1]["run"])
         self.assertIn("git ls-remote --exit-code --tags", validation)
         self.assertIn("require-image-tag-absent", validation)
         self.assertNotIn("select-canary", validation)
