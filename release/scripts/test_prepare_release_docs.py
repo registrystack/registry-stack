@@ -66,6 +66,7 @@ class PreparationTest(TestCase):
         return prep.prepare_docs(self.repo, "0.29.0", "beta-41", "2026-09-10", **kwargs)
 
     def test_preview_builds_from_exact_source_without_changing_branch(self):
+        prep.git(self.repo, "update-ref", "-d", "refs/remotes/origin/main")
         head = prep.git(self.repo, "rev-parse", "HEAD")
         output = self.root / "review output"
         with mock.patch.object(prep.subprocess, "run", side_effect=self.fake_docker):

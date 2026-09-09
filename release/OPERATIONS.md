@@ -244,8 +244,8 @@ planner rejects a prepared tree that binds those versions.
 Run the maintained preparation command from your clean, committed release
 branch with Docker available and PyYAML installed in the Python environment
 used by `registry-release`. The workspace version and selected release manifest
-must match your arguments. Keep `origin/main` from the fetch above available
-for the archive checks.
+must match your arguments. Archive checks compare against the committed source
+revision selected at the start of preparation.
 
 ```sh
 release/scripts/registry-release prepare-docs \
