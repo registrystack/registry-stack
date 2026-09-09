@@ -139,10 +139,11 @@ The adaptor also carries an evidence-offering listing. Do not build a workflow o
 claims no Evidence capability family, the V1 metadata route that served offerings is retired, and
 evidence offerings are published by Registry Manifest instead.
 
-{/* Evidence: docs/site/src/content/docs/products/registry-relay/index.md states that Relay V2 does
-not claim the Evidence family, and docs/site/src/lib/relay-v2-retirement-redirects.mjs lists
-list_metadata_evidence_offerings among the V1 operation slugs retired by the V2 cutover.
-crates/registry-manifest-core/src/lib.rs renders evidence offerings from the manifest. */}
+{/* Evidence: crates/registry-relay-v2/src/artifacts.rs builds unsupported_families with evidence
+among its entries, so every V2 capability inventory reports that family as unsupported.
+docs/site/src/lib/relay-v2-retirement-redirects.mjs lists list_metadata_evidence_offerings among the
+V1 operation slugs the V2 cutover retired. crates/registry-manifest-core/src/lib.rs holds the
+EvidenceOfferingManifest that Registry Manifest compiles and renders. */}
 
 ## How operations fail
 
