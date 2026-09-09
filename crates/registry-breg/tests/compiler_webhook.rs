@@ -910,3 +910,28 @@ fn module_lock(module: &RegistryModule) -> ModuleLockSource {
         digest: Some(module_digest(module)),
     }
 }
+
+#[test]
+fn approve_only_lifecycle_payload_bounds_exclude_impossible_reviewer_text() {
+    let mut source = change_request_event_project();
+    let request = &mut source["entities"][2];
+    request["events"][0]["projection"] = json!(["reason"]);
+    request["fields"][2]["maxLength"] = json!(173_000);
+    for condition in [
+        json!({"kind":"request_lifecycle", "transitions":["approve"]}),
+        json!({"kind":"request_lifecycle", "toStates":["approved"]}),
+    ] {
+        source["entities"][2]["events"][0]["when"] = condition;
+        let compiled = compile(&source).expect("approve-only payload fits the webhook limit");
+        let delivery = compiled
+            .event_deliveries()
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.event_id == "request-lifecycle")
+            .unwrap();
+        assert!(delivery.maximum_payload_bytes < 1_048_576);
+    }
+    source["entities"][2]["events"][0]["when"] =
+        json!({"kind":"request_lifecycle", "transitions":["request_revision"]});
+    assert_compile_code(&source, "event.webhook.projection_too_large");
+}

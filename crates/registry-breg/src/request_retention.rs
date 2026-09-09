@@ -27,6 +27,10 @@ use crate::postgres::{
 use crate::runtime_config::load_runtime_config;
 
 const MAX_RETAINED_HISTORY_PAGE_SIZE: u16 = 50;
+// Reserve the other half of the client's 2 MiB request-extension budget for
+// current decisions, actions, and the remaining request metadata.
+const MAX_RETAINED_HISTORY_BYTES: usize = 1_048_576;
+const MAX_RETAINED_DECISIONS: usize = 1024;
 pub const MAX_REQUEST_RETENTION_OPERATOR_PAGE_SIZE: u16 = 100;
 const RETENTION_OPERATION_ID: &str = "records.request.retention.erase";
 const RETENTION_REFERENCE: &str = "request-retention-erasure";
@@ -614,65 +618,132 @@ pub async fn load_retained_history(
     let page_limit = i64::from(query.limit) + 1;
     let rows = client
         .query(
-            "SELECT s.state, s.proposal_version, p.proposal_version,
-                    p.contract_fingerprint, p.effect_digest, p.erased_at IS NOT NULL,
-                    a.application_id
-               FROM registry_internal.registry_request_state s
-               JOIN registry_internal.registry_request_proposals p
-                 ON p.request_entity_id = s.request_entity_id
-                AND p.request_id = s.request_id
-               LEFT JOIN registry_internal.registry_request_applications a
-                 ON a.request_entity_id = p.request_entity_id
-                AND a.request_id = p.request_id
-                AND a.proposal_version = p.proposal_version
-              WHERE s.request_entity_id = $1
-                AND s.request_id = $2
-                AND ($3::bigint IS NULL OR p.proposal_version > $3::bigint)
-              ORDER BY p.proposal_version
-              LIMIT $4::bigint",
+            "WITH proposals AS (
+                SELECT s.state, s.proposal_version AS current_version, p.proposal_version,
+                       p.contract_fingerprint, p.effect_digest, p.erased_at IS NOT NULL AS erased,
+                       a.application_id
+                  FROM registry_internal.registry_request_state s
+                  JOIN registry_internal.registry_request_proposals p
+                    ON p.request_entity_id = s.request_entity_id AND p.request_id = s.request_id
+                  LEFT JOIN registry_internal.registry_request_applications a
+                    ON a.request_entity_id = p.request_entity_id AND a.request_id = p.request_id
+                   AND a.proposal_version = p.proposal_version
+                 WHERE s.request_entity_id = $1 AND s.request_id = $2
+                   AND ($3::bigint IS NULL OR p.proposal_version > $3::bigint)
+                 ORDER BY p.proposal_version LIMIT $4::bigint
+             )
+             SELECT p.*, d.decision_count, d.decision_bytes
+               FROM proposals p
+               CROSS JOIN LATERAL (
+                   SELECT count(*) AS decision_count,
+                          COALESCE(sum(octet_length(json_build_object(
+                              'stageId', stage_id, 'kind', decision,
+                              'decidedAt', to_char(decided_at AT TIME ZONE 'UTC',
+                                  'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                              'reasonPresent', reason_present,
+                              'reason', CASE WHEN $5::boolean THEN reason ELSE NULL END
+                          )::text) + 1), 0)::bigint AS decision_bytes
+                     FROM (SELECT stage_id, decision, decided_at, reason_present, reason
+                             FROM registry_internal.registry_request_decisions
+                            WHERE request_entity_id = $1 AND request_id = $2
+                              AND proposal_version = p.proposal_version
+                            ORDER BY decision_index LIMIT 1025) bounded
+               ) d
+              ORDER BY p.proposal_version",
             &[
                 &query.request_entity_id,
                 &query.request_id,
                 &query.after_proposal_version,
                 &page_limit,
+                &query.include_decision_reasons,
             ],
         )
         .await
         .map_err(map_retention_error)?;
-    let mut history = Vec::with_capacity(rows.len().min(usize::from(query.limit)));
+    let mut history: Vec<RetainedRequestProposal> =
+        Vec::with_capacity(rows.len().min(usize::from(query.limit)));
     let mut next_after_proposal_version = None;
-    for (index, row) in rows.into_iter().enumerate() {
-        let proposal_version = row.get::<_, i64>(2);
-        if index >= usize::from(query.limit) {
-            next_after_proposal_version = Some(proposal_version);
-            break;
-        }
-        history.push(RetainedRequestProposal {
+    let mut page_bytes = 64;
+    for row in rows {
+        let proposal = RetainedRequestProposal {
             request_entity_id: query.request_entity_id.to_owned(),
             request_id: query.request_id.to_string(),
-            proposal_version,
+            proposal_version: row.get(2),
             request_state: row.get(0),
-            current: row.get::<_, i64>(1) == proposal_version,
+            current: row.get::<_, i64>(1) == row.get::<_, i64>(2),
             contract_fingerprint: row.get(3),
             effect_digest: row.get(4),
             detail_erased: row.get(5),
             application_id: row.get::<_, Option<Uuid>>(6).map(|id| id.to_string()),
             result_link_count: 0,
             result_links: Vec::new(),
-            decisions: load_retained_decisions(
-                client,
-                query.request_entity_id,
-                query.request_id,
-                proposal_version,
-                query.include_decision_reasons,
-            )
-            .await?,
-        });
+            decisions: Vec::new(),
+        };
+        let decision_bytes = usize::try_from(row.get::<_, i64>(8))
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        let proposal_bytes = serde_json::to_vec(&proposal)
+            .map_err(|_| RequestRetentionError::Unavailable)?
+            .len()
+            .checked_add(decision_bytes)
+            .ok_or(RequestRetentionError::Unavailable)?;
+        if history.len() == usize::from(query.limit)
+            || page_bytes + proposal_bytes > MAX_RETAINED_HISTORY_BYTES
+        {
+            // An exclusive cursor is the last returned version, never the
+            // first omitted one. Refuse a single oversized proposal explicitly
+            // rather than return an empty page that cannot make progress.
+            next_after_proposal_version = Some(
+                history
+                    .last()
+                    .ok_or(RequestRetentionError::Unavailable)?
+                    .proposal_version,
+            );
+            break;
+        }
+        if row.get::<_, i64>(7) > MAX_RETAINED_DECISIONS as i64 {
+            return Err(RequestRetentionError::Unavailable);
+        }
+        page_bytes += proposal_bytes;
+        history.push(proposal);
     }
-    Ok(RetainedRequestHistoryPage {
+    let versions = history
+        .iter()
+        .map(|proposal| proposal.proposal_version)
+        .collect::<Vec<_>>();
+    let mut decisions = load_retained_decisions_for_versions(
+        client,
+        query.request_entity_id,
+        query.request_id,
+        &versions,
+        query.include_decision_reasons,
+    )
+    .await?;
+    for proposal in &mut history {
+        proposal.decisions = decisions
+            .remove(&proposal.proposal_version)
+            .unwrap_or_default();
+    }
+    let mut page = RetainedRequestHistoryPage {
         proposals: history,
         next_after_proposal_version,
-    })
+    };
+    // Recheck actual serialized bytes after the batch read in case concurrent
+    // decisions changed a proposal since its size was inspected.
+    while serde_json::to_vec(&page)
+        .map_err(|_| RequestRetentionError::Unavailable)?
+        .len()
+        > MAX_RETAINED_HISTORY_BYTES
+    {
+        if page.proposals.len() <= 1 {
+            return Err(RequestRetentionError::Unavailable);
+        }
+        page.proposals.pop();
+        page.next_after_proposal_version = page
+            .proposals
+            .last()
+            .map(|proposal| proposal.proposal_version);
+    }
+    Ok(page)
 }
 
 /// Retained decision facts survive detail erasure. The caller supplies current
@@ -684,36 +755,61 @@ pub async fn load_retained_decisions(
     proposal_version: i64,
     include_reason: bool,
 ) -> Result<Vec<RetainedRequestDecision>> {
-    let rows = client
-        .query(
-            "SELECT stage_id, decision,
-                    to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    reason_present, CASE WHEN $4::boolean THEN reason ELSE NULL END
-               FROM registry_internal.registry_request_decisions
-              WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = $3
-              ORDER BY decision_index LIMIT 1025",
-            &[
-                &request_entity_id,
-                &request_id,
-                &proposal_version,
-                &include_reason,
-            ],
-        )
-        .await
-        .map_err(map_retention_error)?;
-    if rows.len() > 1024 {
+    Ok(load_retained_decisions_for_versions(
+        client,
+        request_entity_id,
+        request_id,
+        &[proposal_version],
+        include_reason,
+    )
+    .await?
+    .remove(&proposal_version)
+    .unwrap_or_default())
+}
+
+async fn load_retained_decisions_for_versions(
+    client: &impl GenericClient,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal_versions: &[i64],
+    include_reason: bool,
+) -> Result<BTreeMap<i64, Vec<RetainedRequestDecision>>> {
+    if proposal_versions.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    if proposal_versions.len() > usize::from(MAX_RETAINED_HISTORY_PAGE_SIZE) {
         return Err(RequestRetentionError::Unavailable);
     }
-    Ok(rows
-        .into_iter()
-        .map(|row| RetainedRequestDecision {
-            stage_id: row.get(0),
-            kind: row.get(1),
-            decided_at: row.get(2),
-            reason_present: row.get(3),
-            reason: row.get(4),
-        })
-        .collect())
+    let rows = client.query(
+        "SELECT version, d.stage_id, d.decision, d.decided_at, d.reason_present, d.reason
+           FROM unnest($3::bigint[]) version
+           CROSS JOIN LATERAL (
+               SELECT stage_id, decision,
+                      to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS decided_at,
+                      reason_present, CASE WHEN $4::boolean THEN reason ELSE NULL END AS reason,
+                      decision_index
+                 FROM registry_internal.registry_request_decisions
+                WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = version
+                ORDER BY decision_index LIMIT 1025
+           ) d
+          ORDER BY version, d.decision_index",
+        &[&request_entity_id, &request_id, &proposal_versions, &include_reason],
+    ).await.map_err(map_retention_error)?;
+    let mut grouped = BTreeMap::<i64, Vec<RetainedRequestDecision>>::new();
+    for row in rows {
+        let decisions = grouped.entry(row.get(0)).or_default();
+        if decisions.len() == MAX_RETAINED_DECISIONS {
+            return Err(RequestRetentionError::Unavailable);
+        }
+        decisions.push(RetainedRequestDecision {
+            stage_id: row.get(1),
+            kind: row.get(2),
+            decided_at: row.get(3),
+            reason_present: row.get(4),
+            reason: row.get(5),
+        });
+    }
+    Ok(grouped)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

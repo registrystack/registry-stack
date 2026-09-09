@@ -106,7 +106,7 @@ pub(super) async fn erased_terminal_request_record(
         id: record_id.to_owned(),
         revision,
         data: Map::new(),
-        request: Some(erased_terminal_request_metadata(
+        request: Some(bound_request_metadata(erased_terminal_request_metadata(
             &header,
             history,
             may_disclose_effect_digests(entity, request),
@@ -118,7 +118,7 @@ pub(super) async fn erased_terminal_request_record(
                 header.proposal_version,
             )
             .await?,
-        )),
+        ))?),
         request_presence: None,
     };
     if !request.context.request_presence().is_empty() {
@@ -167,7 +167,7 @@ async fn annotate_request_records(
             let history =
                 retained_history(transaction, registry, request, claims, entity, record_uuid)
                     .await?;
-            record.request = Some(erased_terminal_request_metadata(
+            record.request = Some(bound_request_metadata(erased_terminal_request_metadata(
                 &header,
                 history,
                 may_disclose_effect_digests(entity, request),
@@ -179,7 +179,7 @@ async fn annotate_request_records(
                     header.proposal_version,
                 )
                 .await?,
-            ));
+            ))?);
             continue;
         }
         let workflow = crate::request_store::load(transaction, &entity.id, record_uuid, false)
@@ -280,9 +280,40 @@ async fn annotate_request_records(
             }
             metadata.insert("application".to_owned(), application_metadata);
         }
-        record.request = Some(Value::Object(metadata));
+        record.request = Some(bound_request_metadata(Value::Object(metadata))?);
     }
     Ok(())
+}
+
+// This is the maintained client decoder's maximum request-extension size.
+const MAX_REQUEST_EXTENSION_BYTES: usize = 2_097_152;
+
+fn bound_request_metadata(mut metadata: Value) -> Result<Value, ReadServiceError> {
+    while serde_json::to_vec(&metadata)
+        .map_err(|_| ReadServiceError::Unavailable)?
+        .len()
+        > MAX_REQUEST_EXTENSION_BYTES
+    {
+        let history = metadata
+            .get_mut("history")
+            .and_then(Value::as_object_mut)
+            .ok_or(ReadServiceError::Unavailable)?;
+        let proposals = history
+            .get_mut("proposals")
+            .and_then(Value::as_array_mut)
+            .ok_or(ReadServiceError::Unavailable)?;
+        if proposals.len() <= 1 {
+            return Err(ReadServiceError::Unavailable);
+        }
+        proposals.pop();
+        let cursor = proposals
+            .last()
+            .and_then(|proposal| proposal.get("proposalVersion"))
+            .cloned()
+            .ok_or(ReadServiceError::Unavailable)?;
+        history.insert("nextAfterProposalVersion".to_owned(), cursor);
+    }
+    Ok(metadata)
 }
 
 /// Caller-filtered public projection of the frozen planning binding. The
@@ -1292,6 +1323,50 @@ impl std::fmt::Display for SqlIdent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn final_request_size_cap_keeps_whole_proposals_and_exclusive_cursor() {
+        let decisions = (0..1024)
+            .map(|index| {
+                serde_json::json!({
+                    "stageId": format!("stage-{}", index / 32), "kind": "approve",
+                    "decidedAt": "2026-09-09T12:00:00Z", "reasonPresent": false,
+                })
+            })
+            .collect::<Vec<_>>();
+        let metadata = serde_json::json!({
+            "bregState": "draft", "proposalVersion": 26, "editable": false,
+            "history": {
+                "proposals": (1..=25).map(|version| serde_json::json!({
+                    "proposalVersion": version, "decisions": decisions,
+                })).collect::<Vec<_>>(),
+                "nextAfterProposalVersion": null,
+            },
+        });
+        assert!(serde_json::to_vec(&metadata).unwrap().len() > super::MAX_REQUEST_EXTENSION_BYTES);
+        let bounded = super::bound_request_metadata(metadata).expect("whole proposals fit");
+        registry_breg_client::BRegRequestMetadata::from_value(bounded.clone(), false)
+            .expect("bounded metadata passes the real client decoder");
+        let proposals = bounded["history"]["proposals"].as_array().unwrap();
+        assert!(proposals.len() < 25);
+        assert_eq!(
+            bounded["history"]["nextAfterProposalVersion"],
+            proposals.last().unwrap()["proposalVersion"]
+        );
+        assert!(proposals
+            .iter()
+            .all(|proposal| proposal["decisions"].as_array().unwrap().len() == 1024));
+    }
+
+    #[test]
+    fn oversized_single_history_proposal_refuses_without_an_empty_cursor_loop() {
+        let metadata = serde_json::json!({
+            "history": {"proposals": [{"proposalVersion": 1, "decisions": [],
+                "oversized": "x".repeat(super::MAX_REQUEST_EXTENSION_BYTES)}],
+                "nextAfterProposalVersion": 1},
+        });
+        assert!(super::bound_request_metadata(metadata).is_err());
+    }
+
     use std::collections::{BTreeMap, BTreeSet};
 
     use serde_json::{json, Map, Value};

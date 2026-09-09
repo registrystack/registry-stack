@@ -3535,12 +3535,11 @@ fn validate_events(
                 "an event projection refers to an unknown field",
             ));
         }
-        let maximum_payload_bytes =
-            maximum_event_payload_bytes(&entity.id, event.trigger, &event.projection, |field| {
-                fields
-                    .get(field)
-                    .map(|field| (&field.field_type, field.required))
-            });
+        let maximum_payload_bytes = maximum_event_payload_bytes(&entity.id, event, |field| {
+            fields
+                .get(field)
+                .map(|field| (&field.field_type, field.required))
+        });
         if matches!(
             event.trigger,
             EventTrigger::Patched | EventTrigger::Tombstoned
@@ -3826,11 +3825,11 @@ fn valid_logical_destination_id(value: &str) -> bool {
 
 fn maximum_event_payload_bytes<'a>(
     entity_id: &str,
-    trigger: EventTrigger,
-    projection: &BTreeSet<String>,
+    event: &crate::contract::EventSource,
     field: impl Fn(&str) -> Option<(&'a FieldTypeSource, bool)>,
 ) -> Option<u64> {
-    let values = maximum_event_values_bytes(projection, field)?;
+    let trigger = event.trigger;
+    let values = maximum_event_values_bytes(&event.projection, field)?;
     let fixed_keys: &[&str] = if trigger == EventTrigger::RequestLifecycle {
         &[
             "entity",
@@ -3872,7 +3871,6 @@ fn maximum_event_payload_bytes<'a>(
             "effectDigest",
             "deduplicationKey",
             "reasonPresent",
-            "reason",
         ];
         total = total
             .checked_add(2)?
@@ -3889,11 +3887,17 @@ fn maximum_event_payload_bytes<'a>(
             .checked_add(258)?
             .checked_add(73)?
             .checked_add(512)?
-            .checked_add(5)?
-            // Reviewer text is bounded in Unicode characters; a JSON control
-            // escape is at most six bytes per character, plus string quotes.
-            .checked_add((crate::request_workflow::MAX_REVIEW_REASON_CHARS as u64).checked_mul(6)?)?
-            .checked_add(2)?;
+            .checked_add(5)?;
+        if request_event_may_include_review_reason(event) {
+            // Include the comma, key, and worst-case escaped Unicode text only
+            // when the event can carry a rejection or revision reason.
+            total = total
+                .checked_add(1 + "reason".len() as u64 + 3)?
+                .checked_add(
+                    (crate::request_workflow::MAX_REVIEW_REASON_CHARS as u64).checked_mul(6)?,
+                )?
+                .checked_add(2)?;
+        }
     }
     // Entity ids and triggers use the compiler's closed ASCII grammars.
     total = total.checked_add(entity_id.len() as u64 + 2)?;
@@ -3947,13 +3951,12 @@ pub(crate) fn maximum_compiled_event_payload_bytes(
     entity: &CompiledEntity,
     event: &crate::contract::EventSource,
 ) -> Option<u32> {
-    let maximum =
-        maximum_event_payload_bytes(&entity.id, event.trigger, &event.projection, |field| {
-            entity
-                .fields
-                .get(field)
-                .map(|field| (&field.field_type, field.required))
-        })?;
+    let maximum = maximum_event_payload_bytes(&entity.id, event, |field| {
+        entity
+            .fields
+            .get(field)
+            .map(|field| (&field.field_type, field.required))
+    })?;
     u32::try_from(maximum).ok()
 }
 

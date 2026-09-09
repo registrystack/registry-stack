@@ -396,6 +396,14 @@ facts.
 
 {/* Evidence: crates/registry-breg/src/artifacts.rs openapi_request_action_input_schema; crates/registry-breg/src/postgres/request_read.rs decisions_value; crates/registry-breg/src/contract.rs readable_request_fields; crates/registry-breg/src/request_retention.rs; crates/registry-breg/tests/postgres_request_upgrade_retention.rs. */}
 
+History returns up to 50 whole proposals per page. The response byte budget can shorten a page
+without splitting a proposal's decisions. To continue, send the returned
+`data.request.history.nextAfterProposalVersion` as `requestHistoryAfterProposalVersion` on the
+same request GET, keeping the same access profile. Follow each returned cursor until it is
+null; a page with fewer than 50 proposals can still have a next page.
+
+{/* Evidence: crates/registry-breg/src/request_retention.rs load_retained_history; crates/registry-breg/src/postgres/request_read.rs retained_history and bound_request_metadata; crates/registry-breg/src/api/mod.rs requestHistoryAfterProposalVersion. */}
+
 The response of an action is not a Registry Record envelope:
 
 ```json
