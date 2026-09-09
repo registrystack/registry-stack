@@ -41,8 +41,8 @@ export async function prepareReleaseDocsMetadata({
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version ?? '')) {
     throw new Error('version must be an unprefixed stable semantic version');
   }
-  if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(releaseId ?? '')) {
-    throw new Error('release-id must be a lowercase release identifier');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(releaseId ?? '')) {
+    throw new Error('release-id must be a release identifier of 1 to 64 letters, digits, dots, underscores or hyphens, starting with a letter or digit');
   }
   if (!calendarDate(date)) throw new Error('date must be a valid YYYY-MM-DD calendar date');
   const repoRoot = resolve(siteRoot, '../..');
