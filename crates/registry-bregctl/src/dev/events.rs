@@ -59,6 +59,7 @@ struct Delivery {
     id: String,
     destination_id: String,
     data_schema: String,
+    source: String,
     schema: jsonschema::JSONSchema,
 }
 
@@ -79,6 +80,14 @@ impl Delivery {
             id: delivery.id.clone(),
             destination_id: delivery.destination_id.clone(),
             data_schema: delivery.data_schema.clone(),
+            source: format!(
+                "urn:registrystack:registry:{}:instance:{}",
+                registry.registry_id(),
+                registry
+                    .package()
+                    .context("local event source requires package identity")?
+                    .instance_id,
+            ),
             schema,
         })
     }
@@ -214,6 +223,7 @@ async fn receive(
     // supplies its signed schema identity, including nullable projected fields
     // and the closed request metadata on lifecycle events.
     if header(&parts.headers, "ce-dataschema").ok() != Some(delivery.data_schema.as_str())
+        || header(&parts.headers, "ce-source").ok() != Some(delivery.source.as_str())
         || !delivery.schema.is_valid(&document)
     {
         return (
@@ -501,6 +511,7 @@ mod tests {
         let mut project = json!({
             "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
             "registry":{"id":"example", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
+            "package":{"environment":"local", "instanceId":"local", "sequence":1, "sourceRevision":"test"},
             "entities":[{
                 "id":"record", "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
                 "classification":"internal", "fields":[field],
@@ -795,6 +806,28 @@ mod tests {
                 "{change}"
             );
         }
+        let (headers, body) = signed(1, 1);
+        assert_eq!(request(port, headers, body), 204);
+        assert_eq!(
+            report(root.path(), false).unwrap()["deliveries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn signed_source_must_match_the_configured_registry_instance() {
+        let (root, port, _receiver) = fixture();
+        let (mut headers, body) = signed(1, 1);
+        headers.insert(
+            "ce-source",
+            HeaderValue::from_static("urn:registrystack:registry:example:instance:other"),
+        );
+        sign(&mut headers, &body);
+        assert_eq!(request(port, headers, body), 401);
+        assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
         let (headers, body) = signed(1, 1);
         assert_eq!(request(port, headers, body), 204);
         assert_eq!(
