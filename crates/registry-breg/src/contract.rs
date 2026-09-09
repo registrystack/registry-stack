@@ -355,6 +355,9 @@ pub struct EntitySource {
     pub classification: Classification,
     #[serde(default)]
     pub fields: Vec<FieldSource>,
+    /// Governed binary slots on change-request entities, projected under their exact IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentSlotSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geojson: Option<GeoJsonSource>,
     /// Mandatory request-access requirements checked against every profile, including module contributions.
@@ -383,6 +386,23 @@ pub struct EntitySource {
     pub change_control: Option<ChangeControlSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_request: Option<ChangeRequestSource>,
+}
+
+/// A request may declare at most eight independently governed binary slots.
+pub const MAX_ATTACHMENT_SLOTS: usize = 8;
+/// Bounds both database content and optional external storage operations.
+pub const MAX_ATTACHMENT_BYTES: u32 = 16 * 1024 * 1024;
+pub const MAX_ATTACHMENT_CONTENT_TYPES: usize = 16;
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AttachmentSlotSource {
+    pub id: String,
+    pub required: bool,
+    pub maximum_bytes: u32,
+    pub content_types: Vec<String>,
+    pub classification: Classification,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

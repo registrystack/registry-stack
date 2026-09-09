@@ -58,7 +58,7 @@ the same field-schema helper as the generated JSON Schema and OpenAPI. Optional
 stored fields and derived fields accept null through `anyOf`; `nullable` mirrors
 that rule. Required stored fields reject null. `required` describes the stored
 field's create requirement, not a requirement to include the field in PATCH.
-`readOnly` identifies derived fields; only the applicable writable set grants a
+`readOnly` identifies derived fields and engine-owned attachment metadata; only the applicable writable set grants a
 write. `removable` is true only for optional PATCH-writable fields. Removal sets
 the stored value to null, and nested JSON Patch paths are unsupported.
 
@@ -90,6 +90,39 @@ order; otherwise labels are humanized logical IDs/codes. `titleFields` chooses
 one readable authored string identifier or the first readable string field in
 logical-ID order. It may be empty. `identifier: {apiName: "id", location:
 "envelope"}` provides the stable UUID fallback. Render labels as plain text.
+
+## Attachment slot discovery
+
+Request attachment slots appear in `fields` when this operation can read their
+metadata or upload to them. The logical slot ID is also the exact `apiName` under
+`domainData`. Their schema has `x-registry-fieldKind: "attachment"` and
+`x-registry-attachment` with `requiredForSubmit`, `maximumBytes`, and
+`contentTypes`. Those limits govern current uploads; retained metadata can describe
+content accepted under an earlier policy. Empty slots are null. Filled live metadata
+includes `verificationStatus`: `notRequired`, `pending`, `approved`, or `rejected`.
+The schema extension's `verification` member names this status field and the
+release-eligible statuses. Pending and rejected slots block downloads and
+submission, including slots that are optional. Erased provenance omits the
+verification status. The field is `readOnly: true`,
+`required: false`, `nullable: true`, and `removable: false` because ordinary JSON
+create and patch cannot supply attachment metadata. Slot IDs never appear in
+`createWritableFields` or `patchWritableFields`.
+
+The schema's attachment extension adds `download`, `upload`, and `remove` only
+when the same caller/profile has the corresponding GET or PATCH slot authority.
+Each descriptor contains `method`, exact `path`, `accessProfile`,
+`authorizationOperation`, `queryParameters`, `body`, `ifMatchRequired`, and
+`idempotencyKeyRequired`. Download requires `proposalVersion`; upload uses raw
+binary bytes; remove uses an empty body. Upload and remove require the draft
+state. These are separate HTTP requests, not generic JSON field mutations.
+A descriptor is advisory: the runtime rechecks current record/version authority,
+owner, state, and concurrency preconditions on use.
+
+Rust clients expose these inert extensions through `BRegMetadataField::schema()`;
+Node and Python metadata expose the complete schema JSON. Consumers that do not
+understand attachments can display or omit their read-only metadata safely.
+Application code must implement the binary HTTP exchange explicitly and must
+not treat a SHA-256 value as a download capability.
 
 ## Request and lookup contract
 

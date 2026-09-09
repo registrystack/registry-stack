@@ -692,6 +692,10 @@ jobs:
         if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-postgres-tls.sh
 
+      - name: Base Registry Engine S3 attachment lifecycle
+        if: matrix.lane == 'postgres'
+        run: bash products/breg/scripts/test-attachment-s3.sh
+
       - name: Base Registry Engine clean-checkout adopter workflow
         if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-adopter-workflow.sh
@@ -1140,6 +1144,17 @@ jobs:
           CARGO_TARGET_DIR="target/breg-tutorial-source" \
             cargo test --locked --profile ci -p registry-bregctl \
             --test dev_lifecycle -- --ignored
+
+      - name: Verify authored request attachment lifecycle
+        run: >-
+          python3 products/breg/scripts/test-request-attachments.py
+          --bin-dir target/breg-tutorial-source/ci
+
+      - name: Verify asynchronous attachment quarantine lifecycle
+        run: >-
+          uv run --no-project --with PyYAML==6.0.2
+          python3 products/breg/scripts/test-request-attachments.py
+          --bin-dir target/breg-tutorial-source/ci --verification
 
       - name: Verify retained example recovery after process exit
         shell: bash

@@ -234,6 +234,27 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
+        for (table, privileges) in crate::attachment_store::ATTACHMENT_TABLES {
+            catalog.table(
+                &format!("registry_internal.{table}"),
+                privileges.iter().copied(),
+                std::iter::empty::<&str>(),
+                Some((true, true)),
+            );
+            for (name, role) in [
+                ("attachment_runtime", ManagedPolicyRole::Runtime),
+                ("attachment_operator", ManagedPolicyRole::Public),
+            ] {
+                catalog.policies.insert(ManagedPolicy {
+                    table: format!("registry_internal.{table}"),
+                    name: name.to_owned(),
+                    command: "*".to_owned(),
+                    role,
+                    has_using: true,
+                    has_check: true,
+                });
+            }
+        }
 
         for table in &registry.ddl().tables {
             let name = format!("registry_data.{}", table.physical_name);

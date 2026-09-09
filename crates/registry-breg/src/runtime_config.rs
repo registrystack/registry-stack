@@ -154,6 +154,10 @@ pub enum RuntimeConfigError {
     InvalidCursor,
     #[error("runtime configuration contains an invalid event destination binding")]
     InvalidEventDestination,
+    #[error("runtime configuration contains an invalid attachment storage binding")]
+    InvalidAttachmentStorage,
+    #[error("runtime configuration contains an invalid attachment verification binding")]
+    InvalidAttachmentVerification,
     #[error("runtime configuration contains invalid operational bounds")]
     InvalidBounds,
     #[error("runtime configuration secret resolution failed")]
@@ -217,6 +221,8 @@ impl RuntimeConfigError {
             Self::InvalidAudit => "runtime_config.invalid_audit",
             Self::InvalidCursor => "runtime_config.invalid_cursor",
             Self::InvalidEventDestination => "runtime_config.invalid_event_destination",
+            Self::InvalidAttachmentStorage => "runtime_config.invalid_attachment_storage",
+            Self::InvalidAttachmentVerification => "runtime_config.invalid_attachment_verification",
             Self::InvalidBounds => "runtime_config.invalid_bounds",
             Self::Secret => "runtime_config.secret",
         }
@@ -250,6 +256,8 @@ impl RuntimeConfigError {
             Self::InvalidAudit => "/audit",
             Self::InvalidCursor => "/cursor",
             Self::InvalidEventDestination => "/eventDestinations",
+            Self::InvalidAttachmentStorage => "/attachmentStorage",
+            Self::InvalidAttachmentVerification => "/attachmentVerification",
             Self::InvalidBounds => "/operationalTimeouts",
         }
     }
@@ -366,6 +374,8 @@ pub struct RuntimeConfig {
     identity: DeploymentIdentity,
     secret_providers: SecretProvidersConfig,
     database: DatabaseConfig,
+    attachment_storage: crate::attachment_storage::AttachmentStorageConfig,
+    attachment_verification: crate::attachment_verification::AttachmentVerificationConfig,
     package: PackageConfig,
     authentication: AuthenticationConfig,
     audit: AuditConfig,
@@ -390,6 +400,14 @@ impl RuntimeConfig {
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
         let database = DatabaseConfig::from_raw(raw.database)?;
+        let attachment_storage =
+            crate::attachment_storage::AttachmentStorageConfig::from_raw(raw.attachment_storage)
+                .map_err(|_| RuntimeConfigError::InvalidAttachmentStorage)?;
+        let attachment_verification =
+            crate::attachment_verification::AttachmentVerificationConfig::from_raw(
+                raw.attachment_verification,
+            )
+            .map_err(|_| RuntimeConfigError::InvalidAttachmentVerification)?;
         let package = PackageConfig::from_raw(raw.package)?;
         let authentication = AuthenticationConfig::from_raw(raw.authentication)?;
         let audit = AuditConfig::from_raw(raw.audit)?;
@@ -410,6 +428,8 @@ impl RuntimeConfig {
             identity,
             secret_providers,
             database,
+            attachment_storage,
+            attachment_verification,
             package,
             authentication,
             audit,
@@ -431,6 +451,37 @@ impl RuntimeConfig {
             &self.evidence_providers,
             &self.secret_resolver()?,
         )
+    }
+
+    /// Resolve the selected content backend before accepting attachment requests.
+    pub async fn activate_attachment_storage(
+        &self,
+        registry_id: &str,
+    ) -> std::result::Result<
+        crate::attachment_storage::AttachmentStorage,
+        crate::attachment_storage::AttachmentStorageError,
+    > {
+        let resolver = self
+            .secret_resolver()
+            .map_err(|_| crate::attachment_storage::AttachmentStorageError::Secret)?;
+        // Separate databases may activate the same portable Registry package.
+        // They must never share a last-reference deletion namespace.
+        let scope = serde_json::to_string(&(self.identity.database_id(), registry_id))
+            .map_err(|_| crate::attachment_storage::AttachmentStorageError::InvalidConfiguration)?;
+        self.attachment_storage.activate(&scope, &resolver).await
+    }
+
+    /// Activate the external verification transport without submitting content.
+    pub fn activate_attachment_verification(
+        &self,
+    ) -> std::result::Result<
+        crate::attachment_verification::AttachmentVerification,
+        crate::attachment_verification::AttachmentVerificationError,
+    > {
+        let resolver = self
+            .secret_resolver()
+            .map_err(|_| crate::attachment_verification::AttachmentVerificationError::Secret)?;
+        self.attachment_verification.activate(&resolver)
     }
 
     pub fn listener(&self) -> &ListenerConfig {
@@ -610,6 +661,8 @@ impl fmt::Debug for RuntimeConfig {
             .field("identity", &self.identity)
             .field("secret_providers", &self.secret_providers)
             .field("database", &self.database)
+            .field("attachment_storage", &self.attachment_storage)
+            .field("attachment_verification", &self.attachment_verification)
             .field("package", &self.package)
             .field("authentication", &self.authentication)
             .field("audit", &self.audit)
@@ -1743,6 +1796,12 @@ struct RawRuntimeConfig {
     identity: RawDeploymentIdentity,
     secret_providers: RawSecretProvidersConfig,
     database: RawDatabaseConfig,
+    /// Defaults to PostgreSQL; S3 requires a bucket with versioning never enabled.
+    #[serde(default)]
+    attachment_storage: crate::attachment_storage::RawAttachmentStorageConfig,
+    /// Optional external verdict hook. Disabled by default.
+    #[serde(default)]
+    attachment_verification: crate::attachment_verification::RawAttachmentVerificationConfig,
     package: RawPackageConfig,
     authentication: RawAuthenticationConfig,
     audit: RawAuditConfig,
@@ -2095,6 +2154,38 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
     install_schema_const_property(&mut schema, "apiVersion", RUNTIME_CONFIG_API_VERSION);
     install_schema_const_property(&mut schema, "kind", RUNTIME_CONFIG_KIND);
     install_schema_constraints(&mut schema);
+    for definition in [
+        "RawAttachmentStorageConfig",
+        "RawAttachmentVerificationConfig",
+    ] {
+        if let Some(variants) = schema
+            .pointer_mut(&format!("/$defs/{definition}/oneOf"))
+            .and_then(Value::as_array_mut)
+        {
+            for variant in variants {
+                for key in [
+                    "accessKeyIdRef",
+                    "secretAccessKeyRef",
+                    "sessionTokenRef",
+                    "caBundleRef",
+                    "authorizationRef",
+                ] {
+                    if let Some(member) = variant
+                        .get_mut("properties")
+                        .and_then(|properties| properties.get_mut(key))
+                        .and_then(Value::as_object_mut)
+                    {
+                        install_string_constraints_in_object(
+                            member,
+                            1,
+                            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
+                            SECRET_REFERENCE_SCHEMA_PATTERN,
+                        );
+                    }
+                }
+            }
+        }
+    }
     for pointer in [
         "/properties/eventDestinations",
         "/$defs/RawAuthorityClaimsConfig/properties/purpose",

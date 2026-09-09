@@ -639,6 +639,39 @@
       ],
       "type": "object"
     },
+    "AttachmentSlotSource": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "contentTypes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "maximumBytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "required",
+        "maximumBytes",
+        "contentTypes",
+        "classification"
+      ],
+      "type": "object"
+    },
     "BatchSource": {
       "additionalProperties": false,
       "properties": {
@@ -1893,6 +1926,13 @@
             }
           ],
           "description": "Mandatory request-access requirements checked against every profile, including module contributions."
+        },
+        "attachments": {
+          "description": "Governed binary slots on change-request entities, projected under their exact IDs.",
+          "items": {
+            "$ref": "#/$defs/AttachmentSlotSource"
+          },
+          "type": "array"
         },
         "batch": {
           "anyOf": [

@@ -481,7 +481,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     .expect("request_id is a UUID");
 }
 
-fn startup_errors() -> [StartupError; 13] {
+fn startup_errors() -> [StartupError; 14] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -499,6 +499,7 @@ fn startup_errors() -> [StartupError; 13] {
         StartupError::Oidc,
         StartupError::Authentication,
         StartupError::EventDestinations,
+        StartupError::AttachmentStorage,
         StartupError::Listener,
         StartupError::Shutdown,
         StartupError::Logging,
@@ -550,6 +551,20 @@ fn expected_operational_event(
             None,
             Some("webhook.worker.iteration_failed"),
         ),
+        OperationalEvent::AttachmentVerificationIterationFailed => (
+            OperationalLogLevel::Warn,
+            "registry_breg::attachment_verification",
+            "attachment verification worker iteration failed",
+            None,
+            Some("attachment_verification.worker.iteration_failed"),
+        ),
+        OperationalEvent::AttachmentVerificationRetryPending => (
+            OperationalLogLevel::Warn,
+            "registry_breg::attachment_verification",
+            "attachment verification retry is pending",
+            None,
+            Some("attachment_verification.retry_pending"),
+        ),
         OperationalEvent::WebhookStateTransitionFailed(code) => (
             OperationalLogLevel::Warn,
             "registry_breg::webhook",
@@ -574,6 +589,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
+        StartupError::AttachmentStorage => {
+            "the Registry attachment storage or verification binding was refused"
+        }
         StartupError::Listener => "the Registry listener could not be started",
         StartupError::Shutdown => "the Registry shutdown signal failed",
         StartupError::Logging => "the Registry operational log level was refused",
@@ -614,6 +632,8 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
             .map(OperationalEvent::StoppedWithError),
     );
     events.push(OperationalEvent::WebhookWorkerIterationFailed);
+    events.push(OperationalEvent::AttachmentVerificationIterationFailed);
+    events.push(OperationalEvent::AttachmentVerificationRetryPending);
     events.extend(
         WebhookStateTransitionCode::ALL
             .into_iter()
@@ -681,7 +701,9 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
         assert_eq!(fields.get("code").and_then(Value::as_str), expected.code());
         assert!(matches!(
             expected.target(),
-            "registry_breg::startup" | "registry_breg::webhook"
+            "registry_breg::startup"
+                | "registry_breg::webhook"
+                | "registry_breg::attachment_verification"
         ));
     }
 }

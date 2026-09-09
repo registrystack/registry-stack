@@ -39,6 +39,8 @@ pub enum RequestRetentionError {
     ActiveDetailPinned,
     #[error("request retention policy does not permit operator erasure")]
     RetainMode,
+    #[error("attachment storage or verification binding differs from the registry pin; restore the original configuration")]
+    AttachmentStorageBindingMismatch,
     #[error("request retention state is unavailable")]
     Unavailable,
 }
@@ -101,6 +103,7 @@ pub struct RequestDetailErasure {
     pub request_revision_snapshots: u64,
     pub outbox_payloads: u64,
     pub current_intake_rows: u64,
+    pub attachment_references: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -149,6 +152,18 @@ pub struct RequestRetentionErase {
     pub request_state: String,
     pub retention_mode: &'static str,
     pub erasure: RequestDetailErasure,
+    /// Registry-wide external blobs still awaiting confirmed physical deletion.
+    pub pending_external_deletions: u64,
+    /// Confirmed absence observations retained for future delayed-write rechecks.
+    pub external_deletion_tombstones: u64,
+}
+
+/// Registry-wide cleanup observations without changing request retention.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentCleanup {
+    pub pending_external_deletions: u64,
+    pub external_deletion_tombstones: u64,
 }
 
 /// Package-bound operator boundary used by `bregctl`.
@@ -167,6 +182,8 @@ pub struct RequestRetentionOperatorService {
     lock_timeout: Duration,
     statement_timeout: Duration,
     audit_profile: AuditProfile,
+    attachment_storage: crate::attachment_storage::AttachmentStorage,
+    verification_policy: String,
 }
 
 impl RequestRetentionOperatorService {
@@ -203,7 +220,17 @@ impl RequestRetentionOperatorService {
         let audit_profile = config
             .audit_profile()
             .map_err(|_| RequestRetentionError::Unavailable)?;
+        let attachment_storage = config
+            .activate_attachment_storage(startup.package().registry().registry_id())
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        let verification_policy = config
+            .activate_attachment_verification()
+            .map_err(|_| RequestRetentionError::AttachmentStorageBindingMismatch)?
+            .binding_digest();
         Ok(Self {
+            verification_policy,
+            attachment_storage,
             registry: startup.package().registry().clone(),
             expected: startup.expected_identity().clone(),
             expected_catalog: startup.expected_catalog().clone(),
@@ -231,6 +258,8 @@ impl RequestRetentionOperatorService {
         audit_profile: AuditProfile,
     ) -> Self {
         Self {
+            attachment_storage: crate::attachment_storage::AttachmentStorage::Database,
+            verification_policy: "disabled".to_owned(),
             registry,
             expected,
             expected_catalog,
@@ -242,6 +271,23 @@ impl RequestRetentionOperatorService {
             statement_timeout: Duration::from_secs(30),
             audit_profile,
         }
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    pub fn with_attachment_storage_for_test(
+        mut self,
+        storage: crate::attachment_storage::AttachmentStorage,
+    ) -> Self {
+        self.attachment_storage = storage;
+        self
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    pub fn with_verification_policy_for_test(mut self, policy: String) -> Self {
+        self.verification_policy = policy;
+        self
     }
 
     pub async fn list(
@@ -433,6 +479,8 @@ impl RequestRetentionOperatorService {
             .commit()
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
+        let (pending_external_deletions, external_deletion_tombstones) =
+            self.retry_external_deletions(&mut client).await?;
         Ok(RequestRetentionErase {
             request_entity_id: scope.request_entity_id.to_owned(),
             request_id: scope.request_id.to_string(),
@@ -440,7 +488,172 @@ impl RequestRetentionOperatorService {
             request_state: plan.current_state,
             retention_mode: retention_mode_name(plan.retention_mode),
             erasure,
+            pending_external_deletions,
+            external_deletion_tombstones,
         })
+    }
+
+    /// Retry orphaned external objects even when every request is active or
+    /// uses retain mode. Only objects without live references are eligible.
+    pub async fn cleanup_attachments(&self) -> Result<AttachmentCleanup> {
+        let pool = self
+            .migration_connection
+            .build_pool()
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        let mut client = pool
+            .get()
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        let correlation = Uuid::new_v4().to_string();
+        let transaction = self.begin_verified_transaction(&mut client).await?;
+        crate::audit::append_envelope(
+            &transaction,
+            &self.audit_profile,
+            serde_json::json!({
+                "kind":"attachmentCleanup", "phase":"attempt", "outcome":"started",
+                "packageRevision":self.expected.package_revision,
+                "actor":"breg:request-retention-operator", "correlation":correlation,
+            }),
+        )
+        .await
+        .map_err(|_| RequestRetentionError::Unavailable)?;
+        transaction.commit().await.map_err(map_retention_error)?;
+        let (pending_external_deletions, external_deletion_tombstones) =
+            self.retry_external_deletions(&mut client).await?;
+        let result = AttachmentCleanup {
+            pending_external_deletions,
+            external_deletion_tombstones,
+        };
+        let transaction = self.begin_verified_transaction(&mut client).await?;
+        crate::audit::append_envelope(
+            &transaction,
+            &self.audit_profile,
+            serde_json::json!({
+                "kind":"attachmentCleanup", "phase":"terminal", "outcome":"completed",
+                "packageRevision":self.expected.package_revision,
+                "actor":"breg:request-retention-operator", "correlation":correlation,
+                "pendingExternalDeletions":result.pending_external_deletions,
+                "externalDeletionTombstones":result.external_deletion_tombstones,
+            }),
+        )
+        .await
+        .map_err(|_| RequestRetentionError::Unavailable)?;
+        transaction.commit().await.map_err(map_retention_error)?;
+        Ok(result)
+    }
+
+    /// Each invocation spends at most thirty seconds retrying up to sixteen
+    /// objects. Each object commits independently, so an unavailable backend
+    /// cannot accumulate locks or roll back earlier confirmed observations.
+    async fn retry_external_deletions(
+        &self,
+        client: &mut deadpool_postgres::Client,
+    ) -> Result<(u64, u64)> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let transaction = self.begin_verified_transaction(client).await?;
+        let candidates = transaction
+            .query(
+                "SELECT sha256,backend_id FROM registry_internal.registry_attachment_blobs
+             WHERE backend_id <> 'database' AND (state IN ('delete_pending','delete_confirmed')
+               OR (state='staged' AND created_at < transaction_timestamp()-interval '10 minutes'))
+             ORDER BY deletion_checked_at ASC NULLS FIRST, sha256 LIMIT 16",
+                &[],
+            )
+            .await
+            .map_err(map_retention_error)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        for row in candidates {
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            let hash: String = row.get(0);
+            let backend: String = row.get(1);
+            // The overall timeout includes verification, lock acquisition, backend
+            // I/O, and commit. Cancellation leaves the durable tombstone intact.
+            let attempt = tokio::time::timeout_at(
+                deadline,
+                self.retry_external_deletion(client, &hash, &backend, deadline),
+            )
+            .await;
+            if !matches!(attempt, Ok(Ok(()))) {
+                break;
+            }
+        }
+        let transaction = self.begin_verified_transaction(client).await?;
+        let row = transaction
+            .query_one(
+                "SELECT count(*) FILTER (WHERE state IN ('staged','delete_pending')),
+                    count(*) FILTER (WHERE state='delete_confirmed')
+             FROM registry_internal.registry_attachment_blobs WHERE backend_id <> 'database'",
+                &[],
+            )
+            .await
+            .map_err(map_retention_error)?;
+        let pending = count_to_u64(row.get(0))?;
+        let tombstones = count_to_u64(row.get(1))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        Ok((pending, tombstones))
+    }
+
+    async fn retry_external_deletion(
+        &self,
+        client: &mut deadpool_postgres::Client,
+        hash: &str,
+        backend: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        let transaction = self.begin_verified_transaction(client).await?;
+        crate::attachment_store::lock_hash(&transaction, hash)
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        let eligible = transaction
+            .query_opt(
+                "SELECT 1 FROM registry_internal.registry_attachment_blobs b
+             WHERE sha256=$1 AND backend_id=$2
+               AND (state IN ('delete_pending','delete_confirmed')
+                 OR (state='staged' AND created_at < transaction_timestamp()-interval '10 minutes'))
+               AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_request_attachments a
+                   WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)",
+                &[&hash, &backend],
+            )
+            .await
+            .map_err(map_retention_error)?
+            .is_some();
+        if eligible {
+            if let crate::attachment_storage::AttachmentStorage::S3(store) =
+                &self.attachment_storage
+            {
+                // Record retry intent before calling the backend; unsuccessful
+                // attempts commit as pending, successful ones confirm absence.
+                crate::attachment_store::fail_external_delete(&transaction, hash, backend)
+                    .await
+                    .map_err(|_| RequestRetentionError::Unavailable)?;
+                // Fifteen seconds per object also leaves room for durable error
+                // recording within the invocation's shared thirty-second budget.
+                let budget = deadline
+                    .saturating_duration_since(tokio::time::Instant::now())
+                    .min(Duration::from_secs(15));
+                if matches!(
+                    tokio::time::timeout(budget, store.delete(hash)).await,
+                    Ok(Ok(()))
+                ) {
+                    crate::attachment_store::finish_external_delete(&transaction, hash, backend)
+                        .await
+                        .map_err(|_| RequestRetentionError::Unavailable)?;
+                }
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        Ok(())
     }
 
     fn request_plan(&self, request_entity_id: &str) -> Result<()> {
@@ -489,6 +702,18 @@ impl RequestRetentionOperatorService {
             )
             .await
             .map_err(map_retention_error)?;
+        crate::attachment_store::verify_backend_binding(
+            &transaction,
+            &self.attachment_storage.binding_digest(),
+            &self.verification_policy,
+        )
+        .await
+        .map_err(|error| match error {
+            crate::mutation::MutationError::Conflict => {
+                RequestRetentionError::AttachmentStorageBindingMismatch
+            }
+            _ => RequestRetentionError::Unavailable,
+        })?;
         Ok(transaction)
     }
 }
@@ -795,7 +1020,10 @@ async fn count_request_detail_erasure(
                     AND l.record_id = $2
                     AND l.link_kind IN
                         ('request_create','request_patch','request_lifecycle','request_batch')
-                    AND o.payload IS NOT NULL)",
+                    AND o.payload IS NOT NULL),
+                (SELECT count(*) FROM registry_internal.registry_request_attachments
+                  WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                    AND erased_at IS NULL)",
             &[
                 &scope.request_entity_id,
                 &scope.request_id,
@@ -811,6 +1039,7 @@ async fn count_request_detail_erasure(
         request_revision_snapshots: count_to_u64(row.get(3))?,
         outbox_payloads: count_to_u64(row.get(4))?,
         current_intake_rows: u64::from(erase_current_intake),
+        attachment_references: count_to_u64(row.get(5))?,
     })
 }
 
@@ -943,6 +1172,14 @@ async fn erase_request_detail_in_transaction(
     } else {
         None
     };
+    let attachment_references = crate::attachment_store::erase(
+        transaction,
+        scope.request_entity_id,
+        scope.request_id,
+        scope.proposal_version,
+    )
+    .await
+    .map_err(|_| RequestRetentionError::Unavailable)?;
     let current_intake_rows = u64::from(current_revision.is_some());
     let erasure = RequestDetailErasure {
         proposal_snapshots,
@@ -951,6 +1188,7 @@ async fn erase_request_detail_in_transaction(
         request_revision_snapshots,
         outbox_payloads,
         current_intake_rows,
+        attachment_references,
     };
     if erasure != plan.erasure {
         return Err(RequestRetentionError::Unavailable);
@@ -998,6 +1236,7 @@ async fn append_retention_audit(
         .and_then(|count| count.checked_add(erasure.request_revision_snapshots))
         .and_then(|count| count.checked_add(erasure.outbox_payloads))
         .and_then(|count| count.checked_add(erasure.current_intake_rows))
+        .and_then(|count| count.checked_add(erasure.attachment_references))
         .ok_or(RequestRetentionError::Unavailable)?;
     append_terminal_audit(
         transaction,

@@ -119,6 +119,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "eventDestinations",
             "the event destination bindings were refused",
         ),
+        StartupError::AttachmentStorage => (
+            "startup.attachment_storage.refused",
+            "attachmentStorage",
+            "the attachment binding was refused: check attachmentStorage and attachmentVerification credentials and endpoints, disabled S3 versioning, and the registry's pinned backend and verification policy",
+        ),
         StartupError::Listener => (
             "startup.listener.refused",
             "listener",

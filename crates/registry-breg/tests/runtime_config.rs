@@ -2601,3 +2601,82 @@ impl Drop for RuntimeFixture {
         let _ = fs::remove_dir_all(&self.root);
     }
 }
+
+#[tokio::test]
+async fn attachment_storage_defaults_to_database_and_validates_operator_binding() {
+    use registry_breg::attachment_storage::AttachmentStorage;
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let default = parse_runtime_config(&base).unwrap();
+    assert!(matches!(
+        default
+            .activate_attachment_storage("registry")
+            .await
+            .unwrap(),
+        AttachmentStorage::Database
+    ));
+    let explicit =
+        parse_runtime_config(&format!("{base}\nattachmentStorage: {{kind: database}}\n")).unwrap();
+    assert!(matches!(
+        explicit
+            .activate_attachment_storage("registry")
+            .await
+            .unwrap(),
+        AttachmentStorage::Database
+    ));
+    let invalid = format!("{base}\nattachmentStorage:\n  kind: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n");
+    let error = parse_runtime_config(&invalid).unwrap_err();
+    assert_eq!(error, RuntimeConfigError::InvalidAttachmentStorage);
+    assert_eq!(error.path(), "/attachmentStorage");
+    assert_eq!(error.code(), "runtime_config.invalid_attachment_storage");
+    let valid = invalid.replace("http://public.example", "https://storage-canary.example");
+    let config = parse_runtime_config(&valid).unwrap();
+    assert!(!format!("{config:?}").contains("storage-canary"));
+}
+
+#[test]
+fn attachment_verification_defaults_off_and_validates_operator_binding() {
+    use registry_breg::attachment_verification::AttachmentVerification;
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    assert!(matches!(
+        parse_runtime_config(&base)
+            .unwrap()
+            .activate_attachment_verification()
+            .unwrap(),
+        AttachmentVerification::Disabled
+    ));
+    assert!(matches!(
+        parse_runtime_config(&format!(
+            "{base}\nattachmentVerification: {{kind: disabled}}\n"
+        ))
+        .unwrap()
+        .activate_attachment_verification()
+        .unwrap(),
+        AttachmentVerification::Disabled
+    ));
+    let invalid = format!("{base}\nattachmentVerification:\n  kind: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n");
+    let error = parse_runtime_config(&invalid).unwrap_err();
+    assert_eq!(error, RuntimeConfigError::InvalidAttachmentVerification);
+    assert_eq!(error.path(), "/attachmentVerification");
+    assert_eq!(
+        error.code(),
+        "runtime_config.invalid_attachment_verification"
+    );
+    fixture.write_secret("verifier-token", b"verifier-token-canary");
+    let valid = invalid.replace("http://public.example", "https://verifier-canary.example");
+    let config = parse_runtime_config(&valid).unwrap();
+    assert!(!format!("{config:?}").contains("verifier-canary"));
+    assert!(matches!(
+        config.activate_attachment_verification().unwrap(),
+        AttachmentVerification::Http(_)
+    ));
+}

@@ -17,9 +17,8 @@ You operate an active registry under an institutional retention policy, hold the
 credential, and need to erase retained history or change-request detail, restore snapshot coverage
 after an erasure, or prove, copy, and prune the audit journal. At the end of this page each of those
 maintenance actions has run once, under the interlock the migration authority uses, with a chained
-audit record and a report that carries counts rather than values. Four of the commands are
-irreversible: `history erase`, `request-retention erase`, `evidence-retention erase-expired`, and
-`audit prune` without `--dry-run` remove bytes that nothing restores, and the next section says
+audit record and a report that carries counts rather than values. The erasure, attachment
+cleanup, and pruning commands remove bytes that nothing restores. The next section says
 exactly what each one destroys.
 
 ## What cannot be undone
@@ -27,7 +26,8 @@ exactly what each one destroys.
 | Command | Removes for good | Leaves in place |
 | --- | --- | --- |
 | `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, and the audit journal. |
-| `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, idempotency results, request revision snapshots, outbox payloads, and intake rows. | The value-free lifecycle rows of that request, and record history. |
+| `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, idempotency results, request revision snapshots, outbox payloads, intake rows, and attachment references/content. | The value-free lifecycle rows of that request, and record history. |
+| `request-retention cleanup-attachments` | Unreferenced external attachment bytes awaiting deletion, including abandoned uploads and objects recreated after an earlier confirmed deletion. | Live attachment references, request detail, and durable deletion tombstones. |
 | `evidence-retention erase-expired` | The signed Evidence responses and verification context a governed action retained, once their 24-hour window has closed. | Every retained assertion still inside its window, and the action receipts that used them. |
 | `audit prune` | The longest run of audit records at the start of the chain whose creation time precedes the boundary you give. | Every later record, and one retention record stating what left the chain. |
 
@@ -173,12 +173,14 @@ Each list row reports the request state, whether the version is current or pinne
 mode, `eligibleForErasure`, and whether detail is already erased; a listing longer than `--limit`
 continues from the cursor it returns, passed as `--after-cursor`. The dry run reports the counts of
 proposal snapshots, target snapshots, idempotency results, request revision snapshots, outbox
-payloads, and intake rows that the erasure would remove, and changes nothing.
+payloads, intake rows, and `attachmentReferences` that the erasure would remove,
+and changes nothing. Canceled drafts are eligible under the same policy even when
+no proposal was submitted.
 
 :::danger[Erased request detail cannot be restored]
 Erase only a version the dry run counted and the retention request approves. The erasure keeps the
 lifecycle rows, so the request stays visible with its state, but the proposal and target values are
-gone from the registry.
+gone from the registry. Attachment access for that version is also revoked.
 :::
 
 ```sh
@@ -193,10 +195,61 @@ names the cause without values: the entity's retention mode is `retain`, or the 
 Erasing record history does not erase these rows, and erasing these rows does not touch record
 history.
 
+Attachment bytes are removed after their final retained reference is erased.
+Other requests or proposal versions that legitimately retain identical content
+keep their bytes and access. Erased slot metadata keeps filled state, size, and
+hash while dropping content type, verification status, and upload actor/time.
+S3 deletion failures remain in a durable retry queue; `pendingExternalDeletions` reports the registry-wide
+outstanding count. Use [attachment cleanup](#retry-external-attachment-cleanup) to
+retry these deletions independently of request erasure. A nonzero
+count means physical deletion is still pending, even though scoped download
+access has been revoked. `externalDeletionTombstones` counts confirmed S3 deletions
+retained for future absence checks. Continue periodic cleanup runs to recheck these
+keys and remove any orphan bytes from a delayed remote write. Confirmed tombstones
+also remain subject to the first-upload storage and verification binding.
+Configure backup and replication expiry separately, and keep the bucket versioning
+rules in [Attachment storage](../../reference/breg-configuration/#attachment-storage).
+An external verifier may retain its own copies or logs; registry erasure does not
+remove them. Set that service's retention policy as part of [External attachment
+verification](../../reference/breg-configuration/#external-attachment-verification).
+
 {/* Evidence: crates/registry-breg/src/request_retention.rs;
+    crates/registry-breg/src/attachment_store.rs;
     crates/registry-bregctl/src/request_retention.rs;
     crates/registry-bregctl/src/lib.rs, RequestRetentionCommand, RequestRetentionListArgs,
     and RequestRetentionExactArgs. */}
+
+## Retry external attachment cleanup
+
+Use `request-retention cleanup-attachments` when S3 deletions remain pending or
+when an interrupted upload left unreferenced content. Cleanup works even when all
+requests use `retain` mode or the registry has only active drafts. It uses the
+migration credential and verified runtime configuration, including the pinned
+storage and verification bindings.
+
+:::caution[Cleanup permanently removes unreferenced content]
+Check that the runtime configuration identifies the intended registry. Cleanup
+preserves live attachment references and request detail; it permanently removes
+unreferenced external bytes selected by the bounded cleanup pass.
+:::
+
+```sh
+bregctl --format json request-retention cleanup-attachments \
+  --runtime-config /etc/breg/runtime.yaml
+```
+
+The report contains the registry-wide `pendingExternalDeletions` and
+`externalDeletionTombstones` counts. Repeat cleanup while deletions remain pending,
+and continue periodic runs to recheck confirmed tombstones for delayed remote
+writes. A backend failure leaves work durable for a later run. A configuration or
+identity refusal requires restoring the matching runtime binding before retrying.
+This command does not make an active draft or a retained request eligible for
+detail erasure.
+
+{/* Evidence: crates/registry-breg/src/request_retention.rs, cleanup_attachments();
+    crates/registry-breg/src/attachment_store.rs;
+    crates/registry-bregctl/src/request_retention.rs;
+    crates/registry-bregctl/src/lib.rs, AttachmentCleanupArgs. */}
 
 ## Erase expired Evidence uses
 

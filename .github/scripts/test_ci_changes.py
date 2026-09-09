@@ -918,6 +918,8 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/scripts/check-breg-tutorial.test.mjs",
             "docs/site/src/content/docs/tutorials/first-breg.mdx",
             "docs/site/package.json",
+            "products/breg/scripts/test-request-attachments.py",
+            "products/breg/acceptance/request-attachments/registry.yaml",
         )
         for path in infrastructure:
             with self.subTest(path=path):

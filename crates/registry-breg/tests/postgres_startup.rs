@@ -70,6 +70,175 @@ journeys:
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_binding() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    verify_runtime_role(&migration, &database.migration_role)
+        .await
+        .expect_err("migration connection is not accepted as runtime");
+
+    let fixture = StartupFixture::new();
+    let signing =
+        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
+    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let verified_provisional = load_package(&provisional.root, &provisional_context)
+        .expect("provisional package loads enough to install schema");
+    install_compiled_schema(
+        &migration,
+        verified_provisional.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("compiled schema installs");
+    let expected_catalog = ExpectedManagedCatalog::compiled(verified_provisional.registry());
+    let schema_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &expected_catalog)
+            .await
+            .expect("compiled schema fingerprints");
+    drop(provisional);
+
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint, &signing);
+    let context = package.context(PackageIntent::InitialActivation);
+    let verified = load_package(&package.root, &context).expect("final package verifies");
+    initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(verified.registry()),
+        RegistryStateTestIdentity {
+            package_id: &verified.manifest().package_id,
+            environment: &verified.manifest().environment,
+            instance_id: &verified.manifest().instance_id,
+            database_id: &verified.manifest().database_id,
+            package_revision: &verified.manifest().package_revision,
+            package_sequence: i64::try_from(verified.manifest().sequence)
+                .expect("fixture sequence fits"),
+        },
+    )
+    .await
+    .expect("Registry state initializes");
+
+    let idp = MockIdp::start().await;
+    let database_config = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let empty =
+        prepare_with_connection_config_for_test(&database_config, database.runtime_config.clone())
+            .await
+            .expect("default database startup succeeds with no attachment rows");
+    assert_ready(&empty, StatusCode::OK).await;
+    drop(empty);
+
+    // The mocked control endpoint proves actual S3 configuration activation;
+    // retained-binding verification and startup run against real PostgreSQL.
+    // Full object interoperability is covered by the real S3 integration tests.
+    let control = axum::Router::new().fallback(axum::routing::get(|| async {
+        (StatusCode::OK, "<VersioningConfiguration/>")
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let control_task = tokio::spawn(async move {
+        axum::serve(listener, control).await.unwrap();
+    });
+    for (name, value) in [
+        ("attachment-access", "startup-fixture-access"),
+        ("attachment-secret", "startup-fixture-secret"),
+    ] {
+        let path = fixture.secret_root.join(name);
+        fs::write(&path, value).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+    let s3_config = fixture.root.join("runtime-attachment-s3.yaml");
+    let base_config = fs::read_to_string(&database_config).unwrap();
+    fs::write(&s3_config,format!("{base_config}\nattachmentStorage:\n  kind: s3\n  endpoint: {endpoint}\n  bucket: startup-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-access\n  secretAccessKeyRef: secret:file/attachment-secret\n")).unwrap();
+    let activated = registry_breg::runtime_config::load_runtime_config(&s3_config)
+        .unwrap()
+        .activate_attachment_storage(verified.registry().registry_id())
+        .await
+        .unwrap();
+    let original_backend = activated.binding_digest();
+    let hash = "b".repeat(64);
+    let tx = migration.transaction().await.unwrap();
+    registry_breg::attachment_store::test_support::stage(&tx, &hash, 3, &original_backend)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    for state in ["live", "delete_confirmed"] {
+        migration
+            .execute(
+                "UPDATE registry_internal.registry_attachment_blobs
+             SET state=$2,deletion_checked_at=CASE WHEN $2='delete_confirmed'
+                 THEN transaction_timestamp() ELSE NULL END WHERE sha256=$1",
+                &[&hash, &state],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            prepare_with_connection_config_for_test(
+                &database_config,
+                database.runtime_config.clone()
+            )
+            .await
+            .err(),
+            Some(StartupError::AttachmentStorage),
+            "actual runtime startup refuses backend changes while {state} storage remains",
+        );
+        let restored =
+            prepare_with_connection_config_for_test(&s3_config, database.runtime_config.clone())
+                .await
+                .expect("restoring the original operator binding admits runtime startup");
+        assert_ready(&restored, StatusCode::OK).await;
+        drop(restored);
+    }
+    let changed_verifier_config = fixture
+        .root
+        .join("runtime-attachment-changed-verifier.yaml");
+    let original_s3 = fs::read_to_string(&s3_config).unwrap();
+    fs::write(&changed_verifier_config,format!("{original_s3}\nattachmentVerification:\n  kind: http\n  endpoint: {endpoint}/verify\n  policyId: changed-verifier-policy\n  authorizationRef: secret:file/attachment-secret\n")).unwrap();
+    assert_eq!(
+        prepare_with_connection_config_for_test(
+            &changed_verifier_config,
+            database.runtime_config.clone()
+        )
+        .await
+        .err(),
+        Some(StartupError::AttachmentStorage),
+        "actual startup also refuses verifier policy changes against the same backend pin"
+    );
+    // Isolate the permanent first-write pin from all blob rows. A backend
+    // switch remains forbidden even when there is no content left to inspect.
+    migration
+        .execute(
+            "DELETE FROM registry_internal.registry_attachment_blobs",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        prepare_with_connection_config_for_test(&database_config, database.runtime_config.clone())
+            .await
+            .err(),
+        Some(StartupError::AttachmentStorage)
+    );
+    let pinned =
+        prepare_with_connection_config_for_test(&s3_config, database.runtime_config.clone())
+            .await
+            .expect("original binding remains valid with only the permanent pin");
+    drop(pinned);
+    migration_task.abort();
+    control_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_database() {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;

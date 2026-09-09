@@ -258,6 +258,8 @@ configured prefix and never derive their authority from request headers.
 | `audit` and `cursor` | The key that chains the audit journal and the secret that signs pagination cursors. Loss of either key invalidates existing chains or cursors. |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
 | `evidenceProviders` | One binding per Evidence provider the package declares, keyed by provider ID: `baseUrl`, `trustBindingId`, secret references for the token and trusted JWKS, `revokedKeyIds`, and an optional `caBundleRef`. The script cannot replace them; see [Governed registry actions](../../explanation/governed-registry-actions/). |
+| `attachmentStorage` | PostgreSQL by default, or an operator-bound S3-compatible backend for request attachments; see [Attachment storage](../../reference/breg-configuration/#attachment-storage). |
+| `attachmentVerification` | Optional asynchronous HTTP verifier; content stays quarantined until approved. Configure it before the first attachment upload; see [External attachment verification](../../reference/breg-configuration/#external-attachment-verification). |
 | `operationalTimeouts` | Optional HTTP request, record lock, migration lock, migration statement, and shutdown grace bounds. |
 | `metricsListener` | Optional second binding, private to the operator, that serves `GET /metrics`; see [Scrape metrics](#scrape-metrics). |
 

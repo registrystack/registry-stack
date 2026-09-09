@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use registry_breg::request_retention::{
-    RequestDetailErasureScope, RequestRetentionDryRun, RequestRetentionErase,
+    AttachmentCleanup, RequestDetailErasureScope, RequestRetentionDryRun, RequestRetentionErase,
     RequestRetentionError, RequestRetentionListPage, RequestRetentionOperatorService,
     MAX_REQUEST_RETENTION_OPERATOR_PAGE_SIZE,
 };
@@ -21,6 +21,7 @@ pub(crate) enum RequestRetentionCliError {
     Operator,
     ActiveDetailPinned,
     RetainMode,
+    AttachmentStorageBindingMismatch,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -59,17 +60,15 @@ pub(crate) fn list(
         return Err(RequestRetentionCliError::Operator);
     }
     let runtime = operator_runtime()?;
-    let page = runtime
-        .block_on(async {
-            let service = RequestRetentionOperatorService::from_runtime_config(runtime_config)
-                .await
-                .map_err(map_error)?;
-            service
-                .list(request_entity, after_cursor, limit)
-                .await
-                .map_err(map_error)
-        })
-        .map_err(|_| RequestRetentionCliError::Operator)?;
+    let page = runtime.block_on(async {
+        let service = RequestRetentionOperatorService::from_runtime_config(runtime_config)
+            .await
+            .map_err(map_error)?;
+        service
+            .list(request_entity, after_cursor, limit)
+            .await
+            .map_err(map_error)
+    })?;
     Ok(RequestRetentionListOutcome { page })
 }
 
@@ -84,14 +83,12 @@ pub(crate) fn dry_run(
     }
     let scope = scope(request_entity, request_id, proposal_version)?;
     let runtime = operator_runtime()?;
-    let dry_run = runtime
-        .block_on(async {
-            let service = RequestRetentionOperatorService::from_runtime_config(runtime_config)
-                .await
-                .map_err(map_error)?;
-            service.dry_run(scope).await.map_err(map_error)
-        })
-        .map_err(|_| RequestRetentionCliError::Operator)?;
+    let dry_run = runtime.block_on(async {
+        let service = RequestRetentionOperatorService::from_runtime_config(runtime_config)
+            .await
+            .map_err(map_error)?;
+        service.dry_run(scope).await.map_err(map_error)
+    })?;
     Ok(RequestRetentionDryRunOutcome { dry_run })
 }
 
@@ -106,15 +103,29 @@ pub(crate) fn erase(
     }
     let scope = scope(request_entity, request_id, proposal_version)?;
     let runtime = operator_runtime()?;
-    let erase = runtime
-        .block_on(async {
-            let service = RequestRetentionOperatorService::from_runtime_config(runtime_config)
-                .await
-                .map_err(map_error)?;
-            service.erase(scope).await.map_err(map_error)
-        })
-        .map_err(|_| RequestRetentionCliError::Operator)?;
+    let erase = runtime.block_on(async {
+        let service = RequestRetentionOperatorService::from_runtime_config(runtime_config)
+            .await
+            .map_err(map_error)?;
+        service.erase(scope).await.map_err(map_error)
+    })?;
     Ok(RequestRetentionEraseOutcome { erase })
+}
+
+pub(crate) fn cleanup_attachments(
+    runtime_config: &Path,
+) -> Result<AttachmentCleanup, RequestRetentionCliError> {
+    if !runtime_config.is_absolute() {
+        return Err(RequestRetentionCliError::Operator);
+    }
+    operator_runtime()?.block_on(async {
+        RequestRetentionOperatorService::from_runtime_config(runtime_config)
+            .await
+            .map_err(map_error)?
+            .cleanup_attachments()
+            .await
+            .map_err(map_error)
+    })
 }
 
 fn scope<'a>(
@@ -137,6 +148,9 @@ fn map_error(error: RequestRetentionError) -> RequestRetentionCliError {
     match error {
         RequestRetentionError::ActiveDetailPinned => RequestRetentionCliError::ActiveDetailPinned,
         RequestRetentionError::RetainMode => RequestRetentionCliError::RetainMode,
+        RequestRetentionError::AttachmentStorageBindingMismatch => {
+            RequestRetentionCliError::AttachmentStorageBindingMismatch
+        }
         RequestRetentionError::ActiveProposalRequiresRebase
         | RequestRetentionError::Unavailable => RequestRetentionCliError::Operator,
     }
@@ -147,4 +161,16 @@ fn operator_runtime() -> Result<tokio::runtime::Runtime, RequestRetentionCliErro
         .enable_all()
         .build()
         .map_err(|_| RequestRetentionCliError::Operator)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn attachment_binding_refusal_preserves_actionable_cli_error() {
+        assert_eq!(
+            map_error(RequestRetentionError::AttachmentStorageBindingMismatch),
+            RequestRetentionCliError::AttachmentStorageBindingMismatch
+        );
+    }
 }

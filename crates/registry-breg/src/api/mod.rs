@@ -2,6 +2,7 @@
 //! HTTP surface compiled from one immutable Registry inventory.
 
 mod actions;
+mod attachments;
 #[cfg(test)]
 #[path = "tests/change_request_action_tests.rs"]
 mod change_request_action_tests;
@@ -194,7 +195,8 @@ fn route_set(service: Arc<HttpService>) -> Router {
         }
     }
 
-    app.merge(gis::routes())
+    app.merge(attachments::routes(&service))
+        .merge(gis::routes())
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(service)
@@ -304,6 +306,7 @@ async fn openapi(
         }
     }
 
+    metadata::append_attachment_openapi(&service, &visible, &mut paths);
     let mut schemas = readable_by_entity
         .iter()
         .filter_map(|(entity_id, readable)| {
@@ -2958,14 +2961,30 @@ async fn read_query(
         query_options.select.as_ref(),
     ) {
         Ok(Some(fields)) => fields,
-        Ok(None) => operation.projection_fields.iter().cloned().collect(),
+        Ok(None) => operation
+            .projection_fields
+            .iter()
+            .cloned()
+            .chain(
+                surface
+                    .response_entity
+                    .attachments
+                    .keys()
+                    .filter(|id| {
+                        kind == CompiledQueryKind::List && surface.readable_fields.contains(*id)
+                    })
+                    .cloned(),
+            )
+            .collect(),
         Err(()) => return Err(ReadQueryError::Invalid),
     };
     if fields.is_empty()
         || !fields.is_subset(&surface.readable_fields)
-        || !fields
-            .iter()
-            .all(|field| operation.projection_fields.contains(field))
+        || !fields.iter().all(|field| {
+            operation.projection_fields.contains(field)
+                || (kind == CompiledQueryKind::List
+                    && surface.response_entity.attachments.contains_key(field))
+        })
     {
         return Err(ReadQueryError::Invalid);
     }
@@ -3149,6 +3168,12 @@ fn resolve_data_field_id<'a>(entity: &'a CompiledEntity, api_name: &str) -> Opti
         .chain(entity.derived_fields.values().map(|field| &field.logical))
         .find(|field| field.api_name == api_name)
         .map(|field| field.id.as_str())
+        .or_else(|| {
+            entity
+                .attachments
+                .get(api_name)
+                .map(|slot| slot.id.as_str())
+        })
 }
 
 fn projection_plan(
@@ -3157,6 +3182,7 @@ fn projection_plan(
 ) -> Result<Vec<ReadProjectionField>, ReadQueryError> {
     selected_fields
         .iter()
+        .filter(|field_id| !entity.attachments.contains_key(*field_id))
         .map(|field_id| {
             let field_type = data_field_type(entity, field_id).ok_or(ReadQueryError::Invalid)?;
             Ok(ReadProjectionField {
@@ -3889,7 +3915,12 @@ fn read_projection_from_cursor(
     selected_fields: &BTreeSet<String>,
     projection: &[CursorProjectionField],
 ) -> Result<Vec<ReadProjectionField>, ReadQueryError> {
-    if projection.len() != selected_fields.len() {
+    if projection.len()
+        != selected_fields
+            .iter()
+            .filter(|id| !entity.attachments.contains_key(*id))
+            .count()
+    {
         return Err(ReadQueryError::CursorInvalid);
     }
     let expected = projection_plan(entity, selected_fields)?;
@@ -4228,6 +4259,13 @@ fn filtered_schema(
         .chain(entity.derived_fields.values().map(|field| &field.logical))
         .filter(|field| readable_fields.contains(&field.id))
         .map(|field| field.api_name.as_str())
+        .chain(
+            entity
+                .attachments
+                .keys()
+                .filter(|id| readable_fields.contains(*id))
+                .map(String::as_str),
+        )
         .collect::<BTreeSet<_>>();
     let path = format!("generated/schemas/{entity_id}.schema.json");
     let artifact = service.registry.artifacts().get(&path)?;

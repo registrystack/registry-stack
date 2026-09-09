@@ -23,6 +23,7 @@ use tracing_subscriber::filter::LevelFilter;
 use crate::api::{
     authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
+use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::auth::RegistryAuthenticator;
 use crate::metrics::{self, Metrics};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -63,6 +64,8 @@ pub enum StartupError {
     Authentication,
     #[error("the Registry event destination bindings were refused")]
     EventDestinations,
+    #[error("the Registry attachment storage or verification binding was refused")]
+    AttachmentStorage,
     #[error("the Registry listener could not be started")]
     Listener,
     #[error("the Registry shutdown signal failed")]
@@ -170,6 +173,8 @@ pub enum OperationalEvent {
     Stopped,
     StoppedWithError(StartupError),
     WebhookWorkerIterationFailed,
+    AttachmentVerificationIterationFailed,
+    AttachmentVerificationRetryPending,
     WebhookStateTransitionFailed(WebhookStateTransitionCode),
 }
 
@@ -212,6 +217,20 @@ impl OperationalEvent {
                 error: None,
                 code: Some("webhook.worker.iteration_failed"),
             },
+            Self::AttachmentVerificationIterationFailed => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::attachment_verification",
+                message: "attachment verification worker iteration failed",
+                error: None,
+                code: Some("attachment_verification.worker.iteration_failed"),
+            },
+            Self::AttachmentVerificationRetryPending => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::attachment_verification",
+                message: "attachment verification retry is pending",
+                error: None,
+                code: Some("attachment_verification.retry_pending"),
+            },
             Self::WebhookStateTransitionFailed(code) => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
                 target: "registry_breg::webhook",
@@ -239,6 +258,13 @@ impl OperationalEvent {
                     .expect("stopped-with-error records have a closed error");
                 tracing::error!(target: "registry_breg::startup", error, message = record.message);
             }
+            Self::AttachmentVerificationIterationFailed
+            | Self::AttachmentVerificationRetryPending => {
+                let code = record
+                    .code
+                    .expect("verification warning records have a code");
+                tracing::warn!(target: "registry_breg::attachment_verification", code, message = record.message);
+            }
             Self::WebhookWorkerIterationFailed | Self::WebhookStateTransitionFailed(_) => {
                 let code = record.code.expect("webhook warning records have a code");
                 tracing::warn!(target: "registry_breg::webhook", code, message = record.message);
@@ -261,6 +287,9 @@ impl StartupError {
             Self::Cursor => "the Registry cursor profile was refused",
             Self::Oidc => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
+            Self::AttachmentStorage => {
+                "the Registry attachment storage or verification binding was refused"
+            }
             Self::EventDestinations => "the Registry event destination bindings were refused",
             Self::Listener => "the Registry listener could not be started",
             Self::Shutdown => "the Registry shutdown signal failed",
@@ -307,6 +336,7 @@ pub struct PreparedServer {
     app: Router,
     shutdown_grace: Duration,
     webhook_worker: Option<WebhookWorker>,
+    attachment_verification_worker: Option<AttachmentVerificationWorker>,
     metrics: Option<PreparedMetricsListener>,
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     fixture_pool: Option<RuntimePool>,
@@ -349,6 +379,7 @@ impl PreparedServer {
             app,
             shutdown_grace,
             webhook_worker: None,
+            attachment_verification_worker: None,
             metrics: None,
             #[cfg(feature = "tooling")]
             fixture_pool: None,
@@ -369,6 +400,7 @@ impl PreparedServer {
             app,
             shutdown_grace,
             webhook_worker: Some(webhook_worker),
+            attachment_verification_worker: None,
             metrics: None,
             #[cfg(feature = "tooling")]
             fixture_pool: None,
@@ -707,15 +739,35 @@ async fn finish_prepared_server(
         return Err(StartupError::DatabaseUnready);
     }
 
-    let records = Arc::new(PostgresRecordReadService::new(
-        pool.clone(),
-        Arc::clone(&registry),
-        expected.clone(),
+    let attachment_storage = config
+        .activate_attachment_storage(registry.registry_id())
+        .await
+        .map_err(|_| StartupError::AttachmentStorage)?;
+    let attachment_verification = config
+        .activate_attachment_verification()
+        .map_err(|_| StartupError::AttachmentStorage)?;
+    verify_attachment_storage(
+        &pool,
+        &expected,
         lock_key,
         config.operational_timeouts().record_lock,
-        audit_profile.clone(),
-        Arc::clone(&cursor_codec),
-    ));
+        &attachment_storage.binding_digest(),
+        &attachment_verification.binding_digest(),
+    )
+    .await?;
+    let records = Arc::new(
+        PostgresRecordReadService::new(
+            pool.clone(),
+            Arc::clone(&registry),
+            expected.clone(),
+            lock_key,
+            config.operational_timeouts().record_lock,
+            audit_profile.clone(),
+            Arc::clone(&cursor_codec),
+        )
+        .with_attachment_storage(attachment_storage.clone())
+        .with_attachment_verification(attachment_verification.clone()),
+    );
     let read_identity = ReadRuntimeIdentity {
         package_revision: expected.package_revision.clone(),
         schema_fingerprint: expected.schema_fingerprint.clone(),
@@ -755,6 +807,22 @@ async fn finish_prepared_server(
     let evidence = config
         .activate_evidence(&registry)
         .map_err(StartupError::RuntimeConfig)?;
+    let attachment_verification_worker = if matches!(
+        attachment_verification,
+        crate::attachment_verification::AttachmentVerification::Disabled
+    ) {
+        None
+    } else {
+        Some(AttachmentVerificationWorker::new(
+            pool.clone(),
+            expected.clone(),
+            lock_key,
+            config.operational_timeouts().record_lock,
+            audit_profile.clone(),
+            attachment_storage.clone(),
+            attachment_verification.clone(),
+        ))
+    };
     let mutations = PostgresRecordMutationService::new_with_event_destinations(
         pool,
         Arc::clone(&registry),
@@ -763,7 +831,9 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit_profile,
         Some(event_destinations),
-    );
+    )
+    .with_attachment_storage(attachment_storage)
+    .with_attachment_verification(attachment_verification);
     let mutations = Arc::new(match evidence {
         Some(evaluator) => mutations
             .with_evidence_evaluator(evaluator)
@@ -801,10 +871,79 @@ async fn finish_prepared_server(
         app,
         shutdown_grace: config.operational_timeouts().shutdown_grace,
         webhook_worker,
+        attachment_verification_worker,
         metrics,
         #[cfg(all(feature = "postgres-test", feature = "tooling"))]
         fixture_pool: Some(fixture_pool),
     })
+}
+
+/// Startup may inspect storage binding identities, never attachment bytes. This
+/// closed system context is installed only after exact package admission, under
+/// the same shared registry interlock that excludes activation and maintenance.
+async fn verify_attachment_storage(
+    pool: &RuntimePool,
+    expected: &ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    lock_timeout: Duration,
+    backend: &str,
+    verification_policy: &str,
+) -> Result<()> {
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|_| StartupError::AttachmentStorage)?;
+    let tx = client
+        .transaction()
+        .await
+        .map_err(|_| StartupError::AttachmentStorage)?;
+    tx.execute(
+        "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', '30s', true)",
+        &[&format!("{}ms", lock_timeout.as_millis())],
+    )
+    .await
+    .map_err(|_| StartupError::AttachmentStorage)?;
+    tx.execute(
+        "SELECT pg_advisory_xact_lock_shared($1)",
+        &[&lock_key.get()],
+    )
+    .await
+    .map_err(|_| StartupError::AttachmentStorage)?;
+    let ready: bool = tx
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_state WHERE singleton
+         AND package_id=$1 AND environment=$2 AND instance_id=$3 AND database_id=$4
+         AND active_package_revision=$5 AND schema_fingerprint=$6 AND package_sequence=$7
+         AND maintenance_status='ready')",
+            &[
+                &expected.package_id,
+                &expected.environment,
+                &expected.instance_id,
+                &expected.database_id,
+                &expected.package_revision,
+                &expected.schema_fingerprint,
+                &expected.package_sequence,
+            ],
+        )
+        .await
+        .map_err(|_| StartupError::AttachmentStorage)?
+        .get(0);
+    if !ready {
+        return Err(StartupError::AttachmentStorage);
+    }
+    tx.execute(
+        "SELECT set_config('registry.active_package_revision', $1, true),
+                       set_config('registry.principal', 'breg:startup:attachment-binding', true)",
+        &[&expected.package_revision],
+    )
+    .await
+    .map_err(|_| StartupError::AttachmentStorage)?;
+    crate::attachment_store::verify_backend_binding(&*tx, backend, verification_policy)
+        .await
+        .map_err(|_| StartupError::AttachmentStorage)?;
+    tx.commit()
+        .await
+        .map_err(|_| StartupError::AttachmentStorage)
 }
 
 fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
@@ -916,6 +1055,7 @@ pub async fn serve_until_shutdown(
         app,
         shutdown_grace,
         webhook_worker,
+        attachment_verification_worker,
         metrics,
         ..
     } = prepared;
@@ -935,6 +1075,8 @@ pub async fn serve_until_shutdown(
     };
     OperationalEvent::Listening.emit();
     let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
+    let mut verification_worker = attachment_verification_worker
+        .map(|worker| tokio::spawn(worker.run(worker_shutdown_rx.clone())));
     let mut worker = webhook_worker.map(|worker| tokio::spawn(worker.run(worker_shutdown_rx)));
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let (metrics_shutdown_tx, metrics_shutdown_rx) = oneshot::channel::<()>();
@@ -974,6 +1116,9 @@ pub async fn serve_until_shutdown(
         if let Some(worker) = worker.as_mut() {
             let _ = worker.await;
         }
+        if let Some(worker) = verification_worker.as_mut() {
+            let _ = worker.await;
+        }
         if let Some(metrics_server) = metrics_server.as_mut() {
             let _ = metrics_server.await;
         }
@@ -991,6 +1136,10 @@ pub async fn serve_until_shutdown(
                 let _ = metrics_server.await;
             }
             if let Some(worker) = worker.as_mut() {
+                worker.abort();
+                let _ = worker.await;
+            }
+            if let Some(worker) = verification_worker.as_mut() {
                 worker.abort();
                 let _ = worker.await;
             }

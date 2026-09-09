@@ -202,6 +202,602 @@ async fn canceled_draft_without_proposal_erases_current_detail_and_bound_sidecar
 }
 
 #[tokio::test]
+async fn attachment_verification_quarantines_exact_mime_retries_leases_and_erases_pending_work() {
+    use registry_breg::attachment_store::test_support as store;
+    load_postgres_env();
+    let registry = compiled_registry(false, "internal");
+    let database = TestDatabase::create(1).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .unwrap();
+    seed_domain_rows(&migration, &registry).await;
+    seed_canceled_draft_without_proposal(&migration, &registry).await;
+    let request_id = Uuid::parse_str(CANCELED_REQUEST_ID).unwrap();
+    let policy = "verification-policy-a";
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_request_state SET state='draft' WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .unwrap();
+    let tx = migration.transaction().await.unwrap();
+    store::put_verified(
+        &tx,
+        REQUEST_ENTITY,
+        request_id,
+        "evidence",
+        "application/pdf",
+        b"abc",
+        policy,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        store::metadata(&tx, REQUEST_ENTITY, request_id)
+            .await
+            .unwrap()["evidence"]["verificationStatus"],
+        "pending"
+    );
+    assert!(store::manifest(&tx, REQUEST_ENTITY, request_id)
+        .await
+        .is_err());
+    assert!(
+        !store::content_available(&tx, REQUEST_ENTITY, request_id, "evidence")
+            .await
+            .unwrap()
+    );
+    tx.commit().await.unwrap();
+    assert!(
+        store::verify_policy_binding(&migration, "database", "disabled")
+            .await
+            .is_err()
+    );
+    assert!(
+        store::verify_policy_binding(&migration, "database", "changed-policy")
+            .await
+            .is_err()
+    );
+    let tx = migration.transaction().await.unwrap();
+    let first = store::claim(&tx, policy).await.unwrap().unwrap();
+    assert!(store::claim(&tx, policy).await.unwrap().is_none());
+    assert_eq!(
+        store::verification_content(&tx, &first).await.unwrap(),
+        Some(b"abc".to_vec())
+    );
+    assert!(store::retry(&tx, &first).await.unwrap());
+    tx.commit().await.unwrap();
+    let tx = migration.transaction().await.unwrap();
+    assert!(
+        store::claim(&tx, policy).await.unwrap().is_none(),
+        "backoff prevents immediate repeat scanning"
+    );
+    tx.commit().await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_attachment_verification SET next_attempt_at=transaction_timestamp()-interval '1 second'", &[]).await.unwrap();
+    let tx = migration.transaction().await.unwrap();
+    let second = store::claim(&tx, policy).await.unwrap().unwrap();
+    assert_ne!(first.lease_id(), second.lease_id());
+    assert!(!store::finish(&tx, &first, true).await.unwrap());
+    tx.commit().await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_attachment_verification SET lease_expires_at=transaction_timestamp()-interval '1 second'", &[]).await.unwrap();
+    let tx = migration.transaction().await.unwrap();
+    let recovered = store::claim(&tx, policy).await.unwrap().unwrap();
+    assert!(
+        !store::finish(&tx, &second, true).await.unwrap(),
+        "expired worker cannot approve a reclaimed job"
+    );
+    assert!(store::finish(&tx, &recovered, true).await.unwrap());
+    assert!(
+        store::content_available(&tx, REQUEST_ENTITY, request_id, "evidence")
+            .await
+            .unwrap()
+    );
+    let manifest = store::manifest(&tx, REQUEST_ENTITY, request_id)
+        .await
+        .unwrap();
+    assert_eq!(manifest["evidence"]["verificationPolicy"], policy);
+    tx.commit().await.unwrap();
+    let tx = migration.transaction().await.unwrap();
+    store::put_verified(
+        &tx,
+        REQUEST_ENTITY,
+        request_id,
+        "evidence",
+        "text/plain",
+        b"abc",
+        policy,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !store::content_available(&tx, REQUEST_ENTITY, request_id, "evidence")
+            .await
+            .unwrap(),
+        "same bytes with a changed declared MIME require independent approval"
+    );
+    let prior_mime_jobs:i64=tx.query_one("SELECT count(*) FROM registry_internal.registry_attachment_verification WHERE content_type='application/pdf'", &[]).await.unwrap().get(0);
+    assert_eq!(
+        prior_mime_jobs, 0,
+        "replacement prunes unused MIME verdict even while the shared blob survives"
+    );
+    let plain = store::claim(&tx, policy).await.unwrap().unwrap();
+    assert_eq!(plain.content_type(), "text/plain");
+    assert!(store::finish(&tx, &plain, false).await.unwrap());
+    assert_eq!(
+        store::metadata(&tx, REQUEST_ENTITY, request_id)
+            .await
+            .unwrap()["evidence"]["verificationStatus"],
+        "rejected"
+    );
+    assert!(
+        store::manifest(&tx, REQUEST_ENTITY, request_id)
+            .await
+            .is_err(),
+        "even optional filled rejected slots block submission"
+    );
+    store::put_verified(
+        &tx,
+        REQUEST_ENTITY,
+        request_id,
+        "alternate",
+        "application/pdf",
+        b"abc",
+        policy,
+    )
+    .await
+    .unwrap();
+    let pending = store::claim(&tx, policy).await.unwrap().unwrap();
+    assert_eq!(pending.content_type(), "application/pdf");
+    tx.commit().await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_request_state SET state='canceled' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    erase_request_detail(
+        &mut migration,
+        &registry,
+        RequestDetailErasureScope {
+            request_entity_id: REQUEST_ENTITY,
+            request_id,
+            proposal_version: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let tx = migration.transaction().await.unwrap();
+    assert!(
+        !store::finish(&tx, &pending, true).await.unwrap(),
+        "a late scanner result cannot resurrect erased queue state"
+    );
+    assert!(store::verification_content(&tx, &pending).await.is_err());
+    let remaining: i64 = tx
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_attachment_verification",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(remaining, 0);
+    let erased = store::metadata(&tx, REQUEST_ENTITY, request_id)
+        .await
+        .unwrap();
+    assert!(erased["evidence"].get("verificationStatus").is_none());
+    tx.commit().await.unwrap();
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn first_attachment_write_pins_backend_across_concurrent_distinct_hashes_and_erasure() {
+    use registry_breg::attachment_store::test_support;
+    load_postgres_env();
+    let registry = compiled_registry(false, "internal");
+    let database = TestDatabase::create(2).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .unwrap();
+    seed_domain_rows(&migration, &registry).await;
+    seed_canceled_draft_without_proposal(&migration, &registry).await;
+    let request_id = Uuid::parse_str(CANCELED_REQUEST_ID).unwrap();
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_request_state SET state='draft' WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .unwrap();
+    // Two runtimes may legitimately observe the same empty registry before
+    // either writes. The first write, not that startup snapshot, must pin it.
+    test_support::verify_binding(&migration, "database")
+        .await
+        .unwrap();
+    test_support::verify_binding(&migration, "other-external-backend")
+        .await
+        .unwrap();
+    test_support::verify_policy_binding(&migration, "database", "different-verifier-policy")
+        .await
+        .unwrap();
+    let other_request = Uuid::new_v4();
+    migration.execute("INSERT INTO registry_internal.registry_request_state (request_entity_id,request_id,owner_reference,state,proposal_version,workflow_revision) VALUES ($1,$2,'uploader','draft',1,1)", &[&REQUEST_ENTITY,&other_request]).await.unwrap();
+    let (mut competing_policy, policy_task) = database.connect_migration().await;
+    let policy_pid: i32 = competing_policy
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let (mut competing, competing_task) = database.connect_migration().await;
+    let competing_pid: i32 = competing
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let transaction = migration.transaction().await.unwrap();
+    test_support::put_external(&transaction, REQUEST_ENTITY, request_id, "database")
+        .await
+        .unwrap();
+    let pending = tokio::spawn(async move {
+        let tx = competing.transaction().await.unwrap();
+        let result = test_support::stage(&tx, &"c".repeat(64), 3, "other-external-backend").await;
+        tx.rollback().await.unwrap();
+        result
+    });
+    let pending_policy = tokio::spawn(async move {
+        let tx = competing_policy.transaction().await.unwrap();
+        let result = test_support::put_verified(
+            &tx,
+            REQUEST_ENTITY,
+            other_request,
+            "evidence",
+            "application/pdf",
+            b"def",
+            "different-verifier-policy",
+        )
+        .await;
+        tx.rollback().await.unwrap();
+        result
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let blocked: bool = database
+                .admin
+                .query_one(
+                    "SELECT count(DISTINCT pid)=2 FROM pg_locks WHERE pid=ANY($1) AND NOT granted",
+                    &[&vec![competing_pid, policy_pid]],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if blocked {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect(
+        "competing backend waits on the first-write singleton before staging its distinct hash",
+    );
+    transaction.commit().await.unwrap();
+    assert!(
+        pending.await.unwrap().is_err(),
+        "a different hash cannot bypass the durable registry backend pin"
+    );
+    assert!(pending_policy.await.unwrap().is_err(),"a concurrently started verifier configuration cannot bypass the registry policy pin on a different hash");
+    let backend: String = migration
+        .query_one(
+            "SELECT backend_id FROM registry_internal.registry_attachment_storage_binding",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(backend, "database");
+    migration.execute("UPDATE registry_internal.registry_request_state SET state='canceled' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    erase_request_detail(
+        &mut migration,
+        &registry,
+        RequestDetailErasureScope {
+            request_entity_id: REQUEST_ENTITY,
+            request_id,
+            proposal_version: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let count: i64 = migration
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_attachment_blobs",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 0);
+    test_support::verify_binding(&migration, "database")
+        .await
+        .unwrap();
+    assert!(
+        test_support::verify_binding(&migration, "other-external-backend")
+            .await
+            .is_err(),
+        "last-reference erasure does not reset storage identity"
+    );
+    competing_task.abort();
+    policy_task.abort();
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn database_deduplication_refuses_corrupt_existing_bytes_before_linking() {
+    use registry_breg::attachment_store::test_support;
+    load_postgres_env();
+    let registry = compiled_registry(false, "internal");
+    let database = TestDatabase::create(1).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .unwrap();
+    seed_domain_rows(&migration, &registry).await;
+    seed_canceled_draft_without_proposal(&migration, &registry).await;
+    let hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let request_id = Uuid::parse_str(CANCELED_REQUEST_ID).unwrap();
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_request_state SET state='draft' WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .unwrap();
+    migration.execute("INSERT INTO registry_internal.registry_attachment_blobs (sha256,byte_size,backend_id,content,state) VALUES ($1,3,'database',decode('616264','hex'),'live')", &[&hash]).await.unwrap();
+    let tx = migration.transaction().await.unwrap();
+    assert!(
+        test_support::put_external(&tx, REQUEST_ENTITY, request_id, "database")
+            .await
+            .is_err()
+    );
+    let count: i64 = tx
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_request_attachments",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        count, 0,
+        "corrupt deduplicated bytes never gain a new successful reference"
+    );
+    tx.rollback().await.unwrap();
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn external_deletion_tombstones_survive_confirmation_and_failed_rechecks_until_safe_reuse() {
+    use registry_breg::attachment_store::test_support;
+    load_postgres_env();
+    let registry = compiled_registry(false, "internal");
+    let database = TestDatabase::create(1).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .unwrap();
+    seed_domain_rows(&migration, &registry).await;
+    seed_canceled_draft_without_proposal(&migration, &registry).await;
+    let hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let backend = "external-test-binding";
+    let state = |row: tokio_postgres::Row| row.get::<_, String>(0);
+    let tx = migration.transaction().await.unwrap();
+    test_support::stage(&tx, hash, 3, backend).await.unwrap();
+    tx.commit().await.unwrap();
+    let tx = migration.transaction().await.unwrap();
+    test_support::confirm_delete(&tx, hash, backend)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        state(
+            migration
+                .query_one(
+                    "SELECT state FROM registry_internal.registry_attachment_blobs WHERE sha256=$1",
+                    &[&hash]
+                )
+                .await
+                .unwrap()
+        ),
+        "delete_confirmed"
+    );
+    assert!(
+        test_support::verify_binding(&migration, "database")
+            .await
+            .is_err(),
+        "a confirmed tombstone still pins backend cleanup responsibility"
+    );
+    test_support::verify_binding(&migration, backend)
+        .await
+        .unwrap();
+    // A delayed remote PUT may recreate bytes after DELETE+404. The durable
+    // tombstone is rechecked, and a failed recheck becomes pending again.
+    let tx = migration.transaction().await.unwrap();
+    test_support::fail_delete(&tx, hash, backend).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        state(
+            migration
+                .query_one(
+                    "SELECT state FROM registry_internal.registry_attachment_blobs WHERE sha256=$1",
+                    &[&hash]
+                )
+                .await
+                .unwrap()
+        ),
+        "delete_pending"
+    );
+    let tx = migration.transaction().await.unwrap();
+    test_support::confirm_delete(&tx, hash, backend)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let tx = migration.transaction().await.unwrap();
+    test_support::stage(&tx, hash, 3, backend).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        state(
+            migration
+                .query_one(
+                    "SELECT state FROM registry_internal.registry_attachment_blobs WHERE sha256=$1",
+                    &[&hash]
+                )
+                .await
+                .unwrap()
+        ),
+        "staged"
+    );
+    let request_id = Uuid::parse_str(CANCELED_REQUEST_ID).unwrap();
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_request_state SET state='draft' WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .unwrap();
+    let tx = migration.transaction().await.unwrap();
+    test_support::put_external(&tx, REQUEST_ENTITY, request_id, backend)
+        .await
+        .unwrap();
+    test_support::confirm_delete(&tx, hash, backend)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        state(
+            migration
+                .query_one(
+                    "SELECT state FROM registry_internal.registry_attachment_blobs WHERE sha256=$1",
+                    &[&hash]
+                )
+                .await
+                .unwrap()
+        ),
+        "live",
+        "stale cleanup cannot revoke content after safe reuse"
+    );
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn attachment_retention_preserves_shared_bytes_until_last_request_erasure() {
+    load_postgres_env();
+    let registry = compiled_registry(false, "internal");
+    let database = TestDatabase::create(1).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .unwrap();
+    seed_domain_rows(&migration, &registry).await;
+    seed_submitted_request(&migration, &request_fingerprint(&registry)).await;
+    seed_request_intake_and_revisions(&migration, &registry).await;
+    seed_canceled_draft_without_proposal(&migration, &registry).await;
+    let first = Uuid::parse_str(CANCELED_REQUEST_ID).unwrap();
+    let second = Uuid::parse_str(REQUEST_ID).unwrap();
+    let hash = "a".repeat(64);
+    migration.execute("INSERT INTO registry_internal.registry_attachment_blobs (sha256,byte_size,backend_id,content,state) VALUES ($1,3,'database',decode('616263','hex'),'live')", &[&hash]).await.unwrap();
+    for request in [first, second] {
+        migration.execute("INSERT INTO registry_internal.registry_request_attachments (request_entity_id,request_id,proposal_version,slot_id,sha256,content_type,byte_size,uploaded_at,uploaded_by) VALUES ($1,$2,1,'evidence',$3,'application/pdf',3,transaction_timestamp(),'uploader-canary')", &[&REQUEST_ENTITY,&request,&hash]).await.unwrap();
+    }
+    let runtime_pool = database.runtime_config.build_pool().unwrap();
+    let runtime = runtime_pool.get_for_test().await.unwrap();
+    let hidden: i64 = runtime
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_request_attachments",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        hidden, 0,
+        "unadmitted pooled runtime context cannot read attachment metadata"
+    );
+    drop(runtime);
+    let erased = erase_request_detail(
+        &mut migration,
+        &registry,
+        RequestDetailErasureScope {
+            request_entity_id: REQUEST_ENTITY,
+            request_id: first,
+            proposal_version: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(erased.attachment_references, 1);
+    let blob_count: i64 = migration
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_attachment_blobs",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        blob_count, 1,
+        "second retained request still needs shared bytes"
+    );
+    let provenance=migration.query_one("SELECT uploaded_by IS NULL,uploaded_at IS NULL,erased_at IS NOT NULL,sha256,byte_size FROM registry_internal.registry_request_attachments WHERE request_id=$1", &[&first]).await.unwrap();
+    assert!(
+        provenance.get::<_, bool>(0)
+            && provenance.get::<_, bool>(1)
+            && provenance.get::<_, bool>(2)
+    );
+    assert_eq!(provenance.get::<_, String>(3), hash);
+    assert_eq!(provenance.get::<_, i64>(4), 3);
+    assert_eq!(
+        erase_request_detail(
+            &mut migration,
+            &registry,
+            RequestDetailErasureScope {
+                request_entity_id: REQUEST_ENTITY,
+                request_id: second,
+                proposal_version: 1
+            }
+        )
+        .await,
+        Err(RequestRetentionError::ActiveDetailPinned)
+    );
+    migration.execute("UPDATE registry_internal.registry_request_state SET state='canceled' WHERE request_id=$1", &[&second]).await.unwrap();
+    let erased = erase_request_detail(
+        &mut migration,
+        &registry,
+        RequestDetailErasureScope {
+            request_entity_id: REQUEST_ENTITY,
+            request_id: second,
+            proposal_version: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(erased.attachment_references, 1);
+    let blob_count: i64 = migration
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_attachment_blobs",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        blob_count, 0,
+        "last live reference erasure physically deletes database bytes"
+    );
+    drop(runtime_pool);
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
 async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_provenance_links() {
     load_postgres_env();
     let registry = compiled_registry(false, "internal");
@@ -555,6 +1151,31 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     assert_eq!(
         audit_rows, 1,
         "operator erasure appends one durable audit record"
+    );
+
+    let active_scope = RequestDetailErasureScope {
+        request_entity_id: REQUEST_ENTITY,
+        request_id: Uuid::parse_str(ACTIVE_DRAFT_REQUEST_ID).unwrap(),
+        proposal_version: 1,
+    };
+    let before_cleanup = service.dry_run(active_scope.clone()).await.unwrap();
+    assert!(before_cleanup.pinned);
+    assert_eq!(
+        service.erase(active_scope.clone()).await,
+        Err(RequestRetentionError::ActiveDetailPinned)
+    );
+    let cleanup = service.cleanup_attachments().await.unwrap();
+    assert_eq!(cleanup.pending_external_deletions, 0);
+    assert_eq!(cleanup.external_deletion_tombstones, 0);
+    assert_eq!(service.dry_run(active_scope).await.unwrap(), before_cleanup);
+    let cleanup_audits: i64 = migration
+        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        cleanup_audits, 3,
+        "cleanup persists an attempt and terminal audit independently of erasure eligibility"
     );
 
     migration_task.abort();

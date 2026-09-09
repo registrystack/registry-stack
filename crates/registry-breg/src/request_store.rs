@@ -189,6 +189,7 @@ pub(crate) async fn install(
                  REFERENCES registry_internal.registry_request_state
          );"
     ).await.map_err(|_| MutationError::Unavailable)?;
+    crate::attachment_store::install(client, runtime_role).await?;
     for (table, privileges) in REQUEST_TABLES {
         let role = runtime_role.as_str();
         client

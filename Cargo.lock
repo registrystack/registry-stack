@@ -3110,6 +3110,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
+name = "quick-xml"
+version = "0.42.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3360,6 +3369,7 @@ dependencies = [
  "chrono",
  "clap",
  "deadpool-postgres",
+ "futures-core",
  "getrandom 0.4.3",
  "hex",
  "hmac 0.13.0",
@@ -3367,6 +3377,7 @@ dependencies = [
  "jsonschema",
  "jsonwebtoken",
  "pg_query",
+ "quick-xml",
  "rcgen",
  "registry-breg-client",
  "registry-evidence-client",
@@ -3382,6 +3393,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-testing",
+ "reqwest",
  "rhai",
  "rustix 1.1.4",
  "rustls",

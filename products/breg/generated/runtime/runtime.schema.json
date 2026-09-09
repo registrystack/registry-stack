@@ -69,6 +69,155 @@
       ],
       "type": "string"
     },
+    "RawAttachmentStorageConfig": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "database",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "accessKeyIdRef": {
+              "maxLength": 140,
+              "minLength": 1,
+              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            },
+            "bucket": {
+              "maxLength": 63,
+              "minLength": 3,
+              "type": "string"
+            },
+            "caBundleRef": {
+              "maxLength": 140,
+              "minLength": 1,
+              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "endpoint": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "s3",
+              "type": "string"
+            },
+            "pathStyle": {
+              "default": true,
+              "type": "boolean"
+            },
+            "region": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "secretAccessKeyRef": {
+              "maxLength": 140,
+              "minLength": 1,
+              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            },
+            "sessionTokenRef": {
+              "maxLength": 140,
+              "minLength": 1,
+              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeoutMilliseconds": {
+              "default": 10000,
+              "format": "uint64",
+              "maximum": 60000,
+              "minimum": 100,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "endpoint",
+            "bucket",
+            "region",
+            "accessKeyIdRef",
+            "secretAccessKeyRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RawAttachmentVerificationConfig": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "disabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authorizationRef": {
+              "maxLength": 140,
+              "minLength": 1,
+              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            },
+            "endpoint": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "http",
+              "type": "string"
+            },
+            "policyId": {
+              "description": "Non-secret identity of the external scanner and rules generation.",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "type": "string"
+            },
+            "timeoutMilliseconds": {
+              "default": 10000,
+              "format": "uint64",
+              "maximum": 60000,
+              "minimum": 100,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "endpoint",
+            "authorizationRef",
+            "policyId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RawAuditConfig": {
       "additionalProperties": false,
       "properties": {
@@ -834,6 +983,20 @@
     "apiVersion": {
       "const": "registry.registrystack.org/breg-runtime/v1alpha1",
       "type": "string"
+    },
+    "attachmentStorage": {
+      "$ref": "#/$defs/RawAttachmentStorageConfig",
+      "default": {
+        "kind": "database"
+      },
+      "description": "Defaults to PostgreSQL; S3 requires a bucket with versioning never enabled."
+    },
+    "attachmentVerification": {
+      "$ref": "#/$defs/RawAttachmentVerificationConfig",
+      "default": {
+        "kind": "disabled"
+      },
+      "description": "Optional external verdict hook. Disabled by default."
     },
     "audit": {
       "$ref": "#/$defs/RawAuditConfig"

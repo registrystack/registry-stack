@@ -840,6 +840,7 @@ impl MutationCoordinator {
             .map_err(|_| MutationError::Unavailable)?;
         let mut save_previous_revision = previous_revision;
         let previous_state = workflow.state();
+        let previous_version = workflow.current_version().get();
         let trusted = TrustedTransitionContext::from_verified_context(
             TrustedActorRef::from_verified_context(&actor_reference)
                 .map_err(|_| MutationError::Unavailable)?,
@@ -860,9 +861,21 @@ impl MutationCoordinator {
                 {
                     return Err(MutationError::PreconditionFailed);
                 }
+                let attachments = crate::attachment_store::manifest(
+                    transaction.transaction(),
+                    &entity.id,
+                    current.record_uuid,
+                    i64::from(workflow.current_version().get()),
+                )
+                .await?;
+                validate_submission_attachments(&entity.attachments, &attachments)?;
+                let proposal = prepared
+                    .proposal
+                    .with_attachments(attachments)
+                    .map_err(workflow_error)?;
                 prepared_targets = Some(prepared.targets);
                 workflow
-                    .submit(trusted.clone(), prepared.proposal)
+                    .submit(trusted.clone(), proposal)
                     .map_err(workflow_error)?
                     .into_workflow()
             }
@@ -951,6 +964,16 @@ impl MutationCoordinator {
                 applied.workflow
             }
         };
+        if matches!(input.action, RequestActionBody::Revise { .. }) {
+            crate::attachment_store::carry_forward(
+                transaction.transaction(),
+                &entity.id,
+                current.record_uuid,
+                i64::from(previous_version),
+                i64::from(next.current_version().get()),
+            )
+            .await?;
+        }
         if !matches!(input.action, RequestActionBody::Apply { .. })
             && next.state() == RequestState::Approved
             && next
@@ -2125,6 +2148,69 @@ fn request_state_name(state: RequestState) -> &'static str {
         RequestState::Rejected => "rejected",
         RequestState::Canceled => "canceled",
         RequestState::Applied => "applied",
+    }
+}
+
+// Drafts can survive a package upgrade. Recheck their stored attachment policy
+// against the active contract before freezing the manifest into a proposal.
+fn validate_submission_attachments(
+    slots: &BTreeMap<String, crate::model::CompiledAttachmentSlot>,
+    attachments: &BTreeMap<String, crate::request_workflow::AttachmentManifestEntry>,
+) -> Result<(), MutationError> {
+    if slots
+        .iter()
+        .any(|(id, slot)| slot.required && !attachments.contains_key(id))
+        || attachments.iter().any(|(id, attachment)| {
+            slots.get(id).is_none_or(|slot| {
+                attachment.byte_size > u64::from(slot.maximum_bytes)
+                    || !slot.content_types.contains(&attachment.content_type)
+            })
+        })
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod attachment_submission_tests {
+    use super::validate_submission_attachments;
+    use crate::contract::Classification;
+    use crate::model::CompiledAttachmentSlot;
+    use crate::request_workflow::AttachmentManifestEntry;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn stored_draft_attachments_must_satisfy_active_slot_policy() {
+        let mut slots = BTreeMap::from([(
+            "evidence".to_owned(),
+            CompiledAttachmentSlot {
+                id: "evidence".to_owned(),
+                required: true,
+                maximum_bytes: 100,
+                content_types: vec!["application/pdf".to_owned()],
+                classification: Classification::Restricted,
+            },
+        )]);
+        let attachments = BTreeMap::from([(
+            "evidence".to_owned(),
+            AttachmentManifestEntry {
+                verification_policy: None,
+                sha256: "a".repeat(64),
+                content_type: "application/pdf".to_owned(),
+                byte_size: 100,
+            },
+        )]);
+        assert!(validate_submission_attachments(&slots, &attachments).is_ok());
+        assert!(validate_submission_attachments(&slots, &BTreeMap::new()).is_err());
+        slots.get_mut("evidence").unwrap().maximum_bytes = 99;
+        assert!(validate_submission_attachments(&slots, &attachments).is_err());
+        slots.get_mut("evidence").unwrap().maximum_bytes = 100;
+        slots.get_mut("evidence").unwrap().content_types = vec!["image/png".to_owned()];
+        assert!(validate_submission_attachments(&slots, &attachments).is_err());
+        slots.clear();
+        assert!(validate_submission_attachments(&slots, &attachments).is_err());
+        assert!(validate_submission_attachments(&slots, &BTreeMap::new()).is_ok());
     }
 }
 

@@ -31,6 +31,16 @@ class GeneratedGateTests(unittest.TestCase):
             errors = COMPARATOR.compare(baseline, candidate)
         self.assertTrue(any("candidate is missing expected artifacts" in error for error in errors), errors)
 
+    def test_attachment_baseline_requires_request_metadata_schema(self) -> None:
+        baseline = SCRIPT_DIR.parent / "generated/request-attachments"
+        self.assertEqual([], COMPARATOR.compare(baseline, baseline))
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "candidate"
+            shutil.copytree(baseline, candidate)
+            (candidate / "generated/schemas/correction-request.schema.json").unlink()
+            errors = COMPARATOR.compare(baseline, candidate)
+        self.assertTrue(any("candidate is missing expected artifacts" in error for error in errors), errors)
+
     def test_comparator_requires_action_inventory_and_target_condition_schemas(self) -> None:
         baselines = SCRIPT_DIR.parent / "generated"
         self.assertEqual([], COMPARATOR.compare(
@@ -66,6 +76,7 @@ class GeneratedGateTests(unittest.TestCase):
         self.assertIn("asset-site-placement-change-requests", generated_gate)
         self.assertIn("publicschema-household-change-requests", generated_gate)
         self.assertIn("acceptance/person-registration-rhai", generated_gate)
+        self.assertIn("acceptance/request-attachments", generated_gate)
         self.assertIn('export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"', generated_gate)
         self.assertIn("authoring_baseline", generated_gate)
         self.assertIn("--features schema --example authoring-schema", generated_gate)

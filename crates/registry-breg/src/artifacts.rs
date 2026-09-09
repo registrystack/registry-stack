@@ -403,6 +403,143 @@ pub(crate) fn event_data_schema_binding(
     })
 }
 
+/// Engine-owned slot values share ordinary field projection but have no JSON mutation input.
+pub(crate) fn attachment_metadata_schema(slot: &crate::model::CompiledAttachmentSlot) -> Value {
+    let common = json!({
+        "slotId": {"const": slot.id},
+        "proposalVersion": {"type": "integer", "minimum": 1, "maximum": u32::MAX},
+        "filled": {"const": true},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "byteSize": {"type": "integer", "minimum": 1, "maximum": crate::contract::MAX_ATTACHMENT_BYTES},
+    });
+    let mut live = common.clone();
+    live["erased"] = json!({"const": false});
+    // A retained proposal may predate a narrower current upload policy.
+    live["contentType"] = json!({"type": "string", "maxLength": 255,
+        "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$"});
+    live["verificationStatus"] =
+        json!({"type": "string", "enum": ["notRequired", "pending", "approved", "rejected"]});
+    live["uploadedAt"] = json!({"type": "string", "format": "date-time"});
+    live["uploadedBy"] = json!({"type": "string"});
+    let mut erased = common;
+    erased["erased"] = json!({"const": true});
+    json!({
+        "anyOf": [
+            {"type": "null"},
+            {"type": "object", "additionalProperties": false, "properties": live,
+             "required": ["slotId", "proposalVersion", "filled", "sha256", "byteSize", "erased", "contentType", "uploadedAt", "uploadedBy", "verificationStatus"]},
+            {"type": "object", "additionalProperties": false, "properties": erased,
+             "required": ["slotId", "proposalVersion", "filled", "sha256", "byteSize", "erased"]}
+        ],
+        "readOnly": true,
+        "x-registry-fieldKind": "attachment",
+        "x-registry-attachment": {
+            "requiredForSubmit": slot.required,
+            "maximumBytes": slot.maximum_bytes,
+            "contentTypes": slot.content_types,
+            "verification": {
+                "statusField": "verificationStatus",
+                "allowedStatuses": ["notRequired", "approved"],
+                "pendingOrRejectedBlocks": ["download", "submit"]
+            }
+        }
+    })
+}
+
+pub(crate) fn attachment_path(entity: &CompiledEntity, slot_id: &str) -> String {
+    format!(
+        "/v1/records/{}/{{record_id}}/attachments/{slot_id}",
+        entity.route
+    )
+}
+
+/// An attachment operation inherits the admitted GET or PATCH surface and its response projection.
+pub(crate) fn openapi_attachment_operation(
+    spec: OpenApiOperationSpec<'_>,
+    slot: &crate::model::CompiledAttachmentSlot,
+    method: &str,
+) -> Value {
+    let mut operation = openapi_operation(spec);
+    // Binary slot routes do not inherit the record GET's query or GeoJSON representations.
+    for key in [
+        "x-registry-responseShapes",
+        "x-registry-geojsonProfiles",
+        "x-registry-queryProfile",
+    ] {
+        operation.as_object_mut().unwrap().remove(key);
+    }
+    operation["operationId"] = json!(format!(
+        "{}.attachment.{}.{}",
+        spec.route.id, slot.id, method
+    ));
+    operation["x-registry-operation"] = json!(format!("attachment_{method}"));
+    operation["x-registry-attachmentSlot"] = json!(slot.id);
+    operation["description"] = json!(if method == "get" {
+        "Download exact proposal content using current request GET authority and slot visibility."
+    } else {
+        "Mutate one draft slot using request PATCH authority, slot writableFields, owner and row boundaries. Refetch the record after mutation."
+    });
+    operation["security"] = json!([{"bearerAuth": []}]);
+    let mut parameters = vec![
+        json!({"name": "record_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}),
+        json!({"name": "accessProfile", "in": "query", "required": false, "schema": {"type": "string"}}),
+    ];
+    operation.as_object_mut().unwrap().remove("requestBody");
+    if method == "get" {
+        parameters.push(
+            json!({"name": "proposalVersion", "in": "query", "required": true,
+            "schema": {"type": "integer", "minimum": 1, "maximum": u32::MAX}}),
+        );
+        operation
+            .as_object_mut()
+            .unwrap()
+            .remove("x-registry-responseProfile");
+        operation["x-registry-responseShape"] = json!("binary");
+        operation["responses"]
+            .as_object_mut()
+            .unwrap()
+            .remove("304");
+        let content = json!({"*/*": {"schema": {"type": "string", "format": "binary"}}});
+        operation["responses"]["200"] = json!({"description": "Complete integrity-checked attachment content permitted by its verification policy", "content": content,
+        "headers": {
+            "Cache-Control": no_store_header(),
+            "Content-Disposition": {"schema": {"type": "string"}, "description": "Attachment download with an engine-generated filename."},
+            "X-Content-Type-Options": {"schema": {"const": "nosniff"}}
+        }});
+    } else {
+        operation["x-registry-requiredRequestState"] = json!("draft");
+        parameters.push(header_parameter(
+            "If-Match",
+            true,
+            json!({"type": "string"}),
+            "Fresh request record ETag.",
+        ));
+        parameters.push(header_parameter(
+            "Idempotency-Key",
+            true,
+            json!({"type": "string"}),
+            "Caller-selected mutation replay key.",
+        ));
+        if method == "patch" {
+            operation["x-registry-maximumBytes"] = json!(slot.maximum_bytes);
+            let content = slot
+                .content_types
+                .iter()
+                .map(|content_type| {
+                    (
+                        content_type.clone(),
+                        json!({"schema": {"type": "string", "format": "binary"}}),
+                    )
+                })
+                .collect::<Map<_, _>>();
+            operation["requestBody"] = json!({"required": true, "content": content,
+                "description": format!("Raw nonempty bytes, at most {} bytes; actual length and SHA-256 are computed by the server.", slot.maximum_bytes)});
+        }
+    }
+    operation["parameters"] = json!(parameters);
+    operation
+}
+
 fn entity_schema(entity: &CompiledEntity, entities: &BTreeMap<String, CompiledEntity>) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
@@ -422,6 +559,9 @@ fn entity_schema(entity: &CompiledEntity, entities: &BTreeMap<String, CompiledEn
             .expect("field schemas are objects")
             .insert("readOnly".to_owned(), Value::Bool(true));
         properties.insert(field.logical.api_name.clone(), schema);
+    }
+    for slot in entity.attachments.values() {
+        properties.insert(slot.id.clone(), attachment_metadata_schema(slot));
     }
     let mut schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1683,6 +1823,58 @@ fn openapi_document(
                 access_profiles: OpenApiAccessProfiles::All,
             }),
         );
+    }
+    for route in &routes.routes {
+        if !matches!(route.operation, Operation::Get | Operation::Patch)
+            || read_path_for_route(route, &entities[&route.entity_id]).is_some()
+        {
+            continue;
+        }
+        let entity = &entities[&route.entity_id];
+        for slot in entity.attachments.values() {
+            let profiles = route
+                .access_profiles
+                .iter()
+                .filter(|id| {
+                    let profile = &entity.access_profiles[*id];
+                    if route.operation == Operation::Get {
+                        profile.readable_fields.contains(&slot.id)
+                    } else {
+                        profile.writable_fields.contains(&slot.id)
+                    }
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if profiles.is_empty() {
+                continue;
+            }
+            let path = paths
+                .entry(attachment_path(entity, &slot.id))
+                .or_insert_with(|| json!({}));
+            for method in if route.operation == Operation::Get {
+                &["get"][..]
+            } else {
+                &["patch", "delete"][..]
+            } {
+                let mut operation = openapi_attachment_operation(
+                    OpenApiOperationSpec {
+                        registry_identifier: registry_id,
+                        route,
+                        entity,
+                        response_entity: entity,
+                        query,
+                        schema_ref: &entity.id,
+                        request_schema_ref: &entity.id,
+                        readable_fields: None,
+                        access_profiles: OpenApiAccessProfiles::All,
+                    },
+                    slot,
+                    method,
+                );
+                operation["x-registry-accessProfiles"] = json!(profiles);
+                path[*method] = operation;
+            }
+        }
     }
     let mut has_immediate_actions = false;
     for action in &actions.actions {
@@ -4313,6 +4505,63 @@ mod spatial_tests {
     }
 
     #[test]
+    fn attachment_downloads_do_not_inherit_record_query_or_geojson_contracts() {
+        let registry = registry();
+        assert!(operation(&registry, Operation::Get, "map")
+            .get("x-registry-responseShapes")
+            .is_some());
+        let entity = &registry.entities()["site"];
+        let route = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| route.operation == Operation::Get)
+            .unwrap();
+        let slot = crate::model::CompiledAttachmentSlot {
+            id: "supporting-file".to_owned(),
+            required: true,
+            maximum_bytes: 1024,
+            content_types: vec!["application/pdf".to_owned()],
+            classification: crate::contract::Classification::Restricted,
+        };
+        let download = openapi_attachment_operation(
+            OpenApiOperationSpec {
+                registry_identifier: registry.registry_id(),
+                route,
+                entity,
+                response_entity: entity,
+                query: registry.queries(),
+                schema_ref: "site",
+                request_schema_ref: "site",
+                readable_fields: None,
+                access_profiles: OpenApiAccessProfiles::Selected("map"),
+            },
+            &slot,
+            "get",
+        );
+        assert_eq!(download["x-registry-responseShape"], "binary");
+        assert!(download.get("x-registry-responseShapes").is_none());
+        assert!(download.get("x-registry-geojsonProfiles").is_none());
+        assert!(download["responses"].get("304").is_none());
+        assert_eq!(
+            download["responses"]["200"]["content"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            ["*/*"]
+        );
+        let parameters = download["parameters"].as_array().unwrap();
+        assert!(!parameters.iter().any(|parameter| matches!(
+            parameter["name"].as_str(),
+            Some("$select" | "bbox" | "Accept")
+        )));
+        assert!(parameters.iter().any(
+            |parameter| parameter["name"] == "proposalVersion" && parameter["required"] == true
+        ));
+    }
+
+    #[test]
     fn selected_profile_controls_bbox_and_geojson_advertisement() {
         let registry = registry();
         let map = operation(&registry, Operation::List, "map");
@@ -4457,5 +4706,64 @@ mod spatial_tests {
         );
         assert!(module.get("scriptPath").is_none());
         assert!(module.get("scriptBytes").is_none());
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+
+    #[test]
+    fn attachment_schema_distinguishes_empty_live_and_erased_metadata() {
+        let slot = crate::model::CompiledAttachmentSlot {
+            id: "supporting-file".to_owned(),
+            required: true,
+            maximum_bytes: 1024,
+            content_types: vec!["application/pdf".to_owned()],
+            classification: crate::contract::Classification::Restricted,
+        };
+        let schema = attachment_metadata_schema(&slot);
+        assert_eq!(schema["readOnly"], true);
+        assert_eq!(schema["x-registry-fieldKind"], "attachment");
+        assert_eq!(schema["x-registry-attachment"]["requiredForSubmit"], true);
+        assert_eq!(schema["anyOf"][0]["type"], "null");
+        assert_eq!(
+            schema["anyOf"][1]["properties"]["byteSize"]["maximum"],
+            crate::contract::MAX_ATTACHMENT_BYTES
+        );
+        assert_eq!(schema["anyOf"][1]["properties"]["erased"]["const"], false);
+        let erased = &schema["anyOf"][2];
+        assert_eq!(erased["properties"]["erased"]["const"], true);
+        assert!(erased["properties"].get("uploadedBy").is_none());
+        assert!(erased["properties"].get("contentType").is_none());
+        assert!(erased["properties"].get("uploadedAt").is_none());
+        assert!(erased["properties"].get("verificationStatus").is_none());
+        assert_eq!(schema["x-registry-attachment"]["maximumBytes"], 1024);
+        assert_eq!(
+            schema["x-registry-attachment"]["contentTypes"],
+            json!(["application/pdf"])
+        );
+        let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+        let mut retained = json!({
+            "slotId": "supporting-file", "proposalVersion": 1, "filled": true, "erased": false,
+            "sha256": "a".repeat(64), "byteSize": 2048, "contentType": "text/plain",
+            "uploadedAt": "2026-09-09T00:00:00Z", "uploadedBy": "actor-reference", "verificationStatus": "approved"
+        });
+        assert!(
+            validator.is_valid(&retained),
+            "retained metadata can predate current upload policy"
+        );
+        for status in ["notRequired", "pending", "approved", "rejected"] {
+            retained["verificationStatus"] = json!(status);
+            assert!(validator.is_valid(&retained));
+        }
+        retained["verificationStatus"] = json!("unknown");
+        assert!(!validator.is_valid(&retained));
+        retained["verificationStatus"] = json!("approved");
+        retained["byteSize"] = json!(u64::from(crate::contract::MAX_ATTACHMENT_BYTES) + 1);
+        assert!(
+            !validator.is_valid(&retained),
+            "historical metadata retains the global bound"
+        );
     }
 }

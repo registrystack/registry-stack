@@ -1,0 +1,88 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-journeys/v1",
+  "journeys": [
+    {
+      "id": "attachment-draft-authoring",
+      "steps": [
+        {
+          "id": "create-record",
+          "entity": "record",
+          "accessProfile": "operator",
+          "claims": {
+            "principal": "attachment-operator",
+            "scopes": [
+              "attachments:operate"
+            ],
+            "purpose": "attachment-acceptance"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "label": "Original label"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201,
+            "fields": {
+              "label": "Original label"
+            }
+          },
+          "capture": "record"
+        },
+        {
+          "id": "create-incomplete-draft",
+          "entity": "correction-request",
+          "accessProfile": "owner",
+          "claims": {
+            "principal": "attachment-owner",
+            "scopes": [
+              "attachments:submit"
+            ],
+            "purpose": "attachment-acceptance"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "record": {
+                "recordRef": "record"
+              },
+              "label": "Corrected label"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201,
+            "fields": {
+              "label": "Corrected label"
+            }
+          },
+          "capture": "draft"
+        },
+        {
+          "id": "read-incomplete-draft",
+          "entity": "correction-request",
+          "accessProfile": "owner",
+          "claims": {
+            "principal": "attachment-owner",
+            "scopes": [
+              "attachments:submit"
+            ],
+            "purpose": "attachment-acceptance"
+          },
+          "request": {
+            "operation": "get",
+            "recordRef": "draft"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "label": "Corrected label"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

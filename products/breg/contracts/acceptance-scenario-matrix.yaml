@@ -93,3 +93,9 @@ scenarios:
     fixture: fixtures/household-contact-actions
     doneWhen: "Configured patch immediate action journeys prove target conditions and replay without data loss."
     evidence: [{path: crates/registry-breg/tests/postgres_immediate_action_examples.rs, name: household_contact_action_example_runs_patch_conditions_and_replay_without_data_loss}, {path: crates/registry-breg/tests/postgres_immediate_action_activation.rs, name: reviewed_activation_updates_immediate_action_policies_and_consumed_keys}]
+  - id: BREG-J20
+    state: enforced
+    domain: request-attachments
+    fixture: acceptance/request-attachments
+    doneWhen: "An authored request attachment project checks, packages, activates, uploads a draft file, refuses missing required evidence and unauthorized reads, submits, downloads the frozen proposal for review, applies, and erases scoped retained content; configured external verification quarantines pending and rejected content."
+    evidence: [{path: products/breg/scripts/test-request-attachments.py, name: test_request_attachment_journey}, {path: crates/registry-breg/tests/compiler_request_attachments.rs, name: generated_attachment_contract_exposes_binary_routes_and_read_only_metadata}, {path: crates/registry-breg/tests/postgres_change_requests.rs, name: real_s3_http_attachments_preserve_proposals_and_complete_operator_erasure}]

@@ -206,6 +206,8 @@ BREG_TUTORIAL_INPUTS = (
     "docs/site/scripts/check-breg-tutorial.test.mjs",
     "docs/site/src/content/docs/tutorials/first-breg.mdx",
     "products/breg/quickstart/**",
+    "products/breg/acceptance/request-attachments/**",
+    "products/breg/scripts/test-request-attachments.py",
 )
 
 # This guide explains the authoring form across three intentionally separate

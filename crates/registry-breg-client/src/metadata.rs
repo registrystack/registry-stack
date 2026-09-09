@@ -1603,6 +1603,17 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
             return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
         }
     }
+    if fields.iter().any(|field| {
+        field
+            .schema
+            .get("x-registry-fieldKind")
+            .and_then(Value::as_str)
+            == Some("attachment")
+            && (create_writable_fields.contains(&field.id)
+                || patch_writable_fields.contains(&field.id))
+    }) {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
     let request = parse_request(required(&mut operation, "request")?)?;
     let entity_label = bounded_text(required(&mut operation, "entityLabel")?)?;
     validate_envelope_identifier(required(&mut operation, "identifier")?)?;
@@ -1646,12 +1657,23 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
 fn parse_field(value: Value) -> Result<BRegMetadataField, BRegMetadataError> {
     let mut field = object(value)?;
     let id = identifier(required(&mut field, "id")?)?;
-    let api_name = api_name(required(&mut field, "apiName")?)?;
+    let api_name_value = required(&mut field, "apiName")?;
     let schema = required(&mut field, "schema")?;
+    // Slot IDs are verbatim API properties. Keep ordinary scalar API naming strict.
+    let attachment =
+        schema.get("x-registry-fieldKind").and_then(Value::as_str) == Some("attachment");
+    let api_name = if attachment {
+        identifier(api_name_value)?
+    } else {
+        api_name(api_name_value)?
+    };
     let required_value = boolean(required(&mut field, "required")?)?;
     let nullable = boolean(required(&mut field, "nullable")?)?;
     let read_only = boolean(required(&mut field, "readOnly")?)?;
     let removable = boolean(required(&mut field, "removable")?)?;
+    if attachment && (api_name != id || required_value || !nullable || !read_only || removable) {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
     let label = bounded_text(required(&mut field, "label")?)?;
     let (reference_target_entity, references) = field
         .remove("reference")

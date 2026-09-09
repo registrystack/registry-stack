@@ -694,6 +694,7 @@ mod tests {
             })
             .collect();
         CompiledEntity {
+            attachments: Default::default(),
             primary_dataset: None,
             id: "membership".to_owned(),
             route: "memberships".to_owned(),

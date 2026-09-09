@@ -32,6 +32,17 @@ pub struct CompiledField {
     pub pattern: Option<String>,
 }
 
+/// Binary slot policy, separate from scalar fields and physical SQL columns.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledAttachmentSlot {
+    pub id: String,
+    pub required: bool,
+    pub maximum_bytes: u32,
+    pub content_types: Vec<String>,
+    pub classification: Classification,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledLogicalField {
@@ -601,6 +612,8 @@ pub struct CompiledEntity {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change_request: Option<CompiledChangeRequest>,
     pub fields: BTreeMap<String, CompiledField>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attachments: BTreeMap<String, CompiledAttachmentSlot>,
     pub constraints: BTreeMap<String, ConstraintSource>,
     pub indexes: BTreeMap<String, Vec<String>>,
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
