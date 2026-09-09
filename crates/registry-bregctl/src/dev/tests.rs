@@ -277,6 +277,88 @@ fn resolved_prerequisites_record_a_canonical_path_and_their_reported_version() {
 }
 
 #[test]
+fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
+    let own = registry_platform_buildinfo::DISPLAY_VERSION;
+    let installed = |version: &str| Binary {
+        path: PathBuf::from("/usr/local/bin/installed"),
+        version: version.to_owned(),
+    };
+    // Docker belongs to no release of this stack and names itself in its own
+    // shape, so it is never compared against the stack's version.
+    let session = |breg: String, mint: String| {
+        BTreeMap::from([
+            ("breg".to_owned(), installed(&breg)),
+            ("mint".to_owned(), installed(&mint)),
+            (
+                "docker".to_owned(),
+                installed("Docker version 29.4.0, build 1a2b3c4"),
+            ),
+        ])
+    };
+
+    matching_versions(&session(format!("breg {own}"), format!("mint {own}")))
+        .expect("the three binaries of one release start a session");
+
+    for (name, binaries) in [
+        (
+            "breg",
+            session("breg 0.26.1".to_owned(), format!("mint {own}")),
+        ),
+        (
+            "mint",
+            session(format!("breg {own}"), "mint 0.26.1".to_owned()),
+        ),
+    ] {
+        let refusal = format!(
+            "{:#}",
+            matching_versions(&binaries).expect_err("a prerequisite from another release")
+        );
+        for expected in [name, "0.26.1", "bregctl", own, "same release"] {
+            assert!(refusal.contains(expected), "{refusal}");
+        }
+    }
+
+    // A prerequisite that declines to identify itself still serves the
+    // session, as the installed lifecycle proof starts one that never answers.
+    matching_versions(&session(
+        UNREPORTED_VERSION.to_owned(),
+        format!("mint {own}"),
+    ))
+    .expect("a prerequisite that reports no version is not compared");
+
+    // A start resolves the prerequisites and compares them before it inspects
+    // a container or launches the supervisor.
+    let (_temporary, project) = write_init_project();
+    let prerequisites = project.join("prerequisites");
+    fs::create_dir(&prerequisites).unwrap();
+    for (name, reported) in [
+        ("breg", "breg 0.26.1".to_owned()),
+        ("mint", format!("mint {own}")),
+        ("docker", "Docker version 29.4.0, build 1a2b3c4".to_owned()),
+    ] {
+        script(&prerequisites.join(name), &format!("echo '{reported}'"));
+    }
+    let refused = format!(
+        "{:#}",
+        start(StartArgs {
+            project: project.clone(),
+            clients_file: None,
+            breg_port: None,
+            mint_port: None,
+            database_port: None,
+            breg_bin: Some(prerequisites.join("breg")),
+            mint_bin: Some(prerequisites.join("mint")),
+            docker_bin: Some(prerequisites.join("docker")),
+        })
+        .expect_err("a breg from another release never starts a session")
+    );
+    // The named override is the file compared, and the message names it.
+    assert!(refused.contains("prerequisites/breg"), "{refused}");
+    assert!(refused.contains("0.26.1"), "{refused}");
+    assert!(refused.contains(own), "{refused}");
+}
+
+#[test]
 fn stop_before_first_start_names_the_missing_session_without_docker() {
     let temporary = tempfile::tempdir().unwrap();
     let project = fs::canonicalize(temporary.path()).unwrap();

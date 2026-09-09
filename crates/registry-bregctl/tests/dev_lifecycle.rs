@@ -614,6 +614,35 @@ seed:
     let state_file = project.join(".breg/dev/state.json");
     let failed_state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
     assert_eq!(failed_state["status"], "failed");
+
+    // A breg from another release is refused by name before the session
+    // starts, rather than failing later as a package or database the reader
+    // has no reason to suspect.
+    let shim = parent.join("breg-from-another-release");
+    write(&shim, b"#!/bin/sh\necho 'breg 0.26.1'\n");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o700)).unwrap();
+    let mismatched = session.dev(&[
+        "start",
+        "--clients-file",
+        clients.to_str().unwrap(),
+        "--database-port",
+        &database_port.to_string(),
+        "--breg-port",
+        &breg_port.to_string(),
+        "--mint-port",
+        &mint_port.to_string(),
+        "--breg-bin",
+        shim.to_str().unwrap(),
+    ]);
+    assert!(!mismatched.status.success());
+    let refused: Value = serde_json::from_slice(&mismatched.stdout)
+        .expect("a refused prerequisite reports machine-readable");
+    let named = refused["diagnostics"][0]["message"]
+        .as_str()
+        .expect("the refusal carries a message");
+    assert!(named.contains("0.26.1"), "{named}");
+    assert!(named.contains("same release"), "{named}");
+
     let key_before =
         fs::read(project.join(".breg/dev/credentials/operator/assertion-key.jwk")).unwrap();
     let first = session.start();

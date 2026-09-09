@@ -487,6 +487,7 @@ If it fails, the registry is stopped: start it again with the command from
 | Symptom | Next move |
 | --- | --- |
 | `bregctl`, `breg`, or `mint` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
+| `bregctl dev` refuses over a reported version | The `breg` or `mint` it resolved comes from another release than `bregctl`. The refusal names both versions. Install all three from the same release, or put the matching build first on `PATH`. |
 | `bregctl dev` refuses a port | Something else listens on 8090, 8091, or 55432. Pass `--breg-port`, `--mint-port`, or `--database-port` on the first start; later starts keep the ports you chose. |
 | `bregctl dev` fails before it reports `ready` | Read the refusal: it names the check that failed, such as `test.step.failed` with the journey step's own message. Otherwise check that Docker is running. The private logs are under `tutorial-work/project/.breg/dev/logs/`; do not share the credential or secret files beside them. |
 | A create returns `409` with code `idempotency.conflict` | The key was already used with a different body. Reuse the exact body, or choose a new key for a new write. |

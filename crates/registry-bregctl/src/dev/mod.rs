@@ -640,6 +640,15 @@ fn start(args: StartArgs) -> Result<Value> {
     let breg = executable("breg", args.breg_bin.as_deref())?;
     let mint = executable("mint", args.mint_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;
+    // Identify the prerequisites before the session stops a container or
+    // launches the supervisor: a breg or mint from another release has to be
+    // named here, while the terminal that asked for the start is reading.
+    state.binaries = BTreeMap::from([
+        ("breg".into(), binary(&root, &breg)?),
+        ("mint".into(), binary(&root, &mint)?),
+        ("docker".into(), binary(&root, &docker)?),
+    ]);
+    matching_versions(&state.binaries)?;
     for port in [state.breg_port, state.mint_port] {
         probe(port)?;
     }
@@ -667,11 +676,6 @@ fn start(args: StartArgs) -> Result<Value> {
     }
     probe(state.database_port)?;
     remove_socket(&root)?;
-    state.binaries = BTreeMap::from([
-        ("breg".into(), binary(&root, &breg)?),
-        ("mint".into(), binary(&root, &mint)?),
-        ("docker".into(), binary(&root, &docker)?),
-    ]);
     state.status = Status::Starting;
     state.failure = None;
     state.save()?;
@@ -1309,6 +1313,39 @@ fn binary(root: &Path, path: &Path) -> Result<Binary> {
         path: fs::canonicalize(path)?,
         version,
     })
+}
+/// The version a prerequisite reported for itself. Every executable of this
+/// stack answers `--version` with its own name and its version, so the second
+/// word is the version. A prerequisite that reported nothing, or answered in
+/// another shape, offers no version to compare rather than a guessed one.
+fn reported_version(binary: &Binary) -> Option<&str> {
+    if binary.version == UNREPORTED_VERSION {
+        return None;
+    }
+    binary.version.split_whitespace().nth(1)
+}
+/// Refuse a session whose breg or mint comes from another release. The three
+/// executables share a package format, a token shape and a schema, so an older
+/// breg beside this bregctl fails deep inside a supervised phase, where the
+/// cause reads as an unrelated refusal about the package or the database.
+/// Docker belongs to no release of this stack and is never compared.
+fn matching_versions(binaries: &BTreeMap<String, Binary>) -> Result<()> {
+    let own = registry_platform_buildinfo::DISPLAY_VERSION;
+    for name in ["breg", "mint"] {
+        let Some(prerequisite) = binaries.get(name) else {
+            continue;
+        };
+        let Some(reported) = reported_version(prerequisite) else {
+            continue;
+        };
+        if reported != own {
+            bail!(
+                "the installed {name} at {} reports version {reported}, and this bregctl reports version {own}. A local session runs breg, mint and bregctl together, so install all three from the same release, or put the matching build first on PATH",
+                prerequisite.path.display()
+            );
+        }
+    }
+    Ok(())
 }
 fn log_file(root: &Path, name: &str) -> Result<File> {
     let path = root

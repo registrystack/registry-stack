@@ -24,11 +24,19 @@ relevant product pages on this site rather than duplicating release notes.
   reaches your terminal with its code, its `journeys[i].steps[j]` path, and its
   own message. See
   [author journeys](../configure/breg-journeys/#troubleshooting).
+- `bregctl dev` compares the `breg` and `mint` it resolved against its own
+  version before it starts anything, and refuses a prerequisite from another
+  release by name, giving both versions and the fix. Previously the mismatch
+  surfaced much later as a refused package or an unready database.
 - A refused fixture logical reference names its class: a field the entity does
   not declare, a field the access profile grant does not make writable, a
   request body with no field, a step identifier that is not stable, a step
   naming both an entity and an action or neither, or a capture no earlier step
   declares. The sentence still carries no authored value.
+
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, refused_check(),
+    start_failure(), and matching_versions();
+    crates/registry-breg/src/fixtures.rs, LogicalReferenceRefusal. */}
 
 - `bregctl check` no longer tells you to drop a row boundary field from
   `writableFields` on a grant that also creates. The boundary compiles to an
