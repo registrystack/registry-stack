@@ -1719,8 +1719,19 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
     }
     validate_selectors(required(&mut operation, "selectors")?)?;
+    let slots = fields
+        .iter()
+        .filter(|field| {
+            field
+                .schema
+                .get("x-registry-fieldKind")
+                .and_then(Value::as_str)
+                == Some("attachment")
+        })
+        .map(|field| field.id.as_str())
+        .collect::<BTreeSet<_>>();
     let query_value = required(&mut operation, "query")?;
-    validate_query(query_value.clone())?;
+    validate_query(query_value.clone(), &slots)?;
     let query = serde_json::from_value(query_value)
         .map_err(|_| metadata_error(BRegMetadataErrorKind::Shape))?;
     if let Some(read_path) = operation.remove("readPath") {
@@ -1907,15 +1918,23 @@ fn validate_selectors(value: Value) -> Result<(), BRegMetadataError> {
     Ok(())
 }
 
-fn validate_query(value: Value) -> Result<(), BRegMetadataError> {
+fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<(), BRegMetadataError> {
     if value.is_null() {
         return Ok(());
     }
     let mut query = object(value)?;
     identifier(required(&mut query, "kind")?)?;
-    validate_field_identities(required(&mut query, "selectableFields")?, None)?;
-    validate_field_identities(required(&mut query, "filterableFields")?, Some("operators"))?;
-    validate_field_identities(required(&mut query, "sortableFields")?, Some("directions"))?;
+    validate_field_identities(required(&mut query, "selectableFields")?, None, slots)?;
+    validate_field_identities(
+        required(&mut query, "filterableFields")?,
+        Some("operators"),
+        slots,
+    )?;
+    validate_field_identities(
+        required(&mut query, "sortableFields")?,
+        Some("directions"),
+        slots,
+    )?;
     boolean(required(&mut query, "allowCount")?)?;
     positive_integer(required(&mut query, "defaultPageSize")?)?;
     positive_integer(required(&mut query, "maxPageSize")?)?;
@@ -1938,14 +1957,26 @@ fn query_field_identifier(value: Value) -> Result<String, BRegMetadataError> {
 fn validate_field_identities(
     value: Value,
     extra_member: Option<&str>,
+    slots: &BTreeSet<&str>,
 ) -> Result<(), BRegMetadataError> {
     let mut ids = BTreeSet::new();
     let mut api_names = BTreeSet::new();
     for field in array(value)? {
         let mut field = object(field)?;
-        if !ids.insert(query_field_identifier(required(&mut field, "id")?)?)
-            || !api_names.insert(api_name(required(&mut field, "apiName")?)?)
-        {
+        let id = query_field_identifier(required(&mut field, "id")?)?;
+        // A slot identifier is its own verbatim API property. Every other
+        // queryable field keeps strict scalar API naming.
+        let api_name_value = required(&mut field, "apiName")?;
+        let api = if slots.contains(id.as_str()) {
+            let api = identifier(api_name_value)?;
+            if api != id {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+            api
+        } else {
+            api_name(api_name_value)?
+        };
+        if !ids.insert(id) || !api_names.insert(api) {
             return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
         }
         if let Some(member) = extra_member {
