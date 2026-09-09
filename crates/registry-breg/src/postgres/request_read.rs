@@ -941,6 +941,27 @@ async fn authorized_result_links(
     Ok(links)
 }
 
+/// Verified authority over one result-link target under the reader's profile.
+///
+/// A grant that admits submitter targets must present the target's own verified
+/// claims: the request entity's boundaries answer a different question and never
+/// stand in for them, so an absent entry conceals the link.
+fn authorized_target_claims<'a>(
+    registry: &CompiledRegistry,
+    claims: &'a ClaimContext,
+    target_entity_id: &str,
+) -> Option<&'a ClaimContext> {
+    if let Some(target_claims) = claims.submitter_targets().get(target_entity_id) {
+        return Some(target_claims);
+    }
+    let admits_target = registry
+        .entities()
+        .get(claims.entity_id())
+        .and_then(|entity| entity.access_profiles.get(claims.access_profile()))
+        .is_some_and(|profile| profile.submitter_targets.contains(target_entity_id));
+    (!admits_target).then_some(claims)
+}
+
 async fn target_get_is_authorized(
     transaction: &Transaction<'_>,
     registry: &CompiledRegistry,
@@ -959,10 +980,9 @@ async fn target_get_is_authorized(
     else {
         return Ok(false);
     };
-    let target_claims = claims
-        .submitter_targets()
-        .get(target_entity_id)
-        .unwrap_or(claims);
+    let Some(target_claims) = authorized_target_claims(registry, claims, target_entity_id) else {
+        return Ok(false);
+    };
     if !profile.operations.contains(&Operation::Get)
         || !registry.routes().routes.iter().any(|route| {
             route.entity_id == target_entity_id
@@ -1185,20 +1205,21 @@ impl std::fmt::Display for SqlIdent {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use serde_json::{json, Map, Value};
 
     use super::{
-        action_href, action_is_available, api_object, erased_terminal_request_metadata,
-        retained_history_value, revise_rebase_available, selected_profile_allows_draft_patch,
-        RetainedHistoryMetadata,
+        action_href, action_is_available, api_object, authorized_target_claims,
+        erased_terminal_request_metadata, retained_history_value, revise_rebase_available,
+        selected_profile_allows_draft_patch, ClaimContext, RetainedHistoryMetadata,
+        RowBoundaryContext,
     };
     use crate::api::{
         AuthorizedRequestContext, RecordReadKind, RecordReadRequest, VerifiedRequestAction,
     };
     use crate::compiler::{compile_project, CompileProfile};
-    use crate::contract::{parse_project_json, Operation};
+    use crate::contract::{parse_project_json, parse_project_yaml, Operation};
     use crate::correlation::RequestCorrelation;
     use crate::model::{CompiledChangeRequestStage, HttpMethod};
     use crate::request_retention::{RetainedRequestProposal, RetainedRequestResultLink};
@@ -1380,6 +1401,62 @@ mod tests {
             entity,
             &request_for_profile("editor")
         ));
+    }
+
+    #[test]
+    fn result_link_target_authority_never_falls_back_to_request_boundaries() {
+        let project = parse_project_yaml(include_bytes!(
+            "../../../../products/breg/starters/professional-licences/core/registry.yaml"
+        ))
+        .expect("the professional licences starter parses");
+        let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the starter compiles");
+        let holder = ClaimContext::for_compiled(
+            &compiled,
+            "scope-correction",
+            Some("holder-principal".to_owned()),
+            "holder",
+            Some("starter-learning".to_owned()),
+            Vec::new(),
+        )
+        .expect("the holder request grant carries no row boundaries");
+        assert!(
+            authorized_target_claims(&compiled, &holder, "professional-license").is_none(),
+            "a grant admitting submitter targets must conceal a link it holds no target claims for"
+        );
+
+        let admitted = holder
+            .clone()
+            .with_submitter_targets(
+                &compiled,
+                BTreeMap::from([(
+                    "professional-license".to_owned(),
+                    vec![RowBoundaryContext::Equals {
+                        field: "person-reference".to_owned(),
+                        value: "holder-person".to_owned(),
+                    }],
+                )]),
+            )
+            .expect("the target grant carries one person reference boundary");
+        let target_claims = authorized_target_claims(&compiled, &admitted, "professional-license")
+            .expect("verified target claims answer the link");
+        assert_eq!(target_claims.entity_id(), "professional-license");
+        assert_eq!(target_claims.row_boundaries().len(), 1);
+
+        let editor = ClaimContext::for_compiled(
+            &compiled,
+            "scope-correction",
+            Some("editor-principal".to_owned()),
+            "editor",
+            Some("starter-learning".to_owned()),
+            Vec::new(),
+        )
+        .expect("the editor request grant carries no row boundaries");
+        assert!(
+            authorized_target_claims(&compiled, &editor, "professional-license")
+                .is_some_and(|claims| claims.entity_id() == "scope-correction"),
+            "a grant admitting no submitter target reads the link under its own claims"
+        );
     }
 
     #[test]
