@@ -1927,10 +1927,14 @@ fn validate_inert_actions(value: &Value) -> Result<(), BRegMetadataError> {
     Ok(())
 }
 
+/// Every metadata limit crosses a JavaScript number boundary in the bindings,
+/// so a value that boundary cannot carry exactly is refused here.
+const MAXIMUM_EXACT_INTEGER: u64 = 9_007_199_254_740_991;
+
 fn positive_integer(value: Value) -> Result<u64, BRegMetadataError> {
     value
         .as_u64()
-        .filter(|value| *value > 0)
+        .filter(|value| *value > 0 && *value <= MAXIMUM_EXACT_INTEGER)
         .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))
 }
 

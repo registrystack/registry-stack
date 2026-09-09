@@ -675,4 +675,11 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
     assert!(metadata
         .select_direct_write("records.company.get", "company-writer")
         .is_err());
+
+    let mut beyond_exact = value.clone();
+    beyond_exact["operations"][2]["query"]["maxPageSize"] = json!(9_007_199_254_740_992u64);
+    assert!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&beyond_exact).unwrap()).is_err(),
+        "a limit the JavaScript number boundary cannot carry exactly must be refused"
+    );
 }
