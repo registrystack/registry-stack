@@ -534,6 +534,38 @@ class GateInventoryTest(unittest.TestCase):
                     self.module.candidate_attestation_isolation_violations(mutated),
                 )
 
+    def test_candidate_attestation_requires_exact_protected_ci_success(self) -> None:
+        workflow = self.module.policy_file_texts(
+            ROOT,
+            self.module.RELEASE_SECURITY_POLICY_PATHS,
+        )[".github/workflows/release-candidate.yml"]
+        protected_ci = self.module.yaml_job_block(workflow, "protected-ci")
+        attest = self.module.yaml_job_block(workflow, "attest")
+        self.assertIsNotNone(protected_ci)
+        self.assertIsNotNone(attest)
+        assert protected_ci is not None and attest is not None
+        mutations = (
+            (protected_ci, "    needs: validate\n", "    needs: assemble\n"),
+            (protected_ci, "      actions: read\n", "      actions: write\n"),
+            (protected_ci, "      contents: read\n", "      contents: read\n      packages: write\n"),
+            (protected_ci, "    steps:\n", "    continue-on-error: true\n    steps:\n"),
+            (protected_ci, "      - name: Wait for successful push CI on the exact main source\n", "      - name: Wait for successful push CI on the exact main source\n        continue-on-error: true\n"),
+            (protected_ci, "ref: ${{ needs.validate.outputs.workflow_revision }}", "ref: main"),
+            (protected_ci, "registry-release wait-for-ci", "registry-release validate-current"),
+            (protected_ci, '--source-sha "${{ needs.validate.outputs.source_sha }}"', '--source-sha "main"'),
+            (protected_ci, '--repository "${GITHUB_REPOSITORY}"', '--repository "example/other"'),
+            (attest, "      - protected-ci\n", ""),
+            (attest, "    steps:\n", "    if: ${{ always() }}\n    steps:\n"),
+        )
+        for block, before, after in mutations:
+            with self.subTest(before=before, after=after):
+                self.assertIn(before, block)
+                mutated = workflow.replace(block, block.replace(before, after, 1), 1)
+                self.assertEqual(
+                    ["Candidate verification and attestation permission isolation"],
+                    self.module.candidate_attestation_isolation_violations(mutated),
+                )
+
     def test_candidate_artifact_contains_only_manifest_and_bundle(self) -> None:
         workflow = self.module.policy_file_texts(
             ROOT,

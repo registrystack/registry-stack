@@ -688,7 +688,8 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "repository_dispatch:\n    types: [release_candidate]",
             "run-name: Release candidate ${{ github.event.client_payload.release_id }}",
             "REQUEST_ID: ${{ github.event.client_payload.request_id }}",
-            "name: Validate request, source, CI, and destinations",
+            "name: Validate request, source, and destinations",
+            '[[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]',
             "git merge-base --is-ancestor",
             "tag_lookup_status=$?",
             'if [[ "${tag_lookup_status}" -ne 2 ]]; then',
@@ -1274,14 +1275,15 @@ def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
 def candidate_attestation_isolation_violations(
     workflow: str | None,
 ) -> list[str]:
-    """Require candidate inspection to be read-only and OIDC to be attest-only."""
+    """Keep OIDC attest-only, after exact protected CI and candidate verification."""
 
     gate = "Candidate verification and attestation permission isolation"
     if workflow is None:
         return [gate]
     verify = yaml_job_block(workflow, "assemble")
+    protected_ci = yaml_job_block(workflow, "protected-ci")
     attest = yaml_job_block(workflow, "attest")
-    if verify is None or attest is None:
+    if verify is None or protected_ci is None or attest is None:
         return [gate]
     verify_permissions = (
         "    permissions:\n"
@@ -1296,12 +1298,29 @@ def candidate_attestation_isolation_violations(
         "      contents: read\n"
         "      id-token: write"
     )
+    ci_permissions = (
+        "    permissions:\n"
+        "      actions: read\n"
+        "      contents: read"
+    )
+    ci_wait = (
+        "release/scripts/registry-release wait-for-ci \\\n"
+        '            --source-sha "${{ needs.validate.outputs.source_sha }}" \\\n'
+        '            --repository "${GITHUB_REPOSITORY}"'
+    )
     attestation_action = "uses: actions/attest-build-provenance@"
     if (
         verify_permissions not in verify
         or "id-token: write" in verify
         or "attestations: write" in verify
-        or "needs:\n      - validate\n      - assemble" not in attest
+        or "needs:\n      - validate\n      - protected-ci\n      - assemble" not in attest
+        or "\n    if:" in attest
+        or "continue-on-error:" in protected_ci
+        or "    needs: validate\n" not in protected_ci
+        or ci_permissions not in protected_ci
+        or "packages: write" in protected_ci
+        or "ref: ${{ needs.validate.outputs.workflow_revision }}" not in protected_ci
+        or ci_wait not in protected_ci
         or attest_permissions not in attest
         or "packages: write" in attest
         or "name: Upload one candidate manifest and bundle" not in verify
