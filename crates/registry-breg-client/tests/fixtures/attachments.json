@@ -1,0 +1,239 @@
+{
+  "metadata": {
+    "id": "business-registry",
+    "version": "1.2.3",
+    "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "metadataVersion": "1",
+    "entities": [
+      {
+        "id": "company",
+        "datasetIdentifier": "legal-entities",
+        "route": "companies",
+        "operations": [
+          {"operation": "patch", "accessProfile": "company-writer"},
+          {"operation": "get", "accessProfile": "company-writer"}
+        ],
+        "readableFields": ["legal-name", "supporting-file"],
+        "schema": "/v1/schemas/company"
+      }
+    ],
+    "operations": [
+      {
+        "id": "records.company.patch",
+        "method": "PATCH",
+        "path": "/v1/records/companies/{record_id}",
+        "operation": "patch",
+        "sourceEntity": "company",
+        "responseEntity": "company",
+        "accessProfile": "company-writer",
+        "requiredCapabilities": [],
+        "entityLabel": "Companies",
+        "identifier": {"apiName": "id", "location": "envelope"},
+        "titleFields": ["legal-name"],
+        "fields": [
+          {
+            "id": "legal-name",
+            "apiName": "legalName",
+            "label": "Legal name",
+            "schema": {"type": "string"},
+            "required": true,
+            "nullable": true,
+            "readOnly": false,
+            "removable": true
+          },
+          {
+            "id": "supporting-file",
+            "apiName": "supporting-file",
+            "label": "Supporting file",
+            "schema": {
+              "anyOf": [{"type": "null"}, {"type": "object"}],
+              "readOnly": true,
+              "x-registry-fieldKind": "attachment",
+              "x-registry-attachment": {
+                "requiredForSubmit": true,
+                "maximumBytes": 1024,
+                "contentTypes": ["application/pdf"],
+                "verification": {
+                  "statusField": "verificationStatus",
+                  "allowedStatuses": ["notRequired", "approved"],
+                  "pendingOrRejectedBlocks": ["download", "submit"]
+                },
+                "download": {
+                  "method": "GET",
+                  "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
+                  "accessProfile": "company-writer",
+                  "authorizationOperation": "get",
+                  "queryParameters": ["proposalVersion"],
+                  "body": "none",
+                  "ifMatchRequired": false,
+                  "idempotencyKeyRequired": false,
+                  "proposalVersionRequired": true
+                },
+                "upload": {
+                  "method": "PATCH",
+                  "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
+                  "accessProfile": "company-writer",
+                  "authorizationOperation": "patch",
+                  "queryParameters": [],
+                  "body": "binary",
+                  "ifMatchRequired": true,
+                  "idempotencyKeyRequired": true,
+                  "requiredState": "draft"
+                },
+                "remove": {
+                  "method": "DELETE",
+                  "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
+                  "accessProfile": "company-writer",
+                  "authorizationOperation": "patch",
+                  "queryParameters": [],
+                  "body": "none",
+                  "ifMatchRequired": true,
+                  "idempotencyKeyRequired": true,
+                  "requiredState": "draft"
+                }
+              }
+            },
+            "required": false,
+            "nullable": true,
+            "readOnly": true,
+            "removable": false
+          }
+        ],
+        "readableFields": ["legal-name", "supporting-file"],
+        "createWritableFields": [],
+        "patchWritableFields": ["legal-name"],
+        "selectors": [],
+        "query": null,
+        "request": {
+          "fieldNames": "api",
+          "queryParameters": [],
+          "body": "json_patch",
+          "contentType": "application/json-patch+json",
+          "patchPathPrefix": "/data/",
+          "patchOperations": ["add", "replace", "remove", "test"],
+          "removeSemantics": "set_null",
+          "ifMatchRequired": true,
+          "idempotencyKeyRequired": true,
+          "mutationSemantics": "direct",
+          "schema": {"type": "array", "items": {"oneOf": [{"type": "object"}]}}
+        }
+      },
+      {
+        "id": "records.company.get",
+        "method": "GET",
+        "path": "/v1/records/companies/{record_id}",
+        "operation": "get",
+        "sourceEntity": "company",
+        "responseEntity": "company",
+        "accessProfile": "company-writer",
+        "requiredCapabilities": [],
+        "entityLabel": "Companies",
+        "identifier": {"apiName": "id", "location": "envelope"},
+        "titleFields": ["legal-name"],
+        "fields": [
+          {
+            "id": "legal-name",
+            "apiName": "legalName",
+            "label": "Legal name",
+            "schema": {"type": "string"},
+            "required": true,
+            "nullable": true,
+            "readOnly": false,
+            "removable": true
+          },
+          {
+            "id": "supporting-file",
+            "apiName": "supporting-file",
+            "label": "Supporting file",
+            "schema": {
+              "anyOf": [{"type": "null"}, {"type": "object"}],
+              "readOnly": true,
+              "x-registry-fieldKind": "attachment",
+              "x-registry-attachment": {
+                "requiredForSubmit": true,
+                "maximumBytes": 1024,
+                "contentTypes": ["application/pdf"],
+                "verification": {
+                  "statusField": "verificationStatus",
+                  "allowedStatuses": ["notRequired", "approved"],
+                  "pendingOrRejectedBlocks": ["download", "submit"]
+                },
+                "download": {
+                  "method": "GET",
+                  "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
+                  "accessProfile": "company-writer",
+                  "authorizationOperation": "get",
+                  "queryParameters": ["proposalVersion"],
+                  "body": "none",
+                  "ifMatchRequired": false,
+                  "idempotencyKeyRequired": false,
+                  "proposalVersionRequired": true
+                },
+                "upload": {
+                  "method": "PATCH",
+                  "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
+                  "accessProfile": "company-writer",
+                  "authorizationOperation": "patch",
+                  "queryParameters": [],
+                  "body": "binary",
+                  "ifMatchRequired": true,
+                  "idempotencyKeyRequired": true,
+                  "requiredState": "draft"
+                },
+                "remove": {
+                  "method": "DELETE",
+                  "path": "/v1/records/companies/{record_id}/attachments/supporting-file",
+                  "accessProfile": "company-writer",
+                  "authorizationOperation": "patch",
+                  "queryParameters": [],
+                  "body": "none",
+                  "ifMatchRequired": true,
+                  "idempotencyKeyRequired": true,
+                  "requiredState": "draft"
+                }
+              }
+            },
+            "required": false,
+            "nullable": true,
+            "readOnly": true,
+            "removable": false
+          }
+        ],
+        "readableFields": ["legal-name", "supporting-file"],
+        "createWritableFields": [],
+        "patchWritableFields": [],
+        "selectors": [],
+        "query": null,
+        "request": {"fieldNames": "api", "queryParameters": ["$select"]}
+      }
+    ]
+  },
+  "record": {
+    "data": {
+      "recordIdentifier": "00000000-0000-4000-8000-000000000001",
+      "revisionIdentifier": "2",
+      "domainData": {
+        "legalName": "Example Ltd",
+        "supporting-file": {
+          "slotId": "supporting-file",
+          "proposalVersion": 2,
+          "filled": true,
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "byteSize": 23,
+          "erased": false,
+          "contentType": "application/pdf",
+          "uploadedAt": "2026-01-02T03:04:05.000000Z",
+          "uploadedBy": "urn:registry:actor:filer",
+          "verificationStatus": "approved"
+        }
+      },
+      "snapshot": "breg1_00000000-0000-4000-8000-000000000001"
+    },
+    "meta": {
+      "registryIdentifier": "business-registry",
+      "datasetIdentifier": "legal-entities",
+      "entityTypeIdentifier": "company"
+    }
+  },
+  "content": "%PDF-1.7 governed bytes"
+}

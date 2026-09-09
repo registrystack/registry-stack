@@ -8,6 +8,8 @@ const { after, before, test } = require('node:test');
 const {
   BaseRegistryClient,
   BaseRegistryClientError,
+  BRegAttachmentSlot,
+  BRegAttachmentUpload,
   BRegCreateBinding,
   BRegLifecycleAction,
   BRegLifecycleAuthority,
@@ -199,6 +201,8 @@ test('metadata-selected authority types have no public constructor', () => {
     BRegPatchBinding,
     BRegLifecycleAuthority,
     BRegLifecycleAction,
+    BRegAttachmentSlot,
+    BRegAttachmentUpload,
     BRegMetadata,
   ]) {
     assert.throws(() => new Authority());

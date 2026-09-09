@@ -4,6 +4,7 @@
 //! follow redirects, use an ambient proxy, retry, fetch linked resources, or
 //! advance a collection on its own.
 
+mod attachment;
 mod client;
 mod config;
 mod error;
@@ -16,6 +17,7 @@ mod response;
 mod strict_json;
 mod transport;
 
+pub use attachment::*;
 pub use client::BaseRegistryClient;
 pub use config::BaseRegistryClientConfig;
 pub use error::{

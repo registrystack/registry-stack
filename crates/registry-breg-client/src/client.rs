@@ -9,7 +9,8 @@ use std::fmt;
 
 use registry_platform_httpsec::{response_trace_id, ProblemDocument, TraceId};
 use reqwest::header::{
-    ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, LINK, LOCATION, VARY,
+    ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_MATCH, LINK,
+    LOCATION, VARY,
 };
 use reqwest::{Method, Response, StatusCode};
 use uuid::Uuid;
@@ -19,9 +20,20 @@ use crate::transport::{exact_media_type, Transport};
 use crate::*;
 
 const APPLICATION_JSON: &str = "application/json";
+const ANY_MEDIA_TYPE: &str = "*/*";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const MAXIMUM_PROBLEM_BYTES: usize = 4 * 1024;
 const MAXIMUM_LOCATION_BYTES: usize = 2_048;
+const X_CONTENT_TYPE_OPTIONS: reqwest::header::HeaderName =
+    reqwest::header::HeaderName::from_static("x-content-type-options");
+
+/// Which slot route one attachment exchange uses.
+#[derive(Clone, Copy)]
+enum BRegAttachmentRoute {
+    Download,
+    Upload,
+    Remove,
+}
 
 /// One explicitly initiated exchange with one Base Registry Engine deployment.
 pub struct BaseRegistryClient {
@@ -332,6 +344,89 @@ impl BaseRegistryClient {
         Ok(complete)
     }
 
+    /// Replace one governed attachment slot with exact bytes.
+    ///
+    /// The upload is refused locally when the slot cannot accept it, so a
+    /// refused upload never leaves the process.
+    pub async fn upload_attachment(
+        &self,
+        slot: &BRegAttachmentSlot,
+        record_identifier: Uuid,
+        etag: &BRegEtag,
+        upload: &BRegAttachmentUpload,
+        idempotency_key: &BRegIdempotencyKey,
+        format: BRegRecordFormat,
+    ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
+        self.validate_attachment_slot(slot, BRegAttachmentRoute::Upload)?;
+        if !upload.matches_slot(slot) {
+            return Err(BaseRegistryClientError::invalid_request(
+                "the Base Registry Engine attachment upload was prepared for another slot",
+            ));
+        }
+        let url = self.attachment_url(slot, record_identifier, None)?;
+        let builder = self
+            .transport
+            .http
+            .request(Method::PATCH, url)
+            .header(ACCEPT, format.media_type())
+            .header(CONTENT_TYPE, upload.content_type())
+            .header("idempotency-key", idempotency_key.as_str())
+            .header(IF_MATCH, etag.as_str())
+            .body(upload.as_bytes().to_vec());
+        self.attachment_mutation(builder, slot, record_identifier, format)
+            .await
+    }
+
+    /// Read the exact bytes held in one governed attachment slot for one
+    /// proposal version.
+    ///
+    /// The engine releases stored content only while the slot's verification
+    /// status permits it, and the returned bytes are bounded by both the slot
+    /// capacity and this client's configured response bound.
+    pub async fn download_attachment(
+        &self,
+        slot: &BRegAttachmentSlot,
+        record_identifier: Uuid,
+        proposal_version: u32,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        self.validate_attachment_slot(slot, BRegAttachmentRoute::Download)?;
+        if proposal_version == 0 {
+            return Err(BaseRegistryClientError::invalid_request(
+                "the Base Registry Engine attachment proposal version must be positive",
+            ));
+        }
+        let url = self.attachment_url(slot, record_identifier, Some(proposal_version))?;
+        // The engine never negotiates a binary read: it answers with the exact
+        // stored content type. Send the header explicitly rather than leaving
+        // it to the HTTP library's default.
+        let mut builder = self.transport.http.get(url).header(ACCEPT, ANY_MEDIA_TYPE);
+        builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send(builder).await?;
+        self.attachment_wire(response, slot).await
+    }
+
+    /// Empty one governed attachment slot.
+    pub async fn delete_attachment(
+        &self,
+        slot: &BRegAttachmentSlot,
+        record_identifier: Uuid,
+        etag: &BRegEtag,
+        idempotency_key: &BRegIdempotencyKey,
+        format: BRegRecordFormat,
+    ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
+        self.validate_attachment_slot(slot, BRegAttachmentRoute::Remove)?;
+        let url = self.attachment_url(slot, record_identifier, None)?;
+        let builder = self
+            .transport
+            .http
+            .request(Method::DELETE, url)
+            .header(ACCEPT, format.media_type())
+            .header("idempotency-key", idempotency_key.as_str())
+            .header(IF_MATCH, etag.as_str());
+        self.attachment_mutation(builder, slot, record_identifier, format)
+            .await
+    }
+
     /// Promote the actor actions advertised on one Registry Record against a
     /// caller-filtered lifecycle authority fetched by this client.
     pub fn lifecycle_actions(
@@ -410,6 +505,159 @@ impl BaseRegistryClient {
                     "the Base Registry Engine Create request does not match the selected operation",
                 )
             })
+    }
+
+    fn validate_attachment_slot(
+        &self,
+        slot: &BRegAttachmentSlot,
+        route: BRegAttachmentRoute,
+    ) -> Result<(), BaseRegistryClientError> {
+        if !slot.matches_source(&self.source_binding()) {
+            return Err(BaseRegistryClientError::invalid_request(
+                "the Base Registry Engine attachment slot belongs to another client source",
+            ));
+        }
+        let advertised = match route {
+            BRegAttachmentRoute::Download => slot.can_download(),
+            BRegAttachmentRoute::Upload => slot.can_upload(),
+            BRegAttachmentRoute::Remove => slot.can_remove(),
+        };
+        if !advertised {
+            return Err(BaseRegistryClientError::invalid_request(
+                "the Base Registry Engine attachment slot does not advertise this route",
+            ));
+        }
+        Ok(())
+    }
+
+    fn attachment_url(
+        &self,
+        slot: &BRegAttachmentSlot,
+        record_identifier: Uuid,
+        proposal_version: Option<u32>,
+    ) -> Result<reqwest::Url, BaseRegistryClientError> {
+        let path = slot.path_for_record(record_identifier);
+        let segments = fixed_operation_segments(&path)?;
+        let mut pairs = Vec::with_capacity(2);
+        if let Some(version) = proposal_version {
+            pairs.push(("proposalVersion".to_owned(), version.to_string()));
+        }
+        pairs.extend(access_profile_query(Some(slot.access_profile()))?);
+        self.url_with_query(&segments, &pairs)
+    }
+
+    async fn attachment_mutation(
+        &self,
+        builder: reqwest::RequestBuilder,
+        slot: &BRegAttachmentSlot,
+        record_identifier: Uuid,
+        format: BRegRecordFormat,
+    ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
+        let builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send(builder).await?;
+        let wire = self
+            .mutation_wire(
+                response,
+                StatusCode::OK,
+                format.media_type(),
+                LocationExpectation::Forbidden,
+            )
+            .await?;
+        let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
+        validate_mutation_record(
+            &complete,
+            StatusCode::OK,
+            slot.registry_identifier(),
+            slot.dataset_identifier(),
+            slot.entity_identifier(),
+        )?;
+        if complete.value.data.record_identifier != record_identifier.to_string() {
+            return Err(body_failure(
+                StatusCode::OK.as_u16(),
+                complete.metadata.trace_id().clone(),
+            ));
+        }
+        Ok(complete)
+    }
+
+    /// A binary read carries neither a record representation nor a validator:
+    /// it is a governed byte stream with its own narrower cache policy.
+    async fn attachment_wire(
+        &self,
+        response: Response,
+        slot: &BRegAttachmentSlot,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let status = response.status();
+        if status != StatusCode::OK {
+            if status.is_success() {
+                return Err(BaseRegistryClientError::protocol(
+                    status.as_u16(),
+                    BRegProtocolFailure::Status,
+                    breg_trace_id(status, response.headers()).ok(),
+                ));
+            }
+            return Err(breg_problem(response, &self.transport).await);
+        }
+        let headers = response.headers().clone();
+        let trace_id = breg_trace_id(status, &headers)?;
+        validate_no_store(status, &headers, &trace_id)?;
+        validate_exact_header(
+            status,
+            &headers,
+            &VARY,
+            "authorization",
+            BRegProtocolFailure::CachePolicy,
+            &trace_id,
+        )?;
+        validate_exact_header(
+            status,
+            &headers,
+            &CONTENT_DISPOSITION,
+            "attachment",
+            BRegProtocolFailure::CachePolicy,
+            &trace_id,
+        )?;
+        validate_exact_header(
+            status,
+            &headers,
+            &X_CONTENT_TYPE_OPTIONS,
+            "nosniff",
+            BRegProtocolFailure::CachePolicy,
+            &trace_id,
+        )?;
+        // A retained value may predate a narrower current upload policy, so
+        // only the concrete media-type grammar is enforced here.
+        let media_type = single_media_type(&headers)
+            .filter(|value| valid_attachment_content_type(value))
+            .ok_or_else(|| {
+                BaseRegistryClientError::protocol(
+                    status.as_u16(),
+                    BRegProtocolFailure::MediaType,
+                    Some(trace_id.clone()),
+                )
+            })?;
+        if breg_response_etag(status, &headers, &trace_id)?.is_some() {
+            return Err(etag_failure(status, trace_id));
+        }
+        if breg_response_link(status, &headers, &trace_id)?.is_some() {
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::ProfileLink,
+                Some(trace_id),
+            ));
+        }
+        if breg_response_location(status, &headers, &trace_id)?.is_some() {
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::Location,
+                Some(trace_id),
+            ));
+        }
+        let body = self.transport.read(response, slot.maximum_bytes()).await?;
+        Ok(BRegComplete {
+            value: BRegRawDocument::new(media_type, body),
+            metadata: BRegResponseMetadata::new(trace_id, None),
+        })
     }
 
     fn validate_patch_binding(
@@ -1014,6 +1262,14 @@ fn canonical_positive_revision(value: &str) -> bool {
         .parse::<i64>()
         .ok()
         .is_some_and(|revision| revision > 0 && revision.to_string() == value)
+}
+
+fn single_media_type(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    match (values.next(), values.next()) {
+        (Some(value), None) => value.to_str().ok().map(ToOwned::to_owned),
+        _ => None,
+    }
 }
 
 fn breg_trace_id(

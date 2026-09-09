@@ -15,6 +15,11 @@ mod breg_lifecycle;
 pub use breg_lifecycle::*;
 
 #[allow(dead_code)]
+#[path = "../src/attachment.rs"]
+mod breg_attachment;
+pub use breg_attachment::*;
+
+#[allow(dead_code)]
 #[path = "../src/metadata.rs"]
 mod breg_metadata;
 

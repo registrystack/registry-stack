@@ -8,8 +8,10 @@ use std::{sync::Arc, time::Duration};
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
 use napi_derive::napi;
 use registry_breg_client::{
-    BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
-    BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegLifecycleAction as CoreLifecycleAction,
+    BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
+    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus, BRegComplete,
+    BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
+    BRegDirectWrite, BRegEtag, BRegLifecycleAction as CoreLifecycleAction,
     BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
     BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
     BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest, BRegProblemCode,
@@ -543,6 +545,29 @@ fn format(value: Option<String>) -> Result<BRegRecordFormat> {
     }
 }
 
+/// Preconditions every attachment mutation shares, parsed before any request.
+fn attachment_preconditions(
+    record_identifier: String,
+    etag: String,
+    idempotency_key: String,
+) -> Result<(
+    uuid::Uuid,
+    BRegEtag,
+    registry_breg_client::BRegIdempotencyKey,
+)> {
+    let record_identifier = uuid::Uuid::parse_str(&record_identifier)
+        .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+    let etag = BRegEtag::parse(&etag).map_err(|_| {
+        binding_error(
+            "invalid_request",
+            "etag must be a strong Base Registry Engine entity tag",
+        )
+    })?;
+    let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    Ok((record_identifier, etag, key))
+}
+
 fn record_options(object: Option<&Map<String, Value>>) -> Result<BRegRecordOptions> {
     let Some(object) = object else {
         return Ok(BRegRecordOptions::default());
@@ -894,6 +919,134 @@ fn review_value(value: &BRegRequestReview) -> Value {
     })
 }
 
+fn attachment_state_value(value: &BRegAttachmentState) -> Value {
+    json!({
+        "slotIdentifier": value.slot_identifier(),
+        "proposalVersion": value.proposal_version(),
+        "erased": value.erased(),
+        "byteSize": value.byte_size(),
+        "sha256": value.sha256(),
+        "contentType": value.content_type(),
+        "uploadedAt": value.uploaded_at(),
+        "uploadedBy": value.uploaded_by(),
+        "verificationStatus": value
+            .verification_status()
+            .map(BRegAttachmentVerificationStatus::as_str),
+    })
+}
+
+fn attachment_slot_value(value: &BRegAttachmentSlotValue) -> Value {
+    match value {
+        BRegAttachmentSlotValue::NotSelected => json!({"kind": "not_selected", "value": null}),
+        BRegAttachmentSlotValue::Empty => json!({"kind": "empty", "value": null}),
+        BRegAttachmentSlotValue::Filled(state) => json!({
+            "kind": "filled",
+            "value": attachment_state_value(state),
+        }),
+    }
+}
+
+fn attachment_error(error: registry_breg_client::BRegAttachmentError) -> NapiError {
+    binding_error("invalid_request", error.reason())
+}
+
+/// Opaque governed attachment slot selected from metadata fetched by this client source.
+#[napi(js_name = "BRegAttachmentSlot")]
+pub struct AttachmentSlot {
+    inner: CoreAttachmentSlot,
+}
+
+/// Opaque bytes already accepted by one slot's served upload policy.
+#[napi(js_name = "BRegAttachmentUpload")]
+pub struct AttachmentUpload {
+    inner: CoreAttachmentUpload,
+}
+
+#[napi]
+impl AttachmentSlot {
+    #[napi(getter)]
+    pub fn slot_identifier(&self) -> String {
+        self.inner.slot_identifier().to_owned()
+    }
+
+    #[napi(getter)]
+    pub fn entity_identifier(&self) -> String {
+        self.inner.entity_identifier().to_owned()
+    }
+
+    #[napi(getter)]
+    pub fn access_profile(&self) -> String {
+        self.inner.access_profile().to_owned()
+    }
+
+    #[napi(getter)]
+    pub fn required_for_submit(&self) -> bool {
+        self.inner.required_for_submit()
+    }
+
+    /// Largest body the served slot policy accepts, in bytes.
+    #[napi(getter)]
+    pub fn maximum_bytes(&self) -> i64 {
+        i64::try_from(self.inner.maximum_bytes()).unwrap_or(MAXIMUM_JAVASCRIPT_SAFE_INTEGER)
+    }
+
+    #[napi(getter)]
+    pub fn content_types(&self) -> Vec<String> {
+        self.inner.content_types().to_vec()
+    }
+
+    #[napi(getter)]
+    pub fn can_download(&self) -> bool {
+        self.inner.can_download()
+    }
+
+    #[napi(getter)]
+    pub fn can_upload(&self) -> bool {
+        self.inner.can_upload()
+    }
+
+    #[napi(getter)]
+    pub fn can_remove(&self) -> bool {
+        self.inner.can_remove()
+    }
+
+    #[napi]
+    pub fn accepts_content_type(&self, content_type: String) -> bool {
+        self.inner.accepts_content_type(&content_type)
+    }
+
+    /// Bind exact bytes to this slot. Refusals happen here, before any request.
+    #[napi]
+    pub fn prepare_upload(&self, content_type: String, body: Buffer) -> Result<AttachmentUpload> {
+        CoreAttachmentUpload::new(&self.inner, &content_type, body.to_vec())
+            .map(|inner| AttachmentUpload { inner })
+            .map_err(attachment_error)
+    }
+
+    /// Read this slot's engine-owned state out of one Registry Record envelope.
+    #[napi]
+    pub fn value_in(&self, record: Value, format_value: Option<String>) -> Result<Value> {
+        let record = parse_record(record, format(format_value)?)?;
+        self.inner
+            .value_in(&record.data)
+            .map(|value| attachment_slot_value(&value))
+            .map_err(attachment_error)
+    }
+}
+
+#[napi]
+impl AttachmentUpload {
+    #[napi(getter)]
+    pub fn content_type(&self) -> String {
+        self.inner.content_type().to_owned()
+    }
+
+    #[napi(getter)]
+    pub fn byte_size(&self) -> i64 {
+        i64::try_from(self.inner.byte_size()).unwrap_or(MAXIMUM_JAVASCRIPT_SAFE_INTEGER)
+    }
+}
+
 #[napi(js_name = "BRegCreateBinding")]
 pub struct CreateBinding {
     inner: BRegCreateBinding,
@@ -1074,6 +1227,23 @@ impl Metadata {
         self.inner
             .select_lifecycle(&entity_identifier, &expected_profile)
             .map(|inner| LifecycleAuthority { inner })
+            .map_err(selection_error)
+    }
+
+    #[napi]
+    pub fn select_attachments(
+        &self,
+        entity_identifier: String,
+        expected_profile: String,
+    ) -> Result<Vec<AttachmentSlot>> {
+        self.inner
+            .select_attachments(&entity_identifier, &expected_profile)
+            .map(|slots| {
+                slots
+                    .into_iter()
+                    .map(|inner| AttachmentSlot { inner })
+                    .collect()
+            })
             .map_err(selection_error)
     }
 }
@@ -1275,6 +1445,75 @@ impl BaseRegistryClient {
         complete_value(value, metadata)
     }
 
+    /// Replace one governed attachment slot with exact bytes. The prepared
+    /// upload already satisfies the slot's served size and content-type policy.
+    #[napi]
+    pub async fn upload_attachment(
+        &self,
+        slot: &AttachmentSlot,
+        record_identifier: String,
+        etag: String,
+        upload: &AttachmentUpload,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<CompleteOutcome> {
+        let (record_identifier, etag, key) =
+            attachment_preconditions(record_identifier, etag, idempotency_key)?;
+        let (slot, upload) = (slot.inner.clone(), upload.inner.clone());
+        let BRegComplete { value, metadata } = self
+            .inner
+            .upload_attachment(
+                &slot,
+                record_identifier,
+                &etag,
+                &upload,
+                &key,
+                format(format_value)?,
+            )
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Read the exact bytes one governed slot holds for one proposal version.
+    #[napi]
+    pub async fn download_attachment(
+        &self,
+        slot: &AttachmentSlot,
+        record_identifier: String,
+        proposal_version: u32,
+    ) -> Result<RawOutcome> {
+        let record_identifier = uuid::Uuid::parse_str(&record_identifier)
+            .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+        let slot = slot.inner.clone();
+        self.inner
+            .download_attachment(&slot, record_identifier, proposal_version)
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    /// Empty one governed attachment slot.
+    #[napi]
+    pub async fn delete_attachment(
+        &self,
+        slot: &AttachmentSlot,
+        record_identifier: String,
+        etag: String,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<CompleteOutcome> {
+        let (record_identifier, etag, key) =
+            attachment_preconditions(record_identifier, etag, idempotency_key)?;
+        let slot = slot.inner.clone();
+        let BRegComplete { value, metadata } = self
+            .inner
+            .delete_attachment(&slot, record_identifier, &etag, &key, format(format_value)?)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
     #[napi]
     pub fn lifecycle_actions(
         &self,
@@ -1432,6 +1671,54 @@ impl BaseRegistryClient {
                 &key,
                 format(format_value)?,
             )
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    #[napi]
+    pub async fn upload_attachment_json(
+        &self,
+        slot: &AttachmentSlot,
+        record_identifier: String,
+        etag: String,
+        upload: &AttachmentUpload,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<JsonOutcome> {
+        let (record_identifier, etag, key) =
+            attachment_preconditions(record_identifier, etag, idempotency_key)?;
+        let (slot, upload) = (slot.inner.clone(), upload.inner.clone());
+        let BRegComplete { value, metadata } = self
+            .inner
+            .upload_attachment(
+                &slot,
+                record_identifier,
+                &etag,
+                &upload,
+                &key,
+                format(format_value)?,
+            )
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    #[napi]
+    pub async fn delete_attachment_json(
+        &self,
+        slot: &AttachmentSlot,
+        record_identifier: String,
+        etag: String,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<JsonOutcome> {
+        let (record_identifier, etag, key) =
+            attachment_preconditions(record_identifier, etag, idempotency_key)?;
+        let slot = slot.inner.clone();
+        let BRegComplete { value, metadata } = self
+            .inner
+            .delete_attachment(&slot, record_identifier, &etag, &key, format(format_value)?)
             .await
             .map_err(client_error)?;
         complete_json_value(value, metadata)

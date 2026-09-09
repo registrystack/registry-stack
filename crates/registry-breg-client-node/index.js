@@ -701,6 +701,10 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.BaseRegistryClient = nativeBinding.BaseRegistryClient
+module.exports.BRegAttachmentSlot = nativeBinding.BRegAttachmentSlot
+module.exports.AttachmentSlot = nativeBinding.AttachmentSlot
+module.exports.BRegAttachmentUpload = nativeBinding.BRegAttachmentUpload
+module.exports.AttachmentUpload = nativeBinding.AttachmentUpload
 module.exports.BRegCreateBinding = nativeBinding.BRegCreateBinding
 module.exports.CreateBinding = nativeBinding.CreateBinding
 module.exports.BRegLifecycleAction = nativeBinding.BRegLifecycleAction

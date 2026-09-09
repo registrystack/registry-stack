@@ -63,6 +63,8 @@ class ConstructionTests(unittest.TestCase):
             "BRegPatchBinding",
             "BRegLifecycleAuthority",
             "BRegLifecycleAction",
+            "BRegAttachmentSlot",
+            "BRegAttachmentUpload",
             "BRegMetadata",
         ):
             with self.assertRaises(TypeError):

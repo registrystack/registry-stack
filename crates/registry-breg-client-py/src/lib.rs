@@ -4,8 +4,10 @@
 #![deny(unsafe_code)]
 
 use breg_client_sdk::{
-    BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
-    BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegLifecycleAction as CoreLifecycleAction,
+    BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
+    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus, BRegComplete,
+    BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
+    BRegDirectWrite, BRegEtag, BRegLifecycleAction as CoreLifecycleAction,
     BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
     BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
     BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest, BRegProblemCode,
@@ -416,6 +418,132 @@ fn review_value(value: &BRegRequestReview) -> Value {
     })).collect::<Vec<_>>()})
 }
 
+fn attachment_state_value(value: &BRegAttachmentState) -> Value {
+    json!({
+        "slot_identifier": value.slot_identifier(),
+        "proposal_version": value.proposal_version(),
+        "erased": value.erased(),
+        "byte_size": value.byte_size(),
+        "sha256": value.sha256(),
+        "content_type": value.content_type(),
+        "uploaded_at": value.uploaded_at(),
+        "uploaded_by": value.uploaded_by(),
+        "verification_status": value
+            .verification_status()
+            .map(BRegAttachmentVerificationStatus::as_str),
+    })
+}
+
+fn attachment_slot_value(value: &BRegAttachmentSlotValue) -> Value {
+    match value {
+        BRegAttachmentSlotValue::NotSelected => json!({"kind": "not_selected", "value": null}),
+        BRegAttachmentSlotValue::Empty => json!({"kind": "empty", "value": null}),
+        BRegAttachmentSlotValue::Filled(state) => json!({
+            "kind": "filled",
+            "value": attachment_state_value(state),
+        }),
+    }
+}
+
+fn attachment_error(py: Python<'_>, error: breg_client_sdk::BRegAttachmentError) -> PyErr {
+    to_py_err(py, MappedError::binding("invalid_request", error.reason()))
+}
+
+#[pyclass(name = "BRegAttachmentSlot", module = "registry_breg_client", frozen)]
+struct AttachmentSlot {
+    inner: CoreAttachmentSlot,
+}
+
+#[pyclass(name = "BRegAttachmentUpload", module = "registry_breg_client", frozen)]
+struct AttachmentUpload {
+    inner: CoreAttachmentUpload,
+}
+
+#[pymethods]
+impl AttachmentSlot {
+    #[getter]
+    fn slot_identifier(&self) -> String {
+        self.inner.slot_identifier().to_owned()
+    }
+    #[getter]
+    fn entity_identifier(&self) -> String {
+        self.inner.entity_identifier().to_owned()
+    }
+    #[getter]
+    fn access_profile(&self) -> String {
+        self.inner.access_profile().to_owned()
+    }
+    #[getter]
+    fn required_for_submit(&self) -> bool {
+        self.inner.required_for_submit()
+    }
+    /// Largest body the served slot policy accepts, in bytes.
+    #[getter]
+    fn maximum_bytes(&self) -> u64 {
+        self.inner.maximum_bytes()
+    }
+    #[getter]
+    fn content_types(&self) -> Vec<String> {
+        self.inner.content_types().to_vec()
+    }
+    #[getter]
+    fn can_download(&self) -> bool {
+        self.inner.can_download()
+    }
+    #[getter]
+    fn can_upload(&self) -> bool {
+        self.inner.can_upload()
+    }
+    #[getter]
+    fn can_remove(&self) -> bool {
+        self.inner.can_remove()
+    }
+
+    fn accepts_content_type(&self, content_type: &str) -> bool {
+        self.inner.accepts_content_type(content_type)
+    }
+
+    /// Bind exact bytes to this slot. Refusals happen here, before any request.
+    fn prepare_upload(
+        &self,
+        py: Python<'_>,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> PyResult<AttachmentUpload> {
+        CoreAttachmentUpload::new(&self.inner, content_type, body)
+            .map(|inner| AttachmentUpload { inner })
+            .map_err(|error| attachment_error(py, error))
+    }
+
+    /// Read this slot's engine-owned state out of one Registry Record mapping.
+    #[pyo3(signature = (record, *, format="json"))]
+    fn value_in<'py>(
+        &self,
+        py: Python<'py>,
+        record: &Bound<'_, PyAny>,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let record = record_value(py, record, record_format(py, format)?)?;
+        let value = self
+            .inner
+            .value_in(&record.data)
+            .map_err(|error| attachment_error(py, error))?;
+        json_to_python(py, &attachment_slot_value(&value))
+    }
+}
+
+#[pymethods]
+impl AttachmentUpload {
+    #[getter]
+    fn content_type(&self) -> String {
+        self.inner.content_type().to_owned()
+    }
+    #[getter]
+    fn byte_size(&self) -> usize {
+        self.inner.byte_size()
+    }
+}
+
 #[pyclass(name = "BRegCreateBinding", module = "registry_breg_client", frozen)]
 struct CreateBinding {
     inner: BRegCreateBinding,
@@ -552,6 +680,39 @@ impl Metadata {
             .map(|inner| LifecycleAuthority { inner })
             .map_err(|error| selection_error(py, error))
     }
+
+    fn select_attachments(
+        &self,
+        py: Python<'_>,
+        entity_identifier: &str,
+        expected_profile: &str,
+    ) -> PyResult<Vec<AttachmentSlot>> {
+        self.inner
+            .select_attachments(entity_identifier, expected_profile)
+            .map(|slots| {
+                slots
+                    .into_iter()
+                    .map(|inner| AttachmentSlot { inner })
+                    .collect()
+            })
+            .map_err(|error| selection_error(py, error))
+    }
+}
+
+/// Preconditions every attachment mutation shares, parsed before any request.
+fn attachment_preconditions(
+    py: Python<'_>,
+    record_identifier: &str,
+    etag: &str,
+    idempotency_key: &str,
+) -> PyResult<(uuid::Uuid, BRegEtag, breg_client_sdk::BRegIdempotencyKey)> {
+    let record_identifier = uuid::Uuid::parse_str(record_identifier)
+        .map_err(|_| invalid(py, "record_identifier must be a UUID"))?;
+    let etag = BRegEtag::parse(etag)
+        .map_err(|_| invalid(py, "etag must be a strong Base Registry Engine entity tag"))?;
+    let key = breg_client_sdk::BRegIdempotencyKey::parse(idempotency_key)
+        .map_err(|error| invalid(py, error.to_string()))?;
+    Ok((record_identifier, etag, key))
 }
 
 fn selection_error(py: Python<'_>, error: BRegMetadataSelectionError) -> PyErr {
@@ -869,6 +1030,91 @@ impl BaseRegistryClient {
         complete_value(py, &value.value, &value.metadata)
     }
 
+    /// Replace one governed attachment slot with exact bytes. The prepared
+    /// upload already satisfies the slot's served size and content-type policy.
+    #[pyo3(signature = (slot, record_identifier, etag, upload, idempotency_key, *, format="json"))]
+    #[allow(clippy::too_many_arguments)]
+    fn upload_attachment<'py>(
+        &self,
+        py: Python<'py>,
+        slot: PyRef<'_, AttachmentSlot>,
+        record_identifier: &str,
+        etag: &str,
+        upload: PyRef<'_, AttachmentUpload>,
+        idempotency_key: &str,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let (record_identifier, etag, key) =
+            attachment_preconditions(py, record_identifier, etag, idempotency_key)?;
+        let (slot, upload) = (slot.inner.clone(), upload.inner.clone());
+        let format = record_format(py, format)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.upload_attachment(
+                    &slot,
+                    record_identifier,
+                    &etag,
+                    &upload,
+                    &key,
+                    format,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    /// Read the exact bytes one governed slot holds for one proposal version.
+    fn download_attachment<'py>(
+        &self,
+        py: Python<'py>,
+        slot: PyRef<'_, AttachmentSlot>,
+        record_identifier: &str,
+        proposal_version: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let record_identifier = uuid::Uuid::parse_str(record_identifier)
+            .map_err(|_| invalid(py, "record_identifier must be a UUID"))?;
+        let slot = slot.inner.clone();
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.download_attachment(
+                    &slot,
+                    record_identifier,
+                    proposal_version,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    /// Empty one governed attachment slot.
+    #[pyo3(signature = (slot, record_identifier, etag, idempotency_key, *, format="json"))]
+    fn delete_attachment<'py>(
+        &self,
+        py: Python<'py>,
+        slot: PyRef<'_, AttachmentSlot>,
+        record_identifier: &str,
+        etag: &str,
+        idempotency_key: &str,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let (record_identifier, etag, key) =
+            attachment_preconditions(py, record_identifier, etag, idempotency_key)?;
+        let slot = slot.inner.clone();
+        let format = record_format(py, format)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.delete_attachment(
+                    &slot,
+                    record_identifier,
+                    &etag,
+                    &key,
+                    format,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
     #[pyo3(signature = (authority, record, *, format="json"))]
     fn lifecycle_actions(
         &self,
@@ -926,6 +1172,8 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PatchBinding>()?;
     module.add_class::<LifecycleAuthority>()?;
     module.add_class::<LifecycleAction>()?;
+    module.add_class::<AttachmentSlot>()?;
+    module.add_class::<AttachmentUpload>()?;
     module.add(
         "BaseRegistryClientError",
         module.py().get_type::<BaseRegistryClientError>(),

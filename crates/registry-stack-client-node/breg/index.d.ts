@@ -14,6 +14,15 @@ export declare class BaseRegistryClient {
   lookupRecord(entityRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null): Promise<CompleteOutcome>
   createRecord(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
+  /**
+   * Replace one governed attachment slot with exact bytes. The prepared
+   * upload already satisfies the slot's served size and content-type policy.
+   */
+  uploadAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, upload: BRegAttachmentUpload, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
+  /** Read the exact bytes one governed slot holds for one proposal version. */
+  downloadAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, proposalVersion: number): Promise<RawOutcome>
+  /** Empty one governed attachment slot. */
+  deleteAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   lifecycleActions(authority: BRegLifecycleAuthority, record: any, formatValue?: string | undefined | null): Array<BRegLifecycleAction>
   executeLifecycleAction(action: BRegLifecycleAction, idempotencyKey: string): Promise<CompleteOutcome>
   getRecordJson(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
@@ -22,9 +31,38 @@ export declare class BaseRegistryClient {
   lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null): Promise<JsonOutcome>
   createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
   patchRecordJson(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operationsJson: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
+  uploadAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, upload: BRegAttachmentUpload, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
+  deleteAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
   lifecycleActionsJson(authority: BRegLifecycleAuthority, recordJson: string, formatValue?: string | undefined | null): Array<BRegLifecycleAction>
   executeLifecycleActionJson(action: BRegLifecycleAction, idempotencyKey: string): Promise<JsonOutcome>
 }
+
+/** Opaque governed attachment slot selected from metadata fetched by this client source. */
+export declare class BRegAttachmentSlot {
+  get slotIdentifier(): string
+  get entityIdentifier(): string
+  get accessProfile(): string
+  get requiredForSubmit(): boolean
+  /** Largest body the served slot policy accepts, in bytes. */
+  get maximumBytes(): number
+  get contentTypes(): Array<string>
+  get canDownload(): boolean
+  get canUpload(): boolean
+  get canRemove(): boolean
+  acceptsContentType(contentType: string): boolean
+  /** Bind exact bytes to this slot. Refusals happen here, before any request. */
+  prepareUpload(contentType: string, body: Buffer): BRegAttachmentUpload
+  /** Read this slot's engine-owned state out of one Registry Record envelope. */
+  valueIn(record: any, formatValue?: string | undefined | null): any
+}
+export type AttachmentSlot = BRegAttachmentSlot
+
+/** Opaque bytes already accepted by one slot's served upload policy. */
+export declare class BRegAttachmentUpload {
+  get contentType(): string
+  get byteSize(): number
+}
+export type AttachmentUpload = BRegAttachmentUpload
 
 export declare class BRegCreateBinding {
 
@@ -59,6 +97,7 @@ export declare class BRegMetadata {
   selectCreate(operationIdentifier: string, expectedProfile: string): BRegCreateBinding
   selectPatch(operationIdentifier: string, expectedProfile: string): BRegPatchBinding
   selectLifecycle(entityIdentifier: string, expectedProfile: string): BRegLifecycleAuthority
+  selectAttachments(entityIdentifier: string, expectedProfile: string): Array<BRegAttachmentSlot>
 }
 export type Metadata = BRegMetadata
 
