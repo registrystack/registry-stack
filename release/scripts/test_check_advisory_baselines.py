@@ -26,18 +26,18 @@ LIVE_BASELINES = (
     ROOT / "release/security/mint-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:c2fdee13ee6ed8099b46ee228a31477e18a492f3afa6295a1a17fcf5153433ad",
-    "breg": "sha256:382ba2047e213dbf8dc3234f14607e0d3fea5c6b02c5ee54aa2cacf5d59c6f77",
-    "discovery": "sha256:2f2bc9fd04a8fa7f7bb3a2950b60ec89dc65d32a9858e59433f232f25108a740",
-    "evidence": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
-    "mint": "sha256:06fa8148546e162b301e6d3c80b75b59e6597444c4dd9d98fbe3914e05ec837b",
+    "relay": "sha256:078dad0106b290ffa76b88ec7d437f435ea3f0826f16caea1e2f96d9da2d45d6",
+    "breg": "sha256:cc65d4075bc08893bde3442669972d32e337b464fcb9264eb68f2f8d7d7cfeac",
+    "discovery": "sha256:e626ac4761b83df253af95a1fe616c341012783dd6f8501b8a2e1be5e6c0fd9c",
+    "evidence": "sha256:7d746336063cf7abed7197249ab52bfce99cb0f6cc3dfe5e6b77ce99f985b312",
+    "mint": "sha256:02cee1a3b8fb1d8bd51f147faa37eaf0e34628d46f98b48669ac301adb2b5903",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "bee7708e4f6ac5712a05245963fbce7bd5f732e8"
+LIVE_REFERENCE_SOURCE_REVISION = "c012e72f63d27745688362c9690bfb6cb3f960ce"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
 # exception. Move it forward by hand when the baselines are renewed.
-LIVE_REVIEW_EVALUATION_DATE = "2026-09-07"
+LIVE_REVIEW_EVALUATION_DATE = "2026-09-09"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "local_reproduction",
     "breg": "local_reproduction",
