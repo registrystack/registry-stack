@@ -53,6 +53,7 @@
     - ['`request.plan_refused`', '400', 'A change request was submitted and its bounded planner produced no plan. The detail names the failure kind from a closed vocabulary and nothing else. A planner that ran out of time returns `503 service.unavailable` instead.']
     - ['`action.refused`', '422', 'An immediate-action handler intentionally refused the operation. `refusalCode` identifies a declared reason, `detail` contains its static label, and optional `fieldPath` names an input. No effects commit.']
     - ['`action.handler_failed`', '500', 'An activated immediate-action handler failed to produce an accepted result. Operators use the trace identifier and safe server diagnostics to repair the package. A handler deadline returns `503 service.unavailable` instead.']
+    - ['`action.evidence_failed`', '503', 'An immediate-action handler declared an Evidence dependency that could not be acquired or accepted: the provider did not answer, or the assertion was refused, failed verification, or exceeded the retention bound. `fieldPath` names the declared Evidence alias when the failure is bound to one. No effects commit.']
     - ['`unsupported.media_type`', '415', 'A body without the required `Content-Type`.']
     - ['`precondition.required`', '428', 'A route that requires `If-Match` was called without it.']
     - ['`precondition.failed`', '412', '`If-Match` did not match the current revision.']
