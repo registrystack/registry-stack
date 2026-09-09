@@ -995,6 +995,12 @@ impl AttachmentSlot {
         self.inner.content_types().to_vec()
     }
 
+    /// Authored sensitivity of this slot's content.
+    #[napi(getter)]
+    pub fn classification(&self) -> String {
+        self.inner.classification().as_str().to_owned()
+    }
+
     #[napi(getter)]
     pub fn can_download(&self) -> bool {
         self.inner.can_download()

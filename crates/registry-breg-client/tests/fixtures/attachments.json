@@ -53,6 +53,7 @@
                 "requiredForSubmit": true,
                 "maximumBytes": 1024,
                 "contentTypes": ["application/pdf"],
+                "classification": "restricted",
                 "verification": {
                   "statusField": "verificationStatus",
                   "allowedStatuses": ["notRequired", "approved"],
@@ -153,6 +154,7 @@
                 "requiredForSubmit": true,
                 "maximumBytes": 1024,
                 "contentTypes": ["application/pdf"],
+                "classification": "restricted",
                 "verification": {
                   "statusField": "verificationStatus",
                   "allowedStatuses": ["notRequired", "approved"],

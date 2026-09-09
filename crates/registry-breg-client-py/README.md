@@ -27,13 +27,13 @@ client.delete_attachment(slot, record_id, next_etag, "remove-supporting-file-1")
 ```
 
 `slot` carries the served policy: `slot_identifier`, `required_for_submit`,
-`maximum_bytes`, `content_types`, `accepts_content_type(value)`, and the
-`can_download`, `can_upload`, and `can_remove` routes the caller's profile was
-granted. `prepare_upload` refuses an empty body, a body larger than
-`maximum_bytes`, and any content type outside `content_types` before a request
-is built, so a refused upload never leaves the process. Uploads and removals
-need the record's current ETag and a caller-chosen idempotency key, exactly like
-`patch_record`.
+`maximum_bytes`, `content_types`, `classification`,
+`accepts_content_type(value)`, and the `can_download`, `can_upload`, and
+`can_remove` routes the caller's profile was granted. `prepare_upload` refuses
+an empty body, a body larger than `maximum_bytes`, and any content type outside
+`content_types` before a request is built, so a refused upload never leaves the
+process. Uploads and removals need the record's current ETag and a caller-chosen
+idempotency key, exactly like `patch_record`.
 
 `slot.value_in(record)` reads the engine-owned projection of the slot out of one
 record mapping: a `kind` of `not_selected`, `empty`, or `filled`, with a `value`

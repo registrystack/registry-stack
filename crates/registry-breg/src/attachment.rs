@@ -10,6 +10,10 @@ use sha2::{Digest, Sha256};
 use crate::model::CompiledRoute;
 use crate::model::HttpMethod;
 
+/// Downloads carry no filename: no slot metadata holds one, and deriving one would
+/// echo authored configuration text back into a response header.
+pub(crate) const DOWNLOAD_CONTENT_DISPOSITION: &str = "attachment";
+
 /// Binary routes retain the parent authority but have their own stable wire identity.
 #[cfg(feature = "runtime")]
 pub(crate) fn route(base: &CompiledRoute, slot_id: &str, method: HttpMethod) -> CompiledRoute {

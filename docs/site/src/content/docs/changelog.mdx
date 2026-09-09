@@ -64,6 +64,31 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg-client-node/client.d.ts;
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi. */}
 
+- A request attachment slot serves the `classification` its registry
+  configuration authored. It travels in the `x-registry-attachment` extension,
+  so it reaches `/v1/registry` and the caller-filtered OpenAPI document under
+  the same filtering as the size bound and the accepted content types, and the
+  Rust, Node.js, and Python clients read it off the selected slot. A caller can
+  now tell restricted slot content from public before downloading any bytes.
+  The value is advisory: it grants and withholds no route. See
+  [Base Registry Engine API](../reference/breg-api/).
+
+{/* Evidence: crates/registry-breg/src/artifacts.rs, attachment_metadata_schema();
+    crates/registry-breg/src/api/metadata.rs, field();
+    crates/registry-breg-client/src/attachment.rs, BRegAttachmentClassification;
+    crates/registry-breg-client-node/client.d.ts;
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi. */}
+
+- The attachment download operation no longer promises a filename in
+  `Content-Disposition`. The route sends the bare `attachment` disposition, and
+  no stored slot metadata holds a filename, so the served OpenAPI document now
+  pins the header to that exact value. A caller that read the old description
+  and expected a name to save the bytes under has to choose one itself. See
+  [Base Registry Engine API](../reference/breg-api/).
+
+{/* Evidence: crates/registry-breg/src/attachment.rs, DOWNLOAD_CONTENT_DISPOSITION;
+    crates/registry-breg/src/api/attachments.rs, download(). */}
+
 ## v0.28.0 beta-40
 
 - BREAKING: `bregctl dev` and `bregctl dev stop` take a positional project

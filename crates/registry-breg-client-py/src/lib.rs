@@ -486,6 +486,11 @@ impl AttachmentSlot {
     fn content_types(&self) -> Vec<String> {
         self.inner.content_types().to_vec()
     }
+    /// Authored sensitivity of this slot's content.
+    #[getter]
+    fn classification(&self) -> &'static str {
+        self.inner.classification().as_str()
+    }
     #[getter]
     fn can_download(&self) -> bool {
         self.inner.can_download()

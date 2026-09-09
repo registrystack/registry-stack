@@ -76,6 +76,7 @@ test('a selected slot exposes the served limits and its record projection', asyn
     assert.equal(slot.requiredForSubmit, true);
     assert.equal(slot.maximumBytes, 1024);
     assert.deepEqual(slot.contentTypes, ['application/pdf']);
+    assert.equal(slot.classification, 'restricted');
     assert.equal(slot.acceptsContentType('application/pdf'), true);
     assert.equal(slot.acceptsContentType('image/png'), false);
     assert.equal(slot.canDownload, true);

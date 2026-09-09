@@ -277,7 +277,10 @@ async fn download(
         Ok(Some(held)) => Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, held.content_type())
-            .header("content-disposition", "attachment")
+            .header(
+                "content-disposition",
+                crate::attachment::DOWNLOAD_CONTENT_DISPOSITION,
+            )
             .header("x-content-type-options", "nosniff")
             .header(CACHE_CONTROL, "no-store")
             .header(VARY, "authorization")

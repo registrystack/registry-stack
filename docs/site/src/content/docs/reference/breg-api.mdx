@@ -454,6 +454,8 @@ incomplete draft is allowed; submission refuses a missing required slot with
 
 All three accept `accessProfile`. Discover concrete slot paths from caller-filtered
 OpenAPI or the field schema's `x-registry-attachment` extension in `/v1/registry`.
+That extension repeats the compiled slot policy: `requiredForSubmit`,
+`maximumBytes`, `contentTypes`, `classification`, and the verification policy.
 Upload and removal return the ordinary record mutation response. Refetch the
 request to obtain its updated attachment metadata and record ETag. A slot is
 engine-owned and cannot be set by ordinary create, JSON Patch, or request effects.
@@ -483,7 +485,9 @@ references into the next draft; editing that draft preserves earlier submitted
 manifests. Downloads use the explicit proposal version, never a hash or storage
 URL. Owner, stage reviewer, and applier access use their current compiled request
 read authority, including request entries in `reviewStages[].targets[]` and
-`applyTargets`. Slot classification and field projection also apply.
+`applyTargets`. Field projection also applies: a slot reaches a caller only
+through the profile's `readableFields`. The authored `classification` is served
+so a caller can handle the bytes accordingly; it grants and withholds nothing.
 
 Downloads return complete, integrity-verified bytes with attachment disposition,
 `Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`. Hidden requests,

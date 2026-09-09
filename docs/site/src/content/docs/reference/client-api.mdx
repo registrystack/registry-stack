@@ -883,9 +883,10 @@ the caller-filtered metadata advertises for that entity and profile, bound to th
 closed list as the other selections.
 
 A `BRegAttachmentSlot` exposes `slot_identifier`, `entity_identifier`, `access_profile`,
-`required_for_submit`, `maximum_bytes`, `content_types`, `can_download`, `can_upload`, `can_remove`,
-and `accepts_content_type(content_type)`, camel case in Node. The served routes stay opaque, so only
-the client can spend a slot.
+`required_for_submit`, `maximum_bytes`, `content_types`, `classification`, `can_download`,
+`can_upload`, `can_remove`, and `accepts_content_type(content_type)`, camel case in Node.
+`classification` is the authored sensitivity of the slot content, `public`, `internal`, or
+`restricted`. The served routes stay opaque, so only the client can spend a slot.
 
 `prepare_upload(content_type, body)` and `prepareUpload(contentType, body)` check the bytes against
 that served policy before any I/O and return an opaque `BRegAttachmentUpload` carrying `content_type`

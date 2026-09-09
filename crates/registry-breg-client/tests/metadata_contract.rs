@@ -694,6 +694,7 @@ fn attachment_schema_capabilities_are_preserved_without_granting_json_writes() {
     let mut source = fixture();
     let descriptor = json!({
         "requiredForSubmit": true, "maximumBytes": 1024, "contentTypes": ["application/pdf"],
+        "classification": "restricted",
         "verification": {"statusField": "verificationStatus", "allowedStatuses": ["notRequired", "approved"],
             "pendingOrRejectedBlocks": ["download", "submit"]},
         "remove": {"method": "DELETE", "path": "/v1/records/companies/{record_id}/attachments/supporting-file",

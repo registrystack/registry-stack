@@ -96,9 +96,12 @@ logical-ID order. It may be empty. `identifier: {apiName: "id", location:
 Request attachment slots appear in `fields` when this operation can read their
 metadata or upload to them. The logical slot ID is also the exact `apiName` under
 `domainData`. Their schema has `x-registry-fieldKind: "attachment"` and
-`x-registry-attachment` with `requiredForSubmit`, `maximumBytes`, and
-`contentTypes`. Those limits govern current uploads; retained metadata can describe
-content accepted under an earlier policy. Empty slots are null. Filled live metadata
+`x-registry-attachment` with `requiredForSubmit`, `maximumBytes`,
+`contentTypes`, and `classification`. Those limits govern current uploads;
+retained metadata can describe content accepted under an earlier policy.
+`classification` is the authored slot sensitivity, `public`, `internal` or
+`restricted`, and reaches only the callers this operation already admits to the
+slot. Empty slots are null. Filled live metadata
 includes `verificationStatus`: `notRequired`, `pending`, `approved`, or `rejected`.
 The schema extension's `verification` member names this status field and the
 release-eligible statuses. Pending and rejected slots block downloads and
@@ -112,9 +115,11 @@ The schema's attachment extension adds `download`, `upload`, and `remove` only
 when the same caller/profile has the corresponding GET or PATCH slot authority.
 Each descriptor contains `method`, exact `path`, `accessProfile`,
 `authorizationOperation`, `queryParameters`, `body`, `ifMatchRequired`, and
-`idempotencyKeyRequired`. Download requires `proposalVersion`; upload uses raw
-binary bytes; remove uses an empty body. Upload and remove require the draft
-state. These are separate HTTP requests, not generic JSON field mutations.
+`idempotencyKeyRequired`. The download descriptor adds
+`proposalVersionRequired: true`: exactly one canonical nonzero `proposalVersion`
+query parameter is mandatory, and there is no default. Upload uses raw binary
+bytes and remove uses an empty body; both add `requiredState: "draft"`. These
+are separate HTTP requests, not generic JSON field mutations.
 A descriptor is advisory: the runtime rechecks current record/version authority,
 owner, state, and concurrency preconditions on use.
 

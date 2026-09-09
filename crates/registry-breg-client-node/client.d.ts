@@ -226,6 +226,8 @@ export interface BRegOperationDescriptor {
 
 export type BRegAttachmentVerificationStatus = 'notRequired' | 'pending' | 'approved' | 'rejected'
 
+export type BRegAttachmentClassification = 'public' | 'internal' | 'restricted'
+
 /** Engine-owned state of one filled slot, read from a record's domain data. */
 export interface BRegAttachmentState {
   readonly slotIdentifier: string
@@ -263,6 +265,7 @@ export declare class BRegAttachmentSlot {
   readonly requiredForSubmit: boolean
   readonly maximumBytes: SafeInteger
   readonly contentTypes: ReadonlyArray<string>
+  readonly classification: BRegAttachmentClassification
   readonly canDownload: boolean
   readonly canUpload: boolean
   readonly canRemove: boolean
