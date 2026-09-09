@@ -426,6 +426,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("refs/remotes/origin/main", validation)
         ci = document["jobs"]["protected-ci"]
         self.assertEqual(ci["needs"], "validate")
+        _, protected_workflow = workflow("ci.yml")
+        longest_ci_job = max(job.get("timeout-minutes", 0) for job in protected_workflow["jobs"].values())
+        self.assertGreater(ci["timeout-minutes"], longest_ci_job)
         self.assertIn("protected-ci", document["jobs"]["attest"]["needs"])
         self.assertNotIn("if", document["jobs"]["attest"])
         self.assertIn("registry-release wait-for-ci", ci["steps"][-1]["run"])
