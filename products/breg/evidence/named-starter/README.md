@@ -5,15 +5,48 @@ question receives only `name`; it never returns that name or the record code.
 A missing or null name is unavailable evidence. An empty name gives a signed
 false answer. All fixture values are synthetic.
 
-First connect your retained registry through `evidencectl source add`, selecting
-entity `record`, unique field `code`, readable fact `name`, and an explicit row
-scope. Use source ID `registry-name`, connection `registry`, and selector profile
-`by-code`. Copy `questions/`, `derivations/`, and `fixtures/` into the generated
-Evidence project, then run `evidencectl fixtures run --project . --target
-./targets/local --local` to rehearse generated local caller authority with the
-source connection. Restart BReg and use `evidencectl dev --target ./targets/local
---detach` to serve the local rehearsal. An operated candidate needs a separate
-reviewed deployment target.
+Connect your retained registry with `evidencectl source add`. It runs the
+matching `bregctl` for the registry side, so a `bregctl` binary of the same
+version must be on `PATH`, or named by `--bregctl-bin` or `BREGCTL_BIN`. Stop
+the registry normally first, then review the proposed source authority, which
+the command previews without writing anything:
+
+```sh
+bregctl dev stop ./registry
+evidencectl source add ./registry --project ./evidence \
+  --source-id registry-name --selector-profile by-code
+```
+
+Select entity `record`, unique field `code`, readable fact `name`, and an
+explicit row scope. A supplied code is not a row authorization rule; for
+institutional data choose the required row boundary. Repeat the command with
+`--apply` to perform the connection:
+
+```sh
+evidencectl source add ./registry --project ./evidence \
+  --source-id registry-name --selector-profile by-code --apply
+```
+
+That one operation prepares a lookup-only source client on the registry,
+exports its contract, imports it into the Evidence project, copies the
+dedicated credentials into the project's `secrets/` directory, and writes the
+`registry` connection into `evidence/targets/local`. Retained records,
+revisions, and client identities remain; the registry's package revision
+advances to carry the chosen source authority, so restart the registry to
+activate it.
+
+Copy `questions/`, `derivations/`, and `fixtures/` into the Evidence project,
+then run `evidencectl fixtures run --project . --target ./targets/local --local`
+to rehearse generated local caller authority with the source connection.
+Restart BReg and use `evidencectl dev --target ./targets/local --detach` to
+serve the local rehearsal. An operated candidate needs a separate reviewed
+deployment target.
+
+When the registry and the Evidence project are not on the same machine,
+`source add` has no registry to drive, and the two sides connect by hand
+instead: the registry operator runs `bregctl generate evidence-source` for the
+reviewed lookup and `bregctl dev export-client` for the dedicated source
+credentials, and you run `evidencectl source import` on the exported directory.
 
 The matching `organization-selection.yaml` selects PublicSchema's Organization
 concept and name property. It contains no Evidence source permissions. The

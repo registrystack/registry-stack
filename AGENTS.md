@@ -18,6 +18,25 @@ The three compose without merging their product boundaries: Evidence may use a
 Base Registry Engine route or a Relay-protected API as a fixed HTTP source, and
 inherits neither one's authorization.
 
+A Base Registry Engine governed action may also consume an Evidence assertion
+as an ordinary relying party: a Rhai handler declaring handler ABI
+`registry.action-handler/v2` may call `evidence::resolve`, backed by
+`registry-evidence-client` and `registry-evidence-verifier`. The trusted
+Evidence provider is declared by the operator in the registry project's
+configuration, and Base Registry Engine inherits no Evidence authorization.
+The accepted assertion it retains is a bounded relying-party record, held 24
+hours after acceptance and erased by `bregctl evidence-retention
+erase-expired`, never a credential lifecycle. The dependency is on the client
+and verifier libraries only: no Evidence crate depends on `registry-breg`, and
+`registry-breg` never depends on the `registry-evidence` runtime crate.
+
+`evidencectl source add` drives the `bregctl` binary of the same version found
+on `PATH` to export a client and connect a local registry as a fixed Evidence
+source. Adopter tooling may compose across products this way; runtimes may
+not. The composition happens through the public CLI of the other product,
+never through a crate dependency: `registry-evidencectl` does not depend on
+`registry-breg` or `registry-bregctl`.
+
 Registry Manifest describes sources portably; Relay is its consumer in code
 and `registry-platform-*` crates are shared primitives. `relayctl` is Relay
 adopter tooling; `registry-evidencectl` is Evidence adopter tooling.
@@ -53,6 +72,8 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-breg-client` | Base Registry Engine client and its opaque authorization handles |
 | `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
+| `crates/registry-linkml` | LinkML reader and embedded PublicSchema snapshot behind `bregctl init --from publicschema` |
+| `crates/registry-record` | Product-neutral Registry Record v1 response DTOs shared by the Base Registry Engine and Relay clients |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
 | `crates/registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
 | `crates/registry-stack-client-py` | Public `registry-stack-client` Python facade assembled with all native bindings |
@@ -68,9 +89,14 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
 | `crates/registry-platform-sqlite` | Shared bounded read-only SQLite security boundary used by Relay V2 and Evidence |
 | `crates/registry-relay-v2` | Contract-compiled Relay V2 runtime and the `relay` binary |
+| `crates/registry-relay-http-contract` | Stable HTTP wire contract shared by the Relay V2 runtime and its clients |
+| `crates/registry-relay-client` | Canonical bounded Rust client for Registry Relay V2 |
+| `crates/registry-relay-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
+| `crates/registry-relay-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-relayctl` | Relay V2 adopter tooling and the `relayctl` binary |
 | `crates/registry-evidence-oid4vci` | Wallet-facing OID4VCI delivery front end for Evidence credentials, and the `evidence-oid4vci` binary |
 | `crates/registry-language-server` | Editor language server for Relay V2 and Evidence authoring documents, hosted for adopters by `evidencectl` and `relayctl` |
+| `crates/registry-cli-docs` | Deterministic CLI reference data generated from Registry Stack Clap command trees, consumed by the docs site's CLI reference build |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
@@ -360,7 +386,11 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
   must be bit-for-bit repeatable. Site CLI pages and generated data are ignored
   build artifacts; commit their sources and generators, not rendered copies.
   If you change an HTTP endpoint, regenerating and committing the OpenAPI
-  documents is part of the change, not a follow-up.
+  documents is part of the change, not a follow-up. If you change a binary's
+  clap definitions or the workspace version, re-stamping the CLI reference
+  publication record `docs/site/src/data/cli-reference.yaml` is part of the
+  change as well; `docs/site/AGENTS.md` gives the command that prints the
+  values to record.
 - Suspected vulnerabilities (minimum-disclosure failure, auth bypass, audit
   redaction failure, connector data leakage, signing key handling) go through
   `SECURITY.md`, never public issues or PRs.

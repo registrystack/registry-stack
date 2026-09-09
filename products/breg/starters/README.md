@@ -14,9 +14,9 @@ certification or a claim about an institution's legal authority.
 
 The executable examples require the BReg tool version selected by the
 published starter distribution. The maintained native `bregctl dev` and
-`bregctl examples` commands run the project locally. `clients.yaml` contains
-synthetic client definitions, no credentials. Pass it explicitly with
-`bregctl dev --clients-file clients.yaml`. Startup itself loads no records.
+`bregctl examples` commands run the project locally. `dev-clients.yaml` contains
+synthetic client definitions, no credentials. A first `bregctl dev` reads it
+from the project directory. Startup itself loads no records.
 Only an explicit `bregctl examples run starter-data .` populates samples.
 The first-record exercise is independent of those samples.
 
@@ -27,7 +27,7 @@ credential-generating security proof: it includes refusal of a reviewer action p
 submitting principal and callers missing a required scope. The separate HTTP
 proof checks the independent-review policy itself: the submitting principal
 with reviewer scopes has no approval action, while a distinct reviewer does. The normal dev
-rehearsal uses only the three teaching identities in `clients.yaml`. Direct
+rehearsal uses only the three teaching identities in `dev-clients.yaml`. Direct
 PATCH refusal, concrete wrong-type UUIDs, history and retained-state recovery
 are exercised by the native HTTP integration proof.
 Presence of these files is not an execution receipt. Validate and test the exact

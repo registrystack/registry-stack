@@ -85,6 +85,22 @@ For a retained local loop that needs no checkout, Python launcher, or shell
 script, [Native local BReg lifecycle](DEV.md) documents `bregctl dev` against
 installed binaries and Docker PostgreSQL.
 
+For a ready-made registry instead of the generic quickstart project,
+[`starters/`](starters/) holds ordinary authored BReg projects with fixed
+scenarios. `bregctl examples list` describes a starter's scenarios without
+starting services or creating credentials, and `bregctl examples run
+<scenario> <project>` runs or resumes one against the project's ready local
+development instance. `bregctl init <destination> --from publicschema` derives
+a new project from the PublicSchema reference model snapshot pinned in
+`crates/registry-linkml`, either from the shipped `household` starter
+selection (`--starter household`) or from an authored selection document
+(`--selection <file>`); without either flag the command asks which concepts
+and properties to select at the terminal. [Governed facility registration and
+transfer](registry-extensibility.md), [Native persisted field
+patterns](native-patterns.md), and [Current membership
+access](membership-access.md) describe modeling patterns a derived or starter
+project can build on.
+
 ## Pilot operator lifecycle
 
 For an offline permissions exercise, use [Review access configuration](examples/access-review/README.md).

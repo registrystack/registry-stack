@@ -1066,3 +1066,69 @@ fn package_rebuild_refuses_linked_receipts_and_public_runtime_bindings() {
     assert!(clear_package_outputs(&root).is_err());
     assert!(runtime.exists());
 }
+
+/// `dev prepare-source` is the owning operation `evidencectl source add`
+/// drives, not a step an adopter runs by hand, so `bregctl dev --help` lists
+/// the lifecycle commands only. It stays a working command behind that help.
+#[test]
+fn prepare_source_stays_runnable_while_dev_help_omits_it() {
+    let cli = <crate::Cli as clap::CommandFactory>::command();
+    let dev = cli
+        .get_subcommands()
+        .find(|command| command.get_name() == "dev")
+        .expect("bregctl publishes dev");
+    let listed: Vec<_> = dev
+        .get_subcommands()
+        .filter(|command| !command.is_hide_set())
+        .map(clap::Command::get_name)
+        .collect();
+    assert!(
+        !listed.contains(&"prepare-source"),
+        "dev help lists {listed:?}"
+    );
+    assert!(listed.contains(&"start"), "dev help lists {listed:?}");
+    assert!(
+        dev.get_subcommands()
+            .any(|command| command.get_name() == "prepare-source"),
+        "dev keeps prepare-source as a command"
+    );
+
+    let temporary = tempfile::tempdir().expect("temporary");
+    let project = fs::canonicalize(temporary.path()).expect("canonical");
+    let parsed = <crate::Cli as clap::Parser>::try_parse_from([
+        "bregctl".as_ref(),
+        "dev".as_ref(),
+        "prepare-source".as_ref(),
+        project.as_os_str(),
+    ])
+    .expect("hidden commands still parse");
+    let crate::Command::Dev(args) = parsed.command else {
+        panic!("dev prepare-source parsed");
+    };
+    // The command runs and reaches its own refusal, not a parser error.
+    let error = format!("{:#}", run(args).expect_err("no session exists here"));
+    assert!(error.contains("local state path is missing"), "{error}");
+}
+
+/// Every published starter is a project a first `bregctl dev` starts with no
+/// clients flag, so each one carries the file name that start reads.
+#[test]
+fn every_published_starter_carries_the_clients_file_a_first_start_reads() {
+    let starters = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/starters");
+    let mut covered = 0;
+    for entry in fs::read_dir(&starters).expect("the published starters") {
+        let project = entry.expect("starter entry").path().join("core");
+        if !project.is_dir() {
+            continue;
+        }
+        let resolved = clients_file(None, None, &project).expect("a first start reads the file");
+        assert_eq!(
+            resolved,
+            fs::canonicalize(project.join("dev-clients.yaml")).unwrap()
+        );
+        config::clients(&fs::read(&resolved).unwrap()).expect("starter clients parse");
+        covered += 1;
+    }
+    // Naming the starters here would hold their subjects in shipped source.
+    assert_eq!(covered, 4, "every published starter is covered");
+}

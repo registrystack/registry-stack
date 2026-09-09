@@ -91,3 +91,53 @@
   PublicSchema is the first model. The derived project is ordinary source; the
   model never becomes a runtime type, and the snapshot itself is a pinned
   external input recorded in `external/README.md`.
+- `registry.action-handler/v1` runs a project-authored Rhai script inside
+  `handle(ctx)` for typed input calculation and branching. The ABI accepts
+  scalar inputs only and refuses `crs84-point` and `structured` inputs; every
+  effect an action can produce is a declared write slot with a fixed target,
+  operation, and field list, so the script cannot reach a target, field, or
+  operation the compiler did not admit. Declared refusal codes are the only
+  way a script can decline a call before an effect commits.
+- A persisted `string` or `text` field may declare `pattern` using
+  PostgreSQL's native advanced regular-expression syntax, on PostgreSQL 15 or
+  newer. There is no second regular-expression engine in BReg; the database
+  itself enforces the pattern.
+- A read access profile may declare `membershipBoundaries`: a one-hop join
+  predicate over a configured membership entity, its key field, its principal
+  field, and its active flag. Boundaries are restricted to `get`, `lookup`,
+  `list`, `revisions`, and `snapshot`, require an authenticated profile with a
+  verified `principalClaim`, and are capped at eight per profile.
+  `products/breg/scripts/check_source_neutrality.py` no longer forbids the
+  bare words `membership` or `memberships`, since the mechanism is a generic,
+  configured boundary and not domain-specific behavior; concrete fixture
+  compounds such as `group-membership` remain forbidden. Changing this
+  blocklist is a boundary decision, recorded here and in
+  `products/breg/AGENTS.md`.
+- `evidence::resolve(capability_id, subjects)` is available to
+  `registry.action-handler/v2` handlers as a trial: a governed action may
+  consume a signed Evidence assertion as an ordinary relying party, with the
+  trusted provider, its endpoint, token, and trusted JWKS all declared by the
+  operator in runtime configuration. BReg depends unconditionally on
+  `registry-evidence-client` and `registry-evidence-verifier` for this
+  release; gating that dependency behind a Cargo feature is deferred. The
+  accepted assertion is retained for 24 hours after acceptance and erased by
+  `bregctl evidence-retention erase-expired`, following the same operator-run
+  erasure pattern already used for change-request retention and history.
+- `products/breg/starters/` holds ready-made, versioned BReg projects with
+  fixed scenarios and synthetic clients, pinned to the same PublicSchema
+  draft vocabulary snapshot as `bregctl init --from publicschema`.
+  `bregctl examples list` describes a starter's scenarios without starting
+  services or creating credentials; `bregctl examples run <scenario>
+  <project>` runs or resumes one, including a reviewed-change scenario
+  advanced one stage at a time and a first-record scenario resumable by its
+  captured attempt id.
+- `evidencectl source add` is the documented local path for connecting a
+  registry project to an Evidence project: it drives the matching-version
+  `bregctl` binary found on `PATH` through `dev prepare-source` and `dev
+  export-client`, never through a crate dependency. It reviews the connection
+  by default and performs it only with `--apply`; there is no interactive
+  confirmation. `bregctl dev
+  prepare-source` is hidden from `--help` but remains a functional command of
+  its own. `bregctl generate evidence-source`, `bregctl dev export-client` run
+  directly, and `evidencectl source import` remain the manual path for a
+  profile and client already prepared in the registry.

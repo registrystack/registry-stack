@@ -84,6 +84,10 @@ enum DevAction {
     /// Copy an explicitly selected retained local client credential pair.
     ExportClient(export_client::ExportClientArgs),
     /// Review or prepare a bounded lookup successor for a stopped retained registry.
+    ///
+    /// `evidencectl source add` drives this operation for an adopter, so the
+    /// lifecycle help lists only the commands run by hand.
+    #[command(hide = true)]
     PrepareSource(Box<prepare_source::PrepareSourceArgs>),
 }
 

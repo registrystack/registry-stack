@@ -22,10 +22,19 @@ diagnostics.
 The copied `targets/local/settings.yaml` is an explicit loopback teaching target.
 Review its authority and source connection, then set its absolute runtime paths.
 The fixed `registry` connection uses a dedicated BReg workload credential, separate
-from the Evidence caller and the registry operator. After BReg's first start, `bregctl dev export-client ../registry --client source`
-can copy its existing ID and key into this project's owner-only secrets directory.
-Pass `--client-id-file ./secrets/registry-client-id` and
-`--assertion-key-file ./secrets/registry-client-key`; normal stop/start retains this pair.
+from the Evidence caller and the registry operator. Stop the registry normally,
+then export the reviewed lookup for entity `record`, fact `status` and both
+selectors, repeating `--selector` for `by-code` and `by-registration-number`, and
+copy the existing credential pair into this project's owner-only secrets directory:
+
+```sh
+bregctl dev stop ../registry
+bregctl dev export-client ../registry --client source \
+  --client-id-file ./secrets/registry-client-id \
+  --assertion-key-file ./secrets/registry-client-key
+```
+
+Normal stop and start retains that pair.
 
 With the native binaries on PATH, create the target and import the export:
 
@@ -36,6 +45,15 @@ evidencectl source import ../exports/registry-status --project . --target ./targ
 evidencectl fixtures run --project . --target ./targets/configured
 evidencectl build --project . --target ./targets/configured --output ../candidate
 ```
+
+`evidencectl source add ./registry --project ./evidence` connects a stopped
+registry in one guided operation instead, previewing the proposed source
+authority and performing it with `--apply`. It runs the matching `bregctl` for
+the registry side, so it needs both projects on one machine and a `bregctl`
+binary of the same version on `PATH`, or named by `--bregctl-bin` or
+`BREGCTL_BIN`. Each run exposes one selector, so this two-selector example keeps
+the export above; the `default-starter/` and `named-starter/` inputs take the
+guided path.
 
 After BReg dev has published the dedicated source credentials, rehearse both live
 services with `evidencectl dev --project . --target ./targets/configured --detach`.

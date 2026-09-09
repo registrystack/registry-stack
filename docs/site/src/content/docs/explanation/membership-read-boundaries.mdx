@@ -1,0 +1,119 @@
+---
+title: Membership read boundaries
+description: How a read grant requires a current active membership record, what PostgreSQL enforces, and which operations and combinations the compiler refuses.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-08"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+A read grant can require that the caller hold a current active membership in the organization,
+program, or team responsible for a record. Memberships are ordinary governed records: an authorized
+steward creates or deactivates them through the normal mutation API, and the reader keeps the same
+identity token throughout. Base Registry Engine (BReg) compiles the requirement into the database,
+so the same model works for facility, document, or asset registries without new server code.
+
+## When to reach for one
+
+Reach for a membership boundary when the record itself does not carry the caller's identity and the
+right to read it follows from an affiliation that changes over time. When the record stores the
+authorized principal directly, an ordinary `rowBoundaries` claim comparison is the simpler
+mechanism and stays available.
+
+## What the grant declares
+
+A facility stores `organization`, a reference to an `organization` entity. A separate `membership`
+entity stores an `organization` reference, a string `principal`, and a Boolean `active`. The
+boundary joins them inside the facility's read grant:
+
+```yaml
+grants:
+  - entity: facility
+    rowBoundaries: []
+    operations: [get, list, lookup, snapshot, revisions]
+    readableFields: [label]
+    allowCount: true
+    revisionAccess: true
+    membershipBoundaries:
+      - field: organization
+        membershipEntity: membership
+        membershipKeyField: organization
+        principalField: principal
+        activeField: active
+```
+
+The two organization fields must be stored references to the same entity, `principalField` must be a
+stored string or text field, and `activeField` a stored Boolean. Only an active-lifecycle membership
+row with `active: true` and an exact match to the profile's verified principal grants access: a
+missing membership, a null value, an inactive membership, or another principal does not. The
+declared fields are authorization inputs, not an additional readable-field grant.
+
+Every listed membership boundary and every ordinary `rowBoundaries` predicate must hold. Declare
+`rowBoundaries` explicitly even when membership is the only row restriction; `rowBoundaries: []`
+adds no direct claim predicate and leaves the membership checks in force. A grant carries at most
+eight boundaries, reported as `access.membership.limit`. Configure the identity claim from a trusted
+issuer, and never accept a caller-submitted principal as authority.
+
+## What the compiler refuses
+
+The refusals keep a membership boundary from being read as broader authority than it is:
+
+| Combination | Diagnostic |
+| --- | --- |
+| An anonymous profile, or one without a verified `principalClaim` | `access.membership.authentication` |
+| Writes, actions, reviewed changes, or request lifecycle grants | `access.membership.read_only` |
+| A spatial bbox grant, which uses a separate database authority role | `access.membership.spatial_unsupported` |
+| A membership entity with a change-request lifecycle | `access.membership.request_unsupported` |
+| More than eight boundaries on one grant | `access.membership.limit` |
+
+A membership-bounded grant supports get, lookup, list, snapshot, and revisions, plus counts when it
+sets `allowCount`. It can protect the root of a relationship read path, and a target grant that
+would reach the same entity through a separate root is rejected rather than silently bypassing the
+rule. A membership source stays a leaf entity: no boundaries of its own, no change-request
+lifecycle, and no incoming relationship read paths, which is what keeps row-security policies from
+recursing. A membership entity with mandatory `rowBoundaries` is rejected at compilation, because
+the boundary carries no additional direct row requirement from that source. Use a separate,
+explicitly authorized steward profile for membership administration and record mutation, and
+`bregctl explain access` to inspect an expanded boundary beside its scopes, purposes, and ordinary
+row boundaries.
+
+## Revocation, history, and enforcement
+
+Authorization queries read current membership records in PostgreSQL. A request issued after a
+deactivation commits is denied or returns an empty authorized collection, including counts,
+lookups, and cursor continuations; a read already running can finish from the statement snapshot
+that preceded revocation. There is no token membership cache, external authorization service, or
+registry-wide authorization lock, and a read cursor replay reevaluates live membership.
+
+Snapshots and revisions compare the retained record's organization with current memberships, so
+historical membership state cannot restore access and deactivation removes access to historical
+records as well. Moving a facility to another organization does not by itself remove access to its
+older revisions from members of the previous organization: that preserves the ordinary historical
+row-boundary contract, and current-owner-only history is a different policy the boundary does not
+imply. Erased history stays unavailable.
+
+PostgreSQL enforces the predicate through generated `SECURITY INVOKER` functions and forced
+row-level security. Each generated PL/pgSQL function saves the prior authorization context, enables
+only its matching membership probe, and restores the context before returning, with an exception
+block that rolls back the local context on error. It grants no access to private membership records
+through direct endpoints or derived views, and it needs no additional database role and no
+row-level-security bypass.
+
+{/* Evidence: crates/registry-breg/src/membership.rs, access.membership.limit;
+    crates/registry-breg/src/contract.rs, MembershipBoundarySource;
+    products/breg/membership-access.md. */}
+
+## Next
+
+- [Control access per profile](../../configure/breg-access/) to author the profile, its scopes, and
+  the grant the boundary sits in.
+- [Base Registry Engine configuration reference](../../reference/breg-configuration/) for every
+  grant key a fragment names.
+- [Modeling patterns for registries](../registry-modeling-patterns/) for the record structures a
+  membership model joins.
+- [Current membership access](https://github.com/registrystack/registry-stack/blob/main/products/breg/membership-access.md)
+  for the full contract and its fixture project.

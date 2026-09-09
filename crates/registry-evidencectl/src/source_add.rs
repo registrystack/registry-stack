@@ -14,7 +14,7 @@ use std::{
 
 use anyhow::{bail, Context as _, Result};
 use clap::Args;
-use inquire::{validator::MinLengthValidator, Confirm, MultiSelect, Password, Select};
+use inquire::{validator::MinLengthValidator, MultiSelect, Password, Select};
 use registry_evidence_authoring::validate::valid_local_identifier;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -24,6 +24,9 @@ use zeroize::Zeroizing;
 use crate::{authoring, evidence_binary, scaffold, source_import, target};
 
 const MAX_PROVIDER_OUTPUT: u64 = 4 * 1024 * 1024;
+
+/// The one consent this command accepts, stated wherever a review ends.
+const APPLY_REMEDY: &str = "Re-run evidencectl source add with --apply to perform this connection.";
 
 #[derive(Debug, Args)]
 pub(crate) struct SourceAddArgs {
@@ -74,9 +77,9 @@ pub(crate) struct SourceAddArgs {
     /// Local target to extend; defaults to PROJECT/targets/local.
     #[arg(long)]
     pub target: Option<PathBuf>,
-    /// Review new choices without applying them; earlier accepted setup may recover.
+    /// Perform the reviewed connection; without it this command reviews new choices only.
     #[arg(long)]
-    pub dry_run: bool,
+    pub apply: bool,
     /// Public Base Registry Engine tooling binary; otherwise BREGCTL_BIN or bregctl on PATH.
     #[arg(long)]
     pub bregctl_bin: Option<PathBuf>,
@@ -127,7 +130,6 @@ struct Selection {
     row: Option<RowScope>,
     // An interactive row value stays in a private file for the public command.
     _row_value: Option<tempfile::NamedTempFile>,
-    prompted: bool,
 }
 
 struct RowScope {
@@ -142,11 +144,7 @@ pub(crate) fn run(args: SourceAddArgs) -> Result<ExitCode> {
         .clone()
         .or_else(|| std::env::var_os("BREGCTL_BIN").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("bregctl"));
-    let version = public_output(&binary, &["--version".into()])?;
-    let expected = format!("bregctl {}", registry_platform_buildinfo::DISPLAY_VERSION);
-    if std::str::from_utf8(&version).ok().map(str::trim) != Some(expected.as_str()) {
-        bail!("source add requires the matching bregctl version; set --bregctl-bin or BREGCTL_BIN to that binary");
-    }
+    check_public_bregctl(&binary)?;
     let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
     let report = configure(args, terminal, &mut |arguments| {
         let bytes = public_output(&binary, arguments)?;
@@ -160,6 +158,20 @@ pub(crate) fn run(args: SourceAddArgs) -> Result<ExitCode> {
     serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
     println!();
     Ok(ExitCode::SUCCESS)
+}
+
+/// The public provider commands this composition drives belong to one build,
+/// so the tooling it runs must report the version this build published.
+fn check_public_bregctl(binary: &Path) -> Result<()> {
+    let expected = format!("bregctl {}", registry_platform_buildinfo::DISPLAY_VERSION);
+    let requirement = format!(
+        "source add drives public Base Registry Engine tooling and requires {expected} on PATH; set --bregctl-bin or BREGCTL_BIN to that binary"
+    );
+    let version = public_output(binary, &["--version".into()]).context(requirement.clone())?;
+    if std::str::from_utf8(&version).ok().map(str::trim) != Some(expected.as_str()) {
+        bail!(requirement);
+    }
+    Ok(())
 }
 
 fn configure(
@@ -222,7 +234,7 @@ fn configure(
             &registry,
             &selection.client,
             &selection.source_id,
-            args.dry_run,
+            !args.apply,
             invoke,
         )?;
     }
@@ -242,12 +254,9 @@ fn configure(
         "requiresRestart": preview["requiresRestart"],
         "recoveredPriorApply": inspection.recovered_prior_apply || preview["recoveredPriorApply"] == true,
     });
-    if args.dry_run {
-        return Ok(report);
-    }
-    if selection.prompted {
+    if !args.apply {
         eprintln!(
-            "Prepare {}.{} lookup for facts [{}], scope {}, and dedicated client {}?",
+            "Reviewed a {}.{} lookup for facts [{}], scope {}, and dedicated client {}. No new choices were applied.",
             selection.entity,
             selection.selector_field,
             selection.fields.join(", "),
@@ -260,13 +269,9 @@ fn configure(
             ),
             selection.client,
         );
-        if !Confirm::new("Apply this source setup?")
-            .with_default(false)
-            .prompt()
-            .map_err(prompt_error)?
-        {
-            bail!("source setup cancelled; no new source choices were applied");
-        }
+        eprintln!("{APPLY_REMEDY}");
+        report["next"] = json!([APPLY_REMEDY]);
+        return Ok(report);
     }
 
     if !project.exists() {
@@ -343,7 +348,6 @@ fn configure(
 }
 
 fn select(args: &SourceAddArgs, inspection: &Inspection, terminal: bool) -> Result<Selection> {
-    let mut prompted = false;
     let entity_id = choose(
         args.entity.as_deref(),
         inspection
@@ -354,7 +358,6 @@ fn select(args: &SourceAddArgs, inspection: &Inspection, terminal: bool) -> Resu
         "Which registry entity supplies the facts?",
         "--entity",
         terminal,
-        &mut prompted,
     )?;
     let entity = inspection
         .entities
@@ -367,12 +370,10 @@ fn select(args: &SourceAddArgs, inspection: &Inspection, terminal: bool) -> Resu
         "Which unique identifier locates one record?",
         "--selector-field",
         terminal,
-        &mut prompted,
     )?;
     let mut fields = args.fields.clone();
     if fields.is_empty() {
         require_terminal(terminal, "--fields")?;
-        prompted = true;
         let options = field_choices(&entity.readable_fields);
         if options.is_empty() {
             bail!("this entity has no exportable scalar facts");
@@ -409,7 +410,6 @@ fn select(args: &SourceAddArgs, inspection: &Inspection, terminal: bool) -> Resu
             terminal,
             "--all-records or --row-field with --row-value-file",
         )?;
-        prompted = true;
         all_records = Select::new(
             "Which records may this source client look up?",
             vec![
@@ -432,7 +432,6 @@ fn select(args: &SourceAddArgs, inspection: &Inspection, terminal: bool) -> Resu
             "Which field bounds the allowed records?",
             "--row-field",
             terminal,
-            &mut prompted,
         )?;
         let claim = args
             .row_claim
@@ -442,7 +441,6 @@ fn select(args: &SourceAddArgs, inspection: &Inspection, terminal: bool) -> Resu
             Some(path) => fs::canonicalize(path).context("row value file must exist")?,
             None => {
                 require_terminal(terminal, "--row-value-file")?;
-                prompted = true;
                 let raw = Zeroizing::new(
                     Password::new("Allowed field value (hidden)")
                         .with_help_message("Use a nonsecret scope label. This value is stored in dev-clients.yaml.")
@@ -500,7 +498,6 @@ fn select(args: &SourceAddArgs, inspection: &Inspection, terminal: bool) -> Resu
         selector_profile,
         row,
         _row_value: row_value,
-        prompted,
     })
 }
 
@@ -533,7 +530,6 @@ fn choose(
     prompt: &str,
     flag: &str,
     terminal: bool,
-    prompted: &mut bool,
 ) -> Result<String> {
     if let Some(value) = provided {
         if options.iter().any(|(id, _)| id == value) {
@@ -545,7 +541,6 @@ fn choose(
     if options.is_empty() {
         bail!("the registry has no eligible choice for {flag}");
     }
-    *prompted = true;
     let selected = Select::new(
         prompt,
         options.iter().map(|(_, label)| label.clone()).collect(),
@@ -567,7 +562,9 @@ fn field_choices(fields: &[Field]) -> Vec<(String, String)> {
 
 fn require_terminal(terminal: bool, flag: &str) -> Result<()> {
     if !terminal {
-        bail!("source add needs {flag} without an interactive terminal; use --dry-run to review explicit choices");
+        bail!(
+            "source add needs {flag} without an interactive terminal; name every choice explicitly"
+        );
     }
     Ok(())
 }
@@ -757,7 +754,7 @@ fn check_credential_outputs(
     }
     // The public provider export owns credential identity and validity. Stage
     // its retained pair privately so preflight never fills a missing output,
-    // including during dry-run or before the user confirms an interactive setup.
+    // including while a review reports the choices it would apply.
     let temporary = tempfile::tempdir().context("staging the retained credential comparison")?;
     let temporary_path = fs::canonicalize(temporary.path())
         .context("resolving the private credential staging directory")?;
@@ -898,6 +895,7 @@ mod tests {
             "--all-records".into(),
             "--source-id".into(),
             "registry-name".into(),
+            "--apply".into(),
         ])
         .unwrap();
         let crate::Command::Source(crate::source_cli::SourceCommand::Add(args)) = cli.command
@@ -1128,12 +1126,12 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_and_missing_scope_do_not_create_projects_or_apply_provider_changes() {
+    fn a_preview_and_a_missing_scope_do_not_create_projects_or_apply_provider_changes() {
         let root = tempfile::tempdir().unwrap();
         let mut provider = Provider::new();
         let project = root.path().join("evidence");
         let mut selected = args(root.path(), &project);
-        selected.dry_run = true;
+        selected.apply = false;
         let report = configure(selected, false, &mut |a| {
             let mut report = provider.invoke(a)?;
             report["recoveredPriorApply"] = json!(!a.iter().any(|arg| arg == "--entity"));
@@ -1155,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_accepts_a_clean_project_without_secrets_but_apply_still_requires_them() {
+    fn a_preview_accepts_a_clean_project_without_secrets_but_apply_still_requires_them() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("evidence");
         fs::create_dir_all(project.join("questions")).unwrap();
@@ -1164,7 +1162,7 @@ mod tests {
         fs::write(project.join("evidence-project.yaml"), marker).unwrap();
         let mut provider = Provider::new();
         let mut preview = args(root.path(), &project);
-        preview.dry_run = true;
+        preview.apply = false;
         let report = configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
         assert_eq!(report["status"], "preview");
         assert_eq!(
@@ -1217,7 +1215,7 @@ mod tests {
         selected.all_records = false;
         selected.row_field = Some("group".into());
         selected.row_value_file = Some(value_file);
-        selected.dry_run = true;
+        selected.apply = false;
         let mut provider = Provider::new();
         let report = configure(selected, false, &mut |a| provider.invoke(a)).unwrap();
         assert_eq!(
@@ -1323,11 +1321,11 @@ mod tests {
             fs::remove_file(project.join(format!("secrets/registry-{suffix}"))).unwrap();
         }
 
-        for dry_run in [false, true] {
+        for apply in [true, false] {
             provider.calls.clear();
             let mut selected = args(root.path(), &project);
             selected.source_id = Some("registry-other".into());
-            selected.dry_run = dry_run;
+            selected.apply = apply;
             let error = configure(selected, false, &mut |a| provider.invoke(a)).unwrap_err();
             assert!(error.to_string().contains("connection"));
             assert!(provider
@@ -1365,7 +1363,7 @@ mod tests {
         provider.calls.clear();
         let mut preview = args(root.path(), &project);
         preview.source_id = Some("third-source".into());
-        preview.dry_run = true;
+        preview.apply = false;
         let error = configure(preview, false, &mut |a| provider.invoke(a)).unwrap_err();
         assert!(error.to_string().contains("connection"));
         assert!(provider
@@ -1387,10 +1385,10 @@ mod tests {
         .unwrap();
         let key_path = project.join("secrets/registry-client-key");
         fs::write(&key_path, b"different-private-key-canary").unwrap();
-        for dry_run in [false, true] {
+        for apply in [true, false] {
             provider.calls.clear();
             let mut selected = args(root.path(), &project);
-            selected.dry_run = dry_run;
+            selected.apply = apply;
             let error = configure(selected, false, &mut |a| provider.invoke(a)).unwrap_err();
             assert!(error.to_string().contains("choose a fresh --connection"));
             assert!(!format!("{error:#}").contains("different-private-key-canary"));
@@ -1407,7 +1405,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_credentials_stay_missing_in_dry_run_and_exact_retry_restores_them() {
+    fn partial_credentials_stay_missing_in_a_preview_and_exact_retry_restores_them() {
         for missing_suffixes in [
             vec!["client-id"],
             vec!["client-key"],
@@ -1432,7 +1430,7 @@ mod tests {
             provider.calls.clear();
 
             let mut preview = args(root.path(), &project);
-            preview.dry_run = true;
+            preview.apply = false;
             let report = configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
             assert_eq!(report["status"], "preview");
             assert!(
@@ -1563,5 +1561,206 @@ mod tests {
         assert_eq!(selected.client, "chosen-source");
         assert_eq!(selected.access_profile, "chosen-source");
         assert_eq!(selected.selector_profile, "chosen-source");
+    }
+
+    #[test]
+    fn a_preview_is_the_default_and_apply_is_the_only_consent() {
+        let root = tempfile::tempdir().unwrap();
+        let registry = fs::canonicalize(root.path()).unwrap();
+        let project = root.path().join("evidence");
+        let cli = crate::Cli::try_parse_from([
+            OsString::from("evidencectl"),
+            "source".into(),
+            "add".into(),
+            registry.as_os_str().into(),
+            "--project".into(),
+            project.as_os_str().into(),
+            "--entity".into(),
+            "record".into(),
+            "--selector-field".into(),
+            "code".into(),
+            "--fields".into(),
+            "name".into(),
+            "--all-records".into(),
+        ])
+        .unwrap();
+        let crate::Command::Source(crate::source_cli::SourceCommand::Add(preview)) = cli.command
+        else {
+            panic!("source add parsed");
+        };
+        assert!(!preview.apply, "source add reviews choices without --apply");
+        let mut provider = Provider::new();
+        let report = configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
+        assert_eq!(report["status"], "preview");
+        assert_eq!(report["next"], json!([APPLY_REMEDY]));
+        assert!(APPLY_REMEDY.contains("--apply"));
+        assert!(!project.exists());
+        assert!(provider.clients.is_empty());
+        assert!(provider
+            .calls
+            .iter()
+            .flatten()
+            .all(|argument| argument != "--apply"));
+        // The withdrawn review flag must not become an accepted unknown argument.
+        assert!(crate::Cli::try_parse_from([
+            "evidencectl",
+            "source",
+            "add",
+            "registry",
+            "--all-records",
+            "--dry-run",
+        ])
+        .is_err());
+
+        let applied = configure(args(&registry, &project), false, &mut |a| {
+            provider.invoke(a)
+        })
+        .unwrap();
+        assert_eq!(applied["status"], "prepared");
+        assert!(provider
+            .calls
+            .iter()
+            .flatten()
+            .any(|argument| argument == "--apply"));
+    }
+
+    #[test]
+    fn every_bregctl_invocation_names_the_public_flags_source_add_declares() {
+        let root = tempfile::tempdir().unwrap();
+        let registry = fs::canonicalize(root.path()).unwrap();
+        let project = root.path().join("evidence");
+        let public = |command: &str, operation: &str| -> Vec<OsString> {
+            vec![
+                "--format".into(),
+                "json".into(),
+                command.into(),
+                operation.into(),
+                registry.as_os_str().into(),
+            ]
+        };
+        let mut prepare = public("dev", "prepare-source");
+        for (flag, value) in [
+            ("--entity", "record"),
+            ("--selector-field", "code"),
+            ("--readable-fields", "name"),
+            ("--client", "registry-name"),
+            ("--access-profile", "registry-name"),
+            ("--selector-profile", "registry-name"),
+            ("--source-id", "registry-name"),
+            ("--connection", "registry"),
+        ] {
+            add_pair(&mut prepare, flag, value);
+        }
+        prepare.push("--all-records".into());
+
+        let mut provider = Provider::new();
+        let mut preview = args(&registry, &project);
+        preview.apply = false;
+        configure(preview, false, &mut |a| provider.invoke(a)).unwrap();
+        assert_eq!(
+            provider.calls,
+            vec![public("dev", "prepare-source"), prepare.clone()],
+            "a preview inspects the registry and reviews one preparation"
+        );
+
+        provider.calls.clear();
+        configure(args(&registry, &project), false, &mut |a| {
+            provider.invoke(a)
+        })
+        .unwrap();
+        let project = fs::canonicalize(&project).unwrap();
+        let mut applied = prepare.clone();
+        applied.push("--apply".into());
+        let export = PathBuf::from(provider.calls[3].last().unwrap());
+        assert!(export.is_absolute() && export.file_name().unwrap() == "source");
+        let mut generate = public("generate", "evidence-source");
+        for (flag, value) in [
+            ("--entity", "record"),
+            ("--access-profile", "registry-name"),
+            ("--selector", "registry-name"),
+            ("--fields", "name"),
+            ("--source-id", "registry-name"),
+            ("--connection", "registry"),
+        ] {
+            add_pair(&mut generate, flag, value);
+        }
+        add_pair(&mut generate, "--output", &export);
+        let mut export_client = public("dev", "export-client");
+        add_pair(&mut export_client, "--client", "registry-name");
+        add_pair(
+            &mut export_client,
+            "--client-id-file",
+            project.join("secrets/registry-client-id"),
+        );
+        add_pair(
+            &mut export_client,
+            "--assertion-key-file",
+            project.join("secrets/registry-client-key"),
+        );
+        assert_eq!(
+            provider.calls,
+            vec![
+                public("dev", "prepare-source"),
+                prepare,
+                applied,
+                generate,
+                export_client,
+            ],
+            "an applying run drives exactly these public commands"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_different_bregctl_is_refused_by_name_and_expected_version() {
+        let root = tempfile::tempdir().unwrap();
+        let expected = format!("bregctl {}", registry_platform_buildinfo::DISPLAY_VERSION);
+        let script = |name: &str, reported: &str| {
+            let path = root.path().join(name);
+            fs::write(&path, format!("#!/bin/sh\necho '{reported}'\n")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            path
+        };
+        for binary in [
+            root.path().join("absent-bregctl"),
+            script("other-bregctl", "bregctl 0.0.0-other"),
+            script(
+                "other-tool",
+                &format!("evidence {}", registry_platform_buildinfo::DISPLAY_VERSION),
+            ),
+        ] {
+            let error = format!("{:#}", check_public_bregctl(&binary).unwrap_err());
+            assert!(error.contains(&expected), "{error}");
+            assert!(error.contains("--bregctl-bin"), "{error}");
+            assert!(error.contains("BREGCTL_BIN"), "{error}");
+        }
+        check_public_bregctl(&script("bregctl", &expected)).unwrap();
+    }
+
+    #[test]
+    fn the_long_help_states_the_matching_bregctl_requirement() {
+        let command = crate::command();
+        let add = command
+            .get_subcommands()
+            .find(|command| command.get_name() == "source")
+            .expect("evidencectl publishes source")
+            .get_subcommands()
+            .find(|command| command.get_name() == "add")
+            .expect("source publishes add");
+        let long = add
+            .get_long_about()
+            .expect("source add states its tooling requirement")
+            .to_string();
+        assert!(long.contains("bregctl") && long.contains("PATH"), "{long}");
+        assert!(long.contains("--apply"), "{long}");
+        let apply = add
+            .get_arguments()
+            .find(|argument| argument.get_long() == Some("apply"))
+            .expect("source add publishes --apply");
+        assert!(!apply.is_hide_set());
+        assert!(
+            add.get_arguments()
+                .all(|argument| argument.get_long() != Some("dry-run")),
+            "the withdrawn review flag must be absent"
+        );
     }
 }

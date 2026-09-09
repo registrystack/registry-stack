@@ -312,7 +312,7 @@ async function loadReviewMetadata(docsRoot, sourceVersion, sourceDigest) {
   return validateReviewMetadata(metadata, sourceVersion, sourceDigest);
 }
 
-async function executeCatalog(repoRoot) {
+export async function executeCatalog(repoRoot) {
   const environment = {
     ...process.env,
     CARGO_INCREMENTAL: '0',

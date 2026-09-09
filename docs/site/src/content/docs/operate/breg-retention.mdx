@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-08"
 doc_type: how-to
 persona:
   - operator
@@ -17,9 +17,10 @@ You operate an active registry under an institutional retention policy, hold the
 credential, and need to erase retained history or change-request detail, restore snapshot coverage
 after an erasure, or prove, copy, and prune the audit journal. At the end of this page each of those
 maintenance actions has run once, under the interlock the migration authority uses, with a chained
-audit record and a report that carries counts rather than values. Three of the commands are
-irreversible: `history erase`, `request-retention erase`, and `audit prune` without `--dry-run`
-remove bytes that nothing restores, and the next section says exactly what each one destroys.
+audit record and a report that carries counts rather than values. Four of the commands are
+irreversible: `history erase`, `request-retention erase`, `evidence-retention erase-expired`, and
+`audit prune` without `--dry-run` remove bytes that nothing restores, and the next section says
+exactly what each one destroys.
 
 ## What cannot be undone
 
@@ -27,6 +28,7 @@ remove bytes that nothing restores, and the next section says exactly what each 
 | --- | --- | --- |
 | `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, and the audit journal. |
 | `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, idempotency results, request revision snapshots, outbox payloads, and intake rows. | The value-free lifecycle rows of that request, and record history. |
+| `evidence-retention erase-expired` | The signed Evidence responses and verification context a governed action retained, once their 24-hour window has closed. | Every retained assertion still inside its window, and the action receipts that used them. |
 | `audit prune` | The longest run of audit records at the start of the chain whose creation time precedes the boundary you give. | Every later record, and one retention record stating what left the chain. |
 
 `history rebaseline`, `request-retention list`, `request-retention dry-run`, `audit verify`, and
@@ -196,6 +198,49 @@ history.
     crates/registry-bregctl/src/lib.rs, RequestRetentionCommand, RequestRetentionListArgs,
     and RequestRetentionExactArgs. */}
 
+## Erase expired Evidence uses
+
+A governed action that calls a verified Evidence capability retains what it accepted. Under handler
+ABI `registry.action-handler/v2`, each accepted assertion is stored beside the applied action: the
+signed response bytes, the verification context, the capability, the contract fingerprint, the trust
+binding, the assertion identifier, its issue, observation, and validity times, the moment the
+registry accepted it, and the declared maximum observation age. Subject and selector values are
+never retained. The runtime role holds an insert-only grant on that state, so no request path reads
+or deletes what it wrote.
+
+This is a separate retention scope with its own clock. Each retained assertion expires 24 hours
+after the registry accepted it, erasing record history does not cover it, and nothing removes the
+expired rows on its own. Schedule the erasure on the operator host, under the migration authority
+and the exclusive registry lock the rest of this page uses.
+
+:::caution[Erased assertions cannot be restored]
+The erasure removes the retained signed responses and verification context for good, and takes no
+copy first. Export what the institution's retention policy requires to keep before the window
+closes. The action receipts that used the assertions stay replayable, so the registry can still
+account for what it decided.
+:::
+
+```sh
+bregctl evidence-retention erase-expired \
+  --runtime-config /etc/breg/runtime.yaml \
+  --before 2026-01-01T00:00:00Z
+```
+
+The command removes every row whose 24-hour window closed at or before the cutoff, and no row still
+inside its window: a cutoff later than the database transaction time reaches only expired material,
+and a cutoff in the future is refused. Both paths must be absolute. The report carries a count and
+no values. The run verifies the expected registry identity, catalog, and readiness while it holds
+the registry transaction lock through the deletion, and the configured runtime credential cannot
+perform the deletion at all. Unlike `request-retention erase`, which erases one exact proposal
+version, this erasure works from the time boundary alone.
+
+{/* Evidence: crates/registry-breg/src/action_evidence_client.rs,
+    ACTION_EVIDENCE_RETENTION_SECONDS;
+    crates/registry-breg/src/action_evidence_maintenance.rs, erase_expired;
+    crates/registry-breg/src/mutation/action.rs, erase_expired_action_evidence;
+    crates/registry-bregctl/src/lib.rs, EvidenceRetentionEraseArgs;
+    products/breg/immediate-actions.md. */}
+
 ## Keep the audit journal
 
 Every write path appends one hash-chained audit record, and the journal keeps its own head. The
@@ -269,6 +314,7 @@ retention record to the journal, so the chain states what left it.
 | `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
 | `history.erase.request_file.refused` or `history.rebaseline.request_file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
+| `evidence-retention erase-expired` removes nothing | No retained assertion has passed its 24-hour window yet, or the cutoff precedes every expiry. The count is the whole report. |
 | `audit verify` reports `audit.chain.broken` or `audit.head.mismatch` | The journal no longer links to its head. Export what is still reachable, keep the database as it is, and treat it as an integrity incident. |
 | `audit verify`, `audit export`, or `audit prune` reports `audit.envelope.invalid` | A reachable journal record holds an envelope no reader accepts. Nothing is pruned. Keep the database as it is and treat it as an integrity incident, like a broken chain. |
 | `audit verify`, `audit export`, or `audit prune` reports `audit.records.unreachable` | Records exist in the journal that the chain from the head does not reach. Nothing is pruned. Keep the database as it is and treat it as an integrity incident, like a broken chain. |

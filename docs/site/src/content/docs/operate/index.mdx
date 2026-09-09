@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-08"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -54,13 +54,13 @@ The signed checksum chain that does, and the checks behind it, are recorded in
 Replace `| bash` with `| less` to read the installer before you run it on a host
 you operate.
 For a higher-assurance installation, follow
-[release verification](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md)
+[release verification](https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md)
 for the pinned tag, then rerun the installer with `RELAY_ASSET_DIR` pointing at
 the verified directory.
 `RELAY_INSTALL_DIR` selects the install directory; the default is
 `~/.local/bin`.
 
-The container image is `ghcr.io/registrystack/relay:v0.21.0`, built on
+The container image is `ghcr.io/registrystack/relay:v0.26.1`, built on
 distroless nonroot. It exposes port 8080, runs `relay serve --runtime
 /etc/relay/runtime.yaml` by default, and probes itself with `relay healthcheck`.
 

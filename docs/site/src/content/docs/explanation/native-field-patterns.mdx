@@ -1,0 +1,123 @@
+---
+title: Native field patterns
+description: How a persisted string or text field declares a PostgreSQL regular expression, what the generated CHECK constraint guarantees, and what changing one costs.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-08"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+A persisted `string` or `text` field can declare `pattern`, a regular expression in PostgreSQL's
+native advanced syntax. The compiler turns it into a named database CHECK constraint, so the rule
+holds for every writer of the current row: direct CRUD, atomic batches, immediate actions, reviewed
+application, and authorized SQL. Base Registry Engine (BReg) carries no second regular-expression
+engine, and PostgreSQL 15 stays the minimum version.
+
+```yaml
+fields:
+  - id: identifier
+    type: string
+    maxLength: 13
+    required: true
+    classification: restricted
+    pattern: '^[0-9]{13}$'
+```
+
+## When to reach for one
+
+Declare a pattern when a stored format has to hold whatever path a value arrives by, and when a
+mistyped value is a data-integrity problem rather than a policy decision. The example above accepts
+exactly 13 ASCII digits, preserves a leading zero, and rejects whitespace, Unicode digits, and
+embedded or trailing newlines.
+
+A pattern is not a checksum and does not identify a national identifier scheme. When acceptance
+depends on another record, an immediate action's `requires` guard or a
+[governed registry action](../governed-registry-actions/) is the mechanism, because a CHECK constraint
+sees one row.
+
+## What the rule means
+
+The native `~` operator uses the authored expression unchanged. There is no implicit anchoring, case
+conversion, or flag rewriting, so an unanchored expression matches a substring and embedded native
+options keep their PostgreSQL meanings. SQL null passes the check wherever the field or governed
+request-detail retention permits null, an empty string is matched normally, and an empty pattern is
+valid syntax.
+
+Only a persisted `string` or `text` field can carry one. Derived fields, action inputs, and other
+field types are refused with `field.pattern.type_unsupported`. Runtime callers supply values, never
+expressions.
+
+Caller-filtered operation metadata exposes the expression under `storageValidation` with
+`kind: postgresql-are`. Generated JSON Schema and OpenAPI value schemas publish no standard
+`pattern`, because their regular-expression semantics differ from PostgreSQL's.
+
+## Fixed bounds
+
+An expression is limited to 4,096 UTF-8 bytes and cannot contain NUL; exceeding either reports
+`field.pattern.bounds_invalid`. Values keep the field bounds they already had: `string.maxLength` is
+at most 1,000,000 characters and `text.maxLength` at most 10,000,000. The HTTP request,
+transaction, and database statement deadlines bound native evaluation, and a pathological expression
+can exhaust them, so schema-test each expression against representative values before activation.
+
+## Authoring and rejection
+
+`bregctl check <project>` performs offline structural checks and generates safely quoted SQL. It
+cannot establish PostgreSQL expression syntax or existing-data conformance, so it reports
+`field.pattern.unverified_offline` at each authored field path. Those findings are advisory unless
+`--deny-findings` is selected. Schema-test and activation report `field.pattern.syntax_invalid` at
+`entities[<id>].fields[<id>].pattern`, using authored identifiers and a repair hint that excludes
+the expression and the raw database diagnostic.
+
+A rejected write returns `409 mutation.conflict`. Direct writes and immediate actions name the
+authored entity and field admitted by their write contract; change-request application returns the
+generic conflict, because application authority does not grant target-field disclosure. No response
+includes stored values, physical table names, constraint names, or raw PostgreSQL diagnostics.
+Repair the submitted value before retrying: `409` here is not a transient condition.
+
+A fixture journey asserts the same rejection with the authored identifiers, which are allowed
+together only for this conflict expectation:
+
+```yaml
+expect:
+  outcome: refusal
+  status: 409
+  problemCode: mutation.conflict
+  entityId: person
+  fieldId: identifier
+```
+
+## What changing one costs
+
+Adding a rule emits `field_pattern_added`, classified `compatible_additive`. The classification
+permits the compiler-owned DDL path; it does not promise that existing rows satisfy the rule.
+PostgreSQL validates every existing row before the addition commits, under an `ACCESS EXCLUSIVE`
+table lock and a full scan, and a failure keeps the old package active, pins the target in
+maintenance, and reports `field.pattern.existing_rows_invalid`. Size
+`operationalTimeouts.migrationStatementMilliseconds` for lock acquisition plus the validation scan,
+and use `migrationLockMilliseconds` when a shorter separate lock wait is useful.
+
+Changing or removing a rule emits `field_pattern_changed` or `field_pattern_removed`, classified
+`destructive_or_irreversible` under the reviewed migration contract. That includes loosening: the
+compiler does not attempt to prove containment between two regular-expression languages. Each
+pattern check keeps a stable identity derived from its entity and field, independent of the
+expression, and its physical-name inventory member is `pattern:<field-id>`.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, field.pattern.bounds_invalid;
+    crates/registry-breg/src/generated_ddl.rs, field_pattern_constraint_name;
+    products/breg/native-patterns.md. */}
+
+## Next
+
+- [Author a registry project](../../configure/breg/) to declare the field a pattern protects.
+- [Base Registry Engine configuration reference](../../reference/breg-configuration/) for the field
+  keys a fragment names.
+- [Test with journeys](../../configure/breg-journeys/) to assert the refusal before a database
+  exists.
+- [Change an active registry](../../operate/breg-changes/) for the reviewed migration a changed or
+  removed pattern requires.
+- [Native persisted field patterns](https://github.com/registrystack/registry-stack/blob/main/products/breg/native-patterns.md)
+  for the full contract, including recovery from a failed activation.

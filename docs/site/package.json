@@ -32,6 +32,7 @@
     "check:draft-links": "node scripts/check-draft-links.mjs",
     "check:content": "node scripts/check-doc-frontmatter.mjs",
     "check:cli-reference": "node scripts/generate-cli-reference.mjs --check",
+    "cli-reference:digest": "node scripts/cli-reference-digest.mjs",
     "check:cutover": "node scripts/check-current-doc-cutover.mjs",
     "check:notary-surface": "node scripts/check-notary-surface.mjs",
     "check:svg": "node scripts/check-svg-a11y.mjs",

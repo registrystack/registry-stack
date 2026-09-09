@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-06"
+last_reviewed: "2026-09-08"
 doc_type: how-to
 persona:
   - operator
@@ -22,7 +22,8 @@ This page covers the deploy phase only: from an empty PostgreSQL server to the f
 package. The sibling pages take over once the registry serves:
 [Bind webhook receivers](../breg-webhooks/) for the destinations the project declares,
 [Change an active registry](../breg-changes/) for successor packages,
-[Retain, erase, and audit](../breg-retention/) for history and the audit journal, and
+[Retain, erase, and audit](../breg-retention/) for history, retained Evidence uses, and the audit
+journal, and
 [Move data in bulk](../breg-data/) for imports and exports.
 
 Three roles take part. The author prepares a package from the project. A signer approves the exact
@@ -256,6 +257,7 @@ configured prefix and never derive their authority from request headers.
 | `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. |
 | `audit` and `cursor` | The key that chains the audit journal and the secret that signs pagination cursors. Loss of either key invalidates existing chains or cursors. |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
+| `evidenceProviders` | One binding per Evidence provider the package declares, keyed by provider ID: `baseUrl`, `trustBindingId`, secret references for the token and trusted JWKS, `revokedKeyIds`, and an optional `caBundleRef`. The script cannot replace them; see [Governed registry actions](../../explanation/governed-registry-actions/). |
 | `operationalTimeouts` | Optional HTTP request, record lock, migration lock, migration statement, and shutdown grace bounds. |
 | `metricsListener` | Optional second binding, private to the operator, that serves `GET /metrics`; see [Scrape metrics](#scrape-metrics). |
 
@@ -703,8 +705,8 @@ behind an upstream rate limit.
   package refuses to activate until every destination is bound.
 - [Change an active registry](../breg-changes/) for the successor package, its diff, and its
   migration evidence.
-- [Retain, erase, and audit](../breg-retention/) for the maintenance commands that erase history
-  and prove the audit journal.
+- [Retain, erase, and audit](../breg-retention/) for the maintenance commands that erase history,
+  erase expired Evidence uses, and prove the audit journal.
 - [Harden a production deployment](../../security/hardening-checklist/) for the controls around
   the listener, the secret root, and the migration credential.
 - [Evidence deployment targets](https://github.com/registrystack/registry-stack/tree/v0.26.1/products/evidence/reference/deployment-targets)

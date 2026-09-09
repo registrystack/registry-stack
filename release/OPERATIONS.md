@@ -207,7 +207,11 @@ git switch -c release/v<version> origin/main
 
 Update and commit the version metadata, workspace package versions in current
 lockfiles, changelogs, release notes, manifest, candidate docset, and generated
-inputs.
+inputs. The version bump changes the value the CLI reference collector reports,
+so re-stamp `docs/site/src/data/cli-reference.yaml` in the same commit: run
+`npm run cli-reference:digest` from `docs/site` and record the printed
+`reviewed_source_version` and `reviewed_catalog_sha256` with a fresh
+`last_reviewed` date, or the docs build refuses the release tree.
 Prepare the documentation archive lock from those committed inputs as described
 below. `registry-release prepare` validates the prepared tree; it does not edit
 these files and cannot pass until the new archive lock exists. Do not mix
