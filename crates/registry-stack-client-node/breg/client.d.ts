@@ -224,6 +224,53 @@ export interface BRegOperationDescriptor {
   }
 }
 
+export type BRegAttachmentVerificationStatus = 'notRequired' | 'pending' | 'approved' | 'rejected'
+
+/** Engine-owned state of one filled slot, read from a record's domain data. */
+export interface BRegAttachmentState {
+  readonly slotIdentifier: string
+  readonly proposalVersion: SafeInteger
+  readonly erased: boolean
+  readonly byteSize: SafeInteger
+  readonly sha256: string
+  readonly contentType: string | null
+  readonly uploadedAt: string | null
+  readonly uploadedBy: string | null
+  readonly verificationStatus: BRegAttachmentVerificationStatus | null
+}
+
+/** What one record projection says about one slot. */
+export type BRegAttachmentSlotValue =
+  | { readonly kind: 'not_selected'; readonly value: null }
+  | { readonly kind: 'empty'; readonly value: null }
+  | { readonly kind: 'filled'; readonly value: BRegAttachmentState }
+
+/** Opaque bytes already accepted by one slot's served upload policy. */
+export declare class BRegAttachmentUpload {
+  private constructor()
+  private readonly __opaque: void
+  readonly contentType: string
+  readonly byteSize: SafeInteger
+}
+
+/** Opaque governed attachment slot selected from metadata fetched by this client source. */
+export declare class BRegAttachmentSlot {
+  private constructor()
+  private readonly __opaque: void
+  readonly slotIdentifier: string
+  readonly entityIdentifier: string
+  readonly accessProfile: string
+  readonly requiredForSubmit: boolean
+  readonly maximumBytes: SafeInteger
+  readonly contentTypes: ReadonlyArray<string>
+  readonly canDownload: boolean
+  readonly canUpload: boolean
+  readonly canRemove: boolean
+  acceptsContentType(contentType: string): boolean
+  prepareUpload(contentType: string, body: Buffer): BRegAttachmentUpload
+  valueIn(record: RecordEnvelope, format?: RecordFormat | null): BRegAttachmentSlotValue
+}
+
 /** Opaque write authority selected from metadata fetched by this client source. */
 export declare class BRegCreateBinding {
   private constructor()
@@ -267,6 +314,7 @@ export declare class BRegMetadata {
   selectCreate(operationIdentifier: string, expectedProfile: string): BRegCreateBinding
   selectPatch(operationIdentifier: string, expectedProfile: string): BRegPatchBinding
   selectLifecycle(entityIdentifier: string, expectedProfile: string): BRegLifecycleAuthority
+  selectAttachments(entityIdentifier: string, expectedProfile: string): ReadonlyArray<BRegAttachmentSlot>
 }
 
 export interface BaseRegistryClientFailure extends Error {
@@ -304,12 +352,17 @@ export declare class BaseRegistryClient {
   createRecord(binding: BRegCreateBinding, data: JsonObject, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: ReadonlyArray<PatchOperation | RemovePatchOperation>, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   lifecycleActions(authority: BRegLifecycleAuthority, record: RecordEnvelope, format?: RecordFormat | null): ReadonlyArray<BRegLifecycleAction>
+  uploadAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, upload: BRegAttachmentUpload, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
+  downloadAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, proposalVersion: SafeInteger): Promise<RawOutcome>
+  deleteAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   getRecordJson(entityRoute: string, recordIdentifier: string, options?: RecordOptions | null): Promise<JsonOutcome>
   listRecordsJson(entityRoute: string, options?: ListOptions | null): Promise<JsonOutcome>
   continueListJson(continuation: ListContinuation): Promise<JsonOutcome>
   lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | null, options?: RecordOptions | null): Promise<JsonOutcome>
   createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
   patchRecordJson(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operationsJson: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
+  uploadAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, upload: BRegAttachmentUpload, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
+  deleteAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
   lifecycleActionsJson(authority: BRegLifecycleAuthority, recordJson: string, format?: RecordFormat | null): ReadonlyArray<BRegLifecycleAction>
   executeLifecycleActionJson(action: BRegLifecycleAction, idempotencyKey: string): Promise<JsonOutcome>
   executeLifecycleAction(action: BRegLifecycleAction, idempotencyKey: string): Promise<CompleteOutcome<LifecycleReceipt>>

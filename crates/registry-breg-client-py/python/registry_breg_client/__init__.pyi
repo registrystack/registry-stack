@@ -1,4 +1,4 @@
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Sequence, TypedDict
 
 JsonScalar = str | int | float | bool | None
 JsonValue = JsonScalar | list["JsonValue"] | tuple["JsonValue", ...] | dict[str, "JsonValue"]
@@ -16,6 +16,57 @@ class BaseRegistryClientError(Exception):
 class BRegCreateBinding: ...
 class BRegPatchBinding: ...
 class BRegLifecycleAuthority: ...
+
+AttachmentVerificationStatus = Literal["notRequired", "pending", "approved", "rejected"]
+
+class BRegAttachmentState(TypedDict):
+    slot_identifier: str
+    proposal_version: int
+    erased: bool
+    byte_size: int
+    sha256: str
+    content_type: str | None
+    uploaded_at: str | None
+    uploaded_by: str | None
+    verification_status: AttachmentVerificationStatus | None
+
+class BRegAttachmentSlotValue(TypedDict):
+    kind: Literal["not_selected", "empty", "filled"]
+    value: BRegAttachmentState | None
+
+class BRegAttachmentUpload:
+    @property
+    def content_type(self) -> str: ...
+    @property
+    def byte_size(self) -> int: ...
+
+class BRegAttachmentSlot:
+    @property
+    def slot_identifier(self) -> str: ...
+    @property
+    def entity_identifier(self) -> str: ...
+    @property
+    def access_profile(self) -> str: ...
+    @property
+    def required_for_submit(self) -> bool: ...
+    @property
+    def maximum_bytes(self) -> int: ...
+    @property
+    def content_types(self) -> list[str]: ...
+    @property
+    def can_download(self) -> bool: ...
+    @property
+    def can_upload(self) -> bool: ...
+    @property
+    def can_remove(self) -> bool: ...
+    def accepts_content_type(self, content_type: str) -> bool: ...
+    def prepare_upload(self, content_type: str, body: bytes) -> BRegAttachmentUpload: ...
+    def value_in(
+        self,
+        record: dict[str, JsonValue],
+        *,
+        format: RecordFormat = "json",
+    ) -> BRegAttachmentSlotValue: ...
 
 class BRegLifecycleAction:
     def with_reason(self, reason: str) -> BRegLifecycleAction: ...
@@ -44,6 +95,7 @@ class BRegMetadata:
     def select_create(self, operation_identifier: str, expected_profile: str) -> BRegCreateBinding: ...
     def select_patch(self, operation_identifier: str, expected_profile: str) -> BRegPatchBinding: ...
     def select_lifecycle(self, entity_identifier: str, expected_profile: str) -> BRegLifecycleAuthority: ...
+    def select_attachments(self, entity_identifier: str, expected_profile: str) -> Sequence[BRegAttachmentSlot]: ...
 
 class BaseRegistryClient:
     def __init__(
@@ -120,5 +172,30 @@ class BaseRegistryClient:
         format: RecordFormat = "json",
     ) -> Sequence[BRegLifecycleAction]: ...
     def execute_lifecycle_action(self, action: BRegLifecycleAction, idempotency_key: str) -> dict[str, Any]: ...
+    def upload_attachment(
+        self,
+        slot: BRegAttachmentSlot,
+        record_identifier: str,
+        etag: str,
+        upload: BRegAttachmentUpload,
+        idempotency_key: str,
+        *,
+        format: RecordFormat = "json",
+    ) -> dict[str, Any]: ...
+    def download_attachment(
+        self,
+        slot: BRegAttachmentSlot,
+        record_identifier: str,
+        proposal_version: int,
+    ) -> dict[str, Any]: ...
+    def delete_attachment(
+        self,
+        slot: BRegAttachmentSlot,
+        record_identifier: str,
+        etag: str,
+        idempotency_key: str,
+        *,
+        format: RecordFormat = "json",
+    ) -> dict[str, Any]: ...
 
 __version__: str

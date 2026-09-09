@@ -141,8 +141,10 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['getRecord', [2]], ['listRecords', [1]], ['continueList', [0], [0]],
   ['lookupRecord', [2, 3]], ['createRecord', [1], [1]],
   ['patchRecord', [3], [3]], ['executeLifecycleAction'],
+  ['uploadAttachment'], ['downloadAttachment'], ['deleteAttachment'],
   ['getRecordJson', [2]], ['listRecordsJson', [1]], ['continueListJson', [0], [0]],
   ['lookupRecordJson', [3]], ['createRecordJson'], ['patchRecordJson'], ['executeLifecycleActionJson'],
+  ['uploadAttachmentJson'], ['deleteAttachmentJson'],
 ]) wrapAsync(method, jsonIndexes, requiredIndexes);
 
 const withReason = native.BRegLifecycleAction.prototype.withReason;
@@ -171,7 +173,27 @@ native.BaseRegistryClient.prototype.lifecycleActions = function (...args) {
   }
 };
 
-for (const name of ['selectCreate', 'selectPatch', 'selectLifecycle']) {
+const valueIn = native.BRegAttachmentSlot.prototype.valueIn;
+native.BRegAttachmentSlot.prototype.valueIn = function (...args) {
+  try {
+    return valueIn.apply(this, sanitizeArguments(args, new Set([0]), new Set([0])));
+  } catch (error) {
+    throw normalize(error, 'invalid_request');
+  }
+};
+
+for (const name of ['prepareUpload', 'acceptsContentType']) {
+  const original = native.BRegAttachmentSlot.prototype[name];
+  native.BRegAttachmentSlot.prototype[name] = function (...args) {
+    try {
+      return original.apply(this, args);
+    } catch (error) {
+      throw normalize(error, 'invalid_request');
+    }
+  };
+}
+
+for (const name of ['selectCreate', 'selectPatch', 'selectLifecycle', 'selectAttachments']) {
   const original = native.BRegMetadata.prototype[name];
   native.BRegMetadata.prototype[name] = function (...args) {
     try {
@@ -200,4 +222,6 @@ module.exports = {
   BRegPatchBinding: native.BRegPatchBinding,
   BRegLifecycleAuthority: native.BRegLifecycleAuthority,
   BRegLifecycleAction: native.BRegLifecycleAction,
+  BRegAttachmentSlot: native.BRegAttachmentSlot,
+  BRegAttachmentUpload: native.BRegAttachmentUpload,
 };

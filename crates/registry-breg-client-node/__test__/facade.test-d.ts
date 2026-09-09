@@ -1,5 +1,7 @@
 import {
   BaseRegistryClient,
+  BRegAttachmentSlot,
+  BRegAttachmentUpload,
   BRegCreateBinding,
   BRegLifecycleAction,
   BRegLifecycleAuthority,
@@ -18,6 +20,8 @@ declare const action: BRegLifecycleAction
 declare const metadata: BRegMetadata
 declare const record: RecordEnvelope
 declare const continuation: ListContinuation
+declare const slot: BRegAttachmentSlot
+declare const upload: BRegAttachmentUpload
 
 const options: ListOptions = { top: 25, filter: 'status eq active', count: true }
 client.listRecords('people', options)
@@ -76,3 +80,17 @@ const reasonAction: BRegLifecycleAction = action.withReason("Please revise the s
 client.executeLifecycleAction(reasonAction, "request-revision-1")
 // @ts-expect-error review reasons must be strings
 action.withReason(null)
+
+metadata.selectAttachments('company', 'company-writer').map((value) => value.slotIdentifier)
+slot.prepareUpload('application/pdf', Buffer.from('%PDF-1.7'))
+client.uploadAttachment(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', upload, 'upload-1')
+client.uploadAttachmentJson(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', upload, 'upload-1')
+client.downloadAttachment(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', 2).then((raw) => raw.body.byteLength)
+client.deleteAttachment(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', 'remove-1')
+client.deleteAttachmentJson(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', 'remove-1')
+const value = slot.valueIn(record)
+if (value.kind === 'filled') value.value.sha256.toUpperCase()
+// @ts-expect-error Slot policy is served metadata, never caller-set.
+slot.maximumBytes = 1
+// @ts-expect-error Uploads must be bound to a slot before they can be sent.
+client.uploadAttachment(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', Buffer.from('%PDF-1.7'), 'upload-1')

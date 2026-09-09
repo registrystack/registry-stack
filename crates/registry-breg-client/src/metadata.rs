@@ -4,7 +4,7 @@
 //! executable operation binding. Generated entity summaries and older
 //! metadata artifacts are deliberately insufficient authority.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
@@ -992,6 +992,95 @@ impl BRegMetadata {
         )
         .map_err(|_| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))
     }
+
+    /// Promote every caller-visible attachment slot on one entity for one exact
+    /// selected access profile.
+    ///
+    /// The engine repeats the same slot capability on every surface that
+    /// carries the slot, so a slot promotes only when each surface agrees
+    /// exactly and every advertised route matches that slot's own route.
+    pub fn select_attachments(
+        &self,
+        entity_identifier: &str,
+        expected_profile: &str,
+    ) -> Result<Vec<crate::BRegAttachmentSlot>, BRegMetadataSelectionError> {
+        let source_binding = self
+            .source_binding
+            .as_ref()
+            .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::UnboundSource))?;
+        let entity = self
+            .entities
+            .iter()
+            .find(|entity| entity.id == entity_identifier)
+            .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?;
+        let carrying = self
+            .operations
+            .iter()
+            .filter(|operation| {
+                operation.source_entity == entity.id
+                    && operation.response_entity == entity.id
+                    && operation.fields.iter().any(attachment_capability_present)
+            })
+            .collect::<Vec<_>>();
+        if carrying.is_empty() {
+            return Err(selection_error(BRegMetadataSelectionErrorKind::NotFound));
+        }
+        let candidates = carrying
+            .into_iter()
+            .filter(|operation| operation.access_profile == expected_profile)
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::ProfileMismatch,
+            ));
+        }
+
+        let source = crate::BRegAttachmentSource {
+            registry_identifier: self.id.clone(),
+            dataset_identifier: entity.dataset_identifier.clone(),
+            registry_revision: self.revision.clone(),
+            entity_identifier: entity.id.clone(),
+            access_profile: expected_profile.to_owned(),
+            collection_path: format!("/v1/records/{}", entity.route),
+            source_binding: source_binding.clone(),
+        };
+        let mut descriptors: BTreeMap<&str, &Value> = BTreeMap::new();
+        for operation in candidates {
+            for field in operation.fields.iter().filter(|field| {
+                attachment_capability_present(field)
+                    && operation.readable_fields.contains(&field.id)
+            }) {
+                let descriptor = &field.schema["x-registry-attachment"];
+                if descriptors
+                    .insert(field.id.as_str(), descriptor)
+                    .is_some_and(|previous| previous != descriptor)
+                {
+                    return Err(selection_error(
+                        BRegMetadataSelectionErrorKind::ContractMismatch,
+                    ));
+                }
+            }
+        }
+        if descriptors.is_empty() {
+            return Err(selection_error(BRegMetadataSelectionErrorKind::NotFound));
+        }
+        descriptors
+            .into_iter()
+            .map(|(slot_identifier, descriptor)| {
+                crate::BRegAttachmentSlot::from_descriptor(&source, slot_identifier, descriptor)
+                    .map_err(|_| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))
+            })
+            .collect()
+    }
+}
+
+fn attachment_capability_present(field: &BRegMetadataField) -> bool {
+    field
+        .schema
+        .get("x-registry-fieldKind")
+        .and_then(Value::as_str)
+        == Some("attachment")
+        && field.schema.get("x-registry-attachment").is_some()
 }
 
 impl fmt::Debug for BRegMetadata {

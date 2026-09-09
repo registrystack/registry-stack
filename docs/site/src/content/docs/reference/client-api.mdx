@@ -873,13 +873,58 @@ and record, raises kind `lifecycle_promotion` with code `authority` or `binding`
 `execute_lifecycle_action(action, idempotency_key)` and
 `executeLifecycleAction(action, idempotencyKey)` return the receipt as an outcome.
 
+### Request attachments
+
+A change-request entity can declare governed attachment slots. Slot content is engine-owned: a
+create body, a patch operation, and a request effect never set it, and only the served attachment
+routes move the bytes. `select_attachments(entity_identifier, expected_profile)` returns every slot
+the caller-filtered metadata advertises for that entity and profile, bound to the client's origin
+(Node: `selectAttachments`). A mismatch raises kind `metadata_selection` with a code from the same
+closed list as the other selections.
+
+A `BRegAttachmentSlot` exposes `slot_identifier`, `entity_identifier`, `access_profile`,
+`required_for_submit`, `maximum_bytes`, `content_types`, `can_download`, `can_upload`, `can_remove`,
+and `accepts_content_type(content_type)`, camel case in Node. The served routes stay opaque, so only
+the client can spend a slot.
+
+`prepare_upload(content_type, body)` and `prepareUpload(contentType, body)` check the bytes against
+that served policy before any I/O and return an opaque `BRegAttachmentUpload` carrying `content_type`
+and `byte_size`. They raise kind `invalid_request` when the slot advertises no upload route, when the
+body is empty, when the body exceeds `maximum_bytes`, when the content type is not a lowercase
+`type/subtype`, and when that media type is outside `content_types`. A parameter, a wildcard, and an
+uppercase spelling all refuse, since a served type is matched exactly.
+
+| Operation | Rust and Python | Node | Rust returns |
+| --- | --- | --- | --- |
+| Slot selection | `select_attachments(entity_identifier, expected_profile)` | `selectAttachments(entityIdentifier, expectedProfile)` | `Vec<BRegAttachmentSlot>` |
+| Slot state in a record | `value_in(record)` | `valueIn(record, format)` | `BRegAttachmentSlotValue` |
+| Upload | `upload_attachment(slot, record_identifier, etag, upload, idempotency_key)` | `uploadAttachment(slot, recordIdentifier, etag, upload, idempotencyKey, format)` | `BRegComplete<RegistryRecordSingleResponse>` |
+| Download | `download_attachment(slot, record_identifier, proposal_version)` | `downloadAttachment(slot, recordIdentifier, proposalVersion)` | `BRegComplete<BRegRawDocument>` |
+| Delete | `delete_attachment(slot, record_identifier, etag, idempotency_key)` | `deleteAttachment(slot, recordIdentifier, etag, idempotencyKey, format)` | `BRegComplete<RegistryRecordSingleResponse>` |
+
+An upload and a delete take an ETag from a fresh read through the same route and access profile and a
+caller-supplied idempotency key, on the same terms as `patch_record`, and answer with the updated
+record. The record format comes last: a keyword argument in Python and an optional argument in Node.
+`uploadAttachmentJson` and `deleteAttachmentJson` return those receipts as exact JSON text, like the
+other Node exact-JSON methods. A download names a positive proposal version, answers with a raw
+document, and reads its body under the client's maximum response bytes, 8 MiB by default, so raise
+that bound before fetching a slot that serves more.
+
+`value_in` and `valueIn` read one slot's state out of the `domainData` of a fresh record read rather
+than from the wire. The result carries `kind`, one of `not_selected`, `empty`, and `filled`, and a
+`value` present only when filled. A filled value carries `slot_identifier`, `proposal_version`,
+`erased`, `byte_size`, `sha256`, `content_type`, `uploaded_at`, `uploaded_by`, and
+`verification_status`, camel case in Node. `verification_status` is `notRequired`, `pending`,
+`approved`, or `rejected` when the record carries one. A record whose slot value does not match the
+served shape raises kind `invalid_request`.
+
 ### Exact JSON in Node
 
 The Node methods whose names end in `Json` keep domain values on the Rust side of the JavaScript
 number boundary. `getRecordJson`, `listRecordsJson`, `continueListJson`, `lookupRecordJson`,
-`createRecordJson`, `patchRecordJson`, and `executeLifecycleActionJson` return a `JsonOutcome`: the
-validated response as JSON text in `valueJson`, with the same trace, ETag, location, and
-continuation semantics as their object counterparts. `lifecycleActionsJson` takes a complete record
+`createRecordJson`, `patchRecordJson`, `executeLifecycleActionJson`, `uploadAttachmentJson`, and
+`deleteAttachmentJson` return a `JsonOutcome`: the validated response as JSON text in `valueJson`,
+with the same trace, ETag, location, and continuation semantics as their object counterparts. `lifecycleActionsJson` takes a complete record
 envelope as JSON text, and every action it promotes carries `bodyJson` and `reviewJson` beside
 `body` and `review`. The Python binding has no such methods.
 
@@ -947,7 +992,8 @@ attributes are `kind`, `code`, `plan_refusal`, `status`, `trace_id`, `transport_
     crates/registry-breg-client-node/README.md,
     crates/registry-breg-client-node/__test__/exact-json.test.js,
     crates/registry-breg-client/tests/exact_json.rs, crates/registry-breg-client/src/lib.rs,
-    decode_exact_json, crates/registry-breg-client/src/strict_json.rs, validate_number_tokens */}
+    decode_exact_json, crates/registry-breg-client/src/strict_json.rs, validate_number_tokens,
+    crates/registry-breg-client/src/attachment.rs */}
 
 ## Shared implementation boundary
 

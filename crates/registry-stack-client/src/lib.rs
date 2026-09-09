@@ -5,15 +5,16 @@
 
 pub mod breg {
     pub use registry_breg_client::{
-        BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
-        BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey, BRegLifecycleAction,
-        BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecycleOperation,
-        BRegListRequest, BRegLookupRequest, BRegMetadata, BRegMetadataSelectionError,
-        BRegMutationRequestError, BRegOperationKind, BRegPage, BRegPatchBinding, BRegPatchBuilder,
-        BRegPatchRequest, BRegPlanRefusal, BRegProbeStatus, BRegProblemCode, BRegProtocolFailure,
-        BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRequestError,
-        BRegResponseMetadata, BaseRegistryClient, BaseRegistryClientConfig,
-        BaseRegistryClientError,
+        BRegAttachmentError, BRegAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
+        BRegAttachmentUpload, BRegAttachmentVerificationStatus, BRegComplete, BRegContinuation,
+        BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest, BRegDirectWrite,
+        BRegEtag, BRegIdempotencyKey, BRegLifecycleAction, BRegLifecycleActionReceipt,
+        BRegLifecycleAuthority, BRegLifecycleOperation, BRegListRequest, BRegLookupRequest,
+        BRegMetadata, BRegMetadataSelectionError, BRegMutationRequestError, BRegOperationKind,
+        BRegPage, BRegPatchBinding, BRegPatchBuilder, BRegPatchRequest, BRegPlanRefusal,
+        BRegProbeStatus, BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat,
+        BRegRecordOptions, BRegRequestError, BRegResponseMetadata, BaseRegistryClient,
+        BaseRegistryClientConfig, BaseRegistryClientError,
     };
 }
 

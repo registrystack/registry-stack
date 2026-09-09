@@ -82,3 +82,39 @@ validates before network effects. The original action omits the reason. Text
 is preserved exactly, allows an empty string, and is limited to 4096 Unicode
 characters with NUL refused. Reuse the same action and idempotency key for an
 explicit retry.
+
+## Request attachments
+
+Governed binary slots are engine-owned. They are never set through create,
+JSON Patch, or request effects. Select them from a caller-filtered contract,
+then use the three exchanges the engine advertises.
+
+```js
+const contract = await client.registryContract(profile);
+const [slot] = contract.selectAttachments('company', profile);
+const upload = slot.prepareUpload('application/pdf', bytes);
+await client.uploadAttachment(slot, recordId, etag, upload, 'upload-supporting-file-1');
+const stored = await client.downloadAttachment(slot, recordId, proposalVersion);
+await client.deleteAttachment(slot, recordId, nextEtag, 'remove-supporting-file-1');
+```
+
+`slot` carries the served policy: `slotIdentifier`, `requiredForSubmit`,
+`maximumBytes`, `contentTypes`, `acceptsContentType(type)`, and the
+`canDownload`, `canUpload`, and `canRemove` routes the caller's profile was
+granted. `prepareUpload` refuses an empty body, a body larger than
+`maximumBytes`, and any content type outside `contentTypes` before a request is
+built, so a refused upload never leaves the process. Uploads and removals need
+the record's current ETag and a caller-chosen idempotency key, exactly like
+`patchRecord`. `uploadAttachmentJson` and `deleteAttachmentJson` return the same
+record envelope as exact JSON text.
+
+`slot.valueIn(record)` reads the engine-owned projection of the slot out of one
+record envelope: `{kind: 'not_selected' | 'empty' | 'filled'}` with a `value`
+holding `proposalVersion`, `byteSize`, `sha256`, `contentType`, `uploadedAt`,
+`uploadedBy`, `erased`, and `verificationStatus` when the slot is filled.
+
+A download requires the proposal version and returns the stored bytes with
+their stored content type. A retained older value may carry a content type the
+current policy no longer accepts. The response is bounded by both the slot
+capacity and the client's `maxResponseBytes`, so raise `maxResponseBytes` when a
+slot may hold more than the default bound.
