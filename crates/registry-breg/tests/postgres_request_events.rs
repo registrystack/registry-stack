@@ -137,6 +137,41 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
         "closed lifecycle conditions filter notifications without creating state"
     );
 
+    let invalid = migration.transaction().await.expect("transaction starts");
+    let overlong_reason = "é".repeat(4097);
+    for (transition, state, reason) in [
+        ("approve", "approved", "unsupported approval explanation"),
+        ("reject", "needs_changes", "mismatched transition state"),
+        (
+            "request_revision",
+            "rejected",
+            "mismatched transition state",
+        ),
+        ("reject", "rejected", overlong_reason.as_str()),
+    ] {
+        let mut event = lifecycle_event(
+            request_id,
+            3,
+            1,
+            3,
+            "submitted",
+            state,
+            transition,
+            Some("review"),
+            &values,
+        );
+        event.reason = Some(reason);
+        assert!(matches!(
+            insert_request_lifecycle_events(&invalid, &events, &[], None, event).await,
+            Err(registry_breg::outbox::OutboxError::InvalidProjection)
+        ));
+    }
+    invalid
+        .commit()
+        .await
+        .expect("invalid events made no writes");
+    assert_eq!(outbox_count(&migration).await, 0);
+
     let committed = migration.transaction().await.expect("transaction starts");
     for _ in 0..2 {
         insert_request_lifecycle_events(
@@ -188,6 +223,8 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
     assert_eq!(payload["request"]["fromState"], "submitted");
     assert_eq!(payload["request"]["toState"], "approved");
     assert_eq!(payload["request"]["stage"], "review");
+    assert_eq!(payload["request"]["reasonPresent"], false);
+    assert!(payload["request"].get("reason").is_none());
     assert_eq!(payload["request"]["effectDigest"], Value::Null);
     assert!(payload["request"]["deduplicationKey"]
         .as_str()
@@ -221,7 +258,7 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
     let receiver = HttpsReceiver::start().await;
     let database = TestDatabase::create(8).await;
     let (mut migration, migration_task) = database.connect_migration().await;
-    let compiled = compiled_lifecycle_registry();
+    let compiled = compiled_lifecycle_registry_with_rejection();
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("compiled lifecycle event schema installs");
@@ -247,29 +284,34 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         .event_deliveries()
         .deliveries
         .iter()
-        .find(|delivery| delivery.event_id == "request-approved")
+        .find(|delivery| delivery.event_id == "request-rejected")
         .expect("compiled lifecycle delivery exists")
         .clone();
     let mut values = Map::new();
     values.insert("reason".to_owned(), json!("external review completed"));
     let request_id = Uuid::new_v4();
+    // Each accepted control character occupies six JSON bytes. This exercises
+    // the compiler's maximum payload budget through a configured delivery.
+    let reason = "\u{0001}".repeat(4096);
+    let mut event = lifecycle_event(
+        request_id,
+        3,
+        1,
+        3,
+        "submitted",
+        "rejected",
+        "reject",
+        Some("review"),
+        &values,
+    );
+    event.reason = Some(&reason);
     let transaction = migration.transaction().await.expect("transaction starts");
     insert_request_lifecycle_events(
         &transaction,
         &compiled.entities()[REQUEST_ENTITY].events,
         &compiled.event_deliveries().deliveries,
         Some(&destinations),
-        lifecycle_event(
-            request_id,
-            3,
-            1,
-            3,
-            "submitted",
-            "approved",
-            "approve",
-            Some("review"),
-            &values,
-        ),
+        event,
     )
     .await
     .expect("lifecycle event and webhook delivery insert together");
@@ -284,7 +326,11 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         .expect("payload carries consumer deduplication key")
         .to_owned();
     assert_eq!(payload["trigger"], "request_lifecycle");
-    assert_eq!(payload["request"]["transition"], "approve");
+    assert_eq!(payload["request"]["transition"], "reject");
+    assert_eq!(payload["request"]["reason"], reason);
+    assert_eq!(payload["request"]["reasonPresent"], true);
+    assert!(captured.payload.len() > 4096 * 6);
+    assert!(captured.payload.len() <= delivery.maximum_payload_bytes as usize);
 
     let pool = database
         .runtime_config
@@ -519,7 +565,29 @@ fn configured_events() -> BTreeMap<String, EventSource> {
 }
 
 fn compiled_lifecycle_registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(
+    compile_project(&lifecycle_project(), &[], CompileProfile::Authoring)
+        .expect("lifecycle event fixture compiles")
+}
+
+fn compiled_lifecycle_registry_with_rejection() -> registry_breg::CompiledRegistry {
+    let mut project = lifecycle_project();
+    let request = project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == REQUEST_ENTITY)
+        .expect("fixture declares request entity");
+    request.events[0].id = "request-rejected".to_owned();
+    request.events[0].when = Some(EventConditionSource::RequestLifecycle {
+        transitions: BTreeSet::from(["reject".to_owned()]),
+        to_states: BTreeSet::from(["rejected".to_owned()]),
+        stages: BTreeSet::from(["review".to_owned()]),
+    });
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("rejection event fixture compiles")
+}
+
+fn lifecycle_project() -> registry_breg::contract::RegistryProject {
+    parse_project_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
@@ -617,9 +685,7 @@ fn compiled_lifecycle_registry() -> registry_breg::CompiledRegistry {
           }]
         }"#,
     )
-    .expect("lifecycle event fixture parses");
-    compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("lifecycle event fixture compiles")
+    .expect("lifecycle event fixture parses")
 }
 
 struct CapturedEvent {
@@ -697,7 +763,7 @@ fn assert_lifecycle_delivery_request(
         header(request, "ce-source"),
         "urn:registrystack:registry:request-event-registry:instance:request-event-instance"
     );
-    assert_eq!(header(request, "ce-type"), "request-approved");
+    assert_eq!(header(request, "ce-type"), "request-rejected");
     assert_eq!(header(request, "ce-dataschema"), event.data_schema);
     assert_eq!(
         header(request, "x-registry-event-generation"),
@@ -739,6 +805,7 @@ fn lifecycle_event<'a>(
         to_state,
         transition,
         stage_id,
+        reason: None,
         effect_digest: None,
         package_revision: PACKAGE_REVISION,
         schema_fingerprint: SCHEMA_FINGERPRINT,

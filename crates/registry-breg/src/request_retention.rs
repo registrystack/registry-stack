@@ -27,6 +27,10 @@ use crate::postgres::{
 use crate::runtime_config::load_runtime_config;
 
 const MAX_RETAINED_HISTORY_PAGE_SIZE: u16 = 50;
+// Reserve the other half of the client's 2 MiB request-extension budget for
+// current decisions, actions, and the remaining request metadata.
+const MAX_RETAINED_HISTORY_BYTES: usize = 1_048_576;
+const MAX_RETAINED_DECISIONS: usize = 1024;
 pub const MAX_REQUEST_RETENTION_OPERATOR_PAGE_SIZE: u16 = 100;
 const RETENTION_OPERATION_ID: &str = "records.request.retention.erase";
 const RETENTION_REFERENCE: &str = "request-retention-erasure";
@@ -60,6 +64,7 @@ pub struct RetainedHistoryQuery<'a> {
     pub request_id: Uuid,
     pub after_proposal_version: Option<i64>,
     pub limit: u16,
+    pub include_decision_reasons: bool,
     pub authorized_target_entities: &'a BTreeSet<String>,
 }
 
@@ -84,6 +89,31 @@ pub struct RetainedRequestProposal {
     pub application_id: Option<String>,
     pub result_link_count: u16,
     pub result_links: Vec<RetainedRequestResultLink>,
+    pub decisions: Vec<RetainedRequestDecision>,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedRequestDecision {
+    pub stage_id: String,
+    pub kind: String,
+    pub decided_at: String,
+    pub reason_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl std::fmt::Debug for RetainedRequestDecision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RetainedRequestDecision")
+            .field("stage_id", &self.stage_id)
+            .field("kind", &self.kind)
+            .field("decided_at", &self.decided_at)
+            .field("reason_present", &self.reason_present)
+            .field("reason", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -99,6 +129,7 @@ pub struct RetainedRequestResultLink {
 pub struct RequestDetailErasure {
     pub proposal_snapshots: u64,
     pub target_snapshots: u64,
+    pub decision_reasons: u64,
     pub idempotency_results: u64,
     pub request_revision_snapshots: u64,
     pub outbox_payloads: u64,
@@ -793,8 +824,8 @@ pub async fn erase_request_detail(
     Ok(erasure)
 }
 
-/// Load retained proposal history without materializing erased or live payload
-/// copies. Target identifiers are withheld until the caller can prove exact
+/// Load retained proposal history, including decision text only when the caller
+/// grants its disclosure. Target identifiers are withheld until the caller can prove exact
 /// record-level read authority for each target row.
 pub async fn load_retained_history(
     client: &impl GenericClient,
@@ -812,57 +843,198 @@ pub async fn load_retained_history(
     let page_limit = i64::from(query.limit) + 1;
     let rows = client
         .query(
-            "SELECT s.state, s.proposal_version, p.proposal_version,
-                    p.contract_fingerprint, p.effect_digest, p.erased_at IS NOT NULL,
-                    a.application_id
-               FROM registry_internal.registry_request_state s
-               JOIN registry_internal.registry_request_proposals p
-                 ON p.request_entity_id = s.request_entity_id
-                AND p.request_id = s.request_id
-               LEFT JOIN registry_internal.registry_request_applications a
-                 ON a.request_entity_id = p.request_entity_id
-                AND a.request_id = p.request_id
-                AND a.proposal_version = p.proposal_version
-              WHERE s.request_entity_id = $1
-                AND s.request_id = $2
-                AND ($3::bigint IS NULL OR p.proposal_version > $3::bigint)
-              ORDER BY p.proposal_version
-              LIMIT $4::bigint",
+            "WITH proposals AS (
+                SELECT s.state, s.proposal_version AS current_version, p.proposal_version,
+                       p.contract_fingerprint, p.effect_digest, p.erased_at IS NOT NULL AS erased,
+                       a.application_id
+                  FROM registry_internal.registry_request_state s
+                  JOIN registry_internal.registry_request_proposals p
+                    ON p.request_entity_id = s.request_entity_id AND p.request_id = s.request_id
+                  LEFT JOIN registry_internal.registry_request_applications a
+                    ON a.request_entity_id = p.request_entity_id AND a.request_id = p.request_id
+                   AND a.proposal_version = p.proposal_version
+                 WHERE s.request_entity_id = $1 AND s.request_id = $2
+                   AND ($3::bigint IS NULL OR p.proposal_version > $3::bigint)
+                 ORDER BY p.proposal_version LIMIT $4::bigint
+             )
+             SELECT p.*, d.decision_count, d.decision_bytes
+               FROM proposals p
+               CROSS JOIN LATERAL (
+                   SELECT count(*) AS decision_count,
+                          COALESCE(sum(octet_length(json_build_object(
+                              'stageId', stage_id, 'kind', decision,
+                              'decidedAt', to_char(decided_at AT TIME ZONE 'UTC',
+                                  'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                              'reasonPresent', reason_present,
+                              'reason', CASE WHEN $5::boolean THEN reason ELSE NULL END
+                          )::text) + 1), 0)::bigint AS decision_bytes
+                     FROM (SELECT stage_id, decision, decided_at, reason_present, reason
+                             FROM registry_internal.registry_request_decisions
+                            WHERE request_entity_id = $1 AND request_id = $2
+                              AND proposal_version = p.proposal_version
+                            ORDER BY decision_index LIMIT 1025) bounded
+               ) d
+              ORDER BY p.proposal_version",
             &[
                 &query.request_entity_id,
                 &query.request_id,
                 &query.after_proposal_version,
                 &page_limit,
+                &query.include_decision_reasons,
             ],
         )
         .await
         .map_err(map_retention_error)?;
-    let mut history = Vec::with_capacity(rows.len().min(usize::from(query.limit)));
+    let mut history: Vec<RetainedRequestProposal> =
+        Vec::with_capacity(rows.len().min(usize::from(query.limit)));
     let mut next_after_proposal_version = None;
-    for (index, row) in rows.into_iter().enumerate() {
-        let proposal_version = row.get::<_, i64>(2);
-        if index >= usize::from(query.limit) {
-            next_after_proposal_version = Some(proposal_version);
-            break;
-        }
-        history.push(RetainedRequestProposal {
+    let mut page_bytes = 64;
+    for row in rows {
+        let proposal = RetainedRequestProposal {
             request_entity_id: query.request_entity_id.to_owned(),
             request_id: query.request_id.to_string(),
-            proposal_version,
+            proposal_version: row.get(2),
             request_state: row.get(0),
-            current: row.get::<_, i64>(1) == proposal_version,
+            current: row.get::<_, i64>(1) == row.get::<_, i64>(2),
             contract_fingerprint: row.get(3),
             effect_digest: row.get(4),
             detail_erased: row.get(5),
             application_id: row.get::<_, Option<Uuid>>(6).map(|id| id.to_string()),
             result_link_count: 0,
             result_links: Vec::new(),
-        });
+            decisions: Vec::new(),
+        };
+        let decision_bytes = usize::try_from(row.get::<_, i64>(8))
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        let proposal_bytes = serde_json::to_vec(&proposal)
+            .map_err(|_| RequestRetentionError::Unavailable)?
+            .len()
+            .checked_add(decision_bytes)
+            .ok_or(RequestRetentionError::Unavailable)?;
+        if history.len() == usize::from(query.limit)
+            || page_bytes + proposal_bytes > MAX_RETAINED_HISTORY_BYTES
+        {
+            // An exclusive cursor is the last returned version, never the
+            // first omitted one. Refuse a single oversized proposal explicitly
+            // rather than return an empty page that cannot make progress.
+            next_after_proposal_version = Some(
+                history
+                    .last()
+                    .ok_or(RequestRetentionError::Unavailable)?
+                    .proposal_version,
+            );
+            break;
+        }
+        if row.get::<_, i64>(7) > MAX_RETAINED_DECISIONS as i64 {
+            return Err(RequestRetentionError::Unavailable);
+        }
+        page_bytes += proposal_bytes;
+        history.push(proposal);
     }
-    Ok(RetainedRequestHistoryPage {
+    let versions = history
+        .iter()
+        .map(|proposal| proposal.proposal_version)
+        .collect::<Vec<_>>();
+    let mut decisions = load_retained_decisions_for_versions(
+        client,
+        query.request_entity_id,
+        query.request_id,
+        &versions,
+        query.include_decision_reasons,
+    )
+    .await?;
+    for proposal in &mut history {
+        proposal.decisions = decisions
+            .remove(&proposal.proposal_version)
+            .unwrap_or_default();
+    }
+    let mut page = RetainedRequestHistoryPage {
         proposals: history,
         next_after_proposal_version,
-    })
+    };
+    // Recheck actual serialized bytes after the batch read in case concurrent
+    // decisions changed a proposal since its size was inspected.
+    while serde_json::to_vec(&page)
+        .map_err(|_| RequestRetentionError::Unavailable)?
+        .len()
+        > MAX_RETAINED_HISTORY_BYTES
+    {
+        if page.proposals.len() <= 1 {
+            return Err(RequestRetentionError::Unavailable);
+        }
+        page.proposals.pop();
+        page.next_after_proposal_version = page
+            .proposals
+            .last()
+            .map(|proposal| proposal.proposal_version);
+    }
+    Ok(page)
+}
+
+/// Retained decision facts survive detail erasure. The caller supplies current
+/// read authority before requesting the optional reason text.
+pub async fn load_retained_decisions(
+    client: &impl GenericClient,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal_version: i64,
+    include_reason: bool,
+) -> Result<Vec<RetainedRequestDecision>> {
+    Ok(load_retained_decisions_for_versions(
+        client,
+        request_entity_id,
+        request_id,
+        &[proposal_version],
+        include_reason,
+    )
+    .await?
+    .remove(&proposal_version)
+    .unwrap_or_default())
+}
+
+async fn load_retained_decisions_for_versions(
+    client: &impl GenericClient,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal_versions: &[i64],
+    include_reason: bool,
+) -> Result<BTreeMap<i64, Vec<RetainedRequestDecision>>> {
+    if proposal_versions.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    if proposal_versions.len() > usize::from(MAX_RETAINED_HISTORY_PAGE_SIZE) {
+        return Err(RequestRetentionError::Unavailable);
+    }
+    let rows = client.query(
+        "SELECT version, d.stage_id, d.decision, d.decided_at, d.reason_present, d.reason
+           FROM unnest($3::bigint[]) version
+           CROSS JOIN LATERAL (
+               SELECT stage_id, decision,
+                      to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS decided_at,
+                      reason_present, CASE WHEN $4::boolean THEN reason ELSE NULL END AS reason,
+                      decision_index
+                 FROM registry_internal.registry_request_decisions
+                WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = version
+                ORDER BY decision_index LIMIT 1025
+           ) d
+          ORDER BY version, d.decision_index",
+        &[&request_entity_id, &request_id, &proposal_versions, &include_reason],
+    ).await.map_err(map_retention_error)?;
+    let mut grouped = BTreeMap::<i64, Vec<RetainedRequestDecision>>::new();
+    for row in rows {
+        let decisions = grouped.entry(row.get(0)).or_default();
+        if decisions.len() == MAX_RETAINED_DECISIONS {
+            return Err(RequestRetentionError::Unavailable);
+        }
+        decisions.push(RetainedRequestDecision {
+            stage_id: row.get(1),
+            kind: row.get(2),
+            decided_at: row.get(3),
+            reason_present: row.get(4),
+            reason: row.get(5),
+        });
+    }
+    Ok(grouped)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1021,6 +1193,11 @@ async fn count_request_detail_erasure(
                     AND l.link_kind IN
                         ('request_create','request_patch','request_lifecycle','request_batch')
                     AND o.payload IS NOT NULL),
+                (SELECT count(*) FROM registry_internal.registry_request_decisions
+                  WHERE request_entity_id = $1
+                    AND request_id = $2
+                    AND proposal_version = $3
+                    AND reason IS NOT NULL),
                 (SELECT count(*) FROM registry_internal.registry_request_attachments
                   WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
                     AND erased_at IS NULL)",
@@ -1038,8 +1215,9 @@ async fn count_request_detail_erasure(
         idempotency_results: count_to_u64(row.get(2))?,
         request_revision_snapshots: count_to_u64(row.get(3))?,
         outbox_payloads: count_to_u64(row.get(4))?,
+        decision_reasons: count_to_u64(row.get(5))?,
         current_intake_rows: u64::from(erase_current_intake),
-        attachment_references: count_to_u64(row.get(5))?,
+        attachment_references: count_to_u64(row.get(6))?,
     })
 }
 
@@ -1081,6 +1259,22 @@ async fn erase_request_detail_in_transaction(
                 AND request_id = $2
                 AND proposal_version = $3
                 AND (base_snapshot IS NOT NULL OR after_snapshot IS NOT NULL)",
+            &[
+                &scope.request_entity_id,
+                &scope.request_id,
+                &scope.proposal_version,
+            ],
+        )
+        .await
+        .map_err(map_retention_error)?;
+    let decision_reasons = transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_decisions
+                SET reason = NULL
+              WHERE request_entity_id = $1
+                AND request_id = $2
+                AND proposal_version = $3
+                AND reason IS NOT NULL",
             &[
                 &scope.request_entity_id,
                 &scope.request_id,
@@ -1184,6 +1378,7 @@ async fn erase_request_detail_in_transaction(
     let erasure = RequestDetailErasure {
         proposal_snapshots,
         target_snapshots,
+        decision_reasons,
         idempotency_results,
         request_revision_snapshots,
         outbox_payloads,
@@ -1232,6 +1427,7 @@ async fn append_retention_audit(
     let count = erasure
         .proposal_snapshots
         .checked_add(erasure.target_snapshots)
+        .and_then(|count| count.checked_add(erasure.decision_reasons))
         .and_then(|count| count.checked_add(erasure.idempotency_results))
         .and_then(|count| count.checked_add(erasure.request_revision_snapshots))
         .and_then(|count| count.checked_add(erasure.outbox_payloads))
@@ -1474,4 +1670,28 @@ fn map_retention_error(_error: tokio_postgres::Error) -> RequestRetentionError {
 
 fn map_history_commit_error(_error: HistoryCommitError) -> RequestRetentionError {
     RequestRetentionError::Unavailable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RetainedRequestDecision;
+
+    #[test]
+    fn retained_decision_debug_redacts_reason_without_changing_serialization() {
+        let reason = "retained-review-reason-debug-canary";
+        let decision = RetainedRequestDecision {
+            stage_id: "review".to_owned(),
+            kind: "reject".to_owned(),
+            decided_at: "2026-09-09T12:00:00Z".to_owned(),
+            reason_present: true,
+            reason: Some(reason.to_owned()),
+        };
+        let debug = format!("{decision:?}");
+        assert!(!debug.contains(reason));
+        assert!(debug.contains("reason_present: true"));
+        assert!(debug.contains("review"));
+        let serialized = serde_json::to_value(&decision).expect("decision serializes");
+        assert_eq!(serialized["reason"], reason);
+        assert_eq!(serialized["reasonPresent"], true);
+    }
 }

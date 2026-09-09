@@ -897,9 +897,16 @@ mod tests {
         let valid = json!({
             "proposalVersion":1, "workflowRevision":2, "transition":"submit",
             "fromState":"draft", "toState":"submitted", "stage":null,
-            "effectDigest":null, "deduplicationKey":"sha256:synthetic"
+            "effectDigest":null, "deduplicationKey":"sha256:synthetic",
+            "reasonPresent":false
         });
         let mut invalid = vec![json!({})];
+        let mut missing_presence = valid.clone();
+        missing_presence
+            .as_object_mut()
+            .unwrap()
+            .remove("reasonPresent");
+        invalid.push(missing_presence);
         for (field, value) in [
             ("proposalVersion", json!("one")),
             ("workflowRevision", json!(0)),
@@ -909,6 +916,9 @@ mod tests {
             ("stage", json!({})),
             ("effectDigest", json!(7)),
             ("deduplicationKey", Value::Null),
+            ("reasonPresent", Value::Null),
+            ("reasonPresent", json!(true)),
+            ("reason", json!("not present")),
             ("undeclared", json!(true)),
         ] {
             let mut request = valid.clone();

@@ -1822,3 +1822,95 @@ async fn record_revisions_uses_bounded_native_route_and_refuses_invalid_selector
     assert_eq!(fixture.token.0.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.requests.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn prepared_review_reason_survives_restart_and_exact_wire_retry() {
+    use registry_breg_client::BRegPreparedLifecycle;
+    let cases: Value = serde_json::from_str(include_str!("fixtures/review-reasons.json")).unwrap();
+    for operation in ["reject_request", "request_revision"] {
+        let fixture = test_client(vec![
+            MockResponse::json(StatusCode::OK, cases["metadata"].clone()),
+            lifecycle_response(cases["receipts"][operation].clone()),
+            MockResponse::json(StatusCode::OK, cases["metadata"].clone()),
+            lifecycle_response(cases["receipts"][operation].clone()),
+        ])
+        .await;
+        let contract = fixture
+            .client
+            .registry_contract(Some("writer"))
+            .await
+            .unwrap()
+            .value;
+        let authority = contract.select_lifecycle("item", "writer").unwrap();
+        let RegistryRecordResponse::Single(record) = RegistryRecordResponse::from_value(
+            cases["records"][operation].clone(),
+            RegistryRecordRepresentation::Json,
+        )
+        .unwrap() else {
+            panic!("single")
+        };
+        let action = fixture
+            .client
+            .lifecycle_actions(&authority, &record)
+            .unwrap()
+            .remove(0);
+        let before = fixture.token.0.load(Ordering::SeqCst);
+        assert!(action.with_reason("x".repeat(4097)).is_err());
+        assert!(action.with_reason("\0").is_err());
+        assert_eq!(fixture.token.0.load(Ordering::SeqCst), before);
+        let action = action
+            .with_reason("  Please correct the values.\nเหตุผล 📝  ")
+            .unwrap();
+        let prepared = fixture
+            .client
+            .prepare_lifecycle_action(&authority, &record, &action, &key("review-attempt"))
+            .unwrap();
+        let saved = prepared.as_bytes().to_vec();
+        fixture
+            .client
+            .execute_lifecycle_action(&action, &key("review-attempt"))
+            .await
+            .unwrap();
+        drop(prepared);
+        let prepared = BRegPreparedLifecycle::from_slice(&saved).unwrap();
+        let contract = fixture
+            .client
+            .registry_contract(Some("writer"))
+            .await
+            .unwrap()
+            .value;
+        let authority = contract.select_lifecycle("item", "writer").unwrap();
+        let (recovered, original_key) = fixture
+            .client
+            .recover_lifecycle_action(&authority, &prepared)
+            .unwrap();
+        assert_eq!(recovered, action);
+        fixture
+            .client
+            .execute_lifecycle_action(&recovered, &original_key)
+            .await
+            .unwrap();
+        let requests = fixture.requests.lock().unwrap().clone();
+        assert_eq!(requests[1].body, requests[3].body);
+        assert_eq!(requests[1].if_match, requests[3].if_match);
+        assert_eq!(requests[1].idempotency_key, requests[3].idempotency_key);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&requests[1].body).unwrap()["reason"],
+            "  Please correct the values.\nเหตุผล 📝  "
+        );
+        let before = fixture.token.0.load(Ordering::SeqCst);
+        for reason in [json!(null), json!(1), json!("x".repeat(4097)), json!("\0")] {
+            let mut tampered: Value = serde_json::from_slice(&saved).unwrap();
+            let mut body: Value = serde_json::from_str(tampered["body"].as_str().unwrap()).unwrap();
+            body["reason"] = reason;
+            tampered["body"] = json!(serde_json::to_string(&body).unwrap());
+            let tampered =
+                BRegPreparedLifecycle::from_slice(&serde_json::to_vec(&tampered).unwrap()).unwrap();
+            assert!(fixture
+                .client
+                .recover_lifecycle_action(&authority, &tampered)
+                .is_err());
+        }
+        assert_eq!(fixture.token.0.load(Ordering::SeqCst), before);
+    }
+}

@@ -10,14 +10,16 @@ This repo is an Astro and Starlight documentation site.
   `src/data/generated/` are ignored build artifacts. Commit authored inputs and
   generators. `npm test` and `npm run check` regenerate them before validation.
 - `src/data/cli-reference.yaml` is the publication record for the generated CLI
-  reference. While it is `current`, the generator refuses a build whose
-  workspace version or command catalog digest differs from the record, so a
-  change that alters any binary's clap definitions, or bumps the workspace
-  version, must update `reviewed_source_version`, `reviewed_catalog_sha256`,
-  and `last_reviewed` in the same change after reading the regenerated pages.
-  `npm run cli-reference:digest` prints the two values to record. Setting the
-  record back to `draft` hides every CLI page from the site; do that only
-  deliberately.
+  reference. Its v3 content digest covers the public command catalog except the
+  top-level workspace version. Version-only bumps preserve the original human
+  review date, source version, and full catalog digest; real command, help,
+  default, environment, or constraint changes require review of the changed
+  reference and an updated record. `npm run cli-reference:digest` prints the
+  three values to record after review. `npm run cli-reference:digest -- --migrate`
+  upgrades a v2 record only after proving the content still matches its recorded
+  full digest, preserving review dates and provenance. Legacy v2 records retain
+  their exact-version check. Setting the record back to `draft` hides every CLI
+  page from the site; do that only deliberately.
 - Keep OpenAPI reference content in `openapi/*.openapi.json`; Redoc output is
   generated into `public/api/`.
 - Keep SVG illustrations in `public/images/` and include `<title>` and `<desc>`.

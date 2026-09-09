@@ -22,7 +22,8 @@ const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
 export const schemaVersion = 'registry.cli-reference/v2';
-export const reviewSchemaVersion = 'registry.cli-reference-review/v2';
+export const legacyReviewSchemaVersion = 'registry.cli-reference-review/v2';
+export const reviewSchemaVersion = 'registry.cli-reference-review/v3';
 export const expectedBinaries = [
   'breg',
   'bregctl',
@@ -238,6 +239,16 @@ export function catalogDigest(catalog) {
   return createHash('sha256').update(JSON.stringify(catalog)).digest('hex');
 }
 
+// Release identity remains in catalogDigest; only the explicit source version is
+// excluded from editorial content. Versions appearing in help/defaults still count.
+export function contentDigest(catalog) {
+  validateCatalog(catalog);
+  return createHash('sha256').update(JSON.stringify({
+    schema_version: catalog.schema_version,
+    binaries: catalog.binaries,
+  })).digest('hex');
+}
+
 function validCalendarDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
@@ -247,7 +258,9 @@ function validCalendarDate(value) {
     && date.getUTCDate() === day;
 }
 
-export function validateReviewMetadata(metadata, sourceVersion, sourceDigest) {
+export function validateReviewMetadata(metadata, catalog) {
+  validateCatalog(catalog);
+  const legacy = metadata?.schema_version === legacyReviewSchemaVersion;
   exactKeys(
     metadata,
     new Set([
@@ -256,10 +269,11 @@ export function validateReviewMetadata(metadata, sourceVersion, sourceDigest) {
       'last_reviewed',
       'reviewed_source_version',
       'reviewed_catalog_sha256',
+      ...(legacy ? [] : ['reviewed_content_sha256']),
     ]),
     'CLI reference review metadata',
   );
-  if (metadata.schema_version !== reviewSchemaVersion) {
+  if (!legacy && metadata.schema_version !== reviewSchemaVersion) {
     throw new Error(`CLI reference review metadata must use ${reviewSchemaVersion}`);
   }
   if (!['draft', 'current'].includes(metadata.status)) {
@@ -272,6 +286,7 @@ export function validateReviewMetadata(metadata, sourceVersion, sourceDigest) {
       metadata.status !== 'draft'
       || metadata.reviewed_source_version !== null
       || metadata.reviewed_catalog_sha256 !== null
+      || (!legacy && metadata.reviewed_content_sha256 !== null)
     ) {
       throw new Error(
         'unreviewed CLI reference metadata must be draft with no reviewed source version or catalog digest',
@@ -287,21 +302,31 @@ export function validateReviewMetadata(metadata, sourceVersion, sourceDigest) {
     metadata.reviewed_source_version,
     'CLI reference review metadata.reviewed_source_version',
   );
-  if (metadata.reviewed_source_version !== sourceVersion) {
+  if (legacy && metadata.reviewed_source_version !== catalog.source_version) {
     throw new Error(
-      `CLI reference review metadata covers ${metadata.reviewed_source_version}, not ${sourceVersion}`,
+      `CLI reference review metadata covers ${metadata.reviewed_source_version}, not ${catalog.source_version}`,
     );
   }
   if (!/^[0-9a-f]{64}$/u.test(metadata.reviewed_catalog_sha256 ?? '')) {
     throw new Error('CLI reference review metadata.reviewed_catalog_sha256 must be a lowercase SHA-256 digest');
   }
-  if (metadata.reviewed_catalog_sha256 !== sourceDigest) {
+  if (!legacy) {
+    if (!/^[0-9a-f]{64}$/u.test(metadata.reviewed_content_sha256 ?? '')) {
+      throw new Error('CLI reference review metadata.reviewed_content_sha256 must be a lowercase SHA-256 digest');
+    }
+    if (metadata.reviewed_content_sha256 !== contentDigest(catalog)) {
+      throw new Error('CLI reference review metadata does not cover the current command content; review the changed reference before updating its review record');
+    }
+  }
+  // Preserve and verify the source identity recorded at the actual human review.
+  const reviewedCatalog = { ...catalog, source_version: metadata.reviewed_source_version };
+  if (metadata.reviewed_catalog_sha256 !== catalogDigest(reviewedCatalog)) {
     throw new Error('CLI reference review metadata does not cover the current command catalog digest');
   }
   return metadata;
 }
 
-async function loadReviewMetadata(docsRoot, sourceVersion, sourceDigest) {
+async function loadReviewMetadata(docsRoot, catalog) {
   const path = resolve(docsRoot, reviewMetadataFile);
   let metadata;
   try {
@@ -309,7 +334,7 @@ async function loadReviewMetadata(docsRoot, sourceVersion, sourceDigest) {
   } catch (error) {
     throw new Error(`${reviewMetadataFile} could not be read: ${error.message}`);
   }
-  return validateReviewMetadata(metadata, sourceVersion, sourceDigest);
+  return validateReviewMetadata(metadata, catalog);
 }
 
 export async function executeCatalog(repoRoot) {
@@ -538,7 +563,7 @@ function renderIndex(catalog, reviewMetadata, sourceDigest) {
 export function renderCatalog(catalog, reviewMetadata) {
   validateCatalog(catalog);
   const sourceDigest = catalogDigest(catalog);
-  validateReviewMetadata(reviewMetadata, catalog.source_version, sourceDigest);
+  validateReviewMetadata(reviewMetadata, catalog);
   const files = new Map([['index.mdx', renderIndex(catalog, reviewMetadata, sourceDigest)]]);
   const add = (command) => {
     files.set(commandPath(command), renderCommand(command, catalog, reviewMetadata, sourceDigest));
@@ -625,8 +650,7 @@ export async function generateCliReference(
   validateCatalog(catalog);
   const reviewMetadata = await loadReviewMetadata(
     docsRoot,
-    catalog.source_version,
-    catalogDigest(catalog),
+    catalog,
   );
   const pages = renderCatalog(catalog, reviewMetadata);
   const data = `${JSON.stringify(catalog, null, 2)}\n`;

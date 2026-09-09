@@ -73,6 +73,64 @@ fn request_action_bodies_are_narrow_and_operation_bound() {
 }
 
 #[test]
+fn reviewer_reason_parser_preserves_unicode_and_refuses_invalid_or_extra_members() {
+    use serde_json::json;
+    let digest = format!("sha256:{}", "a".repeat(64));
+    for operation in [Operation::RejectRequest, Operation::RequestRevision] {
+        let reason = "文".repeat(crate::request_workflow::MAX_REVIEW_REASON_CHARS);
+        let body = json!({"proposalVersion": 1, "effectDigest": digest, "reason": reason});
+        let parsed = parse_request_action_body(
+            operation,
+            Some("review"),
+            &serde_json::to_vec(&body).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed.reason(), Some(reason.as_str()));
+        assert!(!format!("{parsed:?}").contains(&reason));
+        for invalid in [
+            json!(null),
+            json!(false),
+            json!(3),
+            json!({}),
+            json!([]),
+            json!("\0"),
+            json!("文".repeat(4097)),
+        ] {
+            let body = json!({"proposalVersion": 1, "effectDigest": digest, "reason": invalid});
+            assert!(parse_request_action_body(
+                operation,
+                Some("review"),
+                &serde_json::to_vec(&body).unwrap()
+            )
+            .is_err());
+        }
+        let body = json!({"proposalVersion": 1, "effectDigest": digest, "reason": "fix", "actor": "forged"});
+        assert!(parse_request_action_body(
+            operation,
+            Some("review"),
+            &serde_json::to_vec(&body).unwrap()
+        )
+        .is_err());
+        let duplicate = format!(
+            r#"{{"proposalVersion":1,"effectDigest":"{digest}","reason":"one","reason":"two"}}"#
+        );
+        assert!(
+            parse_request_action_body(operation, Some("review"), duplicate.as_bytes()).is_err()
+        );
+    }
+    for (operation, stage) in [
+        (Operation::ApproveRequest, Some("review")),
+        (Operation::ApplyRequest, None),
+    ] {
+        let body = json!({"proposalVersion": 1, "effectDigest": digest, "reason": "not accepted"});
+        assert!(
+            parse_request_action_body(operation, stage, &serde_json::to_vec(&body).unwrap())
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn request_action_access_uses_exact_finite_route_id() {
     let registry = compiled_registry();
     let service = service_for(registry.clone());

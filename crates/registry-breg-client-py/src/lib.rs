@@ -442,6 +442,18 @@ struct LifecycleAction {
 
 #[pymethods]
 impl LifecycleAction {
+    fn with_reason(&self, py: Python<'_>, reason: String) -> PyResult<Self> {
+        self.inner
+            .with_reason(reason)
+            .map(|inner| Self { inner })
+            .map_err(|error| {
+                to_py_err(
+                    py,
+                    MappedError::binding("invalid_request", error.to_string()),
+                )
+            })
+    }
+
     #[getter]
     fn operation(&self) -> String {
         self.inner.operation().identifier().to_owned()

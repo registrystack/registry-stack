@@ -205,3 +205,47 @@ journeys:
           proposalVersionRef: contact-before-apply
           effectDigestRef: contact-before-apply
         expect: {outcome: success, status: 200}
+        captureResults:
+          person: contact-person
+          membership: contact-membership
+      - id: get-created-contact
+        entity: person
+        accessProfile: household-operator
+        claims: *operator_claims
+        request: {operation: get, recordRef: contact-person}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            person-code: person-001
+            legal-name: Ana Ortega
+            family-name: Ortega
+            person-sex: female
+            residency-status: usual-resident
+        capture: contact-person-current
+      - id: get-created-membership
+        entity: group-membership
+        accessProfile: household-operator
+        claims: *operator_claims
+        request: {operation: get, recordRef: contact-membership}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            relationship: head
+            valid-from: "2026-01-01"
+      - id: update-created-contact
+        entity: person
+        accessProfile: household-operator
+        claims: *operator_claims
+        request:
+          operation: patch
+          recordRef: contact-person
+          etagRef: contact-person-current
+          changes:
+            - {field: legal-name, value: Ana Maria Ortega}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            legal-name: Ana Maria Ortega

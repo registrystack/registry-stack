@@ -54,7 +54,7 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Validate request, source, CI, and destinations
+      - name: Validate request, source, and destinations
         id: request
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,19 +107,6 @@ jobs:
             "${REQUEST_SOURCE_SHA}" refs/remotes/origin/main
           git merge-base --is-ancestor \
             "${workflow_revision}" refs/remotes/origin/main
-          ci_run="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${REQUEST_SOURCE_SHA}&status=success&per_page=100" \
-              | jq -c --arg sha "${REQUEST_SOURCE_SHA}" \
-              '[.workflow_runs[] | select(
-                .head_sha == $sha and
-                .conclusion == "success" and
-                .event == "push"
-              )] | sort_by(.updated_at) | last'
-          )"
-          if [[ "${ci_run}" == "null" ]]; then
-            echo "Protected-main CI has no successful push run for source" >&2
-            exit 1
-          fi
           tag="v${REQUEST_VERSION}"
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
               >/dev/null 2>&1; then
@@ -228,6 +215,32 @@ jobs:
           REGISTRY_RELEASE_SOURCE_MODE=monorepo \
             release/scripts/check-release-source-model.sh
           release/scripts/check-debian13-images.py
+
+  protected-ci:
+    name: Require exact protected-main CI before candidate attestation
+    needs: validate
+    runs-on: ubuntu-24.04
+    # Allow the full CI path and runner queues; the release budget is a target,
+    # not a deadline for cancelling otherwise healthy verification.
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout protected verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.workflow_revision }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Wait for successful push CI on the exact main source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release/scripts/registry-release wait-for-ci \
+            --source-sha "${{ needs.validate.outputs.source_sha }}" \
+            --repository "${GITHUB_REPOSITORY}"
 
   build-canonical-binaries:
     name: Build canonical Linux ${{ matrix.group }} binary shard
@@ -376,6 +389,38 @@ jobs:
               > "dist/images/${name}.digest"
           done
 
+      - name: Stage canonical build products
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate-canonical/dist
+          cp -R dist/bin candidate-canonical/dist/bin
+          cp -R dist/images candidate-canonical/dist/images
+
+      - name: Upload canonical build products
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-canonical-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-canonical
+          if-no-files-found: error
+          retention-days: 2
+
+  build-docs:
+    name: Build exact release docs archive once
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
       - name: Setup Node for exact release docs archive
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -397,22 +442,11 @@ jobs:
             --output "${DOCS_ARCHIVE_OUTPUT}" \
             --verify-lock
 
-      - name: Stage canonical build products
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p candidate-canonical/dist
-          cp -R dist/bin candidate-canonical/dist/bin
-          cp -R dist/images candidate-canonical/dist/images
-          cp \
-            "${RUNNER_TEMP}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
-            candidate-canonical/
-
-      - name: Upload canonical build products
+      - name: Upload exact release docs archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: candidate-canonical-${{ github.run_id }}-${{ github.run_attempt }}
-          path: candidate-canonical
+          name: candidate-docs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
           if-no-files-found: error
           retention-days: 2
 
@@ -965,6 +999,7 @@ jobs:
     needs:
       - validate
       - build-canonical
+      - build-docs
       - build-platforms
       - build-macos-platforms
       - clients
@@ -1283,7 +1318,7 @@ jobs:
           linux_arm="inputs/candidate-linux-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p candidate/bundle-root
           cp "${canonical}"/dist/bin/* candidate/bundle-root/
-          cp "${canonical}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
+          cp "inputs/candidate-docs-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
             candidate/bundle-root/
           rm -f candidate/bundle-root/SHA256SUMS
           cp "${macos}"/platform/* candidate/bundle-root/
@@ -1695,6 +1730,7 @@ jobs:
     name: Reverify and attest candidate
     needs:
       - validate
+      - protected-ci
       - assemble
     runs-on: ubuntu-24.04
     timeout-minutes: 10

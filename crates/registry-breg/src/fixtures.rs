@@ -332,6 +332,8 @@ enum ActionSource {
         effect_digest: Option<String>,
         #[serde(default)]
         effect_digest_ref: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_review_reason")]
+        reason: Option<String>,
     },
     RequestRevision {
         stage: String,
@@ -345,6 +347,8 @@ enum ActionSource {
         effect_digest: Option<String>,
         #[serde(default)]
         effect_digest_ref: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_review_reason")]
+        reason: Option<String>,
     },
     ReviseRequest {
         record_ref: String,
@@ -493,6 +497,21 @@ impl DirectClaimSource {
 enum ExpectedOutcome {
     Success,
     Refusal,
+}
+
+fn deserialize_review_reason<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let reason = String::deserialize(deserializer)?;
+    if reason.chars().count() > crate::request_workflow::MAX_REVIEW_REASON_CHARS
+        || reason.contains('\0')
+    {
+        return Err(serde::de::Error::custom(
+            "review reason exceeds its text bounds",
+        ));
+    }
+    Ok(Some(reason))
 }
 
 #[derive(Clone, Deserialize)]
@@ -841,6 +860,12 @@ pub fn validate_fixture_journeys(
                         capture.is_some(),
                         !step.capture_results.is_empty(),
                     )?;
+                    let capture_result_entities = validate_request_capture_results(
+                        &request,
+                        entity,
+                        &step.access_profile,
+                        &step.capture_results,
+                    )?;
                     let response_readable_field_ids = match &request {
                         ActionSource::ReadPath { path, .. } => profile
                             .read_paths
@@ -862,7 +887,7 @@ pub fn validate_fixture_journeys(
                         response_readable_fields,
                         action,
                         expect,
-                        BTreeMap::new(),
+                        capture_result_entities,
                     )
                 };
                 if let Some(identifier) = capture.as_deref() {
@@ -983,10 +1008,12 @@ fn validate_action_references(
         | ActionSource::TargetConditions { .. }
         | ActionSource::Invoke { .. } => &[],
     };
-    if references
-        .iter()
-        .any(|identifier| !valid_stable_id(identifier) || !captures.contains_key(*identifier))
-    {
+    if references.iter().any(|identifier| {
+        !valid_stable_id(identifier)
+            || captures
+                .get(*identifier)
+                .is_none_or(|source| source.entity.as_deref() != step_entity)
+    }) {
         return Err(FixtureError::LogicalReferenceRefused);
     }
     for reference in etag_references(action) {
@@ -1241,6 +1268,7 @@ fn action_profile_from_grant(grant: &CompiledActionGrant) -> AccessProfileSource
         required_purposes: grant.required_purposes.clone(),
         operations: grant.operations.clone(),
         readable_fields: BTreeSet::new(),
+        readable_request_fields: Default::default(),
         writable_fields: BTreeSet::new(),
         filterable_fields: BTreeSet::new(),
         sortable_fields: BTreeSet::new(),
@@ -1438,6 +1466,39 @@ fn validate_capture_results(
             .map(|compiled| compiled.target.entity_id.clone())
             .ok_or(FixtureError::LogicalReferenceRefused)?;
         captures.insert(capture.clone(), target_entity_id);
+    }
+    Ok(captures)
+}
+
+fn validate_request_capture_results(
+    request: &ActionSource,
+    entity: &crate::model::CompiledEntity,
+    profile_id: &str,
+    capture_results: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, FixtureError> {
+    let mut captures = BTreeMap::new();
+    if capture_results.is_empty() {
+        return Ok(captures);
+    }
+    if !matches!(request, ActionSource::ApplyRequest { .. }) {
+        return Err(FixtureError::JourneyShapeRefused);
+    }
+    let change_request = entity
+        .change_request
+        .as_ref()
+        .ok_or(FixtureError::LogicalReferenceRefused)?;
+    for (effect_id, capture) in capture_results {
+        let effect = change_request
+            .effects
+            .iter()
+            .find(|effect| effect.id == *effect_id && effect.operation == Operation::Create)
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        if !change_request.apply_grants.iter().any(|grant| {
+            grant.profile_id == profile_id && grant.target_entity_id == effect.target.entity_id
+        }) {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+        captures.insert(capture.clone(), effect.target.entity_id.clone());
     }
     Ok(captures)
 }
@@ -2005,6 +2066,7 @@ fn internalize_entity_action(
             proposal_version_ref,
             effect_digest,
             effect_digest_ref,
+            reason,
         } => ActionSource::RejectRequest {
             stage: stage.clone(),
             record_ref: record_ref.clone(),
@@ -2013,6 +2075,7 @@ fn internalize_entity_action(
             proposal_version_ref: proposal_version_ref.clone(),
             effect_digest: effect_digest.clone(),
             effect_digest_ref: effect_digest_ref.clone(),
+            reason: reason.clone(),
         },
         ActionSource::RequestRevision {
             stage,
@@ -2022,6 +2085,7 @@ fn internalize_entity_action(
             proposal_version_ref,
             effect_digest,
             effect_digest_ref,
+            reason,
         } => ActionSource::RequestRevision {
             stage: stage.clone(),
             record_ref: record_ref.clone(),
@@ -2030,6 +2094,7 @@ fn internalize_entity_action(
             proposal_version_ref: proposal_version_ref.clone(),
             effect_digest: effect_digest.clone(),
             effect_digest_ref: effect_digest_ref.clone(),
+            reason: reason.clone(),
         },
         ActionSource::ReviseRequest {
             record_ref,
@@ -2251,6 +2316,7 @@ fn externalize_action(
             proposal_version_ref,
             effect_digest,
             effect_digest_ref,
+            reason,
         } => ActionSource::RejectRequest {
             stage: stage.clone(),
             record_ref: record_ref.clone(),
@@ -2259,6 +2325,7 @@ fn externalize_action(
             proposal_version_ref: proposal_version_ref.clone(),
             effect_digest: effect_digest.clone(),
             effect_digest_ref: effect_digest_ref.clone(),
+            reason: reason.clone(),
         },
         ActionSource::RequestRevision {
             stage,
@@ -2268,6 +2335,7 @@ fn externalize_action(
             proposal_version_ref,
             effect_digest,
             effect_digest_ref,
+            reason,
         } => ActionSource::RequestRevision {
             stage: stage.clone(),
             record_ref: record_ref.clone(),
@@ -2276,6 +2344,7 @@ fn externalize_action(
             proposal_version_ref: proposal_version_ref.clone(),
             effect_digest: effect_digest.clone(),
             effect_digest_ref: effect_digest_ref.clone(),
+            reason: reason.clone(),
         },
         ActionSource::ReviseRequest {
             record_ref,
@@ -2347,7 +2416,7 @@ fn validate_expectation(
     {
         return Err(FixtureError::JourneyShapeRefused);
     }
-    if captures_results && operation != Operation::Invoke {
+    if captures_results && !matches!(operation, Operation::Invoke | Operation::ApplyRequest) {
         return Err(FixtureError::JourneyShapeRefused);
     }
     if is_request_action(operation) || operation == Operation::Invoke {
@@ -2392,7 +2461,7 @@ fn validate_expectation(
                     return Err(FixtureError::JourneyShapeRefused);
                 }
             } else if is_request_action(operation) {
-                if expectation.count.is_some() || captures || captures_results {
+                if expectation.count.is_some() || captures {
                     return Err(FixtureError::JourneyShapeRefused);
                 }
             } else if operation == Operation::Invoke {
@@ -2417,6 +2486,7 @@ fn validate_expectation(
                 || !expectation.fields.is_empty()
                 || expectation.count.is_some()
                 || captures
+                || captures_results
                 || problem_contract(expectation.status, expectation.problem_code.as_deref())
                     .is_none()
             {
@@ -2768,7 +2838,7 @@ impl PostgresFixtureTestRunner {
                 }),
             );
         }
-        accept_response(&step, response, &mut self.observations)
+        accept_response(&step, response, &mut self.observations, Some(&self.pool))
             .await
             .map_err(|error| self.current_step_failure(error))?;
         self.bearer_index += 1;
@@ -3071,7 +3141,7 @@ async fn execute_schema_test_with_key_source(
                     actual,
                 }));
             }
-            accept_response(step, response, &mut observations)
+            accept_response(step, response, &mut observations, Some(&runtime.pool))
                 .await
                 .map_err(step_failure)?;
             bearer_index += 1;
@@ -3711,10 +3781,22 @@ fn request_action_body(
                 _ => return Err(FixtureError::RequestConstructionRefused),
             };
             validate_digest(&digest)?;
-            Ok(json!({
+            let mut body = json!({
                 "proposalVersion": version,
                 "effectDigest": digest,
-            }))
+            });
+            if let ActionSource::RejectRequest {
+                reason: Some(reason),
+                ..
+            }
+            | ActionSource::RequestRevision {
+                reason: Some(reason),
+                ..
+            } = action
+            {
+                body["reason"] = json!(reason);
+            }
+            Ok(body)
         }
         _ => Err(FixtureError::RequestConstructionRefused),
     }
@@ -3876,6 +3958,7 @@ async fn accept_response(
     step: &ValidatedStep,
     response: Response<Body>,
     observations: &mut BTreeMap<String, Observation>,
+    pool: Option<&RuntimePool>,
 ) -> Result<(), FixtureError> {
     let status = response.status();
     let headers = response.headers().clone();
@@ -3892,7 +3975,17 @@ async fn accept_response(
         }
     }
     if !step.capture_results.is_empty() {
-        capture_immediate_action_results(step, &document, observations)?;
+        if matches!(step.action, ActionSource::ApplyRequest { .. }) {
+            capture_request_results(
+                step,
+                &document,
+                observations,
+                pool.ok_or(FixtureError::ExecutionRefused)?,
+            )
+            .await?;
+        } else {
+            capture_immediate_action_results(step, &document, observations)?;
+        }
     }
     if let Some(capture) = step.capture.as_ref() {
         let kind = capture_observation_kind(step, &headers, &document)?;
@@ -3941,6 +4034,101 @@ fn capture_observation_kind(
             })
         }
     }
+}
+
+// This is a schema-test observation, not a runtime response or a target read.
+// Only a successful authenticated apply may reach it. Preflight requires the
+// selected profile's apply grant; subsequent API reads still need GET authority.
+async fn capture_request_results(
+    step: &ValidatedStep,
+    document: &Value,
+    observations: &mut BTreeMap<String, Observation>,
+    pool: &RuntimePool,
+) -> Result<(), FixtureError> {
+    let ActionSource::ApplyRequest { record_ref, .. } = &step.action else {
+        return Err(FixtureError::ResponseShapeRefused);
+    };
+    let request_id = observed_record_id(observations, record_ref)?;
+    if document.get("id").and_then(Value::as_str) != Some(request_id) {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    let entity_id = step
+        .entity
+        .as_deref()
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let record_id =
+        uuid::Uuid::parse_str(request_id).map_err(|_| FixtureError::ResponseShapeRefused)?;
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|_| FixtureError::ExecutionRefused)?;
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|_| FixtureError::ExecutionRefused)?;
+    let workflow = crate::request_store::load(&transaction, entity_id, record_id, false)
+        .await
+        .map_err(|_| FixtureError::ExecutionRefused)?;
+    let receipt = workflow
+        .application()
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let application = document
+        .pointer("/request/application")
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    if application.get("applicationId").and_then(Value::as_str)
+        != Some(receipt.application_id().as_str())
+        || application.get("proposalVersion").and_then(Value::as_u64)
+            != Some(u64::from(receipt.version().get()))
+        || application.get("effectDigest").and_then(Value::as_str)
+            != Some(receipt.effect_digest().as_str())
+    {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    let proposal = workflow
+        .proposal(receipt.version())
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let mut captured = BTreeMap::new();
+    for (effect_id, capture) in &step.capture_results {
+        let effect = proposal
+            .effects()
+            .iter()
+            .find(|effect| {
+                effect.id().as_str() == effect_id && effect.operation() == Operation::Create
+            })
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        let target_id = effect
+            .target()
+            .reserved_record_id()
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        let result = receipt
+            .result_links()
+            .iter()
+            .find(|result| {
+                result.entity_id() == effect.target().entity_id() && result.record_id() == target_id
+            })
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        captured.insert(
+            capture.clone(),
+            Observation {
+                kind: ObservationKind::Record {
+                    record_id: result.record_id().as_str().to_owned(),
+                    etag: format!("\"breg-action-result-{}\"", result.record_revision().get()),
+                },
+                document: json!({
+                    "id": result.record_id().as_str(),
+                    "entity": result.entity_id().as_str(),
+                    "revision": result.record_revision().get(),
+                    "data": {}
+                }),
+            },
+        );
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|_| FixtureError::ExecutionRefused)?;
+    observations.extend(captured);
+    Ok(())
 }
 
 fn capture_immediate_action_results(
@@ -4529,6 +4717,8 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
                 | "actions"
                 | "history"
                 | "application"
+                | "decisions"
+                | "detailErased"
         )
     }) || !["bregState", "proposalVersion"]
         .iter()
@@ -4559,6 +4749,9 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
     }
     if let Some(history) = request.get("history") {
         assert_request_history_shape(history)?;
+    }
+    if let Some(decisions) = request.get("decisions") {
+        assert_request_decisions_shape(decisions)?;
     }
     if let Some(application) = request.get("application") {
         assert_request_application_shape(application)?;
@@ -4669,6 +4862,46 @@ fn assert_request_action_link_shape(value: &Value) -> Result<(), FixtureError> {
     Ok(())
 }
 
+fn assert_request_decisions_shape(value: &Value) -> Result<(), FixtureError> {
+    let decisions = value.as_array().ok_or(FixtureError::ResponseShapeRefused)?;
+    for decision in decisions {
+        let decision = decision
+            .as_object()
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        if decision.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "stageId" | "kind" | "decidedAt" | "reasonPresent" | "reason"
+            )
+        }) || decision
+            .get("stageId")
+            .and_then(Value::as_str)
+            .is_none_or(|stage| !valid_stable_id(stage))
+            || !matches!(
+                decision.get("kind").and_then(Value::as_str),
+                Some("approve" | "reject" | "request_revision")
+            )
+            || decision.get("decidedAt").and_then(Value::as_str).is_none()
+            || decision
+                .get("reasonPresent")
+                .and_then(Value::as_bool)
+                .is_none()
+        {
+            return Err(FixtureError::ResponseShapeRefused);
+        }
+        if let Some(reason) = decision.get("reason") {
+            let reason = reason.as_str().ok_or(FixtureError::ResponseShapeRefused)?;
+            if decision.get("reasonPresent") != Some(&json!(true))
+                || reason.chars().count() > crate::request_workflow::MAX_REVIEW_REASON_CHARS
+                || reason.contains('\0')
+            {
+                return Err(FixtureError::ResponseShapeRefused);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn assert_request_history_shape(value: &Value) -> Result<(), FixtureError> {
     let history = exact_object(value, &["proposals", "nextAfterProposalVersion"])?;
     let proposals = history
@@ -4679,6 +4912,9 @@ fn assert_request_history_shape(value: &Value) -> Result<(), FixtureError> {
         let proposal = proposal
             .as_object()
             .ok_or(FixtureError::ResponseShapeRefused)?;
+        if let Some(decisions) = proposal.get("decisions") {
+            assert_request_decisions_shape(decisions)?;
+        }
         if !proposal.contains_key("proposalVersion")
             || !proposal.contains_key("bregState")
             || proposal
@@ -5857,6 +6093,61 @@ mod tests {
     };
 
     #[test]
+    fn review_reason_fixture_parsing_and_wire_forwarding_are_exact() {
+        for operation in ["reject_request", "request_revision"] {
+            let mut source = json!({"operation":operation, "stage":"review", "recordRef":"record", "etagRef":"record", "proposalVersion":1, "effectDigest":format!("sha256:{}", "a".repeat(64))});
+            let action: ActionSource = serde_json::from_value(source.clone()).unwrap();
+            assert!(request_action_body(&action, &BTreeMap::new())
+                .unwrap()
+                .get("reason")
+                .is_none());
+            for reason in [
+                "".to_owned(),
+                "  Please clarify.\nสาเหตุ 🙂  ".to_owned(),
+                "🙂".repeat(4096),
+            ] {
+                source["reason"] = json!(reason);
+                let action: ActionSource = serde_json::from_value(source.clone()).unwrap();
+                assert_eq!(
+                    request_action_body(&action, &BTreeMap::new()).unwrap()["reason"],
+                    json!(reason)
+                );
+            }
+            for reason in [
+                Value::Null,
+                json!(1),
+                json!(false),
+                json!([]),
+                json!({}),
+                json!("🙂".repeat(4097)),
+                json!("a\0b"),
+            ] {
+                source["reason"] = reason;
+                assert!(serde_json::from_value::<ActionSource>(source.clone()).is_err());
+            }
+            source["reason"] = json!("clarify");
+            source["operation"] = json!("approve_request");
+            assert!(serde_json::from_value::<ActionSource>(source.clone()).is_err());
+            source["operation"] = json!("apply_request");
+            source.as_object_mut().unwrap().remove("stage");
+            assert!(serde_json::from_value::<ActionSource>(source).is_err());
+        }
+    }
+
+    #[test]
+    fn fixture_decisions_allow_redacted_presence_and_refuse_private_fields() {
+        let mut decisions = json!([{"stageId":"review", "kind":"request_revision", "decidedAt":"2026-09-09T00:00:00Z", "reasonPresent":true}]);
+        assert!(assert_request_decisions_shape(&decisions).is_ok());
+        decisions[0]["reason"] = json!(" สาเหตุ ");
+        assert!(assert_request_decisions_shape(&decisions).is_ok());
+        decisions[0]["actor"] = json!("private");
+        assert!(assert_request_decisions_shape(&decisions).is_err());
+        decisions[0].as_object_mut().unwrap().remove("actor");
+        decisions[0]["reasonPresent"] = json!(false);
+        assert!(assert_request_decisions_shape(&decisions).is_err());
+    }
+
+    #[test]
     fn fixture_direct_claims_preserve_bounded_verified_claim_shapes() {
         for value in [json!("owner-a"), json!(["owner-a", "owner-b"])] {
             let source: DirectClaimSource = serde_json::from_value(value).unwrap();
@@ -6846,7 +7137,7 @@ journeys:
             .expect("problem response builds");
         let mut observations = BTreeMap::new();
         assert_eq!(
-            accept_response(refusal, mismatched_trace, &mut observations).await,
+            accept_response(refusal, mismatched_trace, &mut observations, None).await,
             Err(FixtureError::ResponseShapeRefused),
             "the fixture executor refuses disagreement between body and header trace IDs"
         );

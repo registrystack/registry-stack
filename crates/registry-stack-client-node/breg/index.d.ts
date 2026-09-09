@@ -32,6 +32,7 @@ export declare class BRegCreateBinding {
 export type CreateBinding = BRegCreateBinding
 
 export declare class BRegLifecycleAction {
+  withReason(reason: string): BRegLifecycleAction
   get bodyJson(): string
   get reviewJson(): string | null
   get operation(): string

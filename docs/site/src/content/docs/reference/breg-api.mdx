@@ -379,6 +379,31 @@ showed the action. The server rejects a decision whose binding no longer matches
 never approves a proposal that changed under them. A stage with `excludeSubmitter: true` refuses
 the principal that submitted the request.
 
+Reject and request-revision bodies may also include an optional `reason` string of up to
+4096 Unicode characters. The server preserves whitespace and Unicode exactly, accepts an empty
+string, and refuses null, other types, NUL, or longer text with `400 request.invalid`.
+Approve and apply do not accept `reason`. Include the same reason when replaying an action with
+its original idempotency key; changing it is a different request body.
+
+Read the current proposal's decisions in `data.request.decisions`. Each decision has `stageId`,
+`kind`, `decidedAt`, and `reasonPresent`; `reason` appears only when retained and permitted by the
+selected profile. Retained proposal history exposes the same decision shape under
+`data.request.history.proposals[].decisions`. A request grant defaults to
+`readableRequestFields: [reason]`; set `readableRequestFields: []` to hide explanation text while
+keeping the decision facts and reason-presence flag. Anonymous profiles never receive reason
+text. Request-detail erasure removes the text while retaining reason presence and the decision
+facts.
+
+{/* Evidence: crates/registry-breg/src/artifacts.rs openapi_request_action_input_schema; crates/registry-breg/src/postgres/request_read.rs decisions_value; crates/registry-breg/src/contract.rs readable_request_fields; crates/registry-breg/src/request_retention.rs; crates/registry-breg/tests/postgres_request_upgrade_retention.rs. */}
+
+History returns up to 50 whole proposals per page. The response byte budget can shorten a page
+without splitting a proposal's decisions. To continue, send the returned
+`data.request.history.nextAfterProposalVersion` as `requestHistoryAfterProposalVersion` on the
+same request GET, keeping the same access profile. Follow each returned cursor until it is
+null; a page with fewer than 50 proposals can still have a next page.
+
+{/* Evidence: crates/registry-breg/src/request_retention.rs load_retained_history; crates/registry-breg/src/postgres/request_read.rs retained_history and bound_request_metadata; crates/registry-breg/src/api/mod.rs requestHistoryAfterProposalVersion. */}
+
 The response of an action is not a Registry Record envelope:
 
 ```json

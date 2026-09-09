@@ -916,6 +916,14 @@ pub struct LifecycleAction {
 
 #[napi]
 impl LifecycleAction {
+    #[napi]
+    pub fn with_reason(&self, reason: String) -> Result<Self> {
+        self.inner
+            .with_reason(reason)
+            .map(|inner| Self { inner })
+            .map_err(|error| binding_error("invalid_request", error.to_string()))
+    }
+
     #[napi(getter)]
     pub fn body_json(&self) -> Result<String> {
         serde_json::to_string(&self.inner.body().to_value())

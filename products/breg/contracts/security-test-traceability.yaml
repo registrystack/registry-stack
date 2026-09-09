@@ -58,3 +58,4 @@ traceability:
   - {id: BREG-SEC-55, state: enforced, negativeId: BREG-NEG-55, negativeTest: {path: crates/registry-breg/src/attachment_verification.rs, name: malformed_oversized_and_failed_verdicts_remain_unavailable}}
   - {id: BREG-SEC-56, state: enforced, negativeId: BREG-NEG-56, negativeTest: {path: crates/registry-breg/tests/postgres_request_upgrade_retention.rs, name: first_attachment_write_pins_backend_across_concurrent_distinct_hashes_and_erasure}}
   - {id: BREG-SEC-57, state: enforced, negativeId: BREG-NEG-57, negativeTest: {path: crates/registry-breg/tests/postgres_change_requests.rs, name: real_postgres_attachment_verification_quarantines_exact_bytes_and_survives_worker_failures}}
+  - {id: BREG-SEC-58, state: enforced, negativeId: BREG-NEG-58, negativeTest: {path: crates/registry-breg/tests/support/reviewer_reasons.rs, name: real_postgres_http_reviewer_reasons_are_bounded_replayed_and_read_by_permission}}
