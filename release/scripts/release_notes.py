@@ -136,7 +136,7 @@ def build_draft(
         lines.append(f"- {markdown(component)}: {count} changed file{'s' if count != 1 else ''}.")
     if not components:
         lines.append("No net file changes.")
-    lines.extend(["", "This remains a pre-1.0 Beta release for self-hosted institutional pilots.", ""])
+    lines.append("")
     return "\n".join(lines)
 
 
