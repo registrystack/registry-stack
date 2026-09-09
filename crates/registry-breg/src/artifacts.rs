@@ -468,9 +468,15 @@ pub(crate) fn openapi_attachment_operation(
     ] {
         operation.as_object_mut().unwrap().remove(key);
     }
-    operation["operationId"] = json!(format!(
-        "{}.attachment.{}.{}",
-        spec.route.id, slot.id, method
+    operation["operationId"] = json!(crate::attachment::operation_id(
+        &spec.route.id,
+        &slot.id,
+        match method {
+            "get" => HttpMethod::Get,
+            "patch" => HttpMethod::Patch,
+            "delete" => HttpMethod::Delete,
+            _ => unreachable!("attachment operations have a closed method set"),
+        },
     ));
     operation["x-registry-operation"] = json!(format!("attachment_{method}"));
     operation["x-registry-attachmentSlot"] = json!(slot.id);
@@ -4208,6 +4214,9 @@ fn api_field_names<'a>(
 }
 
 fn api_field_name<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a str> {
+    if let Some(slot) = entity.attachments.get(field_id) {
+        return Some(slot.id.as_str());
+    }
     entity
         .stored_fields
         .iter()

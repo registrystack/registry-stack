@@ -4025,3 +4025,91 @@ async fn assert_problem_type(response: axum::response::Response, code: &str) {
         "{code}"
     );
 }
+
+#[tokio::test]
+async fn attachment_query_metadata_matches_readable_slots_without_scalar_sql_projections() {
+    let mut source: Value = serde_json::from_str(include_str!(
+        "../../../products/breg/acceptance/request-attachments/registry.yaml"
+    ))
+    .unwrap();
+    let mut narrow = source["accessProfiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|profile| profile["id"] == "owner")
+        .unwrap()
+        .clone();
+    narrow["id"] = json!("metadata-narrow");
+    narrow["grants"][0]["operations"] = json!(["get", "list"]);
+    narrow["grants"][0]["readableFields"] = json!(["record", "label"]);
+    narrow["grants"][0]["writableFields"] = json!([]);
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(narrow);
+    let source = serde_json::to_string(&source).unwrap();
+    let project = parse_project_yaml(source.as_bytes()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    for query in &registry.queries().operations {
+        assert!(!query
+            .projection_fields
+            .contains(&"supporting-file".to_owned()));
+        assert!(!query
+            .processing_fields
+            .contains(&"supporting-file".to_owned()));
+    }
+    let harness = Harness::from_project(&source, true);
+    let claims = VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        "attachment-owner",
+        BTreeSet::from(["attachments:submit".to_owned()]),
+        Some("attachment-acceptance".to_owned()),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    for (profile, expected) in [
+        ("owner", json!(["label", "record", "supporting-file"])),
+        ("metadata-narrow", json!(["label", "record"])),
+    ] {
+        let response = harness
+            .send(
+                Method::GET,
+                &format!("/v1/registry?accessProfile={profile}"),
+                Some(claims.clone()),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let metadata = body_json(response).await;
+        let operation = metadata_operation(&metadata, "records.correction-request.list");
+        let selectable = operation["query"]["selectableFields"].as_array().unwrap();
+        assert_eq!(
+            json!(selectable
+                .iter()
+                .map(|field| field["id"].clone())
+                .collect::<Vec<_>>()),
+            expected
+        );
+        assert_eq!(
+            json!(selectable
+                .iter()
+                .map(|field| field["apiName"].clone())
+                .collect::<Vec<_>>()),
+            expected
+        );
+        let response = harness
+            .send(
+                Method::GET,
+                &format!("/openapi.json?accessProfile={profile}"),
+                Some(claims.clone()),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let openapi = body_json(response).await;
+        assert_eq!(
+            openapi["paths"]["/v1/records/correction-requests"]["get"]["x-registry-queryProfile"]
+                ["selectableProperties"],
+            expected
+        );
+    }
+    assert_eq!(harness.records.calls(), 0);
+}

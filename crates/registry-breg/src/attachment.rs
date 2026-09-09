@@ -6,6 +6,30 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "runtime")]
+use crate::model::CompiledRoute;
+use crate::model::HttpMethod;
+
+/// Binary routes retain the parent authority but have their own stable wire identity.
+#[cfg(feature = "runtime")]
+pub(crate) fn route(base: &CompiledRoute, slot_id: &str, method: HttpMethod) -> CompiledRoute {
+    let mut route = base.clone();
+    route.id = operation_id(&base.id, slot_id, method);
+    route.path = format!("{}/attachments/{slot_id}", base.path);
+    route.method = method;
+    route
+}
+
+pub(crate) fn operation_id(base: &str, slot_id: &str, method: HttpMethod) -> String {
+    let method = match method {
+        HttpMethod::Get => "get",
+        HttpMethod::Patch => "patch",
+        HttpMethod::Delete => "delete",
+        HttpMethod::Post => "post",
+    };
+    format!("{base}.attachment.{slot_id}.{method}")
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct AttachmentMutation {
     pub slot_id: String,

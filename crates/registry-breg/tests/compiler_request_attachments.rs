@@ -379,6 +379,11 @@ fn generated_attachment_contract_exposes_binary_routes_and_read_only_metadata() 
             .get("supporting-file")
             .is_none()
     );
+    assert_eq!(
+        openapi["paths"]["/v1/records/requests"]["get"]["x-registry-queryProfiles"]["operator"]
+            ["selectableProperties"],
+        json!(["item", "label", "supporting-file"])
+    );
     let path = &openapi["paths"]["/v1/records/requests/{record_id}/attachments/supporting-file"];
     for method in ["get", "patch", "delete"] {
         let operation = &path[method];

@@ -701,6 +701,134 @@ async fn s3_cleanup_with_all_requests_retained(
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_attachment_projection_locks_exclude_scalar_reads_and_lookahead() {
+    let database = TestDatabase::create(8).await;
+    let registry =
+        Arc::new(compile_project(&attachment_project(), &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let storage = registry_breg::attachment_storage::AttachmentStorage::Database;
+    let app = router(change_request_service_with_attachment_storage(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        PACKAGE_ID,
+        None,
+        None,
+        storage.clone(),
+    ));
+    let steward = claims("steward", "projection-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "projection-site",
+        json!({"tenant":TENANT,"name":"site"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "projection-placement",
+        json!({"tenant":TENANT,"site":site.id}),
+    )
+    .await;
+    let mut drafts = Vec::new();
+    for key in ["projection-first", "projection-second"] {
+        drafts.push(create_record(&app, "/v1/records/correction-requests?accessProfile=submitter", submitter.clone(), key, json!({"tenant":TENANT,"placement":placement.id,"proposedSite":site.id,"reason":"initial reason"})).await);
+    }
+    drafts.sort_by(|left, right| left.id.cmp(&right.id));
+    for (case, uri, target) in [
+        (
+            "scalar-get",
+            format!(
+                "/v1/records/correction-requests/{}?accessProfile=submitter&$select=reason",
+                drafts[0].id
+            ),
+            &drafts[0],
+        ),
+        (
+            "scalar-list",
+            "/v1/records/correction-requests?accessProfile=submitter&$select=reason&$top=1"
+                .to_owned(),
+            &drafts[0],
+        ),
+        (
+            "attachment-lookahead",
+            "/v1/records/correction-requests?accessProfile=submitter&$select=evidence&$top=1"
+                .to_owned(),
+            &drafts[1],
+        ),
+    ] {
+        let write_uri = format!(
+            "/v1/records/correction-requests/{}?accessProfile=submitter",
+            target.id
+        );
+        let before = get_record(&app, &write_uri, submitter.clone()).await;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let resume = Arc::new(tokio::sync::Notify::new());
+        let paused = router(change_request_service_with_attachment_pause(
+            &database,
+            registry.clone(),
+            identity.clone(),
+            PACKAGE_ID,
+            None,
+            None,
+            storage.clone(),
+            Some((entered.clone(), resume.clone())),
+        ));
+        let actor = submitter.clone();
+        let reader = tokio::spawn(async move {
+            response_parts(send(&paused, Method::GET, &uri, Some(actor), &[], vec![]).await).await
+        });
+        tokio::time::timeout(Duration::from_secs(3), entered.notified())
+            .await
+            .expect("read reaches source materialization barrier");
+        let writer_app = app.clone();
+        let actor = submitter.clone();
+        let mut writer = tokio::spawn(async move {
+            response_parts(
+                send(
+                    &writer_app,
+                    Method::PATCH,
+                    &write_uri,
+                    Some(actor),
+                    &[
+                        ("content-type", "application/json-patch+json"),
+                        ("idempotency-key", case),
+                        ("if-match", &before.etag),
+                    ],
+                    serde_json::to_vec(
+                        &json!([{"op":"replace","path":"/data/reason","value":case}]),
+                    )
+                    .unwrap(),
+                )
+                .await,
+            )
+            .await
+        });
+        let completed = tokio::time::timeout(Duration::from_secs(1), &mut writer).await;
+        resume.notify_one();
+        let read = reader.await.unwrap();
+        assert_eq!(read.status, StatusCode::OK, "{case}: {}", read.body);
+        let written = match completed {
+            Ok(result) => result.unwrap(),
+            Err(_) => {
+                writer.await.unwrap();
+                panic!("{case} unnecessarily locked a record whose attachment metadata was not returned");
+            }
+        };
+        assert_eq!(written.status, StatusCode::OK, "{case}: {}", written.body);
+        if case == "attachment-lookahead" {
+            assert_eq!(read.body["items"].as_array().unwrap().len(), 1);
+            assert_eq!(read.body["items"][0]["id"], drafts[0].id);
+        }
+    }
+    database.cleanup().await;
+}
+
 async fn attachment_s3_storage() -> (
     tempfile::TempDir,
     registry_breg::attachment_storage::AttachmentStorage,
@@ -778,6 +906,16 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
             .filter(|grant| grant.entity == "correction-request")
         {
             grant.readable_fields.insert("evidence".to_owned());
+            for stage in &mut grant.review_stages {
+                stage
+                    .targets
+                    .push(registry_breg::contract::ReviewStageTargetGrantSource {
+                        entity: "correction-request".to_owned(),
+                        readable_fields: BTreeSet::from(["evidence".to_owned()]),
+                        row_boundaries: vec![],
+                    });
+            }
+
             if profile.id == "submitter" {
                 grant.writable_fields.insert("evidence".to_owned());
                 grant.request_visibility =
@@ -807,7 +945,110 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         "target_tenant_claim".to_owned();
     project.access_profiles.push(other_target);
 
+    for variant in [
+        "reviewer-no-slot",
+        "reviewer-empty-slot",
+        "reviewer-other-stage",
+        "reviewer-self-reason",
+    ] {
+        let mut profile = project
+            .access_profiles
+            .iter()
+            .find(|profile| profile.id == "reviewer")
+            .unwrap()
+            .clone();
+        profile.id = variant.to_owned();
+        profile.default = false;
+        let grant = &mut profile.grants[0];
+        let stage = &mut grant.review_stages[0];
+        match variant {
+            "reviewer-no-slot" => stage
+                .targets
+                .retain(|target| target.entity != "correction-request"),
+            "reviewer-empty-slot" => stage
+                .targets
+                .iter_mut()
+                .find(|target| target.entity == "correction-request")
+                .unwrap()
+                .readable_fields
+                .clear(),
+            "reviewer-other-stage" => {
+                let target = stage.targets.pop().unwrap();
+                grant
+                    .review_stages
+                    .push(registry_breg::contract::ReviewStageGrantSource {
+                        stage: "final".to_owned(),
+                        targets: vec![target],
+                    });
+            }
+            _ => stage
+                .targets
+                .iter_mut()
+                .find(|target| target.entity == "correction-request")
+                .unwrap()
+                .row_boundaries
+                .push(registry_breg::contract::RowBoundarySource {
+                    field: "reason".to_owned(),
+                    claim: "self_reason_claim".to_owned(),
+                    operator: registry_breg::contract::BoundaryOperator::Equals,
+                }),
+        }
+        project.access_profiles.push(profile);
+    }
+    let mut self_applier = project
+        .access_profiles
+        .iter()
+        .find(|profile| profile.id == "applier")
+        .unwrap()
+        .clone();
+    self_applier.id = "applier-self-reason".to_owned();
+    self_applier.default = false;
+    self_applier.grants[0]
+        .apply_targets
+        .push(registry_breg::contract::ApplyTargetGrantSource {
+            entity: "correction-request".to_owned(),
+            row_boundaries: vec![registry_breg::contract::RowBoundarySource {
+                field: "reason".to_owned(),
+                claim: "self_reason_claim".to_owned(),
+                operator: registry_breg::contract::BoundaryOperator::Equals,
+            }],
+        });
+    project.access_profiles.push(self_applier);
+
     project
+}
+
+fn attachment_self_reason_claims(profile: &str, reason: &str) -> VerifiedRequestClaims {
+    let (principal, purpose) = if profile.starts_with("applier") {
+        (APPLIER, "apply")
+    } else {
+        (REVIEWER, "review")
+    };
+    VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        principal,
+        BTreeSet::new(),
+        Some(purpose.to_owned()),
+        BTreeMap::from([
+            (
+                "tenant_claim".to_owned(),
+                VerifiedClaimValue::direct_string(TENANT).unwrap(),
+            ),
+            (
+                "self_reason_claim".to_owned(),
+                VerifiedClaimValue::direct_string(reason).unwrap(),
+            ),
+        ]),
+    )
+    .unwrap()
+}
+
+async fn attachment_audit_records(
+    database: &TestDatabase,
+    operation_id: &str,
+    phase: &str,
+) -> Vec<Value> {
+    database.admin.query("SELECT convert_from(envelope, 'UTF8')::jsonb -> 'record' FROM registry_internal.registry_audit WHERE convert_from(envelope, 'UTF8')::jsonb #>> '{record,operationId}' = $1 AND convert_from(envelope, 'UTF8')::jsonb #>> '{record,phase}' = $2", &[&operation_id, &phase]).await.unwrap().iter().map(|row| row.get(0)).collect()
 }
 
 async fn attachment_download_journey(
@@ -820,6 +1061,19 @@ async fn attachment_download_journey(
         compile_project(&project, &[], CompileProfile::Authoring)
             .expect("attachment fixture compiles"),
     );
+    let attachment_operation = |operation, method| {
+        let base = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| route.entity_id == "correction-request" && route.operation == operation)
+            .unwrap();
+        format!("{}.attachment.evidence.{method}", base.id)
+    };
+    let patch_operation = attachment_operation(registry_breg::contract::Operation::Patch, "patch");
+    let delete_operation =
+        attachment_operation(registry_breg::contract::Operation::Patch, "delete");
+    let get_operation = attachment_operation(registry_breg::contract::Operation::Get, "get");
     let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
     let app = router(change_request_service_with_attachment_storage(
         &database,
@@ -882,6 +1136,42 @@ async fn attachment_download_journey(
         "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
         draft.id
     );
+    for (headers, status) in [
+        (
+            vec![
+                ("content-type", "application/octet-stream"),
+                ("idempotency-key", "missing-precondition"),
+            ],
+            StatusCode::PRECONDITION_REQUIRED,
+        ),
+        (
+            vec![
+                ("content-type", "application/octet-stream"),
+                ("if-match", before.etag.as_str()),
+            ],
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let count = attachment_audit_records(&database, &patch_operation, "refusal")
+            .await
+            .len();
+        let response = send(
+            &app,
+            Method::PATCH,
+            &upload_uri,
+            Some(submitter.clone()),
+            &headers,
+            vec![1],
+        )
+        .await;
+        assert_eq!(response.status(), status);
+        let records = attachment_audit_records(&database, &patch_operation, "refusal").await;
+        assert_eq!(records.len(), count + 1);
+        assert!(records
+            .iter()
+            .all(|record| record["method"] == "PATCH"
+                && record["attachment"]["slotId"] == "evidence"));
+    }
     for (mime, body, status, key) in [
         (
             "text/plain",
@@ -896,6 +1186,9 @@ async fn attachment_download_journey(
             "attachment-too-large",
         ),
     ] {
+        let refusal_count = attachment_audit_records(&database, &patch_operation, "refusal")
+            .await
+            .len();
         let refused = send(
             &app,
             Method::PATCH,
@@ -911,6 +1204,12 @@ async fn attachment_download_journey(
         )
         .await;
         assert_eq!(refused.status(), status);
+        assert_eq!(
+            attachment_audit_records(&database, &patch_operation, "refusal")
+                .await
+                .len(),
+            refusal_count + 1
+        );
     }
     struct InterruptedUpload(bool);
     impl futures_core::Stream for InterruptedUpload {
@@ -1041,6 +1340,77 @@ async fn attachment_download_journey(
     .await;
     assert_eq!(conflicting.status(), StatusCode::CONFLICT);
 
+    let patch_audits = attachment_audit_records(&database, &patch_operation, "terminal").await;
+    for outcome in ["committed", "replayed"] {
+        assert!(patch_audits
+            .iter()
+            .any(|record| record["outcome"] == outcome
+                && record["method"] == "PATCH"
+                && record["attachment"]["slotId"] == "evidence"));
+    }
+    let delete_refusal_count = attachment_audit_records(&database, &delete_operation, "refusal")
+        .await
+        .len();
+    let delete_refused = send(
+        &app,
+        Method::DELETE,
+        &upload_uri,
+        Some(submitter.clone()),
+        &[
+            ("idempotency-key", "attachment-remove-invalid-body"),
+            ("if-match", &uploaded.etag),
+        ],
+        vec![1],
+    )
+    .await;
+    assert_eq!(delete_refused.status(), StatusCode::BAD_REQUEST);
+    let delete_refusals = attachment_audit_records(&database, &delete_operation, "refusal").await;
+    assert_eq!(delete_refusals.len(), delete_refusal_count + 1);
+    assert!(
+        delete_refusals
+            .iter()
+            .all(|record| record["method"] == "DELETE"
+                && record["attachment"]["slotId"] == "evidence")
+    );
+    let removed = response_parts(
+        send(
+            &app,
+            Method::DELETE,
+            &upload_uri,
+            Some(submitter.clone()),
+            &[
+                ("idempotency-key", "attachment-remove"),
+                ("if-match", &uploaded.etag),
+            ],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(removed.status, StatusCode::OK, "{}", removed.body);
+    let delete_audits = attachment_audit_records(&database, &delete_operation, "terminal").await;
+    assert!(delete_audits
+        .iter()
+        .any(|record| record["outcome"] == "committed"
+            && record["method"] == "DELETE"
+            && record["attachment"]["slotId"] == "evidence"));
+    let restored = response_parts(
+        send(
+            &app,
+            Method::PATCH,
+            &upload_uri,
+            Some(submitter.clone()),
+            &[
+                ("content-type", "application/octet-stream"),
+                ("idempotency-key", "attachment-restore"),
+                ("if-match", &removed.etag),
+            ],
+            bytes.clone(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(restored.status, StatusCode::OK, "{}", restored.body);
     let current = get_record(&app, &record_uri, submitter.clone()).await;
     assert_eq!(current.body["data"]["evidence"]["byteSize"], bytes.len());
     assert_eq!(current.body["data"]["evidence"]["proposalVersion"], 1);
@@ -1252,6 +1622,12 @@ async fn attachment_download_journey(
     assert_eq!(audit["entityId"], "correction-request");
     assert!(audit.get("actionId").is_none());
     assert_eq!(audit["outcome"], "returned");
+    assert_eq!(audit["operationId"], get_operation);
+    assert!(
+        !attachment_audit_records(&database, &get_operation, "attempt")
+            .await
+            .is_empty()
+    );
     for (uri, actor) in [
         (
             download_uri.clone(),
@@ -1287,6 +1663,71 @@ async fn attachment_download_journey(
     )
     .await;
     assert_eq!(submitted["request"]["proposalVersion"], 1);
+    for profile in [
+        "reviewer-no-slot",
+        "reviewer-empty-slot",
+        "reviewer-other-stage",
+    ] {
+        let actor = claims(profile, REVIEWER, Some("review"));
+        let metadata = get_record(
+            &app,
+            &record_uri.replace(
+                "accessProfile=submitter",
+                &format!("accessProfile={profile}"),
+            ),
+            actor.clone(),
+        )
+        .await;
+        assert_eq!(metadata.body["data"]["evidence"]["sha256"], original_hash);
+        assert_eq!(
+            send(
+                &app,
+                Method::GET,
+                &download_uri.replace(
+                    "accessProfile=submitter",
+                    &format!("accessProfile={profile}")
+                ),
+                Some(actor),
+                &[],
+                vec![]
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND,
+            "{profile} cannot borrow a slot grant from GET or a different stage"
+        );
+    }
+    let first_reason = get_record(&app, &record_uri, submitter.clone()).await.body["data"]
+        ["reason"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for profile in ["reviewer-self-reason", "applier-self-reason"] {
+        for (reason, expected) in [
+            (first_reason.as_str(), StatusCode::OK),
+            ("unrelated reason", StatusCode::NOT_FOUND),
+        ] {
+            let uri = download_uri.replace(
+                "accessProfile=submitter",
+                &format!("accessProfile={profile}"),
+            );
+            assert_eq!(
+                send(
+                    &app,
+                    Method::GET,
+                    &uri,
+                    Some(attachment_self_reason_claims(profile, reason)),
+                    &[],
+                    vec![]
+                )
+                .await
+                .status(),
+                expected,
+                "request-self boundary controls {profile}"
+            );
+        }
+    }
+
     for (profile, principal, purpose) in [
         ("reviewer", REVIEWER, "review"),
         ("applier", APPLIER, "apply"),
@@ -1362,6 +1803,24 @@ async fn attachment_download_journey(
     .await;
     assert_eq!(revised["request"]["proposalVersion"], 2);
     let current = get_record(&app, &record_uri, submitter.clone()).await;
+    let edited = send(
+        &app,
+        Method::PATCH,
+        &record_uri,
+        Some(submitter.clone()),
+        &[
+            ("content-type", "application/json-patch+json"),
+            ("idempotency-key", "attachment-second-reason"),
+            ("if-match", &current.etag),
+        ],
+        serde_json::to_vec(
+            &json!([{"op":"replace","path":"/data/reason","value":"second proposal reason"}]),
+        )
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(edited.status(), StatusCode::OK);
+    let current = get_record(&app, &record_uri, submitter.clone()).await;
     let replacement = vec![1, 2, 3, 4, 5];
     let replaced = response_parts(
         send(
@@ -1410,6 +1869,34 @@ async fn attachment_download_journey(
         |_| json!({}),
     )
     .await;
+    for profile in ["reviewer-self-reason", "applier-self-reason"] {
+        for (version, reason, expected) in [
+            (1, first_reason.as_str(), StatusCode::OK),
+            (1, "second proposal reason", StatusCode::NOT_FOUND),
+            (2, "second proposal reason", StatusCode::OK),
+        ] {
+            let uri = download_uri
+                .replace(
+                    "accessProfile=submitter",
+                    &format!("accessProfile={profile}"),
+                )
+                .replace("proposalVersion=1", &format!("proposalVersion={version}"));
+            assert_eq!(
+                send(
+                    &app,
+                    Method::GET,
+                    &uri,
+                    Some(attachment_self_reason_claims(profile, reason)),
+                    &[],
+                    vec![]
+                )
+                .await
+                .status(),
+                expected,
+                "{profile} reads only the exact proposal's authorized intake"
+            );
+        }
+    }
     let previous = send(
         &app,
         Method::GET,

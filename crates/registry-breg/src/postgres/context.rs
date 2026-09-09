@@ -1038,6 +1038,59 @@ impl ChangeRequestTargetContext {
         Ok(())
     }
 
+    /// Check a request-self read grant against the exact submitted intake.
+    /// This returns no context usable by a lifecycle mutation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn authorize_retained_attachment_request(
+        registry: &CompiledRegistry,
+        claims: &ClaimContext,
+        review_stage: Option<&str>,
+        slot: &str,
+        boundaries: &[RowBoundaryContext],
+        intake: &serde_json::Map<String, Value>,
+        record_id: Uuid,
+    ) -> Result<()> {
+        claims.validate()?;
+        let entity = registry
+            .entities()
+            .get(claims.entity_id())
+            .ok_or_else(invalid_context)?;
+        let plan = entity.change_request.as_ref().ok_or_else(invalid_context)?;
+        if !entity.attachments.contains_key(slot) {
+            return Err(invalid_context());
+        }
+        let expected = match review_stage {
+            Some(stage) => {
+                let grant = plan
+                    .review_grants
+                    .iter()
+                    .find(|grant| {
+                        grant.profile_id == claims.access_profile()
+                            && grant.stage == stage
+                            && grant.target_entity_id == entity.id
+                    })
+                    .ok_or_else(invalid_context)?;
+                if !grant.readable_fields.contains(slot) {
+                    return Err(invalid_context());
+                }
+                &grant.row_boundaries
+            }
+            None => {
+                &plan
+                    .apply_grants
+                    .iter()
+                    .find(|grant| {
+                        grant.profile_id == claims.access_profile()
+                            && grant.target_entity_id == entity.id
+                    })
+                    .ok_or_else(invalid_context)?
+                    .row_boundaries
+            }
+        };
+        validate_target_boundaries(registry, &entity.id, boundaries, expected)?;
+        validate_snapshot_boundaries(entity, intake, record_id, boundaries)
+    }
+
     /// Reauthorize retained attachment targets without issuing a context that
     /// could be installed for approval or mutation. An older proposal may keep
     /// its bytes after a successor narrows attachment upload policy; every

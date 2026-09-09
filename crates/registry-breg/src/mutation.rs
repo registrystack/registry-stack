@@ -802,17 +802,12 @@ impl MutationPlan {
         {
             return Err(MutationError::InvalidRequest);
         }
-        self.route.path = format!("{}/attachments/{slot_id}", self.route.path);
-        self.route.id = format!(
-            "{}.attachments.{slot_id}.{}",
-            self.route.id,
-            if removal { "remove" } else { "upload" }
-        );
-        self.route.method = if removal {
+        let method = if removal {
             HttpMethod::Delete
         } else {
             HttpMethod::Patch
         };
+        self.route = crate::attachment::route(&self.route, slot_id, method);
         Ok(self)
     }
 

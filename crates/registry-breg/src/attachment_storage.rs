@@ -622,6 +622,108 @@ mod tests {
     }
 
     #[test]
+    fn ipv6_signed_host_preserves_brackets_and_normalizes_default_ports() {
+        // Generated independently with Python hashlib/hmac using the explicitly
+        // bracketed canonical Host, empty payload, and fixed timestamp below.
+        for (endpoint, expected_host, signature) in [
+            (
+                "http://[::1]",
+                "[::1]",
+                "0ee10b0dc41c4bff26a5dd9eaad63941772aae90d96c7019fce39cd81cd52150",
+            ),
+            (
+                "http://[::1]:80",
+                "[::1]",
+                "0ee10b0dc41c4bff26a5dd9eaad63941772aae90d96c7019fce39cd81cd52150",
+            ),
+            (
+                "http://[::1]:9000",
+                "[::1]:9000",
+                "36ddf894e9015041c902f6634914112167bb44b846e701ae807a5d165eebb194",
+            ),
+            (
+                "https://[2001:db8::1]",
+                "[2001:db8::1]",
+                "950e3a5899c2224bca023a1c0718c2d55c967c90da7bdd03a8b3ac32e97d369e",
+            ),
+            (
+                "https://[2001:db8::1]:443",
+                "[2001:db8::1]",
+                "950e3a5899c2224bca023a1c0718c2d55c967c90da7bdd03a8b3ac32e97d369e",
+            ),
+            (
+                "https://[2001:db8::1]:9443",
+                "[2001:db8::1]:9443",
+                "7457aafa835bafa86bae6674c427198ac240c89b22488b2907c3ce60f7c885c1",
+            ),
+        ] {
+            let store = store(endpoint, "registry");
+            let mut url = store.bucket_url.clone();
+            url.set_query(Some("versioning="));
+            let parsed_host = url.host_str().unwrap();
+            assert!(parsed_host.starts_with('[') && parsed_host.ends_with(']'));
+            let headers = store
+                .signed_headers(&Method::GET, &url, &[], "20260909T120000Z")
+                .unwrap();
+            assert_eq!(headers["host"], expected_host);
+            let expected_authorization = format!("AWS4-HMAC-SHA256 Credential=breg960test/20260909/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}");
+            assert_eq!(headers["authorization"], expected_authorization);
+            let request = store.client.get(url).headers(headers).build().unwrap();
+            assert_eq!(request.headers()["host"], expected_host);
+        }
+    }
+
+    #[tokio::test]
+    async fn ipv6_signed_request_preserves_bracketed_host_on_wire() {
+        use axum::{extract::Request, routing::get, Router};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let listener = tokio::net::TcpListener::bind("[::1]:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_host = address.to_string();
+        let received = Arc::new(AtomicBool::new(false));
+        let observed = received.clone();
+        let app = Router::new().route(
+            "/breg-960-test",
+            get(move |request: Request| {
+                let expected_host = expected_host.clone();
+                let observed = observed.clone();
+                async move {
+                    let host_matches = request
+                        .headers()
+                        .get("host")
+                        .is_some_and(|value| value == expected_host.as_str());
+                    let host_is_signed = request
+                        .headers()
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .is_some_and(|value| {
+                            value.contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date,")
+                        });
+                    let exact_request = host_matches
+                        && host_is_signed
+                        && request.uri().query() == Some("versioning=");
+                    observed.store(exact_request, Ordering::SeqCst);
+                    if exact_request {
+                        (StatusCode::OK, "<VersioningConfiguration/>")
+                    } else {
+                        (StatusCode::BAD_REQUEST, "")
+                    }
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let result = store(&format!("http://{address}"), "registry")
+            .ensure_unversioned()
+            .await;
+        server.abort();
+        result.unwrap();
+        assert!(received.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn strict_storage_configuration_and_debug_are_value_free() {
         for endpoint in [
             "http://storage.example",

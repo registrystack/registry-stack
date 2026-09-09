@@ -303,9 +303,16 @@ fn selectors(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Vec<Valu
 
 fn query_metadata(surface: &AuthorizedSurface<'_>, query: &CompiledQueryOperation) -> Value {
     let entity = surface.response_entity;
+    // Attachment metadata is selectable without adding a scalar SQL column.
+    let selectable_fields = query
+        .projection_fields
+        .iter()
+        .chain(entity.attachments.keys())
+        .filter(|id| surface.readable_fields.contains(*id))
+        .collect::<BTreeSet<_>>();
     json!({
         "kind": query.kind,
-        "selectableFields": query.projection_fields.iter().filter(|id| surface.readable_fields.contains(*id)).filter_map(|id| field_identity(entity, id)).collect::<Vec<_>>(),
+        "selectableFields": selectable_fields.into_iter().filter_map(|id| field_identity(entity, id)).collect::<Vec<_>>(),
         "filterableFields": query.filter_fields.iter().filter_map(|field| {
             let mut value = field_identity(entity, &field.field)?;
             value["operators"] = json!(field.operators);
@@ -445,6 +452,9 @@ fn logical_field<'a>(entity: &'a CompiledEntity, id: &str) -> Option<&'a Compile
 }
 
 fn field_identity(entity: &CompiledEntity, id: &str) -> Option<Value> {
+    if entity.attachments.contains_key(id) {
+        return Some(json!({"id": id, "apiName": id}));
+    }
     if entity.change_request.is_some() {
         if let Some(api_name) = crate::model::request_query_field_api_name(id) {
             return Some(json!({"id": id, "apiName": api_name}));
