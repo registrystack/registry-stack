@@ -1,4 +1,4 @@
-import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { open, readFile, rename, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
@@ -48,6 +48,12 @@ export async function migrateCliReferenceReview(
   if (document.errors.length > 0) throw document.errors[0];
   const metadata = document.toJS();
   const catalog = await collect(repoRoot, execute);
+  const requireUnchanged = async () => {
+    if (await readFile(path, 'utf8') !== original) {
+      throw new Error('CLI reference review metadata changed during migration; preserve those edits and rerun');
+    }
+  };
+  await requireUnchanged();
   if (metadata?.schema_version !== legacyReviewSchemaVersion) {
     validateReviewMetadata(metadata, catalog);
     return { migrated: false, metadata };
@@ -70,11 +76,18 @@ export async function migrateCliReferenceReview(
   document.set('schema_version', migrated.schema_version);
   document.set('reviewed_content_sha256', migrated.reviewed_content_sha256);
   const temporary = `${path}.tmp-${process.pid}`;
+  // Create exclusively before entering cleanup, so an existing file is never ours.
+  const temporaryFile = await open(temporary, 'wx');
+  let temporaryOwned = true;
   try {
-    await writeFile(temporary, String(document), 'utf8');
+    await temporaryFile.writeFile(String(document), 'utf8');
+    await temporaryFile.close();
+    await requireUnchanged();
     await rename(temporary, path);
+    temporaryOwned = false;
   } finally {
-    await unlink(temporary).catch(() => {});
+    await temporaryFile.close().catch(() => {});
+    if (temporaryOwned) await unlink(temporary).catch(() => {});
   }
   return { migrated: true, metadata: migrated };
 }

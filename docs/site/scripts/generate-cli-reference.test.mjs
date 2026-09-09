@@ -373,3 +373,50 @@ test('migration proves legacy review after a version bump and preserves human pr
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('migration preserves author edits made while the collector runs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'registry-cli-migrate-edit-'));
+  const directory = join(root, 'docs/site/src/data');
+  const path = join(directory, 'cli-reference.yaml');
+  const catalog = fixtureCatalog();
+  const metadata = {
+    schema_version: legacyReviewSchemaVersion,
+    status: 'current',
+    last_reviewed: '2026-08-13',
+    reviewed_source_version: catalog.source_version,
+    reviewed_catalog_sha256: catalogDigest(catalog),
+  };
+  const original = JSON.stringify(metadata);
+  const edited = JSON.stringify({ ...metadata, status: 'draft' });
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeFile(path, original);
+    await assert.rejects(migrateCliReferenceReview(root, {
+      execute: async () => {
+        await writeFile(path, edited);
+        return JSON.stringify(catalog);
+      },
+    }), /metadata changed during migration/u);
+    assert.equal(await readFile(path, 'utf8'), edited);
+    await assert.rejects(readFile(`${path}.tmp-${process.pid}`), { code: 'ENOENT' });
+
+    // A retry can migrate the author's record, preserving its chosen draft status.
+    const retry = await migrateCliReferenceReview(root, {
+      execute: async () => JSON.stringify(catalog),
+    });
+    assert.equal(retry.migrated, true);
+    assert.equal(retry.metadata.status, 'draft');
+    assert.equal(retry.metadata.last_reviewed, metadata.last_reviewed);
+
+    await writeFile(path, original);
+    const temporary = `${path}.tmp-${process.pid}`;
+    await writeFile(temporary, 'Existing temporary file owned by another operation');
+    await assert.rejects(migrateCliReferenceReview(root, {
+      execute: async () => JSON.stringify(catalog),
+    }), { code: 'EEXIST' });
+    assert.equal(await readFile(path, 'utf8'), original);
+    assert.equal(await readFile(temporary, 'utf8'), 'Existing temporary file owned by another operation');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
