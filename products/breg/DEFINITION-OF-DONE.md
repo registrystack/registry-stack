@@ -36,9 +36,10 @@ has been published.
 The pilot catalog also carries the governed surfaces that are added over the
 same binaries as configuration. Action handlers under
 `registry.action-handler/v1`, acceptance-time target requirements, native
-persisted field patterns, and current membership read boundaries are enforced
-rows, and each one names the real-PostgreSQL test that proves its refusals as
-well as its success path. Adopter tooling rows carry the same rule:
+persisted field patterns, current membership read boundaries, and
+change-request submitter targets are enforced rows, and each one names the
+real-PostgreSQL test that proves its refusals as well as its success path.
+Adopter tooling rows carry the same rule:
 `bregctl init --from publicschema`, the four published starters with
 `bregctl examples`, and `bregctl dev` reading a project's `dev-clients.yaml`
 are enforced by tests that write and compile a derived project, run every

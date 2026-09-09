@@ -2,7 +2,7 @@
   "version": 1,
   "starterId": "professional-licences",
   "variantId": "core",
-  "templateVersion": "0.1.0",
+  "templateVersion": "0.2.0",
   "title": "Professional licence register",
   "description": "Record professional licence decisions and review corrections to recorded activities and conditions.",
   "firstRecordEntity": "professional-license",
@@ -14,7 +14,7 @@
   },
   "review": {
     "entity": "scope-correction",
-    "field": "licensedActivities",
+    "fields": ["licensedActivities", "authorizationConditions"],
     "submitter": "editor",
     "reviewer": "reviewer",
     "applier": "reviewer",

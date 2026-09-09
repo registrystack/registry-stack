@@ -63,7 +63,7 @@ the local learning clients consistent across starters.
 | Actor | Licence records | Recorded-decision corrections |
 | --- | --- | --- |
 | Reader | Get/list profession, jurisdiction, recorded status and validity dates only | No access |
-| Editor (registrar) | Create, get/list and inspect all-field history | Create/edit own draft, submit, revise or cancel own requests |
+| Editor (registrar) | Create, get/list and inspect all-field history | List, create/edit own draft, submit, revise or cancel own requests |
 | Reviewer | Get/list and inspect all-field history | List, inspect, approve, reject, request revision and manually apply |
 | Holder | Get/list own licences through exact trusted person-reference equality | List, create/edit, submit, revise or cancel own corrections against currently owned licences |
 
@@ -187,6 +187,4 @@ said, never an application for a new licence or expanded entitlement. The distin
 reviewer checks the existing decision and may reject the proposal.
 
 Entity and route identifiers retain `professional-license`/`professional-licenses`
-and `scope-correction`/`scope-corrections`. The new field contract replaces the
-earlier combined `practiceScope` field and requires a freshly initialized
-learning project; it is not a migration of existing pilot records.
+and `scope-correction`/`scope-corrections`.
