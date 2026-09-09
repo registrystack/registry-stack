@@ -364,25 +364,149 @@ fn request_lifecycle_webhook_uses_classified_request_projection() {
             "reasonPresent"
         ])
     );
+}
+
+fn lifecycle_request_schema(source: &Value) -> Value {
+    let compiled = compile(source).expect("lifecycle project compiles");
+    let delivery = compiled
+        .event_deliveries()
+        .deliveries
+        .iter()
+        .find(|delivery| delivery.event_id == "request-lifecycle")
+        .unwrap();
+    let schema = compiled
+        .artifacts()
+        .get(&delivery.data_schema_artifact_path)
+        .unwrap();
+    parse_json_strict(&schema.bytes).unwrap()["properties"]["request"].clone()
+}
+
+fn lifecycle_request(transition: &str, to_state: &str) -> Value {
+    json!({
+        "proposalVersion": 1, "workflowRevision": 3,
+        "transition": transition, "fromState": "submitted", "toState": to_state,
+        "stage": "review", "effectDigest": null, "deduplicationKey": "captured-event",
+        "reasonPresent": false
+    })
+}
+
+#[test]
+fn lifecycle_event_reason_schema_matches_captured_presence_and_negative_transition_pairs() {
+    let schema = lifecycle_request_schema(&change_request_event_project());
     let validator = jsonschema::JSONSchema::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&schema_value["properties"]["request"])
-        .expect("lifecycle envelope schema compiles");
-    let mut request = json!({
-        "proposalVersion": 1, "workflowRevision": 3,
-        "transition": "request_revision", "fromState": "submitted",
-        "toState": "needs_changes", "stage": "review",
-        "effectDigest": null, "deduplicationKey": "captured-event",
-        "reasonPresent": true, "reason": " ขอรายละเอียดเพิ่มเติม 🙂 "
+        .compile(&schema)
+        .unwrap();
+    for (transition, state) in [
+        ("reject", "rejected"),
+        ("request_revision", "needs_changes"),
+    ] {
+        let mut request = lifecycle_request(transition, state);
+        assert!(validator.is_valid(&request));
+        request["reason"] = json!("explanation");
+        assert!(!validator.is_valid(&request));
+        request["reasonPresent"] = json!(true);
+        for reason in [
+            json!(""),
+            json!(" ขอรายละเอียดเพิ่มเติม 🙂 "),
+            json!("🙂".repeat(4096)),
+        ] {
+            request["reason"] = reason;
+            assert!(validator.is_valid(&request));
+        }
+        request.as_object_mut().unwrap().remove("reason");
+        assert!(!validator.is_valid(&request));
+        for reason in [
+            Value::Null,
+            json!(false),
+            json!(1),
+            json!([]),
+            json!({}),
+            json!("a\0b"),
+            json!("🙂".repeat(4097)),
+        ] {
+            request["reason"] = reason;
+            assert!(!validator.is_valid(&request));
+        }
+        request["reason"] = json!("valid text");
+        request.as_object_mut().unwrap().remove("reasonPresent");
+        assert!(!validator.is_valid(&request));
+    }
+    for (transition, state) in [
+        ("approve", "approved"),
+        ("reject", "needs_changes"),
+        ("request_revision", "rejected"),
+        ("apply", "applied"),
+    ] {
+        let mut request = lifecycle_request(transition, state);
+        request["reasonPresent"] = json!(true);
+        request["reason"] = json!("");
+        assert!(!validator.is_valid(&request));
+    }
+    let mut ordinary = lifecycle_request("approve", "approved");
+    assert!(validator.is_valid(&ordinary));
+    ordinary["stage"] = Value::Null;
+    assert!(validator.is_valid(&ordinary));
+    for stage in [json!(""), json!("review\n"), json!("a".repeat(65))] {
+        ordinary["stage"] = stage;
+        assert!(!validator.is_valid(&ordinary));
+    }
+    ordinary["stage"] = json!("review");
+    ordinary["transition"] = json!("unknown");
+    assert!(!validator.is_valid(&ordinary));
+    ordinary["transition"] = json!("approve");
+    ordinary["toState"] = json!("unknown");
+    assert!(!validator.is_valid(&ordinary));
+}
+
+#[test]
+fn lifecycle_event_schema_preserves_authored_filter_intersection() {
+    let mut source = change_request_event_project();
+    for condition in [
+        json!({"kind":"request_lifecycle", "transitions":["approve"]}),
+        json!({"kind":"request_lifecycle", "toStates":["approved"]}),
+        json!({"kind":"request_lifecycle", "transitions":["approve"], "toStates":["approved"], "stages":["review"]}),
+    ] {
+        source["entities"][2]["events"][0]["when"] = condition;
+        let schema = lifecycle_request_schema(&source);
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        assert!(validator.is_valid(&lifecycle_request("approve", "approved")));
+        for (transition, state) in [
+            ("reject", "rejected"),
+            ("request_revision", "needs_changes"),
+        ] {
+            let mut request = lifecycle_request(transition, state);
+            assert!(!validator.is_valid(&request));
+            request["reasonPresent"] = json!(true);
+            request["reason"] = json!("explanation");
+            assert!(!validator.is_valid(&request));
+        }
+    }
+    source["entities"][2]["events"][0]["when"] = json!({
+        "kind":"request_lifecycle", "transitions":["reject","request_revision"],
+        "toStates":["rejected","needs_changes"], "stages":["review"]
     });
-    assert!(validator.is_valid(&request));
-    request.as_object_mut().unwrap().remove("reason");
-    assert!(validator.is_valid(&request));
-    request["reason"] = json!("🙂".repeat(4097));
-    assert!(!validator.is_valid(&request));
-    request.as_object_mut().unwrap().remove("reason");
-    request.as_object_mut().unwrap().remove("reasonPresent");
-    assert!(!validator.is_valid(&request));
+    let schema = lifecycle_request_schema(&source);
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    for (transition, state) in [
+        ("reject", "rejected"),
+        ("request_revision", "needs_changes"),
+    ] {
+        let mut request = lifecycle_request(transition, state);
+        request["reasonPresent"] = json!(true);
+        request["reason"] = json!("");
+        assert!(validator.is_valid(&request));
+        for stage in [Value::Null, json!("another-review")] {
+            request["stage"] = stage;
+            assert!(!validator.is_valid(&request));
+        }
+    }
 }
 
 #[test]

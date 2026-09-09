@@ -8,8 +8,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
-    EventSource, EventTrigger, FieldTypeSource, MutationMode, Operation, PackageIdentitySource,
-    ProvenanceFieldSource,
+    EventConditionSource, EventSource, EventTrigger, FieldTypeSource, MutationMode, Operation,
+    PackageIdentitySource, ProvenanceFieldSource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -320,36 +320,7 @@ pub(crate) fn event_data_schema_binding(
     properties.insert("trigger".to_owned(), json!({"const": trigger}));
     properties.insert("packageRevision".to_owned(), json!({"type": "string"}));
     if event.trigger == EventTrigger::RequestLifecycle {
-        properties.insert(
-            "request".to_owned(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "proposalVersion": {"type": "integer", "minimum": 1},
-                    "workflowRevision": {"type": "integer", "minimum": 1},
-                    "transition": {"type": "string"},
-                    "fromState": {"type": "string"},
-                    "toState": {"type": "string"},
-                    "stage": {"type": ["string", "null"]},
-                    "effectDigest": {"type": ["string", "null"]},
-                    "deduplicationKey": {"type": "string"},
-                    "reasonPresent": {"type": "boolean"},
-                    "reason": review_reason_schema()
-                },
-                "required": [
-                    "proposalVersion",
-                    "workflowRevision",
-                    "transition",
-                    "fromState",
-                    "toState",
-                    "stage",
-                    "effectDigest",
-                    "deduplicationKey",
-                    "reasonPresent"
-                ]
-            }),
-        );
+        properties.insert("request".to_owned(), request_lifecycle_event_schema(event));
     }
     properties.insert(
         "values".to_owned(),
@@ -487,6 +458,65 @@ pub(crate) fn openapi_entity_input_schema(
             MutationMode::Mutable => "mutable",
             MutationMode::CreateOnly => "create_only",
         }
+    })
+}
+
+fn review_stage_id_schema() -> Value {
+    json!({
+        "type": "string", "minLength": 1, "maxLength": 64,
+        "pattern": "^[a-z]", "not": {"pattern": "[^a-z0-9_-]"}
+    })
+}
+
+fn request_lifecycle_event_schema(event: &EventSource) -> Value {
+    let mut transition =
+        json!({"type": "string", "enum": crate::compiler::REQUEST_LIFECYCLE_TRANSITIONS});
+    let mut to_state = request_state_schema();
+    let mut stage = json!({"anyOf": [review_stage_id_schema(), {"type": "null"}]});
+    if let Some(EventConditionSource::RequestLifecycle {
+        transitions,
+        to_states,
+        stages,
+    }) = &event.when
+    {
+        if !transitions.is_empty() {
+            transition = json!({"type": "string", "enum": transitions});
+        }
+        if !to_states.is_empty() {
+            to_state = json!({"type": "string", "enum": to_states});
+        }
+        if !stages.is_empty() {
+            stage = json!({"type": "string", "enum": stages});
+        }
+    }
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "proposalVersion": {"type": "integer", "minimum": 1},
+            "workflowRevision": {"type": "integer", "minimum": 1},
+            "transition": transition,
+            "fromState": request_state_schema(),
+            "toState": to_state,
+            "stage": stage,
+            "effectDigest": {"type": ["string", "null"]},
+            "deduplicationKey": {"type": "string"},
+            "reasonPresent": {"type": "boolean"},
+            "reason": review_reason_schema()
+        },
+        "required": [
+            "proposalVersion", "workflowRevision", "transition", "fromState", "toState",
+            "stage", "effectDigest", "deduplicationKey", "reasonPresent"
+        ],
+        "if": {"properties": {"reasonPresent": {"const": true}}},
+        "then": {
+            "required": ["reason"],
+            "oneOf": [
+                {"properties": {"transition": {"const": "reject"}, "toState": {"const": "rejected"}}},
+                {"properties": {"transition": {"const": "request_revision"}, "toState": {"const": "needs_changes"}}}
+            ]
+        },
+        "else": {"not": {"required": ["reason"]}}
     })
 }
 
@@ -3119,10 +3149,7 @@ fn request_decisions_schema() -> Value {
                 }
             ],
             "properties": {
-                "stageId": {
-                    "type": "string", "minLength": 1, "maxLength": 64,
-                    "pattern": "^[a-z]", "not": {"pattern": "[^a-z0-9_-]"}
-                },
+                "stageId": review_stage_id_schema(),
                 "kind": {"enum": ["approve", "reject", "request_revision"]},
                 "decidedAt": {"type": "string", "format": "date-time", "maxLength": 128},
                 "reasonPresent": {"type": "boolean"},
