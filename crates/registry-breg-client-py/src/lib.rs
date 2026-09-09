@@ -45,6 +45,7 @@ struct MappedError {
     message: String,
     code: Option<String>,
     plan_refusal: Option<String>,
+    refusal_code: Option<String>,
     status: Option<u16>,
     trace_id: Option<String>,
     transport_kind: Option<&'static str>,
@@ -72,6 +73,9 @@ fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
         .expect("fresh exception accepts attributes");
     instance
         .setattr("plan_refusal", mapped.plan_refusal)
+        .expect("fresh exception accepts attributes");
+    instance
+        .setattr("refusal_code", mapped.refusal_code)
         .expect("fresh exception accepts attributes");
     instance
         .setattr("status", mapped.status)
@@ -137,6 +141,7 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             status,
             code,
             trace_id,
+            refusal_code,
         } => {
             mapped.status = Some(status);
             mapped.code = Some(code.code().to_owned());
@@ -144,6 +149,9 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             if let BRegProblemCode::RequestPlanRefused(value) = code {
                 mapped.plan_refusal = Some(value.kind().to_owned());
             }
+            // The refusal catalogue belongs to the package, so the declared code
+            // travels as the bounded string the Problem schema admits.
+            mapped.refusal_code = refusal_code.map(|value| value.as_str().to_owned());
         }
         RustClientError::Protocol {
             status,

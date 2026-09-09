@@ -957,8 +957,9 @@ to send the same action again with the same idempotency key.
 ### BReg error contract
 
 `BaseRegistryClientError` is distinct from `RelayClientError`. Its public accessors expose only the
-fixed error kind, status, registered BReg Problem code, validated trace identifier, and bounded
-transport or token category.
+fixed error kind, status, registered BReg Problem code, validated trace identifier, bounded
+transport or token category, and the bounded refusal code a declared immediate-action refusal
+names.
 
 A Problem is accepted only when its closed members, code, status, title, detail, type URI, and header
 and body trace match. Unknown Problem codes and malformed responses fail closed as
@@ -966,10 +967,10 @@ and body trace match. Unknown Problem codes and malformed responses fail closed 
 not retain response-controlled values.
 
 Python raises `breg.BaseRegistryClientError`, an `Exception` whose message is `str(error)` and whose
-attributes are `kind`, `code`, `plan_refusal`, `status`, `trace_id`, `transport_kind`, and
-`token_kind`; an absent member is `None`. Node rejects with `breg.BaseRegistryClientError`, an
-`Error` with `kind` and the optional `code`, `planRefusal`, `status`, `traceId`, `transportKind`, and
-`tokenKind`; an absent member is undefined.
+attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `status`, `trace_id`,
+`transport_kind`, and `token_kind`; an absent member is `None`. Node rejects with
+`breg.BaseRegistryClientError`, an `Error` with `kind` and the optional `code`, `planRefusal`,
+`refusalCode`, `status`, `traceId`, `transportKind`, and `tokenKind`; an absent member is undefined.
 
 `kind` is one of:
 
@@ -979,7 +980,7 @@ attributes are `kind`, `code`, `plan_refusal`, `status`, `trace_id`, `transport_
 | `invalid_request` | An input was refused before any exchange | none |
 | `token` | The private-key JWT provider could not supply a bearer | `token_kind`, plus `transport_kind`, `code`, or `status` depending on how the token endpoint failed |
 | `transport` | The exchange failed below HTTP | `transport_kind` |
-| `problem` | The registry answered with an accepted Problem | `status`, `code`, `trace_id`, and `plan_refusal` when the code is a request-plan refusal |
+| `problem` | The registry answered with an accepted Problem | `status`, `code`, `trace_id`, `plan_refusal` when the code is a request-plan refusal, and `refusal_code` when the code is an immediate-action refusal |
 | `protocol` | The response violated the contract | `status`, `code` (`header_bounds`, `trace_context`, `media_type`, `body`, `problem`, `entity_tag`, `profile_link`, `location`, `cache_policy`, `status`, or `protocol`), and `trace_id` when one was validated |
 | `metadata_selection` | A binding could not be selected from the metadata | `code` |
 | `lifecycle_promotion` | The authority did not conform, or an action was not bound to it and the record | `code` (`authority` or `binding`) |

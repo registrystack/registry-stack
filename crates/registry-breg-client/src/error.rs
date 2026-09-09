@@ -79,12 +79,43 @@ impl std::fmt::Display for BRegPlanRefusal {
     }
 }
 
+/// One package-declared reason an immediate-action handler refused a call.
+///
+/// Every other Base Registry Engine refusal names a closed vocabulary this
+/// crate can enumerate. A refusal catalogue is declared by the package instead,
+/// so the code is carried as the bounded string the published Problem schema
+/// admits: 1 through 128 characters, none of them a control character. The
+/// value is service-supplied text, so it is read through `as_str` rather than
+/// rendered into the error message.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BRegRefusalCode(String);
+
+impl BRegRefusalCode {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        (!value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control))
+            .then(|| Self(value.to_owned()))
+    }
+
+    /// Borrow the declared refusal code.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::fmt::Debug for BRegRefusalCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BRegRefusalCode(<undisclosed>)")
+    }
+}
+
 /// One closed Base Registry Engine Problem code accepted by the client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BRegProblemCode {
     ActionEvidenceFailed,
     ActionHandlerFailed,
+    ActionRefused,
     AuthenticationRefused,
     IdempotencyConflict,
     LookupUnresolved,
@@ -104,9 +135,10 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::ActionEvidenceFailed,
         Self::ActionHandlerFailed,
+        Self::ActionRefused,
         Self::AuthenticationRefused,
         Self::IdempotencyConflict,
         Self::LookupUnresolved,
@@ -136,6 +168,7 @@ impl BRegProblemCode {
         match self {
             Self::ActionEvidenceFailed => "action.evidence_failed",
             Self::ActionHandlerFailed => "action.handler_failed",
+            Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
             Self::IdempotencyConflict => "idempotency.conflict",
             Self::LookupUnresolved => "lookup.unresolved",
@@ -169,6 +202,7 @@ impl BRegProblemCode {
             Self::IdempotencyConflict | Self::MutationConflict => 409,
             Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
+            Self::ActionRefused => 422,
             Self::PreconditionRequired => 428,
             Self::RuntimeNotReady | Self::ServiceUnavailable | Self::SourceUnavailable => 503,
             Self::RequestTimeout => 504,
@@ -183,6 +217,7 @@ impl BRegProblemCode {
             409 => "Conflict",
             412 => "Precondition Failed",
             415 => "Unsupported Media Type",
+            422 => "Unprocessable Entity",
             428 => "Precondition Required",
             500 => "Internal Server Error",
             503 => "Service Unavailable",
@@ -195,6 +230,9 @@ impl BRegProblemCode {
         match self {
             Self::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
+            // The published sentence for the code. A refusal carries its
+            // package-declared label on the wire, which `accepts_detail` reads.
+            Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",
@@ -216,10 +254,13 @@ impl BRegProblemCode {
 
     /// Closed alternate text for the field-pattern form of mutation conflict.
     /// It remains the same typed conflict for existing client consumers.
+    /// An immediate-action refusal is the one code whose detail is declared by
+    /// the package, so it is accepted against the schema bound instead.
     pub(crate) fn accepts_detail(self, detail: &str) -> bool {
         detail == self.detail()
             || (self == Self::MutationConflict
                 && detail == "The field does not conform to its declared storage pattern.")
+            || (self == Self::ActionRefused && bounded_refusal_label(detail))
     }
 
     /// The type URI the service names for this code, resolved the same way the
@@ -237,6 +278,13 @@ impl std::fmt::Display for BRegProblemCode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.code())
     }
+}
+
+/// The published Problem schema bounds a refusal label at 256 characters. The
+/// label is declared by the package, so the client holds it to that bound and
+/// to the control-character exclusion every public member shares.
+fn bounded_refusal_label(detail: &str) -> bool {
+    !detail.is_empty() && detail.chars().count() <= 256 && !detail.chars().any(char::is_control)
 }
 
 /// A closed, value-free reason why a Base Registry Engine response was refused.
@@ -279,7 +327,10 @@ impl std::fmt::Display for BRegProtocolFailure {
 /// Coarse failures from one Base Registry Engine exchange.
 ///
 /// Values controlled by the caller or service are deliberately absent from
-/// every variant and from `Debug`/`Display` output.
+/// every variant and from `Debug`/`Display` output. The one exception is the
+/// declared refusal code an immediate action is refused by, which is the whole
+/// machine-readable outcome of that refusal: it is carried bounded, and it is
+/// read through `refusal_code` rather than rendered.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BaseRegistryClientError {
@@ -296,6 +347,7 @@ pub enum BaseRegistryClientError {
         status: u16,
         code: BRegProblemCode,
         trace_id: TraceId,
+        refusal_code: Option<BRegRefusalCode>,
     },
     #[error("the Base Registry Engine response did not satisfy its wire contract: status {status}, {failure}")]
     Protocol {
@@ -370,6 +422,16 @@ impl BaseRegistryClientError {
             _ => None,
         }
     }
+
+    /// The declared reason an immediate-action handler refused the call, set
+    /// only for `BRegProblemCode::ActionRefused`.
+    #[must_use]
+    pub fn refusal_code(&self) -> Option<&BRegRefusalCode> {
+        match self {
+            Self::Problem { refusal_code, .. } => refusal_code.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -435,9 +497,11 @@ mod tests {
     #[test]
     fn field_pattern_detail_is_a_closed_mutation_conflict_variant() {
         let detail = "The field does not conform to its declared storage pattern.";
+        // An immediate-action refusal carries a package-declared label, so it
+        // accepts any bounded detail and is told apart by its code instead.
         let matches = BRegProblemCode::ALL
             .into_iter()
-            .filter(|code| code.accepts_detail(detail))
+            .filter(|code| *code != BRegProblemCode::ActionRefused && code.accepts_detail(detail))
             .collect::<Vec<_>>();
         assert_eq!(matches, vec![BRegProblemCode::MutationConflict]);
         assert!(BRegProblemCode::MutationConflict
@@ -462,6 +526,7 @@ mod tests {
                 status: code.status(),
                 code,
                 trace_id: trace_id.clone(),
+                refusal_code: None,
             };
             let expected = if code == BRegProblemCode::ResourceNotFound {
                 "not_found"

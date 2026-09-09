@@ -8,6 +8,7 @@ class BaseRegistryClientError(Exception):
     kind: str
     code: str | None
     plan_refusal: str | None
+    refusal_code: str | None
     status: int | None
     trace_id: str | None
     transport_kind: str | None
