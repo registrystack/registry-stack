@@ -174,6 +174,14 @@ class DraftNotesTests(unittest.TestCase):
         self.assertIn("malformed pull-request pages", malformed.stderr)
         self.assertFalse(output.exists())
 
+    def test_one_point_zero_draft_does_not_infer_beta_status(self) -> None:
+        result = self.draft("--version", "1.0.0", "--release-id", "release-1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("# Registry Stack v1.0.0\n"))
+        self.assertIn("TODO (release author)", result.stdout)
+        self.assertNotIn("pre-1.0", result.stdout)
+        self.assertNotIn("Beta", result.stdout)
+
     def test_wrong_origin_and_invalid_release_identity_fail_before_queries(self) -> None:
         self.change("docs/a.md", "Documentation")
         for args in (("--version", "v0.29.0"), ("--release-id", "invalid/id")):
