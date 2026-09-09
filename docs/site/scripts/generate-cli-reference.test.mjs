@@ -6,6 +6,8 @@ import { test } from 'node:test';
 
 import {
   catalogDigest,
+  contentDigest,
+  legacyReviewSchemaVersion,
   expectedBinaries,
   generateCliReference,
   renderCatalog,
@@ -14,7 +16,7 @@ import {
   validateCatalog,
   validateReviewMetadata,
 } from './generate-cli-reference.mjs';
-import { cliReferenceDigest } from './cli-reference-digest.mjs';
+import { cliReferenceDigest, migrateCliReferenceReview } from './cli-reference-digest.mjs';
 
 function argument(display) {
   return {
@@ -63,6 +65,7 @@ function fixtureReviewMetadata(overrides = {}) {
     last_reviewed: 'unreviewed',
     reviewed_source_version: null,
     reviewed_catalog_sha256: null,
+    reviewed_content_sha256: null,
     ...overrides,
   };
 }
@@ -154,56 +157,91 @@ test('rejects empty public help and unstable conflict pairs', () => {
   assert.throws(() => validateCatalog(unsortedConflict), /distinct and sorted/u);
 });
 
-test('requires explicit source-matched human review metadata for current pages', () => {
+test('requires human review of content while retaining its original source provenance', () => {
   const catalog = fixtureCatalog();
-  const digest = catalogDigest(catalog);
   assert.throws(
-    () => validateReviewMetadata(
-      fixtureReviewMetadata({ status: 'current' }),
-      catalog.source_version,
-      digest,
-    ),
+    () => validateReviewMetadata(fixtureReviewMetadata({ status: 'current' }), catalog),
     /unreviewed CLI reference metadata must be draft/u,
   );
-  assert.throws(
-    () => validateReviewMetadata(
-      fixtureReviewMetadata({
-        status: 'current',
-        last_reviewed: '2026-08-13',
-        reviewed_source_version: '0.20.0',
-        reviewed_catalog_sha256: digest,
-      }),
-      catalog.source_version,
-      digest,
-    ),
-    /covers 0\.20\.0, not 0\.21\.0/u,
-  );
-
   const reviewed = fixtureReviewMetadata({
     status: 'current',
     last_reviewed: '2026-08-13',
     reviewed_source_version: catalog.source_version,
-    reviewed_catalog_sha256: digest,
+    reviewed_catalog_sha256: catalogDigest(catalog),
+    reviewed_content_sha256: contentDigest(catalog),
   });
-  assert.equal(validateReviewMetadata(reviewed, catalog.source_version, digest), reviewed);
+  assert.equal(validateReviewMetadata(reviewed, catalog), reviewed);
   assert.throws(
-    () => validateReviewMetadata(
-      { ...reviewed, last_reviewed: '2026-02-30' },
-      catalog.source_version,
-      digest,
-    ),
+    () => validateReviewMetadata({ ...reviewed, last_reviewed: '2026-02-30' }, catalog),
     /unreviewed or YYYY-MM-DD/u,
   );
-  const changed = structuredClone(catalog);
-  changed.binaries[0].about = 'Changed public command surface';
+  const bumped = { ...catalog, source_version: '0.22.0' };
+  assert.notEqual(catalogDigest(bumped), catalogDigest(catalog));
+  assert.equal(contentDigest(bumped), contentDigest(catalog));
+  assert.equal(validateReviewMetadata(reviewed, bumped), reviewed);
   assert.throws(
-    () => validateReviewMetadata(reviewed, changed.source_version, catalogDigest(changed)),
+    () => validateReviewMetadata({ ...reviewed, reviewed_catalog_sha256: 'a'.repeat(64) }, bumped),
     /does not cover the current command catalog digest/u,
   );
-  const page = renderCatalog(catalog, reviewed).get('relayctl.mdx');
+  const page = renderCatalog(bumped, reviewed).get('relayctl.mdx');
   assert.match(page, /status: current/u);
   assert.match(page, /last_reviewed: "2026-08-13"/u);
+  assert.match(page, /source version `0\.22\.0`/u);
+  assert.ok(page.includes(catalogDigest(bumped)));
   assert.doesNotMatch(page, /^draft: true$/mu);
+  assert.match(renderCatalog(bumped, { ...reviewed, status: 'draft' }).get('relayctl.mdx'), /^draft: true$/mu);
+});
+
+test('every public catalog content change invalidates review, including version-like help', () => {
+  const catalog = fixtureCatalog();
+  const metadata = fixtureReviewMetadata({
+    status: 'current',
+    last_reviewed: '2026-08-13',
+    reviewed_source_version: catalog.source_version,
+    reviewed_catalog_sha256: catalogDigest(catalog),
+    reviewed_content_sha256: contentDigest(catalog),
+  });
+  const mutations = [
+    binary => { binary.about = 'Version 0.22.0 details'; },
+    binary => { binary.long_about = 'Detailed help'; },
+    binary => { binary.usage += ' <FILE>'; },
+    binary => { binary.options[0].description = 'Different help'; },
+    binary => { binary.options[0].display = '--other'; },
+    binary => { binary.options[0].default_values = ['0.22.0']; },
+    binary => { binary.options[0].possible_values = ['left']; },
+    binary => { binary.options[0].environment = 'CONFIG_PATH'; },
+    binary => { binary.options[0].repeatable = true; },
+    binary => { binary.options[0].always_required = true; },
+    binary => { binary.arguments.push(argument('<FILE>')); },
+    binary => { binary.constraints.push({ kind: 'required_exactly_one', when: null, arguments: ['--left', '--right'] }); },
+    binary => { binary.subcommands[0].subcommands[0].about = 'Nested help'; },
+    binary => { binary.subcommands.push(command('extra', 'relayctl')); },
+  ];
+  for (const mutate of mutations) {
+    const changed = structuredClone(catalog);
+    mutate(changed.binaries.find(binary => binary.name === 'relayctl'));
+    assert.notEqual(contentDigest(changed), contentDigest(catalog));
+    assert.throws(() => validateReviewMetadata(metadata, changed), /current command content/u);
+  }
+});
+
+test('legacy v2 reviews retain exact version and catalog checks', () => {
+  const catalog = fixtureCatalog();
+  const legacy = {
+    schema_version: legacyReviewSchemaVersion,
+    status: 'current',
+    last_reviewed: '2026-08-13',
+    reviewed_source_version: catalog.source_version,
+    reviewed_catalog_sha256: catalogDigest(catalog),
+  };
+  assert.equal(validateReviewMetadata(legacy, catalog), legacy);
+  assert.throws(
+    () => validateReviewMetadata(legacy, { ...catalog, source_version: '0.22.0' }),
+    /covers 0\.21\.0, not 0\.22\.0/u,
+  );
+  const changed = structuredClone(catalog);
+  changed.binaries[0].about = 'Changed help';
+  assert.throws(() => validateReviewMetadata(legacy, changed), /current command catalog digest/u);
 });
 
 test('writes deterministic pages and detects local output drift', async () => {
@@ -221,6 +259,7 @@ test('writes deterministic pages and detects local output drift', async () => {
         'last_reviewed: unreviewed',
         'reviewed_source_version: null',
         'reviewed_catalog_sha256: null',
+        'reviewed_content_sha256: null',
         '',
       ].join('\n'),
       'utf8',
@@ -264,6 +303,7 @@ test('the digest helper reports the values the review record must carry', async 
   assert.deepEqual(digest, {
     reviewed_source_version: '0.21.0',
     reviewed_catalog_sha256: catalogDigest(catalog),
+    reviewed_content_sha256: contentDigest(catalog),
   });
   const malformed = async () => 'not json';
   await assert.rejects(cliReferenceDigest('/unused', { execute: malformed }), /did not emit JSON/u);
@@ -277,4 +317,59 @@ test('the digest helper is published as an npm script', async () => {
     packageJson.scripts['cli-reference:digest'],
     'node scripts/cli-reference-digest.mjs',
   );
+});
+
+test('migration proves legacy review after a version bump and preserves human provenance', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'registry-cli-migrate-'));
+  const directory = join(root, 'docs/site/src/data');
+  const path = join(directory, 'cli-reference.yaml');
+  const catalog = fixtureCatalog();
+  const original = [
+    '# Existing human review',
+    `schema_version: ${legacyReviewSchemaVersion}`,
+    'status: current',
+    'last_reviewed: 2026-08-13',
+    'reviewed_source_version: "0.21.0"',
+    `reviewed_catalog_sha256: ${catalogDigest(catalog)}`,
+    '',
+  ].join('\n');
+  const bumped = { ...catalog, source_version: '0.22.0' };
+  const execute = async () => JSON.stringify(bumped);
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeFile(path, original);
+    const result = await migrateCliReferenceReview(root, { execute });
+    assert.equal(result.migrated, true);
+    assert.equal(result.metadata.last_reviewed, '2026-08-13');
+    assert.equal(result.metadata.reviewed_source_version, '0.21.0');
+    assert.equal(result.metadata.reviewed_catalog_sha256, catalogDigest(catalog));
+    assert.equal(result.metadata.reviewed_content_sha256, contentDigest(catalog));
+    const migrated = await readFile(path, 'utf8');
+    assert.match(migrated, /^# Existing human review/u);
+    assert.equal((await migrateCliReferenceReview(root, { execute })).migrated, false);
+    assert.equal(await readFile(path, 'utf8'), migrated);
+    await generateCliReference(join(root, 'docs/site'), root, { execute });
+    await generateCliReference(join(root, 'docs/site'), root, { execute, check: true });
+
+    await writeFile(path, original);
+    const changed = structuredClone(bumped);
+    changed.binaries[0].about = 'Changed reference';
+    await assert.rejects(
+      migrateCliReferenceReview(root, { execute: async () => JSON.stringify(changed) }),
+      /current command catalog digest/u,
+    );
+    assert.equal(await readFile(path, 'utf8'), original);
+
+    const draft = original.replace('status: current', 'status: draft')
+      .replace('last_reviewed: 2026-08-13', 'last_reviewed: unreviewed')
+      .replace('reviewed_source_version: "0.21.0"', 'reviewed_source_version: null')
+      .replace(`reviewed_catalog_sha256: ${catalogDigest(catalog)}`, 'reviewed_catalog_sha256: null');
+    await writeFile(path, draft);
+    const draftResult = await migrateCliReferenceReview(root, { execute });
+    assert.equal(draftResult.metadata.last_reviewed, 'unreviewed');
+    assert.equal(draftResult.metadata.reviewed_content_sha256, null);
+    assert.equal(draftResult.metadata.status, 'draft');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
