@@ -76,6 +76,16 @@ relevant product pages on this site rather than duplicating release notes.
 {/* Evidence: crates/registry-breg/src/artifacts.rs, attachment_metadata_schema();
     crates/registry-breg-client/src/attachment.rs, BRegAttachmentClassification. */}
 
+- The attachment download operation no longer promises a filename in
+  `Content-Disposition`. The route has always sent the bare `attachment`
+  disposition, and no stored slot metadata holds a filename, so the served
+  OpenAPI document now pins the header to that exact value. A caller that read
+  the old description and expected a name to save the bytes under has to choose
+  one itself. See [Base Registry Engine API](../reference/breg-api/).
+
+{/* Evidence: crates/registry-breg/src/attachment.rs, DOWNLOAD_CONTENT_DISPOSITION;
+    crates/registry-breg/src/api/attachments.rs, download(). */}
+
 ## v0.28.0 beta-40
 
 - BREAKING: `bregctl dev` and `bregctl dev stop` take a positional project

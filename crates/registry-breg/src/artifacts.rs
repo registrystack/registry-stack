@@ -484,7 +484,7 @@ pub(crate) fn openapi_attachment_operation(
         operation["responses"]["200"] = json!({"description": "Complete integrity-checked attachment content permitted by its verification policy", "content": content,
         "headers": {
             "Cache-Control": no_store_header(),
-            "Content-Disposition": {"schema": {"type": "string"}, "description": "Attachment download with an engine-generated filename."},
+            "Content-Disposition": {"schema": {"const": crate::attachment::DOWNLOAD_CONTENT_DISPOSITION}, "description": "Attachment disposition with no filename; no slot metadata holds one."},
             "X-Content-Type-Options": {"schema": {"const": "nosniff"}}
         }});
     } else {
@@ -4711,6 +4711,11 @@ mod spatial_tests {
         assert!(parameters.iter().any(
             |parameter| parameter["name"] == "proposalVersion" && parameter["required"] == true
         ));
+        assert_eq!(
+            download["responses"]["200"]["headers"]["Content-Disposition"]["schema"]["const"],
+            crate::attachment::DOWNLOAD_CONTENT_DISPOSITION,
+            "the served disposition is the exact literal the download route sends"
+        );
     }
 
     #[test]
