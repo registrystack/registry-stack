@@ -811,6 +811,12 @@ pub fn validate_fixture_journeys(
                         capture.is_some(),
                         !step.capture_results.is_empty(),
                     )?;
+                    let capture_result_entities = validate_request_capture_results(
+                        &request,
+                        entity,
+                        &step.access_profile,
+                        &step.capture_results,
+                    )?;
                     let response_readable_field_ids = match &request {
                         ActionSource::ReadPath { path, .. } => profile
                             .read_paths
@@ -832,7 +838,7 @@ pub fn validate_fixture_journeys(
                         response_readable_fields,
                         action,
                         expect,
-                        BTreeMap::new(),
+                        capture_result_entities,
                     )
                 };
                 if let Some(identifier) = capture.as_deref() {
@@ -953,10 +959,12 @@ fn validate_action_references(
         | ActionSource::TargetConditions { .. }
         | ActionSource::Invoke { .. } => &[],
     };
-    if references
-        .iter()
-        .any(|identifier| !valid_stable_id(identifier) || !captures.contains_key(*identifier))
-    {
+    if references.iter().any(|identifier| {
+        !valid_stable_id(identifier)
+            || captures
+                .get(*identifier)
+                .is_none_or(|source| source.entity.as_deref() != step_entity)
+    }) {
         return Err(FixtureError::LogicalReferenceRefused);
     }
     for reference in etag_references(action) {
@@ -1408,6 +1416,39 @@ fn validate_capture_results(
             .map(|compiled| compiled.target.entity_id.clone())
             .ok_or(FixtureError::LogicalReferenceRefused)?;
         captures.insert(capture.clone(), target_entity_id);
+    }
+    Ok(captures)
+}
+
+fn validate_request_capture_results(
+    request: &ActionSource,
+    entity: &crate::model::CompiledEntity,
+    profile_id: &str,
+    capture_results: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, FixtureError> {
+    let mut captures = BTreeMap::new();
+    if capture_results.is_empty() {
+        return Ok(captures);
+    }
+    if !matches!(request, ActionSource::ApplyRequest { .. }) {
+        return Err(FixtureError::JourneyShapeRefused);
+    }
+    let change_request = entity
+        .change_request
+        .as_ref()
+        .ok_or(FixtureError::LogicalReferenceRefused)?;
+    for (effect_id, capture) in capture_results {
+        let effect = change_request
+            .effects
+            .iter()
+            .find(|effect| effect.id == *effect_id && effect.operation == Operation::Create)
+            .ok_or(FixtureError::LogicalReferenceRefused)?;
+        if !change_request.apply_grants.iter().any(|grant| {
+            grant.profile_id == profile_id && grant.target_entity_id == effect.target.entity_id
+        }) {
+            return Err(FixtureError::LogicalReferenceRefused);
+        }
+        captures.insert(capture.clone(), effect.target.entity_id.clone());
     }
     Ok(captures)
 }
@@ -2314,7 +2355,7 @@ fn validate_expectation(
     {
         return Err(FixtureError::JourneyShapeRefused);
     }
-    if captures_results && operation != Operation::Invoke {
+    if captures_results && !matches!(operation, Operation::Invoke | Operation::ApplyRequest) {
         return Err(FixtureError::JourneyShapeRefused);
     }
     if is_request_action(operation) || operation == Operation::Invoke {
@@ -2359,7 +2400,7 @@ fn validate_expectation(
                     return Err(FixtureError::JourneyShapeRefused);
                 }
             } else if is_request_action(operation) {
-                if expectation.count.is_some() || captures || captures_results {
+                if expectation.count.is_some() || captures {
                     return Err(FixtureError::JourneyShapeRefused);
                 }
             } else if operation == Operation::Invoke {
@@ -2384,6 +2425,7 @@ fn validate_expectation(
                 || !expectation.fields.is_empty()
                 || expectation.count.is_some()
                 || captures
+                || captures_results
                 || problem_contract(expectation.status, expectation.problem_code.as_deref())
                     .is_none()
             {
@@ -2735,7 +2777,7 @@ impl PostgresFixtureTestRunner {
                 }),
             );
         }
-        accept_response(&step, response, &mut self.observations)
+        accept_response(&step, response, &mut self.observations, Some(&self.pool))
             .await
             .map_err(|error| self.current_step_failure(error))?;
         self.bearer_index += 1;
@@ -3038,7 +3080,7 @@ async fn execute_schema_test_with_key_source(
                     actual,
                 }));
             }
-            accept_response(step, response, &mut observations)
+            accept_response(step, response, &mut observations, Some(&runtime.pool))
                 .await
                 .map_err(step_failure)?;
             bearer_index += 1;
@@ -3843,6 +3885,7 @@ async fn accept_response(
     step: &ValidatedStep,
     response: Response<Body>,
     observations: &mut BTreeMap<String, Observation>,
+    pool: Option<&RuntimePool>,
 ) -> Result<(), FixtureError> {
     let status = response.status();
     let headers = response.headers().clone();
@@ -3859,7 +3902,17 @@ async fn accept_response(
         }
     }
     if !step.capture_results.is_empty() {
-        capture_immediate_action_results(step, &document, observations)?;
+        if matches!(step.action, ActionSource::ApplyRequest { .. }) {
+            capture_request_results(
+                step,
+                &document,
+                observations,
+                pool.ok_or(FixtureError::ExecutionRefused)?,
+            )
+            .await?;
+        } else {
+            capture_immediate_action_results(step, &document, observations)?;
+        }
     }
     if let Some(capture) = step.capture.as_ref() {
         let kind = capture_observation_kind(step, &headers, &document)?;
@@ -3908,6 +3961,101 @@ fn capture_observation_kind(
             })
         }
     }
+}
+
+// This is a schema-test observation, not a runtime response or a target read.
+// Only a successful authenticated apply may reach it. Preflight requires the
+// selected profile's apply grant; subsequent API reads still need GET authority.
+async fn capture_request_results(
+    step: &ValidatedStep,
+    document: &Value,
+    observations: &mut BTreeMap<String, Observation>,
+    pool: &RuntimePool,
+) -> Result<(), FixtureError> {
+    let ActionSource::ApplyRequest { record_ref, .. } = &step.action else {
+        return Err(FixtureError::ResponseShapeRefused);
+    };
+    let request_id = observed_record_id(observations, record_ref)?;
+    if document.get("id").and_then(Value::as_str) != Some(request_id) {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    let entity_id = step
+        .entity
+        .as_deref()
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let record_id =
+        uuid::Uuid::parse_str(request_id).map_err(|_| FixtureError::ResponseShapeRefused)?;
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|_| FixtureError::ExecutionRefused)?;
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|_| FixtureError::ExecutionRefused)?;
+    let workflow = crate::request_store::load(&transaction, entity_id, record_id, false)
+        .await
+        .map_err(|_| FixtureError::ExecutionRefused)?;
+    let receipt = workflow
+        .application()
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let application = document
+        .pointer("/request/application")
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    if application.get("applicationId").and_then(Value::as_str)
+        != Some(receipt.application_id().as_str())
+        || application.get("proposalVersion").and_then(Value::as_u64)
+            != Some(u64::from(receipt.version().get()))
+        || application.get("effectDigest").and_then(Value::as_str)
+            != Some(receipt.effect_digest().as_str())
+    {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    let proposal = workflow
+        .proposal(receipt.version())
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let mut captured = BTreeMap::new();
+    for (effect_id, capture) in &step.capture_results {
+        let effect = proposal
+            .effects()
+            .iter()
+            .find(|effect| {
+                effect.id().as_str() == effect_id && effect.operation() == Operation::Create
+            })
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        let target_id = effect
+            .target()
+            .reserved_record_id()
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        let result = receipt
+            .result_links()
+            .iter()
+            .find(|result| {
+                result.entity_id() == effect.target().entity_id() && result.record_id() == target_id
+            })
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        captured.insert(
+            capture.clone(),
+            Observation {
+                kind: ObservationKind::Record {
+                    record_id: result.record_id().as_str().to_owned(),
+                    etag: format!("\"breg-action-result-{}\"", result.record_revision().get()),
+                },
+                document: json!({
+                    "id": result.record_id().as_str(),
+                    "entity": result.entity_id().as_str(),
+                    "revision": result.record_revision().get(),
+                    "data": {}
+                }),
+            },
+        );
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|_| FixtureError::ExecutionRefused)?;
+    observations.extend(captured);
+    Ok(())
 }
 
 fn capture_immediate_action_results(
@@ -6813,7 +6961,7 @@ journeys:
             .expect("problem response builds");
         let mut observations = BTreeMap::new();
         assert_eq!(
-            accept_response(refusal, mismatched_trace, &mut observations).await,
+            accept_response(refusal, mismatched_trace, &mut observations, None).await,
             Err(FixtureError::ResponseShapeRefused),
             "the fixture executor refuses disagreement between body and header trace IDs"
         );

@@ -91,6 +91,29 @@ acceptance fixtures keep their original behavior:
   person, creates the membership row, and patches the household contact
   reference.
 
+## Capture records created by an approved request
+
+A successful `apply_request` journey step can bind aliases to its create effects:
+
+```yaml
+captureResults:
+  person: contact-person
+  membership: contact-membership
+```
+
+Keys are the request's declared `changeRequest.effects[].id`; values are unique
+journey aliases. Only `operation: create` effects covered by the applying
+profile's `applyTargets` grant are capturable. Other lifecycle operations,
+refused steps, missing effects, and patch effects cannot bind result aliases.
+
+The schema-test runner matches each frozen effect to the committed application
+receipt in its prepared test database. It does not add result identifiers or
+fields to the public apply response. A later `get` uses the alias with a profile
+that has ordinary target read authority. Capture that GET response before using
+its `etagRef` in a patch; an application result is not a current record ETag.
+The household journey above captures both created rows, checks their values
+by alias, then updates the created contact.
+
 ## First-hour structural checks
 
 Run these from the repository root:

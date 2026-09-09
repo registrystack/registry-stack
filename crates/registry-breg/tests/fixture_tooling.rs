@@ -792,6 +792,253 @@ fn compiled_fixture() -> registry_breg::CompiledRegistry {
         .expect("fixture project compiles in Production")
 }
 
+fn compiled_contact_request_fixture() -> registry_breg::CompiledRegistry {
+    use registry_breg::compiler::compile_project_with_assets;
+    use registry_breg::contract::ModuleAssetSource;
+    use std::{collections::BTreeSet, fs, path::PathBuf};
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/publicschema-household-change-requests");
+    let mut project = parse_project_yaml(&fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+    project.entities[0].change_request.as_mut().unwrap().effects[2].id =
+        Some("household-contact".to_owned());
+    // Keep a complete applier so the project remains valid while proving that
+    // another profile cannot borrow its grant to capture a created record.
+    let mut limited_applier = project
+        .access_profiles
+        .iter()
+        .find(|profile| profile.id == "household-contact-applier")
+        .unwrap()
+        .clone();
+    limited_applier.id = "household-contact-limited-applier".to_owned();
+    limited_applier.grants[0]
+        .apply_targets
+        .retain(|target| target.entity != "person");
+    project.access_profiles.push(limited_applier);
+
+    let mut modules = Vec::new();
+    let mut assets = Vec::new();
+    for locked in &project.modules {
+        let module_root = root.join("modules").join(&locked.id);
+        let module =
+            parse_module_yaml(&fs::read(module_root.join("module.yaml")).unwrap()).unwrap();
+        let paths = module
+            .entities
+            .iter()
+            .flat_map(|entity| &entity.derived)
+            .chain(
+                module
+                    .extend_entities
+                    .iter()
+                    .flat_map(|entity| &entity.derived),
+            )
+            .map(|derived| derived.sql.clone())
+            .collect::<BTreeSet<_>>();
+        for path in paths {
+            assets.push(ModuleAssetSource {
+                module: Some(module.id.clone()),
+                bytes: fs::read(module_root.join(&path)).unwrap(),
+                path,
+            });
+        }
+        modules.push(module);
+    }
+    compile_project_with_assets(&project, &modules, &assets, CompileProfile::Production)
+        .expect("contact request fixture and limited applier compile")
+}
+
+const CONTACT_REQUEST_CAPTURE_JOURNEY: &str = r#"apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: contact-request-captures
+    steps:
+      - id: create-request
+        entity: register-household-contact-request
+        accessProfile: household-contact-submitter
+        claims: {principal: submitter, scopes: [registry:household-contact:submit], purpose: household-contact-registration}
+        request:
+          operation: create
+          data:
+            household: 11111111-1111-1111-1111-111111111111
+            person-code: person-001
+            legal-name: Ana Ortega
+            family-name: Ortega
+            person-sex: female
+            residency-status: usual-resident
+            relationship: head
+            valid-from: "2026-01-01"
+            reason: verified
+        expect: {outcome: success, status: 201}
+        capture: contact-request
+      - id: get-before-apply
+        entity: register-household-contact-request
+        accessProfile: household-contact-applier
+        claims: &applier {principal: applier, scopes: [registry:household-contact:apply], purpose: household-contact-apply}
+        request: {operation: get, recordRef: contact-request}
+        expect: {outcome: success, status: 200}
+        capture: before-apply
+      - id: apply-request
+        entity: register-household-contact-request
+        accessProfile: household-contact-applier
+        claims: *applier
+        request:
+          operation: apply_request
+          recordRef: before-apply
+          etagRef: before-apply
+          proposalVersionRef: before-apply
+          effectDigestRef: before-apply
+        expect: {outcome: success, status: 200}
+        captureResults: {person: registered-person, membership: registered-membership}
+      - id: get-created-person
+        entity: person
+        accessProfile: household-operator
+        claims: &operator {principal: operator, scopes: [registry:household:operate], purpose: household-administration}
+        request: {operation: get, recordRef: registered-person}
+        expect: {outcome: success, status: 200, fields: {person-code: person-001}}
+      - id: get-created-membership
+        entity: group-membership
+        accessProfile: household-operator
+        claims: *operator
+        request: {operation: get, recordRef: registered-membership}
+        expect: {outcome: success, status: 200, fields: {relationship: head}}
+"#;
+
+#[test]
+fn fixture_tooling_apply_request_captures_created_effects_as_typed_aliases() {
+    let registry = compiled_contact_request_fixture();
+    let suite = validate_fixture_journeys(CONTACT_REQUEST_CAPTURE_JOURNEY.as_bytes(), &registry)
+        .expect("apply captures both create effects and downstream gets use their entity types");
+    assert_eq!(suite.journey_ids(), ["contact-request-captures"]);
+
+    let without_result_captures = CONTACT_REQUEST_CAPTURE_JOURNEY
+        .split("      - id: get-created-person")
+        .next()
+        .unwrap()
+        .replace(
+            "        captureResults: {person: registered-person, membership: registered-membership}\n",
+            "",
+        );
+    let (before_apply_expectation, _) = without_result_captures
+        .rsplit_once("        expect: {outcome: success, status: 200}")
+        .unwrap();
+    let refused_apply = format!(
+        "{before_apply_expectation}        expect: {{outcome: refusal, status: 412, problemCode: precondition.failed}}\n"
+    );
+    validate_fixture_journeys(refused_apply.as_bytes(), &registry)
+        .expect("a refused apply is otherwise valid without result captures");
+
+    for (label, from, to, expected) in [
+        (
+            "patch effect",
+            "person: registered-person",
+            "household-contact: registered-person",
+            FixtureError::LogicalReferenceRefused,
+        ),
+        (
+            "unknown effect",
+            "person: registered-person",
+            "missing-effect: registered-person",
+            FixtureError::LogicalReferenceRefused,
+        ),
+        (
+            "another profile's apply grant",
+            "accessProfile: household-contact-applier",
+            "accessProfile: household-contact-limited-applier",
+            FixtureError::LogicalReferenceRefused,
+        ),
+        (
+            "duplicate result alias",
+            "membership: registered-membership",
+            "membership: registered-person",
+            FixtureError::DuplicateIdentifier,
+        ),
+        (
+            "existing record alias",
+            "person: registered-person",
+            "person: contact-request",
+            FixtureError::DuplicateIdentifier,
+        ),
+        (
+            "wrong downstream entity",
+            "recordRef: registered-person",
+            "recordRef: registered-membership",
+            FixtureError::LogicalReferenceRefused,
+        ),
+        (
+            "created alias has no write ETag",
+            "request: {operation: get, recordRef: registered-person}",
+            "request: {operation: patch, recordRef: registered-person, etagRef: registered-person, changes: [{field: legal-name, value: Ana Garcia}]}",
+            FixtureError::LogicalReferenceRefused,
+        ),
+        (
+            "refused apply",
+            "expect: {outcome: success, status: 200}\n        captureResults:",
+            "expect: {outcome: refusal, status: 412, problemCode: precondition.failed}\n        captureResults:",
+            FixtureError::JourneyShapeRefused,
+        ),
+    ] {
+        let changed = CONTACT_REQUEST_CAPTURE_JOURNEY.replace(from, to);
+        let error = validate_fixture_journeys(changed.as_bytes(), &registry)
+            .expect_err(label);
+        assert_eq!(underlying_fixture_error(&error), &expected, "{label}: {error:?}");
+    }
+}
+
+#[test]
+fn fixture_tooling_capture_results_refuses_other_request_lifecycle_steps() {
+    let registry = compiled_contact_request_fixture();
+    let base = CONTACT_REQUEST_CAPTURE_JOURNEY
+        .split("      - id: apply-request")
+        .next()
+        .unwrap();
+    for (operation, profile, scope, purpose, extra) in [
+        ("submit_request", "submitter", "submit", "registration", ""),
+        (
+            "revise_request",
+            "submitter",
+            "submit",
+            "registration",
+            ", rebase: true",
+        ),
+        ("cancel_request", "submitter", "submit", "registration", ""),
+        (
+            "approve_request",
+            "reviewer",
+            "review",
+            "review",
+            ", stage: review, proposalVersionRef: before-apply, effectDigestRef: before-apply",
+        ),
+        (
+            "reject_request",
+            "reviewer",
+            "review",
+            "review",
+            ", stage: review, proposalVersionRef: before-apply, effectDigestRef: before-apply",
+        ),
+        (
+            "request_revision",
+            "reviewer",
+            "review",
+            "review",
+            ", stage: review, proposalVersionRef: before-apply, effectDigestRef: before-apply",
+        ),
+    ] {
+        let step = format!(
+            "      - id: lifecycle-capture\n        entity: register-household-contact-request\n        accessProfile: household-contact-{profile}\n        claims: {{principal: {profile}, scopes: [registry:household-contact:{scope}], purpose: household-contact-{purpose}}}\n        request: {{operation: {operation}, recordRef: before-apply, etagRef: before-apply{extra}}}\n        expect: {{outcome: success, status: 200}}\n"
+        );
+        let without_capture = format!("{base}{step}");
+        validate_fixture_journeys(without_capture.as_bytes(), &registry)
+            .unwrap_or_else(|error| panic!("{operation} is otherwise valid: {error:?}"));
+        let with_capture =
+            format!("{without_capture}        captureResults: {{person: registered-person}}\n");
+        let error = validate_fixture_journeys(with_capture.as_bytes(), &registry).unwrap_err();
+        assert_eq!(
+            underlying_fixture_error(&error),
+            &FixtureError::JourneyShapeRefused,
+            "{operation}: {error:?}"
+        );
+    }
+}
+
 fn compiled_request_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
