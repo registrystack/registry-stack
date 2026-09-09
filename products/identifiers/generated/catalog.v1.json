@@ -1204,7 +1204,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "ed0e28ca510eb19dc6d895bec435cfc9c0e04ef672d8e27cbb69aa9ffc98f0be",
+        "sha256": "7c75b4942e22ced22c7b69aef3936b840b49517e924431b414fad4395c2820ef",
         "mediaType": "application/schema+json"
       }
     },

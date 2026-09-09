@@ -1226,6 +1226,7 @@ fn action_profile_from_grant(grant: &CompiledActionGrant) -> AccessProfileSource
         read_paths: Vec::new(),
         review_stages: Vec::new(),
         apply_targets: Vec::new(),
+        submitter_targets: BTreeSet::new(),
         request_presence: Vec::new(),
         allow_count: false,
         revision_access: false,

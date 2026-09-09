@@ -551,6 +551,62 @@ pub(crate) fn compile_change_requests(
             }
         }
     }
+    for entity in entities.values() {
+        for profile in entity
+            .access_profiles
+            .values()
+            .filter(|p| !p.submitter_targets.is_empty())
+        {
+            let authors_requests = profile.operations.contains(&Operation::Create)
+                || profile.operations.contains(&Operation::Patch);
+            let valid = compiled.get(&entity.id).is_some_and(|plan| {
+                plan.planner.is_none()
+                    && plan.application.mode
+                        == crate::model::CompiledChangeRequestApplicationMode::Manual
+                    && plan.target_entities == profile.submitter_targets
+                    && plan
+                        .effects
+                        .iter()
+                        .all(|effect| match &effect.target.binding {
+                            CompiledChangeRequestTargetBinding::Existing { from_field } => {
+                                // Admission reads the target identifier from the
+                                // request record, so an absent value would only
+                                // surface as a runtime refusal.
+                                profile.readable_fields.contains(from_field)
+                                    && entity
+                                        .fields
+                                        .get(from_field)
+                                        .is_some_and(|field| field.required)
+                                    // A profile that authors the request must be
+                                    // able to write the reference the effect reads,
+                                    // or its own create can never satisfy it.
+                                    && (!authors_requests
+                                        || profile.writable_fields.contains(from_field))
+                            }
+                            _ => false,
+                        })
+                    && profile.submitter_targets.iter().all(|id| {
+                        !request_entity_ids.contains(id)
+                            && entities
+                                .get(id)
+                                .and_then(|target| target.access_profiles.get(&profile.id))
+                                .is_some_and(|target_profile| {
+                                    target_profile.operations.contains(&Operation::Get)
+                                        && target_profile.membership_boundaries.is_empty()
+                                })
+                    })
+                    && !profile.anonymous
+                    && !profile.operations.contains(&Operation::Batch)
+            });
+            if !valid {
+                errors.push(Diagnostic::error(
+                    "change_request.submitter_targets.invalid",
+                    format!("{}.submitterTargets", profile_path(&entity.id, &profile.id)),
+                    "submitterTargets requires manual application and exactly the fixed native-reference targets; each reference must be required, readable, and writable wherever the profile authors the request, and each non-request target needs a same-profile get grant without membership boundaries",
+                ));
+            }
+        }
+    }
     compile_presence_grants(entities, &mut compiled, &mut errors);
 
     if !errors.is_empty() {

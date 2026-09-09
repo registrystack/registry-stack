@@ -1510,6 +1510,7 @@ fn strict_claim_context(
         context.purpose().map(str::to_owned),
         row_boundaries,
     )
+    .and_then(|claims| claims.with_api_submitter_targets(registry, context))
     .map_err(|_| ReadServiceError::Unavailable)
 }
 

@@ -359,13 +359,27 @@ pub(crate) fn canonical_claim_context(
             }))
         })
         .collect::<Result<Vec<_>, IdempotencyError>>()?;
-    Ok(json!({
+    let mut value = json!({
         "entityId": context.entity_id(),
         "principalReference": principal_reference,
         "selectedAccessProfile": context.access_profile(),
         "verifiedPurpose": context.purpose(),
         "rowBoundaries": row_boundaries,
-    }))
+    });
+    if !context.submitter_targets().is_empty() {
+        value["submitterTargets"] = context
+            .submitter_targets()
+            .iter()
+            .map(|(id, target)| {
+                Ok((
+                    id.clone(),
+                    canonical_claim_context(profile, target, package_revision)?,
+                ))
+            })
+            .collect::<Result<serde_json::Map<String, Value>, IdempotencyError>>()?
+            .into();
+    }
+    Ok(value)
 }
 
 pub(crate) fn canonical_action_context(

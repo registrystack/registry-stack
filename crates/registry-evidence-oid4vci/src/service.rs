@@ -2874,14 +2874,12 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let directory = tempfile::tempdir().expect("temp dir");
-        let public_port = {
-            let probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe public port");
-            probe.local_addr().expect("public address").port()
-        };
-        let metrics_port = {
-            let probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe metrics port");
-            probe.local_addr().expect("metrics address").port()
-        };
+        // Keep both reservations alive so the OS cannot reuse the public port
+        // when selecting the separate metrics port.
+        let public_probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe public port");
+        let metrics_probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe metrics port");
+        let public_port = public_probe.local_addr().expect("public address").port();
+        let metrics_port = metrics_probe.local_addr().expect("metrics address").port();
         let path = write_deployment(directory.path(), public_port, 0o600);
         let document = fs::read_to_string(&path).expect("read the configuration");
         fs::write(
@@ -2897,6 +2895,7 @@ mod tests {
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
         let service = Arc::new(DeliveryService::load(config).expect("the service loads"));
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        drop((public_probe, metrics_probe));
         let serving = tokio::spawn(serve(service, async move {
             let _ = stopped.await;
         }));

@@ -597,6 +597,19 @@ impl MutationCoordinator {
             crate::request_store::load(transaction.transaction(), &entity.id, request_id, false)
                 .await?;
         let record_uuid = current.record_uuid;
+        if matches!(
+            input.action,
+            RequestActionBody::Submit | RequestActionBody::Revise { .. }
+        ) {
+            admit_submitter_targets(
+                transaction.transaction(),
+                entity,
+                registry.entities(),
+                claims,
+                &current.data,
+            )
+            .await?;
+        }
         if let Some(stored) = stored {
             if workflow.current_proposal().is_some() {
                 let targets = crate::request_store::load_targets(
@@ -1221,6 +1234,26 @@ impl MutationCoordinator {
         {
             return Err(MutationError::PreconditionFailed);
         }
+        if !entity.access_profiles[claims.access_profile()]
+            .submitter_targets
+            .is_empty()
+        {
+            crate::request_store::load_header(
+                transaction.transaction(),
+                &entity.id,
+                current.record_uuid,
+                true,
+            )
+            .await?;
+            admit_submitter_targets(
+                transaction.transaction(),
+                entity,
+                registry.entities(),
+                claims,
+                &current.data,
+            )
+            .await?;
+        }
         let authored = crate::request_store::load_authored_intake(
             transaction.transaction(),
             &entity.id,
@@ -1613,6 +1646,7 @@ impl MutationCoordinator {
             registry_id: registry.registry_id().to_owned(),
             route: target_route,
             entity: entity.clone(),
+            submitter_target_entities: BTreeMap::new(),
             event_deliveries: exact_entity_event_deliveries(registry, entity)?,
             temporal_exclusion_constraints: temporal_exclusion_constraints(
                 registry, entity, inventory,
@@ -2159,4 +2193,95 @@ mod timestamp_tests {
             assert_eq!(super::request_timestamp(now).unwrap().as_str(), stored);
         }
     }
+}
+
+/// Current native-reference admission runs under target table locks, held until the
+/// request mutation commits. A target change therefore cannot pass between the
+/// authority check and its protected request write.
+pub(super) async fn admit_submitter_targets(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    targets: &BTreeMap<String, CompiledEntity>,
+    claims: &ClaimContext,
+    intake: &Map<String, Value>,
+) -> Result<(), MutationError> {
+    let profile = entity
+        .access_profiles
+        .get(claims.access_profile())
+        .ok_or(MutationError::InvalidRequest)?;
+    if profile.submitter_targets.is_empty() {
+        return Ok(());
+    }
+    if profile
+        .submitter_targets
+        .iter()
+        .any(|id| !claims.submitter_targets().contains_key(id))
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let plan = entity
+        .change_request
+        .as_ref()
+        .ok_or(MutationError::InvalidRequest)?;
+    let records = plan
+        .effects
+        .iter()
+        .map(|effect| {
+            let crate::model::CompiledChangeRequestTargetBinding::Existing { from_field } =
+                &effect.target.binding
+            else {
+                return Err(MutationError::InvalidRequest);
+            };
+            let id = intake
+                .get(from_field)
+                .and_then(Value::as_str)
+                .ok_or(MutationError::InvalidRequest)?;
+            let id = Uuid::parse_str(id).map_err(|_| MutationError::InvalidRequest)?;
+            Ok((effect.target.entity_id.clone(), id))
+        })
+        .collect::<Result<BTreeSet<_>, MutationError>>()?;
+    transaction
+        .execute(
+            "SELECT set_config('registry.change_request_target_context', '', true)",
+            &[],
+        )
+        .await
+        .map_err(map_database_error)?;
+    for (entity_id, id) in records {
+        let target = targets
+            .get(&entity_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        let target_claims = claims
+            .submitter_targets()
+            .get(&entity_id)
+            .ok_or(MutationError::PreconditionFailed)?;
+        target_claims
+            .install_row_boundaries(transaction)
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        // PostgreSQL row-locking SELECT also requires an UPDATE RLS policy.
+        // A table SHARE lock preserves ordinary GET-only target authority while
+        // serializing target writes through the short request transaction.
+        // Fixed target ordering and manual application avoid lock upgrades.
+        transaction
+            .batch_execute(&format!(
+                "LOCK TABLE registry_data.{} IN SHARE MODE",
+                quote_identifier(&target.physical_table)
+            ))
+            .await
+            .map_err(map_database_error)?;
+        let sql = format!("SELECT record_id FROM registry_data.{} WHERE record_id = $1 AND record_lifecycle = 'active'", quote_identifier(&target.physical_table));
+        let admitted = transaction
+            .query_opt(&sql, &[&id])
+            .await
+            .map_err(map_database_error)?;
+        claims
+            .install_row_boundaries(transaction)
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        if admitted.is_none() {
+            return Err(MutationError::PreconditionFailed);
+        }
+    }
+    Ok(())
 }

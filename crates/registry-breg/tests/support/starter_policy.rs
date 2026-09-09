@@ -80,8 +80,8 @@ const PROFESSIONAL_LICENCES: Starter = Starter {
     reviewed_change: include_bytes!("../../../../products/breg/starters/professional-licences/core/examples/inputs/reviewed-change.json"),
     primary_route: "professional-licenses",
     correction_route: "scope-corrections",
-    correction_field: "practiceScope",
-    hidden_reader_fields: &["localIdentifier", "personReference", "regulatorReference", "practiceScope"],
+    correction_field: "authorizationConditions",
+    hidden_reader_fields: &["localIdentifier", "personReference", "regulatorReference", "licensedActivities", "authorizationConditions"],
     references: ReferencePolicy::NoLocalReferences,
     expected_journeys: &["starter-model-policy"],
 };
@@ -328,7 +328,11 @@ impl StarterHttp<'_> {
             .uri(format!("{path}?accessProfile={profile}"))
             .header("authorization", format!("Bearer {token}"))
             .header("accept", "application/json");
-        if method != "GET" {
+        if method != "GET"
+            && !extra_headers
+                .iter()
+                .any(|(name, _)| *name == "idempotency-key")
+        {
             request = request.header("idempotency-key", Uuid::new_v4().to_string());
         }
         if body.is_some()
@@ -466,6 +470,7 @@ async fn assert_http_policy(starter: &Starter, http: &StarterHttp<'_>) {
         !original_value.is_null(),
         "first-record input includes the corrected field"
     );
+    let original_record = first.clone();
     let target = http.create(starter.primary_route, first.clone()).await;
     let target_path = format!("/v1/records/{}/{target}", starter.primary_route);
     let (status, _, headers) = http.persona("GET", &target_path, "editor", None, &[]).await;
@@ -602,6 +607,56 @@ async fn assert_http_policy(starter: &Starter, http: &StarterHttp<'_>) {
     // Freeze two independently approved corrections against the same target
     // revision. Applying the first changes only the target, not the second
     // request's ETag: the second refusal must be the target conflict itself.
+    if starter.primary_route == "professional-licenses" {
+        for activities in [
+            json!([]),
+            json!(["unknown"]),
+            json!(["example-assessment", "example-assessment"]),
+            json!(["example-assessment", "example-unlisted-activity"]),
+        ] {
+            let mut invalid = change.clone();
+            invalid["licensedActivities"] = activities;
+            let (status, body, _) = http
+                .persona(
+                    "POST",
+                    "/v1/records/scope-corrections",
+                    "editor",
+                    Some(json!({"data":invalid})),
+                    &[],
+                )
+                .await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "invalid correction: {body}"
+            );
+        }
+        for (route, input) in [
+            ("scope-corrections", &change),
+            ("professional-licenses", &original_record),
+        ] {
+            for field in ["licensedActivities", "authorizationConditions"] {
+                for missing in [false, true] {
+                    let mut invalid = input.clone();
+                    if missing {
+                        invalid.as_object_mut().unwrap().remove(field);
+                    } else {
+                        invalid[field] = Value::Null;
+                    }
+                    let (status, body, _) = http
+                        .persona(
+                            "POST",
+                            &format!("/v1/records/{route}"),
+                            "editor",
+                            Some(json!({"data":invalid})),
+                            &[],
+                        )
+                        .await;
+                    assert_eq!(status, StatusCode::BAD_REQUEST, "invalid {field}: {body}");
+                }
+            }
+        }
+    }
     let second = http.create(starter.correction_route, change.clone()).await;
     let second_path = format!("/v1/records/{}/{second}", starter.correction_route);
     invoke_action(http, &second_path, "editor", "submit_request").await;
@@ -626,6 +681,13 @@ async fn assert_http_policy(starter: &Starter, http: &StarterHttp<'_>) {
         changed["data"]["domainData"][starter.correction_field],
         change[starter.correction_field]
     );
+    if starter.primary_route == "professional-licenses" {
+        let mut expected = original_record.clone();
+        expected["licensedActivities"] = change["licensedActivities"].clone();
+        expected["authorizationConditions"] = json!("");
+        assert_eq!(changed["data"]["domainData"], expected,
+            "one reviewed application changes exactly activities and conditions, including explicit clearing");
+    }
     let (status, history, _) = http
         .persona(
             "GET",
@@ -641,6 +703,69 @@ async fn assert_http_policy(starter: &Starter, http: &StarterHttp<'_>) {
         2,
         "only creation and the first approved correction may commit"
     );
+
+    if starter.primary_route == "professional-licenses" {
+        let rebase = selected_action(http, &second_path, "editor", "revise_request").await;
+        let (status, body, _) = http
+            .persona(
+                "POST",
+                rebase["href"].as_str().unwrap().split('?').next().unwrap(),
+                "editor",
+                Some(json!({"rebase":true})),
+                &[("if-match", rebase["ifMatch"].as_str().unwrap())],
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "rebase: {body}");
+        let (_, rebased, _) = http.persona("GET", &second_path, "editor", None, &[]).await;
+        assert_eq!(rebased["data"]["request"]["bregState"], "draft");
+        let (status, _, _) = send_selected_action(http, "reviewer", &second_apply).await;
+        assert_eq!(
+            status,
+            StatusCode::PRECONDITION_FAILED,
+            "old frozen application remains stale after rebase"
+        );
+        invoke_action(http, &second_path, "editor", "submit_request").await;
+        invoke_action(http, &second_path, "reviewer", "approve_request").await;
+        let apply = selected_action(http, &second_path, "reviewer", "apply_request").await;
+        let payload = json!({"proposalVersion":apply["proposalVersion"],"effectDigest":apply["effectDigest"]});
+        let apply_path = apply["href"].as_str().unwrap().split('?').next().unwrap();
+        let headers = [
+            ("if-match", apply["ifMatch"].as_str().unwrap()),
+            ("idempotency-key", "licence-rebased-apply"),
+        ];
+        let (status, applied, _) = http
+            .persona(
+                "POST",
+                apply_path,
+                "reviewer",
+                Some(payload.clone()),
+                &headers,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "reapproved application: {applied}");
+        let (status, replayed, _) = http
+            .persona("POST", apply_path, "reviewer", Some(payload), &headers)
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            replayed, applied,
+            "exact retry returns the same frozen receipt"
+        );
+        let (_, history, _) = http
+            .persona(
+                "GET",
+                &format!("{target_path}/revisions"),
+                "editor",
+                None,
+                &[],
+            )
+            .await;
+        assert_eq!(
+            history["items"].as_array().unwrap().len(),
+            3,
+            "exact retry adds no target revision"
+        );
+    }
 
     let (status, body, _) = http
         .persona("GET", &request_path, "reader", None, &[])

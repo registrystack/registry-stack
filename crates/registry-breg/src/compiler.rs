@@ -1668,6 +1668,7 @@ fn expand_project_access(
                 read_paths: grant.read_paths.clone(),
                 review_stages: grant.review_stages.clone(),
                 apply_targets: grant.apply_targets.clone(),
+                submitter_targets: grant.submitter_targets.clone(),
                 request_presence: grant.request_presence.clone(),
                 allow_count: grant.allow_count,
                 revision_access: grant.revision_access,

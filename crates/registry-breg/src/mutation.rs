@@ -708,6 +708,7 @@ pub struct MutationPlan {
     registry_id: String,
     route: CompiledRoute,
     entity: CompiledEntity,
+    submitter_target_entities: BTreeMap<String, CompiledEntity>,
     event_deliveries: Vec<CompiledEventDelivery>,
     temporal_exclusion_constraints: Vec<String>,
 }
@@ -766,6 +767,19 @@ impl MutationPlan {
             registry_id: registry.registry_id().to_owned(),
             route: route.clone(),
             entity: entity.clone(),
+            submitter_target_entities: entity
+                .access_profiles
+                .values()
+                .flat_map(|profile| &profile.submitter_targets)
+                .map(|id| {
+                    registry
+                        .entities()
+                        .get(id)
+                        .cloned()
+                        .map(|entity| (id.clone(), entity))
+                        .ok_or(MutationError::InvalidRequest)
+                })
+                .collect::<Result<_, _>>()?,
             event_deliveries,
             temporal_exclusion_constraints,
         })
@@ -822,6 +836,7 @@ impl MutationPlan {
                 default_access_profile: Some(profile_id.to_owned()),
             },
             entity: self.entity.clone(),
+            submitter_target_entities: self.submitter_target_entities.clone(),
             event_deliveries: self.event_deliveries.clone(),
             temporal_exclusion_constraints: self.temporal_exclusion_constraints.clone(),
         })
@@ -1307,6 +1322,39 @@ impl MutationCoordinator {
         .await?;
 
         if let Some(stored) = lock_and_load(transaction.transaction(), &binding).await? {
+            if !request.plan.entity.access_profiles[request.claims.access_profile()]
+                .submitter_targets
+                .is_empty()
+            {
+                // Reauthorize the exact retained result target, including create
+                // retries, before releasing cached request data.
+                let envelope: Value = serde_json::from_slice(stored.response.body())
+                    .map_err(|_| MutationError::Unavailable)?;
+                let api_data = envelope
+                    .get("data")
+                    .and_then(|member| member.get("domainData"))
+                    .and_then(Value::as_object)
+                    .ok_or(MutationError::Unavailable)?;
+                let intake = request
+                    .plan
+                    .entity
+                    .stored_fields
+                    .iter()
+                    .filter_map(|field| {
+                        api_data
+                            .get(&field.logical.api_name)
+                            .map(|value| (field.logical.id.clone(), value.clone()))
+                    })
+                    .collect();
+                request::admit_submitter_targets(
+                    transaction.transaction(),
+                    &request.plan.entity,
+                    &request.plan.submitter_target_entities,
+                    request.claims,
+                    &intake,
+                )
+                .await?;
+            }
             if !matches!(&stored.metadata, StoredResultMetadata::Record { .. }) {
                 return Err(MutationError::Unavailable);
             }
@@ -2088,6 +2136,17 @@ async fn apply_current_row(
         Operation::Create => {
             let authored_fields = request.body.submitted_fields()?;
             let record_id = Uuid::new_v4().to_string();
+            let MutationBody::Create(data) = &request.body else {
+                return Err(MutationError::InvalidRequest);
+            };
+            request::admit_submitter_targets(
+                transaction,
+                &request.plan.entity,
+                &request.plan.submitter_target_entities,
+                request.claims,
+                data,
+            )
+            .await?;
             let row = apply_create_row(transaction, request, &record_id).await?;
             if request.plan.entity.change_request.is_some() {
                 let owner = request_actor_reference(audit_profile, identity_scope, request.claims)?;
@@ -2143,6 +2202,16 @@ async fn apply_current_row(
             }
             let before_data = current.data.clone();
             let data = apply_patch_document(request, &current.data)?;
+            let mut admitted_intake = current.data.clone();
+            admitted_intake.extend(data.clone());
+            request::admit_submitter_targets(
+                transaction,
+                &request.plan.entity,
+                &request.plan.submitter_target_entities,
+                request.claims,
+                &admitted_intake,
+            )
+            .await?;
             let mut row =
                 apply_patch_row(transaction, request, current.record_revision, data).await?;
             if request.plan.entity.change_request.is_some() {

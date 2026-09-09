@@ -19,7 +19,7 @@
     "catalog": {
       "baseUrl": "https://professional-licences.example.org",
       "title": "Professional licence register",
-      "description": "Record dated professional authorizations and review practice-scope corrections.",
+      "description": "Record professional licence decisions and review recorded activity and condition corrections.",
       "publisher": {
         "id": "synthetic-custodian",
         "name": "Synthetic example custodian"
@@ -33,7 +33,7 @@
       {
         "id": "directory",
         "title": "Professional licence register",
-        "description": "Record dated professional authorizations and review practice-scope corrections.",
+        "description": "Record professional licence decisions and review recorded activity and condition corrections.",
         "owner": "Synthetic example custodian",
         "status": "active"
       }
@@ -98,7 +98,7 @@
             ]
           },
           {
-            "id": "practice-scope",
+            "id": "authorization-conditions",
             "concepts": [
               "https://publicschema.org/authorization_conditions"
             ]
@@ -191,12 +191,33 @@
           "apiName": "validTo"
         },
         {
-          "id": "practice-scope",
+          "id": "licensed-activities",
+          "type": "structured",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "licensedActivities",
+          "maxBytes": 512,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "example-assessment",
+                "example-advisory-services",
+                "example-practical-services"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true
+          }
+        },
+        {
+          "id": "authorization-conditions",
           "type": "string",
           "required": true,
           "classification": "restricted",
-          "apiName": "practiceScope",
-          "minLength": 1,
+          "apiName": "authorizationConditions",
           "maxLength": 500
         }
       ],
@@ -235,12 +256,33 @@
           "target": "professional-license"
         },
         {
-          "id": "practice-scope",
+          "id": "licensed-activities",
+          "type": "structured",
+          "required": true,
+          "classification": "restricted",
+          "apiName": "licensedActivities",
+          "maxBytes": 512,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "example-assessment",
+                "example-advisory-services",
+                "example-practical-services"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true
+          }
+        },
+        {
+          "id": "authorization-conditions",
           "type": "string",
           "required": true,
           "classification": "restricted",
-          "apiName": "practiceScope",
-          "minLength": 1,
+          "apiName": "authorizationConditions",
           "maxLength": 500
         },
         {
@@ -269,8 +311,11 @@
             },
             "operation": "patch",
             "set": {
-              "practice-scope": {
-                "fromField": "practice-scope"
+              "licensed-activities": {
+                "fromField": "licensed-activities"
+              },
+              "authorization-conditions": {
+                "fromField": "authorization-conditions"
               }
             }
           }
@@ -350,7 +395,8 @@
             "licence-status",
             "valid-from",
             "valid-to",
-            "practice-scope"
+            "licensed-activities",
+            "authorization-conditions"
           ],
           "rowBoundaries": [],
           "revisionAccess": true,
@@ -363,7 +409,11 @@
             "licence-status",
             "valid-from",
             "valid-to",
-            "practice-scope"
+            "licensed-activities",
+            "authorization-conditions"
+          ],
+          "filterableFields": [
+            "local-identifier"
           ]
         },
         {
@@ -374,17 +424,20 @@
             "patch",
             "submit_request",
             "revise_request",
-            "cancel_request"
+            "cancel_request",
+            "list"
           ],
           "readableFields": [
             "record",
-            "practice-scope",
+            "licensed-activities",
+            "authorization-conditions",
             "reason",
             "supporting-reference"
           ],
           "writableFields": [
             "record",
-            "practice-scope",
+            "licensed-activities",
+            "authorization-conditions",
             "reason",
             "supporting-reference"
           ],
@@ -420,10 +473,14 @@
             "licence-status",
             "valid-from",
             "valid-to",
-            "practice-scope"
+            "licensed-activities",
+            "authorization-conditions"
           ],
           "rowBoundaries": [],
-          "revisionAccess": true
+          "revisionAccess": true,
+          "filterableFields": [
+            "local-identifier"
+          ]
         },
         {
           "entity": "scope-correction",
@@ -432,11 +489,13 @@
             "approve_request",
             "reject_request",
             "request_revision",
-            "apply_request"
+            "apply_request",
+            "list"
           ],
           "readableFields": [
             "record",
-            "practice-scope",
+            "licensed-activities",
+            "authorization-conditions",
             "reason",
             "supporting-reference"
           ],
@@ -456,7 +515,8 @@
                     "licence-status",
                     "valid-from",
                     "valid-to",
-                    "practice-scope"
+                    "licensed-activities",
+                    "authorization-conditions"
                   ],
                   "rowBoundaries": []
                 }
@@ -468,6 +528,79 @@
               "entity": "professional-license",
               "rowBoundaries": []
             }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "holder",
+      "default": false,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "starter:holder"
+      ],
+      "requiredPurposes": [
+        "starter-learning"
+      ],
+      "grants": [
+        {
+          "entity": "professional-license",
+          "operations": [
+            "get",
+            "list"
+          ],
+          "readableFields": [
+            "local-identifier",
+            "person-reference",
+            "regulator-reference",
+            "jurisdiction-reference",
+            "profession-code",
+            "licence-status",
+            "valid-from",
+            "valid-to",
+            "licensed-activities",
+            "authorization-conditions"
+          ],
+          "rowBoundaries": [
+            {
+              "field": "person-reference",
+              "claim": "person_reference",
+              "operator": "equals"
+            }
+          ],
+          "filterableFields": [
+            "local-identifier"
+          ]
+        },
+        {
+          "entity": "scope-correction",
+          "operations": [
+            "create",
+            "get",
+            "patch",
+            "submit_request",
+            "revise_request",
+            "cancel_request",
+            "list"
+          ],
+          "readableFields": [
+            "record",
+            "licensed-activities",
+            "authorization-conditions",
+            "reason",
+            "supporting-reference"
+          ],
+          "writableFields": [
+            "record",
+            "licensed-activities",
+            "authorization-conditions",
+            "reason",
+            "supporting-reference"
+          ],
+          "requestVisibility": "owner",
+          "rowBoundaries": [],
+          "submitterTargets": [
+            "professional-license"
           ]
         }
       ]

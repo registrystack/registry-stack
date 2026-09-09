@@ -383,3 +383,29 @@ cargo run --locked -p registry-bregctl -- \
   generate openapi products/breg/acceptance/person-name-change-rhai \
   --output "$artifact_parent/openapi"
 ```
+
+## Current native-reference submitter admission
+
+A request grant may declare `submitterTargets: [target-entity-id]` to require
+current ordinary GET authority on its fixed referenced target records. Each
+named entity must have a GET grant in the same selected profile. The target's
+existing verified claim boundaries apply; profiles are never combined. The
+explicit request grant activates admission and does not grant target writes.
+
+The compiler requires complete coverage of fixed existing native-reference
+effects, readable reference fields, manual application, and targets that are
+not request entities and do not use membership boundaries. Dynamic planners,
+new target creation and batch intake are outside this capability. Admission
+runs for create, draft edits/retargeting, submission, revision/rebase and exact
+replay in the operation transaction. Missing target authority safely refuses
+with `412 precondition.failed`; missing claim authority conceals the surface.
+Request owner reads and cancellation remain available. Target snapshots and
+retained result links independently obey current authority.
+
+PostgreSQL row-locking reads require UPDATE policy, which a submitter does not
+hold. The bounded implementation takes target-table SHARE locks in canonical
+entity order, then uses the same-profile GET RLS predicates. Concurrent target
+writes wait until the short request transaction completes, bounded by existing
+lock and operation timeouts. A failed or cancelled operation releases its locks
+and commits no request effect. This deliberately trades target write concurrency
+for avoiding extra target write privilege or an elevated lock function.

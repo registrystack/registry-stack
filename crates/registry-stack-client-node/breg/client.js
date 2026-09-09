@@ -141,7 +141,15 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['getRecord', [2]], ['listRecords', [1]], ['continueList', [0], [0]],
   ['lookupRecord', [2, 3]], ['createRecord', [1], [1]],
   ['patchRecord', [3], [3]], ['executeLifecycleAction'],
+  ['getRecordJson', [2]], ['listRecordsJson', [1]], ['continueListJson', [0], [0]],
+  ['lookupRecordJson', [3]], ['createRecordJson'], ['patchRecordJson'], ['executeLifecycleActionJson'],
 ]) wrapAsync(method, jsonIndexes, requiredIndexes);
+
+const lifecycleActionsJson = native.BaseRegistryClient.prototype.lifecycleActionsJson;
+native.BaseRegistryClient.prototype.lifecycleActionsJson = function (...args) {
+  try { return lifecycleActionsJson.apply(this, args); }
+  catch (error) { throw normalize(error, 'invalid_request'); }
+};
 
 const lifecycleActions = native.BaseRegistryClient.prototype.lifecycleActions;
 native.BaseRegistryClient.prototype.lifecycleActions = function (...args) {

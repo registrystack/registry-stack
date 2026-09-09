@@ -26,7 +26,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "Supervized community practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "Supervized community practice"
             }
           },
           "expect": {
@@ -52,9 +55,13 @@
               "record": {
                 "recordRef": "first-record"
               },
-              "reason": "Synthetic spelling correction",
+              "reason": "Correction to the recorded professional decision",
               "supportingReference": "SYNTHETIC-SUPPORT-001",
-              "practiceScope": "Supervised community practice"
+              "licensedActivities": [
+                "example-assessment",
+                "example-practical-services"
+              ],
+              "authorizationConditions": ""
             }
           },
           "expect": {
@@ -177,7 +184,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "Supervized community practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "Supervized community practice"
             }
           },
           "capture": "approval-does-not-apply"
@@ -253,7 +263,11 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "Supervised community practice"
+              "licensedActivities": [
+                "example-assessment",
+                "example-practical-services"
+              ],
+              "authorizationConditions": ""
             }
           },
           "capture": "corrected-record"
@@ -277,7 +291,10 @@
               },
               "reason": "Synthetic rejection exercise",
               "supportingReference": "SYNTHETIC-SUPPORT-002",
-              "practiceScope": "Unapproved wider scope"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "Disputed recorded conditions"
             }
           },
           "expect": {
@@ -400,7 +417,11 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "Supervised community practice"
+              "licensedActivities": [
+                "example-assessment",
+                "example-practical-services"
+              ],
+              "authorizationConditions": ""
             }
           },
           "capture": "rejection-preserves-record"
@@ -427,7 +448,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -457,7 +481,11 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-advisory-services",
+                "example-practical-services"
+              ],
+              "authorizationConditions": ""
             }
           },
           "expect": {
@@ -487,7 +515,10 @@
               "licenceStatus": "recorded-suspended",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -517,7 +548,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-01-01",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -547,7 +581,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2025-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -578,7 +615,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-02-30",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -609,7 +649,10 @@
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -640,7 +683,10 @@
               "licenceStatus": "unrecognized",
               "validFrom": "2026-01-01",
               "validTo": "2026-12-31",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
@@ -670,12 +716,185 @@
               "professionCode": "example-nursing",
               "licenceStatus": "recorded-active",
               "validFrom": "2026-01-01",
-              "practiceScope": "General supervised practice"
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "General supervised practice"
             }
           },
           "expect": {
             "outcome": "success",
             "status": 201
+          }
+        },
+        {
+          "id": "unknown-activity-refused",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "NEG-unknown-activity",
+              "personReference": "https://people.example.org/people/journey-first-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "licensedActivities": [
+                "unknown"
+              ],
+              "authorizationConditions": "Supervized community practice"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "duplicate-activity-refused",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "NEG-duplicate-activity",
+              "personReference": "https://people.example.org/people/journey-first-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "licensedActivities": [
+                "example-assessment",
+                "example-assessment"
+              ],
+              "authorizationConditions": "Supervized community practice"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "empty-activities-refused",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "NEG-empty-activities",
+              "personReference": "https://people.example.org/people/journey-first-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "licensedActivities": [],
+              "authorizationConditions": "Supervized community practice"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "unknown-additional-activity-refused",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "NEG-unknown-additional-activity",
+              "personReference": "https://people.example.org/people/journey-first-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-nursing",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "licensedActivities": [
+                "example-assessment",
+                "example-unlisted-activity"
+              ],
+              "authorizationConditions": "Supervized community practice"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          }
+        },
+        {
+          "id": "wrong-profession-refused",
+          "entity": "professional-license",
+          "accessProfile": "editor",
+          "claims": {
+            "principal": "synthetic-editor",
+            "scopes": [
+              "starter:editor"
+            ],
+            "purpose": "starter-learning"
+          },
+          "request": {
+            "operation": "create",
+            "data": {
+              "localIdentifier": "NEG-wrong-profession",
+              "personReference": "https://people.example.org/people/journey-first-001",
+              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
+              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
+              "professionCode": "example-unlisted-profession",
+              "licenceStatus": "recorded-active",
+              "validFrom": "2026-01-01",
+              "validTo": "2026-12-31",
+              "licensedActivities": [
+                "example-assessment"
+              ],
+              "authorizationConditions": "Supervized community practice"
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
           }
         }
       ]

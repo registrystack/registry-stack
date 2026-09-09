@@ -2,9 +2,9 @@
   "version": 1,
   "starterId": "professional-licences",
   "variantId": "core",
-  "templateVersion": "0.1.0",
+  "templateVersion": "0.2.0",
   "title": "Professional licence register",
-  "description": "Record dated professional authorizations and review practice-scope corrections.",
+  "description": "Record professional licence decisions and review corrections to recorded activities and conditions.",
   "firstRecordEntity": "professional-license",
   "publicSchema": {
     "repository": "https://github.com/PublicSchema/publicschema.org",
@@ -14,11 +14,11 @@
   },
   "review": {
     "entity": "scope-correction",
-    "field": "practiceScope",
+    "fields": ["licensedActivities", "authorizationConditions"],
     "submitter": "editor",
     "reviewer": "reviewer",
     "applier": "reviewer",
-    "description": "A distinct reviewer approves a fixed practice-scope correction. Approval leaves the licence unchanged until the reviewer applies the frozen effect."
+    "description": "A distinct reviewer approves correction of recorded professional activities and conditions. Approval leaves the licence unchanged until manual application of both frozen values."
   },
   "scopeNotes": [
     "Person, regulator and jurisdiction URIs are inert external references. No lookup, identity validation or duplication of external masters occurs.",

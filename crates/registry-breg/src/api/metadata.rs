@@ -337,6 +337,11 @@ fn logical_field<'a>(entity: &'a CompiledEntity, id: &str) -> Option<&'a Compile
 }
 
 fn field_identity(entity: &CompiledEntity, id: &str) -> Option<Value> {
+    if entity.change_request.is_some() {
+        if let Some(api_name) = crate::model::request_query_field_api_name(id) {
+            return Some(json!({"id": id, "apiName": api_name}));
+        }
+    }
     let field = if id == entity.canonical_id.id {
         &entity.canonical_id
     } else {

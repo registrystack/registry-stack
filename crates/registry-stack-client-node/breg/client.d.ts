@@ -151,6 +151,79 @@ export interface LifecycleReceipt extends JsonObject {
   request: JsonObject
 }
 
+/** Exact validated JSON text, serialized before conversion to JavaScript numbers.
+ * Decode with a lossless JSON library if inspecting values outside the safe integer range.
+ * Decimal fields remain fixed-scale JSON strings. */
+export interface JsonOutcome {
+  kind: 'complete'
+  valueJson: string
+  continuation?: ListContinuation
+  traceId: string
+  etag?: string
+  location?: string
+}
+
+export interface BRegFieldDescriptor {
+  readonly id: string
+  readonly apiName: string
+  readonly label: string
+  readonly schemaJson: string
+  readonly required: boolean
+  readonly nullable: boolean
+  readonly readOnly: boolean
+  readonly removable: boolean
+  readonly referenceTargetEntity: string | null
+}
+export interface BRegQueryField {
+  readonly id: string
+  readonly apiName: string
+  readonly operators?: ReadonlyArray<string>
+  readonly directions?: ReadonlyArray<string>
+}
+export interface BRegQueryDescriptor {
+  readonly kind: string
+  readonly selectableFields: ReadonlyArray<BRegQueryField>
+  readonly filterableFields: ReadonlyArray<BRegQueryField>
+  readonly sortableFields: ReadonlyArray<BRegQueryField>
+  readonly allowCount: boolean
+  readonly defaultPageSize: number
+  readonly maxPageSize: number
+  readonly maxFilterClauses: number
+  readonly maxInValues: number
+  readonly pagination: { readonly parameter: string; readonly responsePath: string; readonly exclusive: boolean }
+  readonly temporal: JsonObject | null
+}
+export interface BRegOperationDescriptor {
+  readonly id: string
+  readonly method: string
+  readonly path: string
+  readonly kind: string
+  readonly sourceEntity: string
+  readonly responseEntity: string
+  readonly accessProfile: string
+  readonly entityLabel: string
+  readonly titleFields: ReadonlyArray<string>
+  readonly requiredCapabilities: ReadonlyArray<string>
+  readonly fields: ReadonlyArray<BRegFieldDescriptor>
+  readonly readableFields: ReadonlyArray<string>
+  readonly createWritableFields: ReadonlyArray<string>
+  readonly patchWritableFields: ReadonlyArray<string>
+  readonly query: BRegQueryDescriptor | null
+  readonly request: {
+    readonly fieldNames: string | null
+    readonly queryParameters: ReadonlyArray<string>
+    readonly body: string | null
+    readonly contentType: string | null
+    readonly schemaJson: string | null
+    readonly idempotencyKeyRequired: boolean | null
+    readonly ifMatchRequired: boolean | null
+    readonly mutationSemantics: string | null
+    readonly patchPathPrefix: string | null
+    readonly patchOperations: ReadonlyArray<string>
+    readonly removeSemantics: string | null
+  }
+}
+
 /** Opaque write authority selected from metadata fetched by this client source. */
 export declare class BRegCreateBinding {
   private constructor()
@@ -174,6 +247,8 @@ export declare class BRegLifecycleAction {
   readonly operation: string
   readonly stage: string | null
   readonly href: string
+  readonly bodyJson: string
+  readonly reviewJson: string | null
   readonly body: JsonObject
   readonly review: LifecycleReview | null
 }
@@ -182,6 +257,7 @@ export declare class BRegLifecycleAction {
 export declare class BRegMetadata {
   private constructor()
   private readonly __opaque: void
+  readonly operations: ReadonlyArray<BRegOperationDescriptor>
   readonly registryIdentifier: string
   readonly registryVersion: string
   readonly registryRevision: string
@@ -227,5 +303,13 @@ export declare class BaseRegistryClient {
   createRecord(binding: BRegCreateBinding, data: JsonObject, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: ReadonlyArray<PatchOperation | RemovePatchOperation>, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   lifecycleActions(authority: BRegLifecycleAuthority, record: RecordEnvelope, format?: RecordFormat | null): ReadonlyArray<BRegLifecycleAction>
+  getRecordJson(entityRoute: string, recordIdentifier: string, options?: RecordOptions | null): Promise<JsonOutcome>
+  listRecordsJson(entityRoute: string, options?: ListOptions | null): Promise<JsonOutcome>
+  continueListJson(continuation: ListContinuation): Promise<JsonOutcome>
+  lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | null, options?: RecordOptions | null): Promise<JsonOutcome>
+  createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
+  patchRecordJson(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operationsJson: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
+  lifecycleActionsJson(authority: BRegLifecycleAuthority, recordJson: string, format?: RecordFormat | null): ReadonlyArray<BRegLifecycleAction>
+  executeLifecycleActionJson(action: BRegLifecycleAction, idempotencyKey: string): Promise<JsonOutcome>
   executeLifecycleAction(action: BRegLifecycleAction, idempotencyKey: string): Promise<CompleteOutcome<LifecycleReceipt>>
 }

@@ -1857,6 +1857,13 @@
           ],
           "default": null
         },
+        "submitterTargets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "writableFields": {
           "default": [],
           "items": {

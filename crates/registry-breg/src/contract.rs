@@ -1712,8 +1712,10 @@ pub(crate) fn valid_crs84_point(
 
 pub(crate) fn valid_structured_schema(schema: &Value) -> bool {
     schema.as_object().is_some_and(|object| {
-        schema_declares_object(object)
-            && object.get("additionalProperties") == Some(&Value::Bool(false))
+        (schema_declares_object(object)
+            && object.get("additionalProperties") == Some(&Value::Bool(false)))
+            || (object.get("type") == Some(&Value::String("array".to_owned()))
+                && object.get("items").is_some_and(Value::is_object))
     }) && canonicalize_json(schema).is_ok_and(|bytes| bytes.len() <= MAX_STRUCTURED_SCHEMA_BYTES)
         && schema_refs_are_local(schema)
         && object_schemas_are_closed(schema)
@@ -1974,6 +1976,9 @@ pub struct AccessProfileSource {
     pub review_stages: Vec<ReviewStageGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apply_targets: Vec<ApplyTargetGrantSource>,
+    /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub submitter_targets: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub request_presence: Vec<RequestPresenceGrantSource>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -2213,6 +2218,9 @@ pub struct AccessGrantSource {
     pub review_stages: Vec<ReviewStageGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apply_targets: Vec<ApplyTargetGrantSource>,
+    /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub submitter_targets: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub request_presence: Vec<RequestPresenceGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2262,6 +2270,8 @@ struct RawAccessGrantSource {
     review_stages: Vec<ReviewStageGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     apply_targets: Vec<ApplyTargetGrantSource>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    submitter_targets: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     request_presence: Vec<RequestPresenceGrantSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2307,6 +2317,7 @@ impl<'de> Deserialize<'de> for AccessGrantSource {
             read_paths: raw.read_paths,
             review_stages: raw.review_stages,
             apply_targets: raw.apply_targets,
+            submitter_targets: raw.submitter_targets,
             request_presence: raw.request_presence,
             targets: raw.targets,
             results: raw.results,
@@ -2373,6 +2384,8 @@ struct EntityAccessGrantSourceSchema {
     review_stages: Vec<ReviewStageGrantSource>,
     #[serde(default)]
     apply_targets: Vec<ApplyTargetGrantSource>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    submitter_targets: BTreeSet<String>,
     #[serde(default)]
     request_presence: Vec<RequestPresenceGrantSource>,
     #[serde(default)]

@@ -186,6 +186,102 @@ The JSON report carries a `controlledWrites` list, one entry per target entity w
 
 {/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-breg/src/contract.rs, ChangeControlSource and ChangeRequestSource and RequestVisibilitySource; crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/access.rs. */}
 
+### Require submitter authority over targets
+
+A change request that reaches into another record, a licence correction that names the licence it corrects, can require the submitter to still hold read authority over that record, not merely to have created the request. Add `submitterTargets` to the request entity's grant, naming the entities its native reference fields target:
+
+```yaml
+entities:
+  - id: professional-license
+    primaryDataset: directory
+    route: professional-licenses
+    mutationMode: mutable
+    fields:
+      - id: person-reference
+        type: string
+        required: true
+        classification: restricted
+      - id: licensed-activities
+        type: structured
+        required: true
+        classification: restricted
+        maxBytes: 512
+        schema:
+          type: array
+          items:
+            type: string
+            enum: [example-assessment, example-advisory-services, example-practical-services]
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+  - id: scope-correction
+    primaryDataset: directory
+    route: scope-corrections
+    mutationMode: mutable
+    fields:
+      - id: record
+        type: reference
+        target: professional-license
+        required: true
+        classification: restricted
+      - id: licensed-activities
+        type: structured
+        required: true
+        classification: restricted
+        maxBytes: 512
+        schema:
+          type: array
+          items:
+            type: string
+            enum: [example-assessment, example-advisory-services, example-practical-services]
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+    changeRequest:
+      effects:
+        - target:
+            fromField: record
+          operation: patch
+          set:
+            licensed-activities:
+              fromField: licensed-activities
+      application:
+        mode: manual
+      review:
+        stages:
+          - id: review
+            approvals: 1
+            excludeSubmitter: true
+      retention:
+        mode: operator_erase
+accessProfiles:
+  - id: holder
+    principalClaim: registry_principal
+    requiredScopes: [starter:holder]
+    requiredPurposes: [starter-learning]
+    grants:
+      - entity: professional-license
+        operations: [get, list]
+        readableFields: [person-reference, licensed-activities]
+        rowBoundaries:
+          - field: person-reference
+            claim: person_reference
+            operator: equals
+      - entity: scope-correction
+        operations: [create, get, patch, submit_request, revise_request, cancel_request, list]
+        readableFields: [record, licensed-activities]
+        writableFields: [record, licensed-activities]
+        requestVisibility: owner
+        rowBoundaries: []
+        submitterTargets: [professional-license]
+```
+
+`submitterTargets` must name exactly the request's target entities: one entry for every entity its `effects` write, no more and no fewer. Each field the effects read a target from, `record` above, must be `required` on the request entity and readable through the grant, so admission can always read the target id it names, and writable through it wherever the profile holds `create` or `patch` on the request, so the submitter can supply the reference its own request needs. Application must stay `manual`: a `planner` or `automatic` request cannot declare it. No target may itself be a change-request entity, since a request's own read authority is the thing being checked. The profile itself must be non-anonymous and cannot hold `batch` on the request entity. And the same profile id must carry a grant on the target entity with `get` in its `operations` and no `membershipBoundaries`; a `rowBoundaries` restriction is fine, and the holder's own row boundary on `person-reference` above is what actually limits which licences a holder may target. `check` refuses a grant that cannot honour all of this, with `change_request.submitter_targets.invalid`.
+
+At runtime the engine reuses that same target grant's current `get` authority, never the request entity's own boundaries. Two checks carry it. The route itself refuses `create`, a draft `patch`, `submit_request`, and `revise_request` unless the caller's claims resolve to target authority under that grant: a claim that carries no matching value, or one a boundary cannot reduce to the single value it needs, leaves the route unauthorized and answers `404`, the same concealment an unrelated caller gets. Then `submit_request` and `revise_request` admit the named target rows inside the request transaction, under a share lock on each target table, and an exact idempotent replay admits them again before it replays: a target row the caller can no longer read through that grant answers `412` and `precondition.failed`. Reads are symmetric: once the request is retained, its target links appear only to a reader who currently holds that same `get` authority.
+
+{/* Evidence: products/breg/starters/professional-licences/core/registry.yaml; crates/registry-breg/src/contract.rs, AccessGrantSource; crates/registry-breg/src/change_request.rs; crates/registry-breg/src/mutation/request.rs, admit_submitter_targets(); crates/registry-breg/src/api/mod.rs, authorize_direct_route_base(); crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/postgres/request_read.rs, target_get_is_authorized(); crates/registry-breg/src/problem.rs. */}
+
 ### Plan effects with a Rhai script
 
 When the effects depend on the request's content, a request entity declares a `planner` instead of `effects`.

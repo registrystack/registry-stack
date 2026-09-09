@@ -350,6 +350,22 @@ fn row_reach(
                 &profile.membership_boundaries,
                 profile.request_visibility.is_some(),
             );
+            for id in &profile.submitter_targets {
+                if let Some(target) = entities
+                    .get(id)
+                    .and_then(|entity| entity.access_profiles.get(&profile.id))
+                {
+                    add(
+                        id,
+                        &profile.id,
+                        format!("{path}.submitterTargets[entity={id}]"),
+                        "submitter_target",
+                        &target.row_boundaries,
+                        &[],
+                        false,
+                    );
+                }
+            }
             for stage in &profile.review_stages {
                 for target in &stage.targets {
                     add(
