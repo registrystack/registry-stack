@@ -20,6 +20,7 @@ from typing import Any
 import release_candidate
 import verify_latest_published_release
 import verify_public_release
+import prepare_release_docs
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -3124,6 +3125,15 @@ def main() -> int:
     prepare_parser.add_argument("--release-id", required=True)
     prepare_parser.add_argument("--repo", type=Path, default=ROOT)
     prepare_parser.add_argument("--plan-output", type=Path)
+    docs_prepare_parser = subparsers.add_parser(
+        "prepare-docs", help="prepare candidate docs metadata and a canonical archive patch"
+    )
+    docs_prepare_parser.add_argument("--version", required=True)
+    docs_prepare_parser.add_argument("--release-id", required=True)
+    docs_prepare_parser.add_argument("--date", required=True, help="candidate date, YYYY-MM-DD")
+    docs_prepare_parser.add_argument("--repo", type=Path, default=ROOT)
+    docs_prepare_parser.add_argument("--output-dir", type=Path, help="new directory for logs, patch and archive")
+    docs_prepare_parser.add_argument("--apply", action="store_true", help="apply the verified documentation patch")
     candidate_parser = subparsers.add_parser("request-candidate")
     candidate_parser.add_argument("--version", required=True)
     candidate_parser.add_argument("--release-id", required=True)
@@ -3198,6 +3208,10 @@ def main() -> int:
             args.version,
             args.release_id,
             args.plan_output,
+        )
+    if args.command == "prepare-docs":
+        return prepare_release_docs.run(
+            args.repo, args.version, args.release_id, args.date, args.output_dir, args.apply
         )
     if args.command == "request-candidate":
         return request_release_candidate(
