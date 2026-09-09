@@ -363,6 +363,11 @@ impl PostgresRecordReadService {
                 && request.adapter == CursorAdapter::Native
                 && request.representation == CursorRepresentation::Json
         });
+        // Validate against the compiled base GET before assigning the binary
+        // route's distinct audit identity.
+        let mut request = request;
+        request.operation_id =
+            crate::attachment::operation_id(&request.operation_id, &slot_id, request.method);
         record_pre_io_audit(
             &mut client,
             self.lock_key,
@@ -477,6 +482,7 @@ impl PostgresRecordReadService {
             &plan.entity,
             record_uuid,
             i64::from(proposal_version),
+            slot_id,
         )
         .await?
         {
@@ -751,14 +757,6 @@ impl PostgresRecordReadService {
             }
             _ => return Err(ReadServiceError::Unavailable),
         };
-        stabilize_attachment_read_rows(transaction.transaction(), &plan.entity, &rows).await?;
-        #[cfg(feature = "postgres-test")]
-        if !plan.entity.attachments.is_empty() {
-            if let Some((entered, resume)) = &self.metadata_pause {
-                entered.notify_one();
-                resume.notified().await;
-            }
-        }
         let page_size = query.map_or(request.maximum_records, |query| {
             usize::from(query.page_size)
         });
@@ -768,6 +766,20 @@ impl PostgresRecordReadService {
         } else {
             rows.as_slice()
         };
+        if request
+            .selected_fields
+            .iter()
+            .any(|id| plan.entity.attachments.contains_key(id))
+        {
+            stabilize_attachment_read_rows(transaction.transaction(), &plan.entity, rows).await?;
+        }
+        #[cfg(feature = "postgres-test")]
+        if !plan.entity.attachments.is_empty() {
+            if let Some((entered, resume)) = &self.metadata_pause {
+                entered.notify_one();
+                resume.notified().await;
+            }
+        }
         let next_cursor = if has_more {
             let query = query.ok_or(ReadServiceError::Unavailable)?;
             rows.last()

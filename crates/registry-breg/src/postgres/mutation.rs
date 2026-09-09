@@ -406,6 +406,33 @@ impl PostgresRecordMutationService {
         .map_err(MutationError::from)
     }
 
+    pub(crate) async fn record_attachment_refusal(
+        &self,
+        event: HttpRefusalAudit<'_>,
+        slot_id: &str,
+    ) -> Result<(), MutationError> {
+        #[cfg(feature = "postgres-test")]
+        if matches!(self.fault, MutationFaultControl::RefusalAudit) {
+            return Err(MutationError::Unavailable);
+        }
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        crate::audit::record_attachment_http_refusal_audit(
+            &mut client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            &self.audit_profile,
+            event,
+            slot_id,
+        )
+        .await
+        .map_err(MutationError::from)
+    }
+
     pub(crate) async fn record_action_refusal<'a>(
         &self,
         action_id: &'a str,

@@ -3,6 +3,7 @@
 //! Binary slot routes inherit the compiled request's get/patch authorities.
 
 use super::*;
+use crate::model::HttpMethod;
 
 #[derive(Clone)]
 struct AttachmentRoute {
@@ -58,6 +59,15 @@ async fn mutate(
         return concealed();
     };
     let route = &binding.base;
+    let attachment_route = crate::attachment::route(
+        route,
+        &binding.slot,
+        if binding.removal {
+            HttpMethod::Delete
+        } else {
+            HttpMethod::Patch
+        },
+    );
     let claims = claims
         .map(|Extension(value)| value)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
@@ -77,24 +87,50 @@ async fn mutate(
                     .contains(&binding.slot)
         });
     let Some(surface) = surface else {
-        return audited_mutation_concealment(
+        let selected_access_profile =
+            options
+                .as_ref()
+                .ok()
+                .and_then(|options| match options.access_profile() {
+                    Some(profile) => route
+                        .access_profiles
+                        .iter()
+                        .any(|value| value == profile)
+                        .then_some(profile.as_str()),
+                    None => route.default_access_profile.as_deref(),
+                });
+        return attachment_refusal(
             mutations,
-            route,
-            options.as_ref().unwrap_or(&QueryOptions::default()),
-            &claims,
-            Some(record_id),
-            &correlation,
+            crate::audit::HttpRefusalAudit {
+                method: attachment_route.method,
+                operation_id: &attachment_route.id,
+                target_record: Some(record_id),
+                action_id: None,
+                principal: claims.principal(),
+                selected_access_profile,
+                purpose_present: claims.purpose().is_some(),
+                correlation: &correlation,
+            },
+            &binding.slot,
+            concealed(),
         )
         .await;
     };
     let refusal = |response| {
-        audited_mutation_refusal(
+        attachment_refusal(
             mutations,
-            route,
-            &surface.context,
-            Some(record_id),
+            crate::audit::HttpRefusalAudit {
+                method: attachment_route.method,
+                operation_id: &attachment_route.id,
+                target_record: Some(record_id),
+                action_id: None,
+                principal: surface.context.principal(),
+                selected_access_profile: Some(surface.context.selected_profile()),
+                purpose_present: surface.context.purpose().is_some(),
+                correlation: &correlation,
+            },
+            &binding.slot,
             response,
-            &correlation,
         )
     };
     let Some(key) = single_header(&headers, "idempotency-key") else {
@@ -165,6 +201,21 @@ async fn mutate(
     }
 }
 
+async fn attachment_refusal(
+    mutations: &crate::postgres::PostgresRecordMutationService,
+    event: crate::audit::HttpRefusalAudit<'_>,
+    slot_id: &str,
+    response: Response,
+) -> Response {
+    if event.principal.is_none() {
+        return anonymous_refusal(response, AnonymousRefusalReason::MutationRefused);
+    }
+    match mutations.record_attachment_refusal(event, slot_id).await {
+        Ok(()) => response,
+        Err(_) => mutation_problem(MutationError::Unavailable),
+    }
+}
+
 async fn download(
     State(service): State<Arc<HttpService>>,
     Extension(binding): Extension<AttachmentRoute>,
@@ -177,6 +228,7 @@ async fn download(
         .map(|Extension(value)| value)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let route = &binding.base;
+    let attachment_route = crate::attachment::route(route, &binding.slot, HttpMethod::Get);
     let parsed = parse_download_query(raw_query.as_deref());
     let record_id = path.get("record_id");
     let surface = parsed
@@ -191,7 +243,7 @@ async fn download(
     let Some(surface) = surface else {
         return audited_known_read_refusal(
             &service,
-            route,
+            &attachment_route,
             &claims,
             record_id,
             concealed(),

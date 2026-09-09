@@ -289,6 +289,7 @@ pub(super) async fn attachment_version_is_authorized(
     entity: &CompiledEntity,
     record_id: Uuid,
     proposal_version: i64,
+    slot_id: &str,
 ) -> Result<bool, ReadServiceError> {
     let header = crate::request_store::load_header(transaction, &entity.id, record_id, false)
         .await
@@ -353,6 +354,64 @@ pub(super) async fn attachment_version_is_authorized(
                 | Operation::ApplyRequest
         )
     }) {
+        let self_authority = action.attachment_request_authority();
+        if action.operation() != Operation::ApplyRequest && self_authority.is_none() {
+            continue;
+        }
+        if let Some(authority) = self_authority {
+            if authority.target_entity_id() != entity.id
+                || (action.operation() != Operation::ApplyRequest
+                    && !authority.readable_fields().contains(slot_id))
+            {
+                continue;
+            }
+            let Some(row) = transaction.query_opt(
+                "SELECT snapshot FROM registry_internal.registry_revisions WHERE entity_id=$1 AND record_id=$2 AND record_revision=$3 AND erased_at IS NULL",
+                &[&entity.id, &record_id, &proposal.request_record_revision().get()],
+            ).await.map_err(|_| ReadServiceError::Unavailable)? else { continue; };
+            let Some(bytes): Option<Vec<u8>> =
+                row.try_get(0).map_err(|_| ReadServiceError::Unavailable)?
+            else {
+                continue;
+            };
+            let intake = registry_platform_canonical_json::parse_json_strict(&bytes)
+                .map_err(|_| ReadServiceError::Unavailable)?;
+            if registry_platform_canonical_json::canonicalize_json(&intake)
+                .map_err(|_| ReadServiceError::Unavailable)?
+                != bytes
+            {
+                return Err(ReadServiceError::Unavailable);
+            }
+            let intake = intake.as_object().ok_or(ReadServiceError::Unavailable)?;
+            let stage = if action.operation() == Operation::ApplyRequest {
+                None
+            } else {
+                action.review_stage()
+            };
+            if action.operation() != Operation::ApplyRequest && stage.is_none() {
+                continue;
+            }
+            if ChangeRequestTargetContext::authorize_retained_attachment_request(
+                registry,
+                claims,
+                stage,
+                slot_id,
+                &row_boundaries(authority)?,
+                intake,
+                record_id,
+            )
+            .is_err()
+            {
+                continue;
+            }
+        } else if entity.change_request.as_ref().is_some_and(|plan| {
+            plan.apply_grants.iter().any(|grant| {
+                grant.profile_id == claims.access_profile() && grant.target_entity_id == entity.id
+            })
+        }) {
+            // Authored self boundaries must not disappear from verified input.
+            continue;
+        }
         if attachment_targets_are_authorized(
             registry, expected, claims, entity, record_id, &actor, &proposal, &targets, action,
         )? {

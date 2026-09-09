@@ -250,6 +250,48 @@ pub(crate) async fn record_http_refusal_audit(
     profile: &AuditProfile,
     event: HttpRefusalAudit<'_>,
 ) -> Result<(), RegistryAuditError> {
+    record_http_refusal_audit_inner(
+        client,
+        lock_key,
+        lock_timeout,
+        expected,
+        profile,
+        event,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn record_attachment_http_refusal_audit(
+    client: &mut Client,
+    lock_key: RegistryLockKey,
+    lock_timeout: Duration,
+    expected: &ExpectedRegistryIdentity,
+    profile: &AuditProfile,
+    event: HttpRefusalAudit<'_>,
+    slot_id: &str,
+) -> Result<(), RegistryAuditError> {
+    record_http_refusal_audit_inner(
+        client,
+        lock_key,
+        lock_timeout,
+        expected,
+        profile,
+        event,
+        Some(slot_id),
+    )
+    .await
+}
+
+async fn record_http_refusal_audit_inner(
+    client: &mut Client,
+    lock_key: RegistryLockKey,
+    lock_timeout: Duration,
+    expected: &ExpectedRegistryIdentity,
+    profile: &AuditProfile,
+    event: HttpRefusalAudit<'_>,
+    attachment_slot: Option<&str>,
+) -> Result<(), RegistryAuditError> {
     if event.operation_id.is_empty()
         || event.action_id.is_some_and(str::is_empty)
         || !profile_is_keyed(profile)
@@ -354,6 +396,12 @@ pub(crate) async fn record_http_refusal_audit(
             Value::Bool(event.purpose_present),
         ),
     ]);
+    if let Some(slot_id) = attachment_slot {
+        record.insert(
+            "attachment".to_owned(),
+            serde_json::json!({"slotId": slot_id}),
+        );
+    }
     if let Some(selected_access_profile) = event.selected_access_profile {
         record.insert(
             "selectedAccessProfile".to_owned(),

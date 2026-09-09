@@ -383,12 +383,14 @@ pub struct VerifiedRequestAction {
     review_stage: Option<String>,
     response_fields: BTreeSet<String>,
     target_authority: Vec<VerifiedRequestTargetAuthority>,
+    attachment_request_authority: Option<VerifiedRequestTargetAuthority>,
     automatic_apply_authority: Option<Vec<VerifiedRequestTargetAuthority>>,
     requires_automatic_apply_if_ready: bool,
 }
 
 pub(crate) struct VerifiedRequestActionAuthority {
     target: Vec<VerifiedRequestTargetAuthority>,
+    attachment_request: Option<VerifiedRequestTargetAuthority>,
     automatic_apply: Option<Vec<VerifiedRequestTargetAuthority>>,
     requires_automatic_apply_if_ready: bool,
 }
@@ -401,9 +403,17 @@ impl VerifiedRequestActionAuthority {
     ) -> Self {
         Self {
             target,
+            attachment_request: None,
             automatic_apply,
             requires_automatic_apply_if_ready,
         }
+    }
+    pub(crate) fn with_attachment_request_authority(
+        mut self,
+        authority: Option<VerifiedRequestTargetAuthority>,
+    ) -> Self {
+        self.attachment_request = authority;
+        self
     }
 }
 
@@ -425,6 +435,7 @@ impl VerifiedRequestAction {
             review_stage,
             response_fields,
             target_authority: authority.target,
+            attachment_request_authority: authority.attachment_request,
             automatic_apply_authority: authority.automatic_apply,
             requires_automatic_apply_if_ready: authority.requires_automatic_apply_if_ready,
         }
@@ -463,6 +474,10 @@ impl VerifiedRequestAction {
     #[must_use]
     pub fn target_authority(&self) -> &[VerifiedRequestTargetAuthority] {
         &self.target_authority
+    }
+
+    pub(crate) fn attachment_request_authority(&self) -> Option<&VerifiedRequestTargetAuthority> {
+        self.attachment_request_authority.as_ref()
     }
 
     #[must_use]

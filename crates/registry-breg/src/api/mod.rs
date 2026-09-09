@@ -2156,6 +2156,39 @@ fn request_visibility_authority(
                         )
                     })
                     .collect();
+                // Request-self attachment grants are read authority, not
+                // effect authority hashed into lifecycle action preconditions.
+                let plan = entity.change_request.as_ref().expect("request checked");
+                let attachment_request_authority = if entity.attachments.is_empty() {
+                    None
+                } else {
+                    let grant = if route.operation == Operation::ApplyRequest {
+                        plan.apply_grants
+                            .iter()
+                            .find(|grant| {
+                                grant.profile_id == selected_profile
+                                    && grant.target_entity_id == entity.id
+                            })
+                            .map(|grant| (BTreeSet::new(), &grant.row_boundaries))
+                    } else {
+                        plan.review_grants
+                            .iter()
+                            .find(|grant| {
+                                grant.profile_id == selected_profile
+                                    && grant.target_entity_id == entity.id
+                                    && Some(grant.stage.as_str()) == route.request_stage.as_deref()
+                            })
+                            .map(|grant| (grant.readable_fields.clone(), &grant.row_boundaries))
+                    };
+                    match grant {
+                        Some((fields, boundaries)) => Some(VerifiedRequestTargetAuthority::new(
+                            entity.id.clone(),
+                            fields,
+                            verified_row_boundaries_from_sources(boundaries, claims)?,
+                        )),
+                        None => None,
+                    }
+                };
                 let automatic_apply_authority = entity.change_request.as_ref().and_then(|plan| {
                     request_automatic_apply_authority(plan, selected_profile, claims).map(
                         |authority| {
@@ -2189,7 +2222,8 @@ fn request_visibility_authority(
                                 .expect("change request checked"),
                             route,
                         ),
-                    ),
+                    )
+                    .with_attachment_request_authority(attachment_request_authority),
                 ))
             })
             .collect()
