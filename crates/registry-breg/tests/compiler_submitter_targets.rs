@@ -28,6 +28,7 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
         "automatic",
         "request-target",
         "optional-reference",
+        "unwritable-reference",
     ] {
         let mut candidate = original.clone();
         let holder = candidate["accessProfiles"]
@@ -57,6 +58,14 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
             }
             "optional-reference" => {
                 candidate["entities"][1]["fields"][0]["required"] = json!(false)
+            }
+            "unwritable-reference" => {
+                holder["grants"][1]["writableFields"] = json!([
+                    "licensed-activities",
+                    "authorization-conditions",
+                    "reason",
+                    "supporting-reference"
+                ])
             }
             _ => unreachable!(),
         }

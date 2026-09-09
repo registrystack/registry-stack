@@ -557,6 +557,8 @@ pub(crate) fn compile_change_requests(
             .values()
             .filter(|p| !p.submitter_targets.is_empty())
         {
+            let authors_requests = profile.operations.contains(&Operation::Create)
+                || profile.operations.contains(&Operation::Patch);
             let valid = compiled.get(&entity.id).is_some_and(|plan| {
                 plan.planner.is_none()
                     && plan.application.mode
@@ -575,6 +577,11 @@ pub(crate) fn compile_change_requests(
                                         .fields
                                         .get(from_field)
                                         .is_some_and(|field| field.required)
+                                    // A profile that authors the request must be
+                                    // able to write the reference the effect reads,
+                                    // or its own create can never satisfy it.
+                                    && (!authors_requests
+                                        || profile.writable_fields.contains(from_field))
                             }
                             _ => false,
                         })
@@ -595,7 +602,7 @@ pub(crate) fn compile_change_requests(
                 errors.push(Diagnostic::error(
                     "change_request.submitter_targets.invalid",
                     format!("{}.submitterTargets", profile_path(&entity.id, &profile.id)),
-                    "submitterTargets requires manual application and exactly the fixed native-reference targets; each reference must be readable and required, and each non-request target needs a same-profile get grant without membership boundaries",
+                    "submitterTargets requires manual application and exactly the fixed native-reference targets; each reference must be required, readable, and writable wherever the profile authors the request, and each non-request target needs a same-profile get grant without membership boundaries",
                 ));
             }
         }
