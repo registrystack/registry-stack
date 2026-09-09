@@ -124,6 +124,20 @@ class PreparationTest(TestCase):
             self.prepare(output_dir=self.root / "not-created")
         self.assertFalse((self.root / "not-created").exists())
 
+    def test_staged_edit_with_restored_worktree_still_prevents_apply(self):
+        head = prep.git(self.repo, "rev-parse", "HEAD")
+        path = self.repo / prep.DOCS_INPUTS[0]
+        original = path.read_text()
+        path.write_text("staged: keep\n")
+        prep.git(self.repo, "add", prep.DOCS_INPUTS[0])
+        path.write_text(original)
+        patch = self.root / "empty.patch"
+        patch.write_text("")
+        with self.assertRaisesRegex(prep.PreparationError, "inputs changed"):
+            prep.apply_patch(self.repo, head, patch)
+        self.assertEqual(prep.git(self.repo, "show", f":{prep.DOCS_INPUTS[0]}"), "staged: keep")
+        self.assertEqual(path.read_text(), original)
+
     def test_untracked_manifest_is_rejected_before_clone(self):
         name = "release/manifests/registry-stack-beta-41.yaml"
         prep.git(self.repo, "rm", "--cached", name)
