@@ -119,6 +119,22 @@ class PreparationTest(TestCase):
         self.assertEqual((self.repo / prep.DOCS_INPUTS[1]).read_text(), "concurrent: keep\n")
         self.assertNotIn("candidate:", (self.repo / prep.DOCS_INPUTS[0]).read_text())
 
+    def test_concurrent_source_edit_outside_patch_prevents_apply(self):
+        def mutate(args, **kwargs):
+            result = self.fake_docker(args, **kwargs)
+            if args[0] == "docker":
+                (self.repo / "Cargo.toml").write_text("# concurrent source edit\n")
+            return result
+        output = self.root / "concurrent-source"
+        with mock.patch.object(prep.subprocess, "run", side_effect=mutate):
+            with self.assertRaises(prep.PreparationError):
+                self.prepare(output_dir=output, apply=True)
+        self.assertEqual((self.repo / "Cargo.toml").read_text(), "# concurrent source edit\n")
+        self.assertNotIn("candidate:", (self.repo / prep.DOCS_INPUTS[0]).read_text())
+        report = json.loads((output / "report.json").read_text())
+        self.assertFalse(report["applied"])
+        self.assertIn("tracked source inputs changed", report["error"])
+
     def test_uncommitted_inputs_and_wrong_identity_fail_before_build(self):
         with self.assertRaisesRegex(prep.PreparationError, "tracked input"):
             prep.validate_inputs(self.repo, "0.30.0", "beta-41", "2026-09-10")
@@ -129,16 +145,16 @@ class PreparationTest(TestCase):
 
     def test_staged_edit_with_restored_worktree_still_prevents_apply(self):
         head = prep.git(self.repo, "rev-parse", "HEAD")
-        path = self.repo / prep.DOCS_INPUTS[0]
+        path = self.repo / "Cargo.toml"
         original = path.read_text()
         path.write_text("staged: keep\n")
-        prep.git(self.repo, "add", prep.DOCS_INPUTS[0])
+        prep.git(self.repo, "add", "Cargo.toml")
         path.write_text(original)
         patch = self.root / "empty.patch"
         patch.write_text("")
         with self.assertRaisesRegex(prep.PreparationError, "inputs changed"):
             prep.apply_patch(self.repo, head, patch)
-        self.assertEqual(prep.git(self.repo, "show", f":{prep.DOCS_INPUTS[0]}"), "staged: keep")
+        self.assertEqual(prep.git(self.repo, "show", ":Cargo.toml"), "staged: keep")
         self.assertEqual(path.read_text(), original)
 
     def test_untracked_manifest_is_rejected_before_clone(self):
@@ -166,6 +182,42 @@ class PreparationTest(TestCase):
                 self.assertIn("error: release manifest must contain an artifacts object", stdout.getvalue())
                 self.assertFalse(output.exists())
                 self.assertEqual(prep.git(self.repo, "status", "--porcelain"), "")
+
+    def test_matching_candidate_tag_is_accepted(self):
+        prep.git(self.repo, "tag", "v0.29.0")
+        with mock.patch.object(prep.subprocess, "run", side_effect=self.fake_docker):
+            self.assertEqual(self.prepare(output_dir=self.root / "matching")["status"], "ready")
+
+    def make_stale_candidate_tag(self):
+        prep.git(self.repo, "tag", "v0.29.0")
+        (self.repo / "docs/site/src/data/cli-reference.yaml").write_text("review: updated\n")
+        self.commit()
+
+    def test_conflicting_candidate_tag_fails_before_docker(self):
+        self.make_stale_candidate_tag()
+        output = self.root / "stale-tag"
+        with mock.patch.object(prep.subprocess, "run", wraps=REAL_RUN) as run:
+            with self.assertRaises(prep.PreparationError):
+                self.prepare(output_dir=output, apply=True)
+        self.assertFalse(any(call.args[0][0] == "docker" for call in run.call_args_list))
+        self.assertIn("conflicts with the prepared source", json.loads((output / "report.json").read_text())["error"])
+        self.assertEqual(prep.git(self.repo, "status", "--porcelain"), "")
+
+    def test_frozen_archive_can_use_earlier_published_tag(self):
+        self.make_stale_candidate_tag()
+        (self.repo / prep.DOCS_INPUTS[2]).write_text("archives: {v0.29.0: {bundle_sha256: frozen}}\n")
+        self.commit()
+        with mock.patch.object(prep.subprocess, "run", side_effect=self.fake_docker):
+            self.assertEqual(self.prepare(output_dir=self.root / "frozen")["status"], "ready")
+
+    def test_explicit_source_ref_is_unaffected_by_candidate_tag(self):
+        self.make_stale_candidate_tag()
+        source_sha = prep.git(self.repo, "rev-parse", "HEAD")
+        manifest = self.repo / "release/manifests/registry-stack-beta-41.yaml"
+        manifest.write_text(manifest.read_text().replace("release: beta-41}", f"release: beta-41, source_ref: {source_sha}}}"))
+        self.commit()
+        with mock.patch.object(prep.subprocess, "run", side_effect=self.fake_docker):
+            self.assertEqual(self.prepare(output_dir=self.root / "explicit-ref")["status"], "ready")
 
     def test_existing_output_is_never_overwritten(self):
         output = self.root / "existing"
