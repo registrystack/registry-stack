@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.29.0 - 2026-09-10
+
+- The shared platform crates have no user-visible changes in this release.
+
 ## v0.28.0 - 2026-09-09
 
 - The shared platform crates have no user-visible changes in this release.

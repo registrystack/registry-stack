@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.29.0
+
+- Registry Manifest has no user-visible changes in this release.
+
 ## 0.28.0
 
 - A field may no longer list one semantic concept twice. Two entries name one
