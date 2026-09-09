@@ -35,6 +35,9 @@ repos:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0]
             standards_referenced: [govstack-digital-registries, sdmx, openapi, json-schema, shacl, json-ld]
             last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ govstack-digital-registries, sdmx, openapi, json-schema, shacl, json-ld ]
+            last_reviewed: unreviewed
         description: Approved Relay V2 product concept covering the registry contract, the compiler, the read-only source boundary, and the acceptance set.
       - src: products/relay-v2/STANDARDS-ALIGNMENT.md
         dest: products/registry-relay/standards-alignment
@@ -47,6 +50,9 @@ repos:
         docset_overrides:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0]
             standards_referenced: [govstack-digital-registries, sdmx, openapi, json-schema, shacl, json-ld]
+            last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ govstack-digital-registries, sdmx, openapi, json-schema, shacl, json-ld ]
             last_reviewed: unreviewed
         description: Maintained directional mapping from Relay V2 to the pinned GovStack drafts and the aligned SDMX read subset. Makes no conformance claim.
 
@@ -72,6 +78,9 @@ repos:
           - docsets: [beta-2026-06-12]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, json-ld, odrl, sp-dci, w3c-did, prov-o, govstack-digital-registries]
             last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl, sp-dci, w3c-did, prov-o, govstack-digital-registries ]
+            last_reviewed: unreviewed
         description: Operator and integrator documentation for Registry Manifest.
       - src: products/manifest/docs/validate-and-render.md
         archive_src: docs/validate-and-render.md
@@ -88,6 +97,9 @@ repos:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl]
             last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl ]
+            last_reviewed: unreviewed
       - src: products/manifest/docs/profile-fixtures.md
         archive_src: docs/profile-fixtures.md
         dest: products/registry-manifest/profile-fixtures
@@ -99,6 +111,9 @@ repos:
         docset_overrides:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [sp-dci]
+            last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ sp-dci ]
             last_reviewed: unreviewed
       - src: products/manifest/docs/reference.md
         archive_src: docs/reference.md
@@ -115,6 +130,9 @@ repos:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, cccev, odrl, w3c-did]
             last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, cccev, odrl, w3c-did ]
+            last_reviewed: unreviewed
       - src: products/manifest/docs/itb-semic-validation.md
         dest: products/registry-manifest/itb-semic-validation
         label: ITB and SEMIC validation
@@ -126,6 +144,9 @@ repos:
         docset_overrides:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [dcat, bregdcat-ap, shacl, skos, json-schema, json-ld]
+            last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ dcat, bregdcat-ap, shacl, skos, json-schema, json-ld ]
             last_reviewed: unreviewed
   registry-evidence:
     label: Evidence Gateway
@@ -147,6 +168,9 @@ repos:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0]
             standards_referenced: [openapi, json-schema, sd-jwt-vc]
             last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ openapi, json-schema, sd-jwt-vc ]
+            last_reviewed: unreviewed
         description: Operator and integrator documentation for Evidence Gateway, the minimum-disclosure assertion service.
       - src: products/evidence/CONCEPT.md
         dest: products/registry-evidence/concept
@@ -159,6 +183,9 @@ repos:
         docset_overrides:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0]
             standards_referenced: [cccev, json-schema, openapi, sd-jwt-vc]
+            last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ cccev, json-schema, openapi, sd-jwt-vc ]
             last_reviewed: unreviewed
         description: Approved Version 1 product concept covering the boundary, data model, trust and privacy invariants, native API, and acceptance set.
       - src: products/evidence/reference/authoring-projects/CONFIG.md
@@ -173,6 +200,9 @@ repos:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0]
             standards_referenced: [json-schema, openapi, sd-jwt-vc]
             last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ json-schema, openapi, sd-jwt-vc ]
+            last_reviewed: unreviewed
         description: Complete reference for the editable Evidence authoring project, its validation layers, local key material, and access policies.
       - src: products/evidence/reference/authoring-projects/SOURCE-EXPORT.md
         dest: products/registry-evidence/source-exports
@@ -184,6 +214,9 @@ repos:
         exclude_docsets: [v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
           - docsets: [v0.28.0, v0.27.0]
+            standards_referenced: []
+            last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
             standards_referenced: []
             last_reviewed: unreviewed
         description: Optional native source import, customized updates, provenance and interrupted transaction recovery.
@@ -199,6 +232,9 @@ repos:
           - docsets: [v0.28.0, v0.27.0]
             standards_referenced: []
             last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: []
+            last_reviewed: unreviewed
         description: Rotate source credentials with explicit overlap, bounded OAuth caches and verified restart.
       - src: products/evidence/FIRST-CURL-TEST.md
         dest: products/registry-evidence/first-curl-test
@@ -210,6 +246,9 @@ repos:
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0]
+            standards_referenced: []
+            last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
             standards_referenced: []
             last_reviewed: unreviewed
         description: Deterministic local curl checkpoint against the Evidence Gateway server with a mock source and an in-memory test JWKS.
@@ -225,6 +264,9 @@ repos:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0]
             standards_referenced: [sd-jwt-vc]
             last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ sd-jwt-vc ]
+            last_reviewed: unreviewed
         description: Source-testing contract with the deterministic mock matrix, opt-in public demo smoke tests, and credential handling rules.
       - src: products/evidence/SD-JWT-VC-DEMO.md
         dest: products/registry-evidence/sd-jwt-vc-demo
@@ -237,6 +279,9 @@ repos:
         docset_overrides:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0]
             standards_referenced: [sd-jwt-vc]
+            last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ sd-jwt-vc ]
             last_reviewed: unreviewed
         description: Deterministic local demo that issues one assertion in both later-verifiable formats and re-verifies the credential offline.
       - src: products/evidence/OPERATOR-CONTRACT.md
@@ -251,6 +296,9 @@ repos:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0]
             standards_referenced: [openapi, sd-jwt-vc]
             last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
+            standards_referenced: [ openapi, sd-jwt-vc ]
+            last_reviewed: unreviewed
         description: Supported deployment shape, requester authority and purpose duties, required configuration and secrets, and readiness, audit, and key obligations.
       - src: products/evidence/PERFORMANCE.md
         dest: products/registry-evidence/performance
@@ -262,6 +310,9 @@ repos:
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
           - docsets: [v0.28.0, v0.27.0, v0.26.1, v0.26.0, v0.25.0, v0.24.0, v0.23.0, v0.22.0, v0.21.0, v0.20.1, v0.20.0, v0.18.0, v0.17.0]
+            standards_referenced: []
+            last_reviewed: unreviewed
+          - docsets: [ v0.29.0 ]
             standards_referenced: []
             last_reviewed: unreviewed
         description: Measured baseline of the audit-durability throughput trade and the deferred work that would recover most of the cost.
