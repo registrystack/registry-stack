@@ -68,13 +68,17 @@ test('removes the current Notary docs sources and generated product plumbing', (
   assert.equal(repoDocs.repos['registry-notary'], undefined);
   const currentDocset = docsets.docsets.find((docset) => docset.id === docsets.current);
   assert.equal(currentDocset.products['registry-notary'], undefined);
-  const historicalNotaryDocsets = docsets.docsets.filter(
-    (entry) =>
-      entry.status === 'archived' &&
-      !['v0.17.0', 'v0.18.0', 'v0.20.0', 'v0.20.1', 'v0.21.0', 'v0.22.0', 'v0.23.0', 'v0.24.0', 'v0.25.0', 'v0.26.0', 'v0.26.1', 'v0.27.0', 'v0.28.0'].includes(entry.id),
-  );
-  for (const docset of historicalNotaryDocsets) {
-    assert.ok(docset.products['registry-notary'], `${docset.id} lost its historical Notary pin`);
+  // Notary retirement is a product boundary at v0.17.0, independent of
+  // how many subsequent candidate docsets are prepared.
+  for (const docset of docsets.docsets) {
+    if (docset.status !== 'archived') continue;
+    const version = /^v(\d+)\.(\d+)\.(\d+)$/.exec(docset.id)?.slice(1).map(Number);
+    const afterRetirement = version && (version[0] > 0 || version[1] >= 17);
+    if (afterRetirement) {
+      assert.equal(docset.products['registry-notary'], undefined, `${docset.id} restored retired Notary`);
+    } else {
+      assert.ok(docset.products['registry-notary'], `${docset.id} lost its historical Notary pin`);
+    }
   }
   const v017 = docsets.docsets.find((entry) => entry.id === 'v0.17.0');
   assert.equal(v017.products['registry-notary'], undefined);
