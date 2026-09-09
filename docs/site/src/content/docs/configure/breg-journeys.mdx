@@ -110,10 +110,11 @@ These are all the findings the compiler can report, each attached to the documen
 | `access.profile.no_writable_fields` | The profile grants `create` or `patch` and names no writable field. | List the writable fields, or remove the write operations. |
 | `access.profile.related_disclosure` | A read path discloses related records under the root profile rather than the target entity's own profiles. | Review its fields and the target entity's access requirements. |
 | `access.profile.revision_history` | History can disclose values removed from the current record. | Review historical disclosure separately. |
+| `access.profile.row_boundary_not_writable` | The profile grants `create` and a row boundary whose field it cannot write, so the row policy refuses every create. | Add the boundary field to the writable fields, or remove `create` from the grant. |
 | `access.profile.snapshot_history` | Snapshot reads reproduce retained historical rows under current authorization. | Review stored-field projection, filters, and row boundaries separately. |
 | `access.profile.unrestricted_collection` | The profile can list every row; caller filters are not authorization. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
 | `access.profile.unrestricted_rows` | The profile's granted operations reach every row and no claim-bound boundary narrows them. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
-| `access.profile.writable_row_boundary` | `patch` can change a field a row boundary depends on, within the caller's allowed values. | Remove it from the writable fields unless moving records is intended. |
+| `access.profile.writable_row_boundary` | The profile can write a field a row boundary depends on. | With `create`, keep it writable: the row policy pins it to the caller's claim on insert. With `patch` alone, remove it from the writable fields unless moving records is intended. |
 | `manifest_projection.missing` | No Registry Manifest projection is declared. | Declare one to clear the finding. `check --production` passes without it, and `package` builds a package without one. |
 | `module.lock.digest_missing` | A module lock entry has no production digest. | Run `project lock` before a production package. |
 | `module.lock.missing` | A module source has no lock entry. | Run `project lock`. |

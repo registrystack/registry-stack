@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Pure, value-free access inspection and compile-time requirements.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -191,7 +191,31 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 findings.push(Diagnostic::finding("access.profile.no_writable_fields", format!("{path}.writableFields"),
                     &format!("this profile grants {} and names no writable field, so every write naming a field is refused and a required field can never be supplied. List the fields this profile may write, or remove the write operations", write_operations.join(", "))));
             }
-            if profile.operations.contains(&Operation::Patch)
+            // A row boundary compiles to an INSERT `WITH CHECK` pinning its field to
+            // the caller's claim, so a grant that creates must keep the field
+            // writable. The record id is never a writable field, so a boundary on it
+            // is outside that advice.
+            let creates = profile.operations.contains(&Operation::Create);
+            let patches = profile.operations.contains(&Operation::Patch);
+            let boundary_fields = profile
+                .row_boundaries
+                .iter()
+                .map(|b| b.field.as_str())
+                .filter(|field| *field != "id")
+                .collect::<BTreeSet<_>>();
+            if creates
+                && boundary_fields
+                    .iter()
+                    .any(|field| profile.writable_fields.contains(*field))
+            {
+                let patch_review = if patches {
+                    ". Review separately that patch can move a record within the caller's allowed values"
+                } else {
+                    ""
+                };
+                findings.push(Diagnostic::finding("access.profile.writable_row_boundary", format!("{path}.writableFields"),
+                    &format!("create needs this authorization-bound field in writableFields, because the row policy pins it to the caller's claim on insert; keep it writable, and expect a create naming any other value to be refused{patch_review}")));
+            } else if patches
                 && profile
                     .row_boundaries
                     .iter()
@@ -199,6 +223,15 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
             {
                 findings.push(Diagnostic::finding("access.profile.writable_row_boundary", format!("{path}.writableFields"),
                     "patch can change an authorization-bound field within the caller's allowed values; remove it from writableFields unless moving records is intended"));
+            }
+            if creates {
+                for field in boundary_fields
+                    .iter()
+                    .filter(|field| !profile.writable_fields.contains(**field))
+                {
+                    findings.push(Diagnostic::finding("access.profile.row_boundary_not_writable", format!("{path}.writableFields"),
+                        &format!("create is granted, but row boundary field `{field}` is not writable: a create cannot name it, the row policy pins it to the caller's claim on insert, and every create is refused. Add `{field}` to writableFields, or remove create from this grant")));
+                }
             }
             if profile.revision_access && profile.operations.contains(&Operation::Revisions) {
                 findings.push(Diagnostic::finding("access.profile.revision_history", format!("{path}.revisionAccess"),
