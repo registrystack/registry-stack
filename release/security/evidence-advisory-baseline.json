@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:1ad2dc4833ec1e552c4ca20a2e64b267f2a35b6eaf24bb6242e0dd615d501887",
+      "sha256:180f156263f534db55642f89977603faa46e0af387b4b2d70e8ff19ca2dacca8",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -51,7 +51,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552"
+    "definition_digest": "sha256:afcf589fd2531a0a91ad7b7322cce225b32222b4321643f2d822b7c56eee509c"
   },
   "policies": [
     {
@@ -74,8 +74,8 @@
       "severity": "Critical",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.27.0 Linux AMD64 Evidence local reproduction from rehearsal run 34065151079 has one __isoc99_sscanf call whose two branches select only the immutable %lu and %lx formats. Neither uses an allocating-character conversion or field width, and no other scanf-family call or affected dynamically resolved name was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
-      "reviewed_at": "2026-09-07",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.28.0 Linux AMD64 Evidence local reproduction from rehearsal run 34314075327 has one __isoc99_sscanf call whose two branches select only the immutable %lu and %lx formats. Neither uses an allocating-character conversion or field width, and no other scanf-family call or affected dynamically resolved name was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
+      "reviewed_at": "2026-09-09",
       "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -92,14 +92,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
+      "runtime_definition_digest": "sha256:afcf589fd2531a0a91ad7b7322cce225b32222b4321643f2d822b7c56eee509c",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
-        "reference_source_revision": "bee7708e4f6ac5712a05245963fbce7bd5f732e8",
+        "reference_image_digest": "sha256:7d746336063cf7abed7197249ab52bfce99cb0f6cc3dfe5e6b77ce99f985b312",
+        "reference_source_revision": "c012e72f63d27745688362c9690bfb6cb3f960ce",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
+        "runtime_definition_digest": "sha256:afcf589fd2531a0a91ad7b7322cce225b32222b4321643f2d822b7c56eee509c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -119,10 +119,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:524df3e7de28032045a5fcace079697c8f1d597093b755195c14d4b420614096"
+            "sha256": "sha256:9850b2cdc3a03d0db8477e184f8fb429112e2c133975eea4e12b207cc596af16"
           }
         ],
-        "definition_digest": "sha256:69784f49ef9a2773322a93a8e4da49731f4d0fd65f52707d33f959392d75d1c8"
+        "definition_digest": "sha256:83955ec00f455a8233c01c38bc6e83237b7932c18701e2bbc2e511142b6c1b68"
       }
     },
     {
@@ -132,8 +132,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.27.0 Linux AMD64 Evidence local reproduction from rehearsal run 34065151079 imports no wide-input or ungetwc function and embeds no affected dynamic-resolution name, so no vulnerable wide-character pushback path was identified in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
-      "reviewed_at": "2026-09-07",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.28.0 Linux AMD64 Evidence local reproduction from rehearsal run 34314075327 imports no wide-input or ungetwc function and embeds no affected dynamic-resolution name, so no vulnerable wide-character pushback path was identified in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
+      "reviewed_at": "2026-09-09",
       "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -150,14 +150,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
+      "runtime_definition_digest": "sha256:afcf589fd2531a0a91ad7b7322cce225b32222b4321643f2d822b7c56eee509c",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
-        "reference_source_revision": "bee7708e4f6ac5712a05245963fbce7bd5f732e8",
+        "reference_image_digest": "sha256:7d746336063cf7abed7197249ab52bfce99cb0f6cc3dfe5e6b77ce99f985b312",
+        "reference_source_revision": "c012e72f63d27745688362c9690bfb6cb3f960ce",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
+        "runtime_definition_digest": "sha256:afcf589fd2531a0a91ad7b7322cce225b32222b4321643f2d822b7c56eee509c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -177,10 +177,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:524df3e7de28032045a5fcace079697c8f1d597093b755195c14d4b420614096"
+            "sha256": "sha256:9850b2cdc3a03d0db8477e184f8fb429112e2c133975eea4e12b207cc596af16"
           }
         ],
-        "definition_digest": "sha256:69784f49ef9a2773322a93a8e4da49731f4d0fd65f52707d33f959392d75d1c8"
+        "definition_digest": "sha256:83955ec00f455a8233c01c38bc6e83237b7932c18701e2bbc2e511142b6c1b68"
       }
     },
     {
@@ -190,8 +190,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.27.0 Linux AMD64 Evidence local reproduction from rehearsal run 34065151079 imports or dynamically resolves none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
-      "reviewed_at": "2026-09-07",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.28.0 Linux AMD64 Evidence local reproduction from rehearsal run 34314075327 imports or dynamically resolves none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
+      "reviewed_at": "2026-09-09",
       "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -208,14 +208,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
+      "runtime_definition_digest": "sha256:afcf589fd2531a0a91ad7b7322cce225b32222b4321643f2d822b7c56eee509c",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
-        "reference_source_revision": "bee7708e4f6ac5712a05245963fbce7bd5f732e8",
+        "reference_image_digest": "sha256:7d746336063cf7abed7197249ab52bfce99cb0f6cc3dfe5e6b77ce99f985b312",
+        "reference_source_revision": "c012e72f63d27745688362c9690bfb6cb3f960ce",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
+        "runtime_definition_digest": "sha256:afcf589fd2531a0a91ad7b7322cce225b32222b4321643f2d822b7c56eee509c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -235,10 +235,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:524df3e7de28032045a5fcace079697c8f1d597093b755195c14d4b420614096"
+            "sha256": "sha256:9850b2cdc3a03d0db8477e184f8fb429112e2c133975eea4e12b207cc596af16"
           }
         ],
-        "definition_digest": "sha256:69784f49ef9a2773322a93a8e4da49731f4d0fd65f52707d33f959392d75d1c8"
+        "definition_digest": "sha256:83955ec00f455a8233c01c38bc6e83237b7932c18701e2bbc2e511142b6c1b68"
       }
     },
     {
@@ -248,8 +248,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.27.0 Linux AMD64 Evidence local reproduction from rehearsal run 34065151079 does not link libz or embed libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf in its executable. Its reviewed dynamic lookups do not select those functions, so no vulnerable stalled gzip-write followed by formatted-output path was identified. SQLite extension-loading wrappers are compiled in, but loading remains disabled and governed SQL explicitly denies load_extension. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
-      "reviewed_at": "2026-09-07",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.28.0 Linux AMD64 Evidence local reproduction from rehearsal run 34314075327 does not link libz or embed libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf in its executable. Its reviewed dynamic lookups do not select those functions, so no vulnerable stalled gzip-write followed by formatted-output path was identified. SQLite C extension-loading support is compiled in; its SQL entry point remains disabled and governed SQL explicitly denies load_extension, with no first-party runtime C-API loading or enabling caller identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests.",
+      "reviewed_at": "2026-09-09",
       "expires_at": "2026-09-18",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -266,14 +266,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
+      "runtime_definition_digest": "sha256:afcf589fd2531a0a91ad7b7322cce225b32222b4321643f2d822b7c56eee509c",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:536cf29441b7c5dd4fa5e231a41466a45a52c466cc95f62e94a07bfd9618e3b0",
-        "reference_source_revision": "bee7708e4f6ac5712a05245963fbce7bd5f732e8",
+        "reference_image_digest": "sha256:7d746336063cf7abed7197249ab52bfce99cb0f6cc3dfe5e6b77ce99f985b312",
+        "reference_source_revision": "c012e72f63d27745688362c9690bfb6cb3f960ce",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:1de71eec60ccc5d453ae8544ff09b3d2463964ad49660f97855a74bbd117e552",
+        "runtime_definition_digest": "sha256:afcf589fd2531a0a91ad7b7322cce225b32222b4321643f2d822b7c56eee509c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -293,10 +293,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:524df3e7de28032045a5fcace079697c8f1d597093b755195c14d4b420614096"
+            "sha256": "sha256:9850b2cdc3a03d0db8477e184f8fb429112e2c133975eea4e12b207cc596af16"
           }
         ],
-        "definition_digest": "sha256:69784f49ef9a2773322a93a8e4da49731f4d0fd65f52707d33f959392d75d1c8"
+        "definition_digest": "sha256:83955ec00f455a8233c01c38bc6e83237b7932c18701e2bbc2e511142b6c1b68"
       }
     }
   ]
