@@ -781,12 +781,48 @@ journeys:
     );
 }
 
+/// Dropping the row boundary field from `writableFields` leaves every create
+/// unable to name the column the INSERT policy pins to the caller's claim, so
+/// the refusal has to say that rather than report an anonymous reference.
+#[test]
+fn fixture_tooling_names_the_row_boundary_when_a_create_cannot_write_its_field() {
+    let registry = compiled_fixture_with_project(|source| {
+        source.replace(
+            "writableFields: [jurisdiction, label, note, quantity]",
+            "writableFields: [label, note, quantity]",
+        )
+    });
+    let error = validate_fixture_journeys(JOURNEY_SOURCE, &registry)
+        .expect_err("a create naming an unwritable row boundary field is refused");
+    assert_eq!(
+        underlying_fixture_error(&error),
+        &FixtureError::CreateRowBoundaryNotWritable
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("row boundary") && message.contains("writableFields"),
+        "the refusal names the cause and the fix: {message}"
+    );
+    assert!(
+        message.starts_with("journeys[0].steps[0]:"),
+        "the refusal keeps its step location: {message}"
+    );
+}
+
 fn compiled_fixture() -> registry_breg::CompiledRegistry {
+    compiled_fixture_with_project(|source| source)
+}
+
+fn compiled_fixture_with_project(
+    edit: impl FnOnce(String) -> String,
+) -> registry_breg::CompiledRegistry {
     let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
-    let project_source = String::from_utf8(PROJECT_TEMPLATE.to_vec())
-        .expect("project fixture is UTF-8")
-        .replace("MODULE_DIGEST", &module_digest(&module))
-        .into_bytes();
+    let project_source = edit(
+        String::from_utf8(PROJECT_TEMPLATE.to_vec())
+            .expect("project fixture is UTF-8")
+            .replace("MODULE_DIGEST", &module_digest(&module)),
+    )
+    .into_bytes();
     let project = parse_project_yaml(&project_source).expect("project fixture parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture project compiles in Production")

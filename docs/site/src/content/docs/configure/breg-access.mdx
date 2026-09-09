@@ -116,7 +116,9 @@ A row boundary compares a declared field with a verified token claim: `equals` a
 On reads, rows outside the boundary do not exist for the caller: a get returns 404, and a list omits them.
 Writes check both the existing record, where one exists, and the proposed record against the same boundaries.
 Bind the boundary to whatever field carries your registry's tenancy, an owning office, a jurisdiction code, a programme.
-Decide deliberately which profiles may write that field, because a profile that can patch it moves records in and out of another caller's rows; `check` reports that as `access.profile.writable_row_boundary`.
+Decide deliberately which profiles that only patch may write that field, because a profile that can patch it moves records in and out of another caller's rows.
+A grant that also creates has no such choice: the boundary compiles to an INSERT `WITH CHECK` pinning the field to the caller's claim, so the field has to stay in `writableFields` and each create has to send a value the claim allows.
+`check` reports a writable boundary field as `access.profile.writable_row_boundary` either way, with the advice the grant's operations call for, and reports a create whose boundary field is missing from `writableFields` as `access.profile.row_boundary_not_writable`, because the row policy refuses every such create.
 A profile that can list an entity with no row boundary raises `access.profile.unrestricted_collection`, because caller-supplied filters are never authorization; accept it only for a registry-wide role.
 
 Use the principal claim for an ownership boundary when the field stores that same identity, for example

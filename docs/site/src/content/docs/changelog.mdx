@@ -18,6 +18,20 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- `bregctl check` no longer tells you to drop a row boundary field from
+  `writableFields` on a grant that also creates. The boundary compiles to an
+  INSERT `WITH CHECK` pinning that field to the caller's claim, so the field has
+  to stay writable and each create has to send a value the claim allows.
+  `access.profile.writable_row_boundary` now words its advice for the grant's
+  operations, the new `access.profile.row_boundary_not_writable` reports a
+  create whose boundary field is not writable, and `bregctl test` names the row
+  boundary rather than reporting an anonymous reference refusal. See
+  [control access per profile](../configure/breg-access/).
+
+{/* Evidence: crates/registry-breg/src/access.rs, access_findings();
+    crates/registry-breg/src/{generated_ddl,fixtures}.rs;
+    crates/registry-breg/tests/access_configuration.rs. */}
+
 ## v0.28.0 beta-40
 
 - BREAKING: `bregctl dev` and `bregctl dev stop` take a positional project

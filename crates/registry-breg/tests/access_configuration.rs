@@ -298,12 +298,101 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
     ] {
         assert!(compiled.findings().iter().any(|d| d.code == code), "{code}");
     }
+    let patch_only = compiled
+        .findings()
+        .iter()
+        .find(|d| d.code == "access.profile.writable_row_boundary")
+        .unwrap();
+    assert!(
+        patch_only.message.contains("remove it from writableFields"),
+        "{}",
+        patch_only.message
+    );
     value["accessProfiles"][0]["grants"][0]["writableFields"] = json!([]);
     assert!(!compile(&value)
         .unwrap()
         .findings()
         .iter()
         .any(|d| d.code == "access.profile.writable_row_boundary"));
+}
+
+/// A row boundary compiles to an INSERT `WITH CHECK` pinning its field to the
+/// caller's claim, so a grant that also creates must keep that field writable.
+#[test]
+fn create_grants_keep_the_row_boundary_field_writable() {
+    let mut value = source();
+    let grant = &mut value["accessProfiles"][0]["grants"][0];
+    grant["operations"] = json!(["create", "get", "list", "patch"]);
+    grant["writableFields"] = json!(["code", "district"]);
+    let compiled = compile(&value).unwrap();
+    let finding = compiled
+        .findings()
+        .iter()
+        .find(|d| d.code == "access.profile.writable_row_boundary")
+        .expect("a create-bearing grant still reports the writable boundary for review");
+    assert!(
+        finding.path.contains("entry")
+            && finding.path.contains("reader")
+            && finding.path.ends_with("writableFields")
+    );
+    assert!(
+        !finding.message.contains("remove it from writableFields"),
+        "{}",
+        finding.message
+    );
+    assert!(
+        finding.message.contains("create")
+            && finding.message.contains("keep")
+            && finding.message.contains("patch"),
+        "{}",
+        finding.message
+    );
+    assert!(compiled
+        .findings()
+        .iter()
+        .all(|d| d.code != "access.profile.row_boundary_not_writable"));
+
+    let mut create_only = value.clone();
+    create_only["accessProfiles"][0]["grants"][0]["operations"] = json!(["create", "get", "list"]);
+    let create_only = compile(&create_only).unwrap();
+    let finding = create_only
+        .findings()
+        .iter()
+        .find(|d| d.code == "access.profile.writable_row_boundary")
+        .unwrap();
+    assert!(!finding.message.contains("patch"), "{}", finding.message);
+
+    // Taking the patch-only advice on a create-bearing grant refuses every create.
+    value["accessProfiles"][0]["grants"][0]["writableFields"] = json!(["code"]);
+    let compiled = compile(&value).unwrap();
+    let finding = compiled
+        .findings()
+        .iter()
+        .find(|d| d.code == "access.profile.row_boundary_not_writable")
+        .expect("a create that cannot name its boundary field is reported");
+    assert!(
+        finding.path.contains("entry")
+            && finding.path.contains("reader")
+            && finding.path.ends_with("writableFields")
+    );
+    assert!(
+        finding.message.contains("district") && finding.message.contains("writableFields"),
+        "{}",
+        finding.message
+    );
+    assert!(compiled
+        .findings()
+        .iter()
+        .all(|d| d.code != "access.profile.writable_row_boundary"));
+    assert_eq!(compiled.findings(), compile(&value).unwrap().findings());
+
+    // Without `create` the boundary field may stay unwritable.
+    value["accessProfiles"][0]["grants"][0]["operations"] = json!(["get", "list", "patch"]);
+    assert!(compile(&value)
+        .unwrap()
+        .findings()
+        .iter()
+        .all(|d| d.code != "access.profile.row_boundary_not_writable"));
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]

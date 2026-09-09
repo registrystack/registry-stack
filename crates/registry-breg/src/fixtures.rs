@@ -105,6 +105,9 @@ pub enum FixtureError {
     JourneyBoundsRefused,
     DuplicateIdentifier,
     LogicalReferenceRefused,
+    /// A create names a row boundary field the profile cannot write. The INSERT
+    /// policy pins that field to the caller's claim, so it has to stay writable.
+    CreateRowBoundaryNotWritable,
     AuthorityWideningRefused,
     RequestConstructionRefused,
     ResponseTooLarge,
@@ -187,6 +190,9 @@ impl fmt::Display for FixtureError {
             Self::JourneyBoundsRefused => "the fixture journey inventory was refused",
             Self::DuplicateIdentifier => "the fixture journey contains a duplicate identifier",
             Self::LogicalReferenceRefused => "the fixture logical reference was refused",
+            Self::CreateRowBoundaryNotWritable => {
+                "a create names a row boundary field this profile cannot write; the row policy pins that field to the caller's claim on insert, so keep it in writableFields"
+            }
             Self::AuthorityWideningRefused => "the fixture authority reference was refused",
             Self::RequestConstructionRefused => "the fixture request could not be constructed",
             Self::ResponseTooLarge => "the fixture response exceeded a fixed bound",
@@ -1531,6 +1537,19 @@ fn validate_action_fields(
     outcome: ExpectedOutcome,
 ) -> Result<(), FixtureError> {
     let validate_data = |data: &Map<String, Value>| {
+        // Name the row boundary before the general refusal: dropping a boundary
+        // field from writableFields is the one way a create becomes impossible
+        // rather than merely undeclared.
+        if data.keys().any(|field| {
+            entity.fields.contains_key(field)
+                && !profile.writable_fields.contains(field)
+                && profile
+                    .row_boundaries
+                    .iter()
+                    .any(|boundary| &boundary.field == field)
+        }) {
+            return Err(FixtureError::CreateRowBoundaryNotWritable);
+        }
         if data.is_empty()
             || data.keys().any(|field| {
                 !entity.fields.contains_key(field) || !profile.writable_fields.contains(field)
