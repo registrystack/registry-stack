@@ -40,6 +40,8 @@ test('a generated base and its descendants are recognised', () => {
   assert.equal(isGeneratedApiDir('reference/apis/evidence/operations/createevidence'), true);
   assert.equal(isGeneratedApiPath('/reference/apis/evidence/'), true);
   assert.equal(isGeneratedApiPath('/reference/apis/evidence/operations/gethealth/'), true);
+  assert.equal(isGeneratedApiDir('reference/apis/casework'), true);
+  assert.equal(isGeneratedApiPath('/reference/apis/casework/operations/health/'), true);
 });
 
 test('the hand-authored narrative pages keep their Markdown twin', () => {
@@ -48,6 +50,8 @@ test('the hand-authored narrative pages keep their Markdown twin', () => {
   // swallow it.
   assert.equal(isGeneratedApiDir('reference/apis/registry-evidence'), false);
   assert.equal(isGeneratedApiPath('/reference/apis/registry-evidence/'), false);
+  assert.equal(isGeneratedApiDir('reference/apis/registry-casework'), false);
+  assert.equal(isGeneratedApiPath('/reference/apis/registry-casework/'), false);
   assert.equal(isGeneratedApiDir('reference/apis'), false);
   assert.equal(isGeneratedApiPath('/reference/apis/'), false);
 });

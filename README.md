@@ -39,7 +39,10 @@ release manifests, and docs.
 ## What It Includes
 
 Registry Stack ships five installable products on one release train. Each has
-its own deployment contract and adopter tooling, and each one is optional.
+its own deployment contract and adopter tooling, and each one is optional. The
+current development source also contains an unreleased Registry Casework
+candidate; build that candidate from the reviewed source revision until a
+future release lists Casework artifacts.
 
 - **Base Registry Engine:** a configuration-defined writable registry backed by
   PostgreSQL. A registry project declares the entities, relationships,
@@ -62,6 +65,10 @@ its own deployment contract and adopter tooling, and each one is optional.
 - **Registry Manifest:** portable metadata that describes what a registry
   exposes, rendered without touching the production source.
   Docs: [Registry Manifest reference](https://docs.registrystack.org/dev/products/registry-manifest/reference/).
+- **Registry Casework candidate:** an accountable team inbox for source-owned
+  review work and small human decisions requested by another service. It can
+  run with a governed Base Registry Engine source or in standalone hosted mode.
+  Docs: [Registry Casework overview](https://docs.registrystack.org/dev/start/casework/).
 
 Evidence Gateway can use a Base Registry Engine or Registry Relay API as one of
 its fixed sources, and keeps its own authorization either way. The stack also

@@ -5,6 +5,15 @@
 # standards_referenced and last_reviewed so future current-page reviews cannot
 # rewrite historical metadata.
 repos:
+  # Casework first appears in the current development docset. Its product-owned
+  # OpenAPI artifact is rendered directly; adopter prose remains hand-authored
+  # in the Casework product lane rather than duplicating the long product README.
+  registry-casework:
+    ref: HEAD
+    version: main source (unreleased)
+    local: ../..
+    openapi: products/casework/generated/registry-casework.openapi.json
+
   # Relay's product source moved to products/relay-v2 with the V2 rebuild. The
   # V1 runtime docs under crates/registry-relay/docs described capabilities the
   # V2 runtime does not have, so they are retired rather than retargeted: every

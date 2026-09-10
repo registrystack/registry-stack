@@ -11,6 +11,7 @@ import { flattenSidebarGroups } from '../src/lib/sidebar.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
+const fetchOpenapiSource = readFileSync(resolve(siteRoot, 'scripts/fetch-openapi.mjs'), 'utf8');
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
 const validationSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
@@ -41,19 +42,30 @@ const generatedProducts = new Map(['Relay', 'Manifest', 'Evidence Gateway'].map(
 ]));
 const apiConfigSource = configSource.match(/starlightOpenAPI\((\[[\s\S]*?\])\),/)?.[1];
 assert.ok(apiConfigSource, 'could not isolate the OpenAPI plugin configuration');
-const apiSchemas = new Function(`return ${apiConfigSource};`)();
+const caseworkOpenApiSchema = {
+  base: 'reference/apis/casework',
+  schema: './openapi/registry-casework.openapi.json',
+  sidebar: { label: 'API operations', collapsed: true },
+};
+const apiSchemas = new Function(
+  'isArchivedBuild',
+  'caseworkOpenApiSchema',
+  `return ${apiConfigSource};`,
+)(false, caseworkOpenApiSchema);
 const generatedAPI = apiSchemas.map((schema) => ({
   ...schema.sidebar,
   items: [{ label: 'Generated tag', items: [] }],
 }));
-const sidebar = new Function(
+const sidebarFactory = new Function(
   'cliReferenceSidebar',
   'generatedProduct',
   'optionalGeneratedProduct',
   'openAPISidebarGroups',
   'flattenSidebarGroups',
+  'isArchivedBuild',
   `return [${sidebarSource}];`,
-)(
+);
+const sidebarArguments = [
   cliReferenceSidebar,
   (label) => {
     assert.ok(generatedProducts.has(label), `unexpected generated product: ${label}`);
@@ -62,7 +74,9 @@ const sidebar = new Function(
   (label) => generatedProducts.get(label) ?? null,
   generatedAPI,
   flattenSidebarGroups,
-);
+];
+const sidebar = sidebarFactory(...sidebarArguments, false);
+const archivedSidebar = sidebarFactory(...sidebarArguments, true);
 
 function section(label) {
   const group = sidebar.find((item) => item.label === label);
@@ -173,12 +187,38 @@ test('uses the product navigation in its published order', () => {
     'Evidence Gateway',
     'Registry Relay',
     'Base Registry Engine',
+    'Registry Casework',
     'Registry Mint',
     'Registry Discovery',
     'Operations',
     'Design',
     'Reference',
   ]);
+});
+
+test('keeps the unreleased Casework lane out of archived docsets', () => {
+  assert.equal(
+    archivedSidebar.some((item) => item.label === 'Registry Casework'),
+    false,
+  );
+  assert.equal(new Function(
+    'isArchivedBuild',
+    'caseworkOpenApiSchema',
+    `return ${apiConfigSource};`,
+  )(true, caseworkOpenApiSchema).length, 1);
+  assert.match(fetchOpenapiSource, /repoId === 'registry-casework' && docset\.id !== docsets\.current/);
+  for (const route of [
+    '/start/casework/',
+    '/configure/casework/',
+    '/operate/casework/',
+    '/reference/apis/registry-casework/',
+  ]) {
+    assert.match(configSource, new RegExp(`'${route}'`));
+  }
+  assert.match(
+    configSource,
+    /isArchivedBuild \? Object\.fromEntries\(caseworkCurrentOnlyRoutes\.flatMap/,
+  );
 });
 
 test('starts with only Start expanded and all secondary groups collapsed', () => {
@@ -252,6 +292,7 @@ test('uses the formal product names for top-level sections', () => {
     'Evidence Gateway',
     'Registry Relay',
     'Base Registry Engine',
+    'Registry Casework',
     'Registry Mint',
     'Registry Discovery',
   ]) {
@@ -285,6 +326,7 @@ test('publishes one overview route for every section that has one', () => {
     ['Evidence Gateway', "slug: 'start/evidence-quickstart'"],
     ['Registry Relay', "slug: 'configure'"],
     ['Base Registry Engine', "slug: 'start/breg-quickstart'"],
+    ['Registry Casework', "slug: 'start/casework'"],
     ['Operations', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {
@@ -550,7 +592,7 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
       "slug: 'reference/evidence-configuration'",
       "slug: 'reference/evidence-problems'",
       "slug: 'reference/apis/registry-evidence'",
-      '...openAPISidebarGroups',
+      '...openAPISidebarGroups.slice(0, 1)',
     ],
     'Evidence Gateway task group',
   );
@@ -573,6 +615,22 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
     configSource,
     /'\/tutorials\/first-run-with-solmara-lab\/': internalRedirect\('\/start\/evidence-quickstart\/'\)/,
   );
+});
+
+test('keeps the unreleased Casework journey in one product lane', () => {
+  const casework = topLevelSection(sidebarSource, 'Registry Casework');
+  assert.ok(casework, 'could not isolate the Registry Casework section');
+  const slugs = [...casework.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
+  assert.deepEqual(slugs, [
+    'start/casework',
+    'configure/casework',
+    'operate/casework',
+    'reference/apis/registry-casework',
+  ]);
+  for (const slug of slugs) {
+    assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Casework journey`);
+  }
+  assert.match(casework, /\.\.\.openAPISidebarGroups\.slice\(1, 2\)/);
 });
 
 test('keeps validation on the offline relayctl commands', () => {

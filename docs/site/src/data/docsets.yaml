@@ -23,6 +23,9 @@ docsets:
       registry-evidence:
         version: main source (unreleased)
         ref: HEAD
+      registry-casework:
+        version: main source (unreleased)
+        ref: HEAD
   - id: v0.29.0
     label: v0.29.0
     path: /v/0.29.0/

@@ -329,6 +329,15 @@ is an equality check, not an ordering value or an action precondition. Periodic
 readback repairs missed events while preserving claims, first-observation
 timing, and unresolved action recovery.
 
+Source-backed retention is an explicit operator decision for one exact source
+request. `caseworkctl retention erase PROJECT [--operator FILE] --source-id ID
+--request-kind KIND --request-id ID` previews a count-only report under
+migration database authority; repeat it with `--apply` only after review. Apply
+removes local payload copies and cancels local clock work while retaining
+bounded tombstones. A pending or uncertain source attempt blocks erasure until
+it is recovered. The command makes no BReg call and does not erase the external
+audit JSONL file.
+
 The HTTP contract is generated deterministically from the Rust-owned problem
 catalog and per-operation response table. The generator also checks the exact
 router inventory, header constants, request extraction shape, success statuses,

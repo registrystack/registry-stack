@@ -41,6 +41,7 @@ const cacheRoot = resolve(root, '.repo-docs-cache');
 // Repo id -> the spec path within the repo. Only repos listed here publish an
 // aggregated API reference; others are skipped.
 const SPEC_SOURCES = {
+  'registry-casework': 'products/casework/generated/registry-casework.openapi.json',
   'registry-evidence': 'products/evidence/generated/registry-evidence.openapi.json',
 };
 
@@ -117,6 +118,10 @@ async function main() {
 
   let written = 0;
   for (const [repoId, specPath] of Object.entries(SPEC_SOURCES)) {
+    if (repoId === 'registry-casework' && docset.id !== docsets.current) {
+      console.log(`Skipped ${repoId} OpenAPI spec for archived docset ${docset.id}.`);
+      continue;
+    }
     const repo = manifest.repos[repoId];
     if (!repo) {
       fail(`${repoId}: no entry in repo-docs.yaml to source the OpenAPI spec ref from`);

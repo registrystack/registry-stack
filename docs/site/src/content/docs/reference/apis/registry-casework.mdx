@@ -1,0 +1,70 @@
+---
+title: Registry Casework API
+description: Authentication, authority, response, and source-selection context for the generated Casework OpenAPI operations.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-10"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+---
+
+[Open the Registry Casework API operations](../casework/)
+
+The generated reference is the authoritative route and schema inventory for the
+unreleased Casework candidate in the current development source. It is rendered
+from `products/casework/generated/registry-casework.openapi.json`. No published
+Registry Stack release currently carries this Casework contract.
+
+## Contract boundary
+
+Casework uses one fixed HTTP surface for source-backed and hosted work. Most
+operations require a bearer token and `Registry-Casework-Profile`. A
+source-backed item additionally requires `Registry-Source-Profile`; omitting
+that header on shared work-item routes selects hosted work. Operations reject a
+source profile where the route is hosted-only or directory-only.
+
+Mutations use item or directory revisions through `If-Match` where the operation
+description requires one. Retriable creates and mutations require an
+`Idempotency-Key`. The generated operation documents list each reachable problem
+code and recovery status, including expired cursors, expired hosted idempotency
+records, and expired clock-recompute previews.
+
+{/* Evidence: crates/registry-casework/src/{http,problem}.rs;
+    crates/registry-casework-core/src/http.rs;
+    products/casework/generated/registry-casework.openapi.json. */}
+
+## Profiles and disclosure
+
+- Staff works eligible items and may delegate an item it holds.
+- Supervisor controls assignment and caseload for currently led teams, reads
+  holdings, and resolves retained hosted accountability for served queues.
+- Administrator manages directory teams, holiday revisions, and clock
+  recomputation without gaining item payload access.
+- Requester creates and follows only hosted items bound to the same service
+  principal and selected Requester profile. It cannot claim or decide work.
+
+Hosted terminal feeds expose stable event identifiers and opaque actor
+references. The separate accountability read returns raw issuer-qualified actor
+identity and staff reason only to an authorized Supervisor, records that read in
+the audit journal, and stops returning the record after accountability expiry.
+
+{/* Evidence: crates/registry-casework/src/{auth,assignment,hosted}.rs;
+    products/casework/README.md. */}
+
+## Source of truth
+
+The product generator builds the OpenAPI document from Rust-owned DTOs, problem
+codes, route inventory, extraction rules, and operation contracts. The product
+check regenerates it and refuses byte drift. A running Casework process exposes
+health and readiness routes, but does not serve the OpenAPI artifact itself.
+
+{/* Evidence: products/casework/scripts/{generate_openapi.py,check-checkpoint.sh};
+    crates/registry-casework/src/{http,problem}.rs. */}
+
+For deployment policy and authority, use
+[configure Registry Casework](../../../configure/casework/). For runtime setup
+and readiness, use [run Registry Casework from source](../../../operate/casework/).
