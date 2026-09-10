@@ -692,9 +692,77 @@ async fn service_visibility_boundaries() {
     inbox_views_filter_before_candidate_pagination().await;
     recovery_problem_discloses_only_the_entitled_original_attempt().await;
     caller_owned_live_attempt_survives_a_fresh_session_without_cross_actor_disclosure().await;
+    source_claim_requires_a_current_permitted_operation().await;
     supervisor_release_and_holder_timing_obey_current_authority().await;
     exact_subject_selector_is_complete_and_cursor_bound().await;
     http_authentication_and_directory_authority_are_enforced().await;
+}
+
+async fn source_claim_requires_a_current_permitted_operation() {
+    let subject_id = Uuid::from_u128(34);
+    let fixture = fixture(
+        [(subject_id, CallerRead::Visible("previous reviewer"))],
+        policy(10, 1_000),
+    )
+    .await;
+    add_item(&fixture.service, subject_id, None).await;
+    let item = fixture
+        .service
+        .store()
+        .inbox_candidates(&fixture.staff, 1, None, None)
+        .await
+        .expect("local candidate")
+        .items
+        .pop()
+        .expect("source item");
+    let (visible, source) = fixture
+        .service
+        .caller_item(&fixture.staff, item.item_id, "reader", "token")
+        .await
+        .expect("previous reviewer can still read the item");
+    assert!(source.permitted_operations.is_empty());
+    assert!(!visible
+        .actions
+        .iter()
+        .any(|action| action.operation == "claim"));
+    assert!(matches!(
+        fixture
+            .service
+            .claim_source_item(
+                &fixture.staff,
+                item.item_id,
+                item.revision,
+                "reader",
+                "excluded-reviewer-claim",
+                "token",
+            )
+            .await,
+        Err(ServiceError::Forbidden)
+    ));
+
+    let claimed = fixture
+        .service
+        .store()
+        .claim(
+            &fixture.staff,
+            item.item_id,
+            item.revision,
+            "existing-holder",
+        )
+        .await
+        .expect("establish an existing holder without changing source authority");
+    fixture
+        .service
+        .release_source_item(
+            &fixture.staff,
+            claimed.item_id,
+            claimed.revision,
+            "reader",
+            "excluded-reviewer-release",
+            "token",
+        )
+        .await
+        .expect("an existing holder can still release work");
 }
 
 async fn exact_subject_selector_is_complete_and_cursor_bound() {
@@ -786,14 +854,14 @@ async fn exact_subject_selector_is_complete_and_cursor_bound() {
 async fn supervisor_release_and_holder_timing_obey_current_authority() {
     let released_subject = Uuid::from_u128(30);
     let fenced_subject = Uuid::from_u128(31);
-    let fixture = fixture(
-        [
-            (released_subject, CallerRead::Visible("released")),
-            (fenced_subject, CallerRead::Visible("fenced")),
-        ],
-        policy(10, 1_000),
-    )
-    .await;
+    let mut source = MockSource::with_reads([
+        (released_subject, CallerRead::Visible("released")),
+        (fenced_subject, CallerRead::Visible("fenced")),
+    ]);
+    source
+        .approve_reads
+        .extend([released_subject.to_string(), fenced_subject.to_string()]);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
     add_item(&fixture.service, released_subject, None).await;
     add_item(&fixture.service, fenced_subject, None).await;
     let items = fixture

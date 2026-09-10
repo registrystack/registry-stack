@@ -472,8 +472,12 @@ impl CaseworkService {
     ) -> Result<WorkItem, ServiceError> {
         self.preflight_source_claim(actor, item_id, expected_revision, idempotency_key)
             .await?;
-        self.caller_item(actor, item_id, source_profile_id, token)
+        let (_, source) = self
+            .caller_item(actor, item_id, source_profile_id, token)
             .await?;
+        if source.permitted_operations.is_empty() {
+            return Err(ServiceError::Forbidden);
+        }
         self.store
             .claim(actor, item_id, expected_revision, idempotency_key)
             .await?;
@@ -1754,6 +1758,7 @@ fn local_actions(
     if actor.role == registry_casework_core::CaseworkRole::Staff
         && item.holder.is_none()
         && item.state == registry_casework_core::OccurrenceState::Open
+        && !source.permitted_operations.is_empty()
     {
         return vec![CaseworkAction {
             operation: "claim".to_owned(),
