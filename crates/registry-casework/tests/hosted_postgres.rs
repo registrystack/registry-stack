@@ -87,6 +87,8 @@ fn project(version: &str, outcomes: Vec<HostedOutcomePolicy>) -> CaseworkProject
             }),
             outcomes,
         }],
+        calendars: Vec::new(),
+        clocks: Vec::new(),
         inbox: InboxPolicy::default(),
     }
 }

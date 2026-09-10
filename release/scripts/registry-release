@@ -118,6 +118,11 @@ PYTHON_CLIENT_RELEASE_SURFACES = (
         "registry-breg-client-native",
         "breg-client-sdk",
     ),
+    (
+        "crates/registry-casework-client-py",
+        "registry-casework-client-native",
+        "casework-client-sdk",
+    ),
 )
 FUZZ_LOCK_RELEASE_SURFACE_PATHS = (
     "products/manifest/fuzz/Cargo.lock",

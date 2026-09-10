@@ -124,6 +124,20 @@ for (const [method, jsonIndexes] of [
   ['holdings', [3]],
   ['directory', []],
   ['bootstrapDirectory', [4]],
+  ['updateDirectoryTeam', [5]],
+  ['workItemClocks', []],
+  ['holidayRevision', []],
+  ['createHolidayRevision', [3]],
+  ['previewClockRecompute', [2]],
+  ['applyClockRecompute', [3]],
+  ['absences', []],
+  ['createAbsence', [4]],
+  ['updateAbsence', [5]],
+  ['deleteAbsence', []],
+  ['assignWorkItem', [5]],
+  ['delegateWorkItem', [5]],
+  ['previewCaseloadMove', [2, 3]],
+  ['applyCaseloadMove', [3]],
 ]) {
   CaseworkClient.prototype[method] = function (...args) {
     try {

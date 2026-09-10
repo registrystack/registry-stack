@@ -4,11 +4,12 @@ use std::time::Duration;
 use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_casework_core::{
-    transition, ActorContext, AttemptState, AttemptStatus, AuthoritativeObservation,
-    BootstrapDirectoryRequest, CaseworkRole, CorrectionRoutingCopy, Draft, DurableEvent,
-    HistoryEntry, HistoryKind, InboxView, IssuerPrincipal, OccurrenceEvent, OccurrenceKind,
-    OccurrenceState, OperationName, Page, PageStatus, PreparedSourceAttempt, SourceBinding,
-    SourceReceipt, SubjectRef, TeamRecord, TransitionHint, WorkItem,
+    transition, ActorContext, AssignmentContext, AttemptState, AttemptStatus,
+    AuthoritativeObservation, BootstrapDirectoryRequest, CaseworkRole, CorrectionRoutingCopy,
+    Draft, DurableEvent, HistoryEntry, HistoryKind, InboxView, IssuerPrincipal, OccurrenceEvent,
+    OccurrenceKind, OccurrenceState, OperationName, Page, PageStatus, PreparedSourceAttempt,
+    SourceBinding, SourceReceipt, StaffingDiagnostic, SubjectRef, TeamRecord, TransitionHint,
+    WorkItem,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
@@ -21,6 +22,8 @@ use crate::DatabaseConfig;
 
 const MIGRATION: &str = include_str!("../migrations/0001_casework.sql");
 const HOSTED_MIGRATION: &str = include_str!("../migrations/0002_hosted_casework.sql");
+const ASSIGNMENT_MIGRATION: &str = include_str!("../migrations/0003_assignment.sql");
+const CLOCK_MIGRATION: &str = include_str!("../migrations/0004_clocks.sql");
 
 #[derive(Clone)]
 pub struct PostgresStore {
@@ -131,6 +134,44 @@ impl PostgresStore {
             transaction
                 .execute(
                     "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(2,now())",
+                    &[],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let assignment_applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=3)",
+                &[],
+            )
+            .await?
+            .get(0);
+        if !assignment_applied {
+            transaction.batch_execute(ASSIGNMENT_MIGRATION).await?;
+            transaction
+                .execute(
+                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(3,now())",
+                    &[],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let clocks_applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=4)",
+                &[],
+            )
+            .await?
+            .get(0);
+        if !clocks_applied {
+            transaction.batch_execute(CLOCK_MIGRATION).await?;
+            transaction
+                .execute(
+                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(4,now())",
                     &[],
                 )
                 .await?;
@@ -327,6 +368,24 @@ impl PostgresStore {
         queue_id: &str,
         passive_target_seconds: Option<i64>,
     ) -> Result<Option<WorkItem>, StoreError> {
+        self.apply_observation_with_context(
+            observation,
+            queue_id,
+            passive_target_seconds,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn apply_observation_with_context(
+        &self,
+        observation: &AuthoritativeObservation,
+        queue_id: &str,
+        passive_target_seconds: Option<i64>,
+        routing: Option<&registry_casework_core::RoutingDecision>,
+        clock: Option<&crate::ResolvedClockPolicy>,
+    ) -> Result<Option<WorkItem>, StoreError> {
         if observation.ordered_revision <= 0
             || passive_target_seconds.is_some_and(|seconds| seconds <= 0)
             || observation.occurrence_key.is_empty()
@@ -384,6 +443,13 @@ impl PostgresStore {
             && applied_representation_etag.as_deref()
                 == Some(observation.representation_etag.as_str())
         {
+            crate::reconcile_clock_observation(
+                &transaction,
+                observation,
+                clock,
+                Utc::now(),
+            )
+            .await?;
             transaction.execute(
                 "UPDATE casework_subjects SET sync_pending=(wanted_revision>$4),sync_lease_until=NULL WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3",
                 &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id,&observation.ordered_revision]
@@ -494,6 +560,7 @@ impl PostgresStore {
                     state: observation.state,
                     queue_id: queue_id.to_owned(),
                     holder: None,
+                    assignment: None,
                     revision: 1,
                     first_observed_at: now,
                     passive_due_at: due,
@@ -512,12 +579,13 @@ impl PostgresStore {
                     HistoryKind::Observed,
                     None,
                     "system:reconciliation",
-                    json!({"sourceRevision":observation.ordered_revision}),
+                    json!({"sourceRevision":observation.ordered_revision,"routingRule":routing.and_then(|decision|decision.rule_id.as_deref()),"routingBecause":routing.and_then(|decision|decision.because.as_deref())}),
                 )
                 .await?;
                 result = Some(item);
             }
         }
+        crate::reconcile_clock_observation(&transaction, observation, clock, now).await?;
         transaction.execute(
             "UPDATE casework_subjects SET applied_revision=$4,wanted_revision=GREATEST(wanted_revision,$4),sync_pending=(wanted_revision>$4),sync_lease_until=NULL,active=$5,representation_etag=$6 WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3",
             &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id,&observation.ordered_revision,&(!terminal),&observation.representation_etag]
@@ -609,11 +677,17 @@ impl PostgresStore {
         let now = Utc::now();
         let holder = claim.then_some(&actor.principal);
         transaction.execute(
-            "UPDATE casework_items SET holder_issuer=$2,holder_subject=$3,state=$4,revision=$5,updated_at=$6 WHERE item_id=$1",
-            &[&item_id,&holder.map(|p| &p.issuer),&holder.map(|p| &p.subject),&state_name(next_state),&next_revision,&now]
+            "UPDATE casework_items SET holder_issuer=$2,holder_subject=$3,state=$4,revision=$5,updated_at=$6,assignment_owner_issuer=$7,assignment_owner_subject=$8,assigned_by_issuer=NULL,assigned_by_subject=NULL,assignment_absence_ids='{}',staffing_diagnostic=NULL WHERE item_id=$1",
+            &[&item_id,&holder.map(|p| &p.issuer),&holder.map(|p| &p.subject),&state_name(next_state),&next_revision,&now,&holder.map(|p| &p.issuer),&holder.map(|p| &p.subject)]
         ).await?;
         let mut updated = item;
         updated.holder = holder.cloned();
+        updated.assignment = holder.cloned().map(|owner| AssignmentContext {
+            owner: Some(owner),
+            assigned_by: None,
+            absence_ids: Vec::new(),
+            staffing_diagnostic: None,
+        });
         updated.state = next_state;
         updated.revision = next_revision;
         updated.updated_at = now;
@@ -2009,7 +2083,7 @@ fn observation_event(state: OccurrenceState) -> Result<OccurrenceEvent, StoreErr
     }
 }
 
-async fn append_item_event(
+pub(crate) async fn append_item_event(
     transaction: &tokio_postgres::Transaction<'_>,
     item: &WorkItem,
     kind: HistoryKind,
@@ -2102,7 +2176,7 @@ fn hash_bytes(bytes: &[u8]) -> String {
     )
 }
 
-fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
+pub(crate) fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
     let holder = match (
         row.get::<_, Option<String>>("holder_issuer"),
         row.get::<_, Option<String>>("holder_subject"),
@@ -2111,6 +2185,7 @@ fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
         (None, None) => None,
         _ => return Err(StoreError::Corrupt),
     };
+    let assignment = assignment_context(row)?;
     let subject = SubjectRef {
         source_id: row.get("source_id"),
         kind: row.get("subject_kind"),
@@ -2127,6 +2202,7 @@ fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
         state: parse_state(&row.get::<_, String>("state"))?,
         queue_id: row.get("queue_id"),
         holder,
+        assignment,
         revision: row.get("revision"),
         first_observed_at: row.get("first_observed_at"),
         passive_due_at: row.get("passive_due_at"),
@@ -2136,6 +2212,48 @@ fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
         routing_copy: None,
         live_attempt: None,
     })
+}
+
+fn assignment_context(row: &Row) -> Result<Option<AssignmentContext>, StoreError> {
+    let owner = match (
+        row.get::<_, Option<String>>("assignment_owner_issuer"),
+        row.get::<_, Option<String>>("assignment_owner_subject"),
+    ) {
+        (Some(issuer), Some(subject)) => Some(IssuerPrincipal { issuer, subject }),
+        (None, None) => None,
+        _ => return Err(StoreError::Corrupt),
+    };
+    let assigned_by = match (
+        row.get::<_, Option<String>>("assigned_by_issuer"),
+        row.get::<_, Option<String>>("assigned_by_subject"),
+    ) {
+        (Some(issuer), Some(subject)) => Some(IssuerPrincipal { issuer, subject }),
+        (None, None) => None,
+        _ => return Err(StoreError::Corrupt),
+    };
+    let absence_ids = row.get::<_, Vec<Uuid>>("assignment_absence_ids");
+    let staffing_diagnostic = match row
+        .get::<_, Option<String>>("staffing_diagnostic")
+        .as_deref()
+    {
+        Some("no_cover_available") => Some(StaffingDiagnostic::NoCoverAvailable),
+        None => None,
+        Some(_) => return Err(StoreError::Corrupt),
+    };
+    if owner.is_none()
+        && assigned_by.is_none()
+        && absence_ids.is_empty()
+        && staffing_diagnostic.is_none()
+    {
+        Ok(None)
+    } else {
+        Ok(Some(AssignmentContext {
+            owner,
+            assigned_by,
+            absence_ids,
+            staffing_diagnostic,
+        }))
+    }
 }
 fn history_from_row(row: Row) -> Result<HistoryEntry, StoreError> {
     let actor = match (
@@ -2275,11 +2393,17 @@ fn history_kind_name(value: HistoryKind) -> &'static str {
         HistoryKind::Observed => "observed",
         HistoryKind::Opened => "opened",
         HistoryKind::Claimed => "claimed",
+        HistoryKind::Assigned => "assigned",
+        HistoryKind::Delegated => "delegated",
+        HistoryKind::CaseloadMoved => "caseload_moved",
         HistoryKind::Released => "released",
         HistoryKind::DraftSaved => "draft_saved",
         HistoryKind::AttemptReserved => "attempt_reserved",
         HistoryKind::AttemptUncertain => "attempt_uncertain",
         HistoryKind::ActionCompleted => "action_completed",
+        HistoryKind::ClockReminder => "clock_reminder",
+        HistoryKind::ClockStepApplied => "clock_step_applied",
+        HistoryKind::ClockRecomputed => "clock_recomputed",
         HistoryKind::Superseded => "superseded",
         HistoryKind::Completed => "completed",
     }
@@ -2289,11 +2413,17 @@ fn parse_history(value: &str) -> Result<HistoryKind, StoreError> {
         "observed" => Ok(HistoryKind::Observed),
         "opened" => Ok(HistoryKind::Opened),
         "claimed" => Ok(HistoryKind::Claimed),
+        "assigned" => Ok(HistoryKind::Assigned),
+        "delegated" => Ok(HistoryKind::Delegated),
+        "caseload_moved" => Ok(HistoryKind::CaseloadMoved),
         "released" => Ok(HistoryKind::Released),
         "draft_saved" => Ok(HistoryKind::DraftSaved),
         "attempt_reserved" => Ok(HistoryKind::AttemptReserved),
         "attempt_uncertain" => Ok(HistoryKind::AttemptUncertain),
         "action_completed" => Ok(HistoryKind::ActionCompleted),
+        "clock_reminder" => Ok(HistoryKind::ClockReminder),
+        "clock_step_applied" => Ok(HistoryKind::ClockStepApplied),
+        "clock_recomputed" => Ok(HistoryKind::ClockRecomputed),
         "superseded" => Ok(HistoryKind::Superseded),
         "completed" => Ok(HistoryKind::Completed),
         _ => Err(StoreError::Corrupt),
@@ -2331,6 +2461,8 @@ pub enum StoreError {
     IdempotencyConflict,
     #[error("the stored idempotent response has expired")]
     IdempotencyExpired,
+    #[error(transparent)]
+    Absence(#[from] registry_casework_core::AbsenceError),
     #[error("a source attempt is still pending recovery")]
     AttemptPending,
     #[error("the source binding generation is stale")]

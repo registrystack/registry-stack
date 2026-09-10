@@ -452,6 +452,11 @@ version = "1.1.0"
                 "registry-breg-client-native",
                 "breg-client-sdk",
             ),
+            (
+                "crates/registry-casework-client-py",
+                "registry-casework-client-native",
+                "casework-client-sdk",
+            ),
         ):
             client_root = self.root / relative_root
             write(

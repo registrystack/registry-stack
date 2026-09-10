@@ -203,6 +203,10 @@ impl SourceAdapter for MockSource {
             if id == &subject.id {
                 let verified = verified.load(Ordering::SeqCst);
                 return Ok(AuthoritativeObservation {
+                    submitted_at: None,
+                    stage_entered_at: None,
+                    review_timing: None,
+                    routing_context: None,
                     subject: subject.clone(),
                     occurrence_key: "review:1".into(),
                     ordered_revision: 1,
@@ -227,6 +231,10 @@ impl SourceAdapter for MockSource {
                 return Err(SourceAdapterError::Invalid);
             }
             return Ok(AuthoritativeObservation {
+                submitted_at: None,
+                stage_entered_at: None,
+                review_timing: None,
+                routing_context: None,
                 subject: subject.clone(),
                 occurrence_key: "review:1".into(),
                 ordered_revision: 1,
@@ -241,6 +249,10 @@ impl SourceAdapter for MockSource {
         let mut terminal_binding = binding();
         terminal_binding.source_revision = "2".into();
         Ok(AuthoritativeObservation {
+            submitted_at: None,
+            stage_entered_at: None,
+            review_timing: None,
+            routing_context: None,
             subject: subject.clone(),
             occurrence_key: "review:1".into(),
             ordered_revision: 2,
@@ -518,10 +530,15 @@ fn project(inbox: InboxPolicy) -> CaseworkProject {
             requests: vec![SourceRequestPolicy {
                 entity: ENTITY.into(),
                 queue: QUEUE.into(),
+                projection: Vec::new(),
+                routing: Vec::new(),
+                clock: None,
                 target: None,
             }],
         }],
         hosted_kinds: Vec::new(),
+        calendars: Vec::new(),
+        clocks: Vec::new(),
         inbox,
     }
 }
@@ -561,6 +578,10 @@ async fn add_item(service: &CaseworkService, id: Uuid, passive_target_seconds: O
         .store()
         .apply_observation(
             &AuthoritativeObservation {
+                submitted_at: None,
+                stage_entered_at: None,
+                review_timing: None,
+                routing_context: None,
                 subject: SubjectRef {
                     source_id: SOURCE_ID.into(),
                     kind: ENTITY.into(),
@@ -589,6 +610,10 @@ async fn complete_item(service: &CaseworkService, id: Uuid) {
         .store()
         .apply_observation(
             &AuthoritativeObservation {
+                submitted_at: None,
+                stage_entered_at: None,
+                review_timing: None,
+                routing_context: None,
                 subject: SubjectRef {
                     source_id: SOURCE_ID.into(),
                     kind: ENTITY.into(),

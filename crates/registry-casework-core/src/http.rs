@@ -14,7 +14,12 @@ pub const SOURCE_PROFILE_HEADER: &str = "registry-source-profile";
 /// Prefix for every public Registry Casework problem type URI.
 pub const CASEWORK_PROBLEM_TYPE_BASE: &str =
     "https://id.registrystack.org/problems/registry-casework/";
+pub const ABSENCE_COVER_CYCLE_PROBLEM: &str = "absence.cover-cycle";
+pub const ABSENCE_INVALID_PERIOD_PROBLEM: &str = "absence.invalid-period";
+pub const ABSENCE_OVERLAP_PROBLEM: &str = "absence.overlap";
+pub const ABSENCE_SELF_COVER_PROBLEM: &str = "absence.self-cover";
 pub const AUTHENTICATION_REFUSED_PROBLEM: &str = "authentication.refused";
+pub const CLOCK_RECOMPUTE_PREVIEW_EXPIRED_PROBLEM: &str = "clock.recompute-preview-expired";
 pub const CURSOR_EXPIRED_PROBLEM: &str = "cursor.expired";
 pub const CURSOR_INVALID_PROBLEM: &str = "cursor.invalid";
 pub const IDEMPOTENCY_EXPIRED_PROBLEM: &str = "idempotency.expired";
@@ -54,6 +59,10 @@ pub const VALIDATION_PATH_HEADER: &str = "registry-casework-validation-path";
 pub const VALIDATION_REASON_HEADER: &str = "registry-casework-validation-reason";
 pub const MAXIMUM_CASEWORK_PROFILE_BYTES: usize = 128;
 pub const MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES: usize = 128;
+pub const MAXIMUM_DIRECTORY_IDENTIFIER_BYTES: usize = 128;
+pub const MAXIMUM_DIRECTORY_PRINCIPALS: usize = 100;
+pub const MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES: usize = 2_048;
+pub const MAXIMUM_DIRECTORY_SERVED_QUEUES: usize = 100;
 pub const WORK_ITEMS_PATH: &str = "/v1/work-items";
 pub const HOSTED_ITEMS_PATH: &str = "/v1/hosted-items";
 pub const HOSTED_TERMINAL_PATH: &str = "/v1/hosted-items/terminal";
@@ -171,6 +180,14 @@ pub struct BootstrapDirectoryRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DirectoryTeamUpdateRequest {
+    pub staff: Vec<crate::IssuerPrincipal>,
+    pub supervisors: Vec<crate::IssuerPrincipal>,
+    pub served_queues: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DirectoryResponse {
     pub revision: i64,
     pub teams: Vec<TeamRecord>,
@@ -183,6 +200,10 @@ pub struct Description {
     pub policy_version: String,
     pub queues: Vec<crate::QueueRecord>,
     pub sources: Vec<crate::SourcePolicy>,
+    #[serde(default)]
+    pub calendars: Vec<crate::CalendarPolicy>,
+    #[serde(default)]
+    pub clocks: Vec<crate::ClockPolicy>,
     #[serde(default)]
     pub hosted_kinds: Vec<crate::HostedKindPolicy>,
 }
@@ -198,6 +219,9 @@ pub type HostedHistoryPage = Page<HostedHistoryEntry>;
 pub enum HostedHistoryKind {
     Created,
     Claimed,
+    Assigned,
+    Delegated,
+    CaseloadMoved,
     Released,
     NoteAdded,
     Completed,
@@ -214,6 +238,8 @@ pub struct HostedHistoryEntry {
     pub occurred_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_ref: Option<crate::OpaqueActorRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<crate::AssignmentContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

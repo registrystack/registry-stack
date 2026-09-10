@@ -30,6 +30,7 @@ http.workspace = true
 jsonwebtoken.workspace = true
 registry-casework-core.workspace = true
 registry-casework-breg.workspace = true
+registry-platform-canonical-json.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true
@@ -54,6 +55,7 @@ zeroize.workspace = true
 [dev-dependencies]
 registry-casework-client.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
+tempfile.workspace = true
 tower.workspace = true
 wiremock.workspace = true
 
@@ -75,4 +77,14 @@ required-features = ["postgres-test"]
 [[test]]
 name = "hosted_postgres"
 path = "tests/hosted_postgres.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "assignment_postgres"
+path = "tests/assignment_postgres.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "routing_postgres"
+path = "tests/routing_postgres.rs"
 required-features = ["postgres-test"]

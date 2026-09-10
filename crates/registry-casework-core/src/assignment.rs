@@ -159,6 +159,15 @@ pub struct CaseloadItemResult {
 /// contains results only for the explicit selections supplied by that caller.
 pub type CaseloadPreviewPage = crate::Page<crate::WorkItem>;
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CaseloadPreviewQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
 /// Resolve routing only. The caller must check current queue membership and
 /// retain unassignable work in its serving queue with a staffing diagnostic.
 pub fn resolve_absence_cover(

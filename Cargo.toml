@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/registry-casework-client-node",
+    "crates/registry-casework-client-py",
     "crates/registry-casework",
     "crates/registry-caseworkctl",
     "crates/registry-casework-client",
@@ -72,6 +73,7 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 registry-casework = { path = "crates/registry-casework", version = "0.29.0" }
 registry-casework-client-node = { path = "crates/registry-casework-client-node", version = "0.29.0" }
+registry-casework-client-py = { path = "crates/registry-casework-client-py", version = "0.29.0" }
 registry-caseworkctl = { path = "crates/registry-caseworkctl", version = "0.29.0" }
 registry-casework-client = { path = "crates/registry-casework-client", version = "0.29.0" }
 registry-casework-breg = { path = "crates/registry-casework-breg", version = "0.29.0" }

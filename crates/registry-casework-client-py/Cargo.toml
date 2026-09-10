@@ -1,0 +1,35 @@
+[package]
+name = "registry-casework-client-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Python binding for the Registry Casework client, via PyO3."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "registry_casework_client"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+pyo3.workspace = true
+# Keep the SDK name distinct from this extension's Python module name.
+casework-client-sdk = { package = "registry-casework-client", path = "../registry-casework-client", version = "0.29.0" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[build-dependencies]
+pyo3-build-config.workspace = true
+
+[dev-dependencies]
+pyo3 = { workspace = true, features = ["auto-initialize"] }

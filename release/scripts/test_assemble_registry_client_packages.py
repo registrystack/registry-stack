@@ -106,7 +106,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for index, line in enumerate(self.rendered)
             if "maturin build --release --locked" in line
         ]
-        self.assertEqual(4, len(builds))
+        self.assertEqual(5, len(builds))
         assemble = next(
             index
             for index, line in enumerate(self.rendered)
@@ -131,8 +131,13 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 f"registry_{product}_client-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
                 assemble,
             )
+        self.assertIn(
+            "--casework-wheel /work/product-wheels/"
+            "registry_casework_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
+            assemble,
+        )
 
-    def test_ci_profile_only_changes_all_four_binding_build_profiles(self) -> None:
+    def test_ci_profile_only_changes_all_five_binding_build_profiles(self) -> None:
         for napi_platform in self.module.PLATFORMS:
             with self.subTest(platform=napi_platform):
                 args = (
@@ -165,7 +170,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
         result = subprocess.run(
             [*command, "--python-profile", "ci"], capture_output=True, text=True, check=True
         )
-        self.assertEqual(result.stdout.count("maturin build --profile ci --locked"), 4)
+        self.assertEqual(result.stdout.count("maturin build --profile ci --locked"), 5)
         self.assertNotIn("--release", result.stdout)
         invalid = subprocess.run(
             [*command, "--python-profile", "dev"], capture_output=True, text=True

@@ -50,6 +50,13 @@ pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeErro
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
+    match config.policy_package_digest()? {
+        Some(digest) => tracing::info!(
+            policy_package_digest = %digest,
+            "verified Casework policy package"
+        ),
+        None => tracing::info!("loading authored Casework policy for loopback development"),
+    }
     let project = CaseworkProject::load(&config.project)?;
     let secrets = secret_resolver(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)?;
@@ -107,10 +114,22 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             if let Err(error) = worker_service.synchronize_pending(100).await {
                 tracing::warn!(error = %error, "Casework synchronization pass did not complete");
             }
+            if let Err(error) = worker_service.process_due_clocks(100).await {
+                tracing::warn!(error = %error, "Casework clock pass did not complete");
+            }
             retention_ticks = (retention_ticks + 1) % 30;
             if retention_ticks == 0 {
                 if let Err(error) = worker_service.erase_expired_hosted().await {
                     tracing::warn!(error = %error, "Casework hosted retention pass did not complete");
+                }
+                if let Err(error) = worker_service.erase_expired_assignment_cursors().await {
+                    tracing::warn!(error = %error, "Casework assignment cursor retention pass did not complete");
+                }
+                if let Err(error) = worker_service.reconcile_ineligible_assignments(100).await {
+                    tracing::warn!(error = %error, "Casework assignment eligibility pass did not complete");
+                }
+                if let Err(error) = worker_service.erase_expired_clock_previews().await {
+                    tracing::warn!(error = %error, "Casework clock preview retention pass did not complete");
                 }
             }
         }

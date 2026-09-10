@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::CaseworkRole;
 use crate::HostedKindPolicy;
+use crate::{check_clock_policies, check_routing_policy, CalendarPolicy, ClockPolicy, RoutingRule};
 
 pub const CASEWORK_API_VERSION: &str = "registry.registrystack.org/casework/v1alpha1";
 pub const CASEWORK_KIND: &str = "CaseworkProject";
@@ -38,6 +39,10 @@ pub struct CaseworkProject {
     #[serde(default)]
     pub hosted_kinds: Vec<HostedKindPolicy>,
     #[serde(default)]
+    pub calendars: Vec<CalendarPolicy>,
+    #[serde(default)]
+    pub clocks: Vec<ClockPolicy>,
+    #[serde(default)]
     pub inbox: InboxPolicy,
 }
 
@@ -56,8 +61,13 @@ impl CaseworkProject {
         if self.casework.id.is_empty() || self.casework.version.is_empty() {
             return Err(ConfigError::Identifier);
         }
-        let queues: BTreeSet<_> = self.queues.iter().map(|queue| &queue.id).collect();
-        if queues.len() != self.queues.len() || queues.len() != 1 {
+        let queues: BTreeSet<_> = self.queues.iter().map(|queue| queue.id.clone()).collect();
+        if queues.len() != self.queues.len()
+            || queues.is_empty()
+            || self.queues.iter().any(|queue| {
+                queue.id.is_empty() || queue.label.trim().is_empty() || queue.label.len() > 160
+            })
+        {
             return Err(ConfigError::DefaultQueue);
         }
         let profiles: BTreeSet<_> = self.access_profiles.iter().map(|p| &p.id).collect();
@@ -129,21 +139,47 @@ impl CaseworkProject {
         if self.sources.is_empty() && self.hosted_kinds.is_empty() {
             return Err(ConfigError::NoConfiguredWork);
         }
-        if self.sources.iter().any(|source| {
-            source.id.is_empty()
+        check_clock_policies(&self.calendars, &self.clocks, &queues)
+            .map_err(|_| ConfigError::Clocks)?;
+        let clock_ids = self
+            .clocks
+            .iter()
+            .map(ClockPolicy::id)
+            .collect::<BTreeSet<_>>();
+        for source in &self.sources {
+            if source.id.is_empty()
                 || source.adapter.is_empty()
                 || source.description.is_empty()
                 || source.requests.is_empty()
-                || source.requests.iter().any(|request| {
-                    request.entity.is_empty()
-                        || !queues.contains(&request.queue)
-                        || request.target.as_ref().is_some_and(|target| {
-                            target.id.is_empty()
-                                || parse_elapsed_seconds(&target.after.elapsed).is_none()
-                        })
-                })
-        }) {
-            return Err(ConfigError::Identifier);
+            {
+                return Err(ConfigError::Identifier);
+            }
+            for request in &source.requests {
+                if request.entity.is_empty()
+                    || !queues.contains(&request.queue)
+                    || request.target.as_ref().is_some_and(|target| {
+                        target.id.is_empty()
+                            || parse_elapsed_seconds(&target.after.elapsed).is_none()
+                    })
+                {
+                    return Err(ConfigError::Identifier);
+                }
+                check_routing_policy(
+                    &request.queue,
+                    &request.projection,
+                    &request.routing,
+                    &queues,
+                    None,
+                )
+                .map_err(|_| ConfigError::Routing)?;
+                if request
+                    .clock
+                    .as_deref()
+                    .is_some_and(|clock| !clock_ids.contains(clock))
+                {
+                    return Err(ConfigError::Clocks);
+                }
+            }
         }
         self.inbox.check()
     }
@@ -190,6 +226,12 @@ pub struct SourcePolicy {
 pub struct SourceRequestPolicy {
     pub entity: String,
     pub queue: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projection: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routing: Vec<RoutingRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<PassiveTargetPolicy>,
 }
@@ -278,7 +320,7 @@ pub enum ConfigError {
     Envelope,
     #[error("a Casework identifier is invalid")]
     Identifier,
-    #[error("the checkpoint requires exactly one default queue")]
+    #[error("the Casework queues are invalid")]
     DefaultQueue,
     #[error("staff, supervisor, and administrator access profiles are required")]
     AccessProfiles,
@@ -286,6 +328,10 @@ pub enum ConfigError {
     HostedKinds,
     #[error("the Casework project configures no source or hosted work")]
     NoConfiguredWork,
+    #[error("a source routing policy is invalid")]
+    Routing,
+    #[error("a clock or calendar policy is invalid")]
+    Clocks,
     #[error("the inbox work and response bounds are invalid")]
     InboxBounds,
 }
@@ -335,6 +381,8 @@ mod tests {
             }],
             sources: Vec::new(),
             hosted_kinds: vec![standalone_decision_starter_kind()],
+            calendars: Vec::new(),
+            clocks: Vec::new(),
             inbox: InboxPolicy::default(),
         }
     }
@@ -365,5 +413,65 @@ mod tests {
         let mut project = project();
         project.hosted_kinds[0].deciding_profiles = vec!["administrator".to_owned()];
         assert_eq!(project.check(), Err(ConfigError::HostedKinds));
+    }
+
+    #[test]
+    fn multi_queue_routing_and_named_clocks_use_the_documented_authoring_shape() {
+        let project: CaseworkProject = serde_norway::from_str(
+            r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework: {id: regional-review, version: "1"}
+accessProfiles:
+  - {id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}
+  - {id: supervisor, principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
+  - {id: administrator, principalClaim: sub, requiredScopes: [casework:admin], role: administrator}
+queues:
+  - {id: triage, label: Triage}
+  - {id: northern-review, label: Northern review}
+  - {id: southern-review, label: Southern review}
+  - {id: overdue-review, label: Overdue review}
+sources:
+  - id: professional-register
+    adapter: breg
+    description: sources/professional-register.json
+    requests:
+      - entity: scope-correction
+        queue: triage
+        projection: [region]
+        clock: review-deadline
+        routing:
+          - id: northern-requests
+            because: The request's governed region is north.
+            when: {fields: {region: {equals: north}}}
+            queue: northern-review
+          - id: southern-requests
+            because: The request's governed region is south or islands.
+            when: {fields: {region: {oneOf: [south, islands]}}}
+            queue: southern-review
+calendars:
+  - id: office
+    timezone: Asia/Bangkok
+    workingWeekdays: [monday, tuesday, wednesday, thursday, friday]
+    holidaySet: office-holidays
+clocks:
+  - id: review-deadline
+    scope: activity
+    anchor: stageEnteredAt
+    calendar: office
+    after: {workingDays: 5}
+    dueTime: "17:00"
+    atRisk: {workingDaysBefore: 1}
+    reminders: [{id: due-soon, workingDaysBefore: 1}]
+    steps:
+      - id: supervisor-at-deadline
+        because: The review deadline passed while the review remained active.
+        at: due
+        action: {reassign: {queue: overdue-review}}
+"#,
+        )
+        .expect("documented policy parses");
+        assert_eq!(project.check(), Ok(()));
+        assert_eq!(project.queues.len(), 4);
+        assert_eq!(project.sources[0].requests[0].routing.len(), 2);
     }
 }

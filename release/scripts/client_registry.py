@@ -68,6 +68,7 @@ WHEEL_PLATFORMS = (
     "manylinux_2_17_aarch64.manylinux2014_aarch64",
     "macosx_11_0_arm64",
 )
+STACK_PYTHON_NAMESPACES = ("breg", "casework", "discovery", "evidence", "relay")
 MAXIMUM_ARCHIVE_MEMBERS = 128
 MAXIMUM_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 MAXIMUM_REGISTRY_METADATA_BYTES = 4 * 1024 * 1024
@@ -291,6 +292,13 @@ def validate_wheels(directory: Path, version: str, client: str) -> list[Path]:
             raise ClientRegistryError(f"cannot read Python wheel {path.name}: {exc}") from exc
         if len(names) != len(set(names)):
             raise ClientRegistryError(f"Python wheel {path.name} repeats a member")
+        if client == "stack":
+            for namespace in STACK_PYTHON_NAMESPACES:
+                prefix = f"registry_client/{namespace}/"
+                if not any(name.startswith(prefix) for name in names):
+                    raise ClientRegistryError(
+                        f"Python wheel {path.name} has no {namespace} namespace"
+                    )
         metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
         if len(metadata_names) != 1:
             raise ClientRegistryError(

@@ -1,8 +1,13 @@
+use registry_casework_core::DirectoryTeamUpdateRequest;
 use std::fmt;
 
 use registry_casework_core::{
-    BootstrapDirectoryRequest, CaseworkAction, ClaimRequest, DecideRequest, Description,
-    DirectoryResponse, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery,
+    AbsenceInput, AbsenceRecord, AssignmentRequest, BootstrapDirectoryRequest,
+    CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage,
+    CaseloadPreviewQuery, CaseworkAction, ClaimRequest, ClockOccurrenceView,
+    ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
+    DecideRequest, DelegateRequest, Description, DirectoryResponse, DraftResponse, HistoryPage,
+    HoldingsPage, HoldingsQuery, HolidaySetDocument, HolidaySetRevisionInput,
     HostedAccountabilityRecord, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
     HostedHistoryPage, HostedNotePage, HostedNoteRequest, HostedPageQuery, HostedTerminalPage,
     HostedTerminalQuery, HostedTerminalResult, HostedValidationError, HostedValidationReason,
@@ -499,6 +504,277 @@ impl CaseworkClient {
             bootstrap,
         )
         .await
+    }
+
+    pub async fn absences(
+        &self,
+        auth: CaseworkAuth<'_>,
+    ) -> Result<CaseworkComplete<Vec<AbsenceRecord>>, CaseworkClientError> {
+        self.get_json(&auth, &["v1", "directory", "absences"], &[])
+            .await
+    }
+
+    pub async fn create_absence(
+        &self,
+        auth: CaseworkAuth<'_>,
+        expected_directory_revision: i64,
+        idempotency_key: &str,
+        input: &AbsenceInput,
+    ) -> Result<CaseworkComplete<AbsenceRecord>, CaseworkClientError> {
+        validate_mutation(expected_directory_revision, idempotency_key)?;
+        let request = self.mutation_headers(
+            self.authorized(
+                self.http
+                    .post(self.url(&["v1", "directory", "absences"])?)
+                    .json(input),
+                &auth,
+            )?,
+            expected_directory_revision,
+            idempotency_key,
+        )?;
+        self.send_json(request, StatusCode::CREATED).await
+    }
+
+    pub async fn update_absence(
+        &self,
+        auth: CaseworkAuth<'_>,
+        absence_id: Uuid,
+        expected_directory_revision: i64,
+        idempotency_key: &str,
+        input: &AbsenceInput,
+    ) -> Result<CaseworkComplete<AbsenceRecord>, CaseworkClientError> {
+        self.mutate_with_method(
+            &auth,
+            Method::PUT,
+            &["v1", "directory", "absences", &absence_id.to_string()],
+            expected_directory_revision,
+            idempotency_key,
+            input,
+        )
+        .await
+    }
+
+    pub async fn delete_absence(
+        &self,
+        auth: CaseworkAuth<'_>,
+        absence_id: Uuid,
+        expected_directory_revision: i64,
+        idempotency_key: &str,
+    ) -> Result<CaseworkComplete<()>, CaseworkClientError> {
+        validate_mutation(expected_directory_revision, idempotency_key)?;
+        let request = self.mutation_headers(
+            self.authorized(
+                self.http.delete(self.url(&[
+                    "v1",
+                    "directory",
+                    "absences",
+                    &absence_id.to_string(),
+                ])?),
+                &auth,
+            )?,
+            expected_directory_revision,
+            idempotency_key,
+        )?;
+        self.send_empty(request, StatusCode::NO_CONTENT).await
+    }
+
+    pub async fn assign_work_item(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        request: &AssignmentRequest,
+    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
+        self.mutate(
+            &auth,
+            &["v1", "work-items", &item_id.to_string(), "assign"],
+            expected_revision,
+            idempotency_key,
+            request,
+        )
+        .await
+    }
+
+    pub async fn delegate_work_item(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        request: &DelegateRequest,
+    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
+        self.mutate(
+            &auth,
+            &["v1", "work-items", &item_id.to_string(), "delegate"],
+            expected_revision,
+            idempotency_key,
+            request,
+        )
+        .await
+    }
+
+    pub async fn preview_caseload_move(
+        &self,
+        auth: CaseworkAuth<'_>,
+        movement: &CaseloadMoveRequest,
+        query: &CaseloadPreviewQuery,
+    ) -> Result<CaseworkComplete<CaseloadPreviewPage>, CaseworkClientError> {
+        validate_page(query.cursor.as_deref(), query.limit)?;
+        let request = self.authorized(
+            self.http
+                .post(self.url(&["v1", "directory", "caseload", "preview"])?)
+                .query(query)
+                .json(movement),
+            &auth,
+        )?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn apply_caseload_move(
+        &self,
+        auth: CaseworkAuth<'_>,
+        idempotency_key: &str,
+        request: &CaseloadApplyRequest,
+    ) -> Result<CaseworkComplete<Vec<CaseloadItemResult>>, CaseworkClientError> {
+        validate_idempotency_key(idempotency_key)?;
+        if request.items.is_empty()
+            || request.items.len() > 100
+            || request.items.iter().any(|item| item.expected_revision <= 0)
+            || request
+                .items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != request.items.len()
+        {
+            return Err(CaseworkClientError::invalid_request(
+                "select between 1 and 100 distinct caseload items with positive revisions",
+            ));
+        }
+        let request = self
+            .authorized(
+                self.http
+                    .post(self.url(&["v1", "directory", "caseload", "apply"])?)
+                    .json(request),
+                &auth,
+            )?
+            .header(
+                HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
+                idempotency_key,
+            );
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn update_directory_team(
+        &self,
+        auth: CaseworkAuth<'_>,
+        team_id: &str,
+        expected_directory_revision: i64,
+        idempotency_key: &str,
+        request: &DirectoryTeamUpdateRequest,
+    ) -> Result<CaseworkComplete<DirectoryResponse>, CaseworkClientError> {
+        self.mutate_with_method(
+            &auth,
+            Method::PUT,
+            &["v1", "directory", "teams", team_id],
+            expected_directory_revision,
+            idempotency_key,
+            request,
+        )
+        .await
+    }
+
+    pub async fn work_item_clocks(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+    ) -> Result<CaseworkComplete<Vec<ClockOccurrenceView>>, CaseworkClientError> {
+        require_source_profile(&auth)?;
+        self.get_json(
+            &auth,
+            &["v1", "work-items", &item_id.to_string(), "clocks"],
+            &[],
+        )
+        .await
+    }
+
+    pub async fn holiday_revision(
+        &self,
+        auth: CaseworkAuth<'_>,
+        holiday_set: &str,
+        revision: u64,
+    ) -> Result<CaseworkComplete<HolidaySetDocument>, CaseworkClientError> {
+        self.get_json(
+            &auth,
+            &[
+                "v1",
+                "directory",
+                "holidays",
+                holiday_set,
+                "revisions",
+                &revision.to_string(),
+            ],
+            &[],
+        )
+        .await
+    }
+
+    pub async fn create_holiday_revision(
+        &self,
+        auth: CaseworkAuth<'_>,
+        idempotency_key: &str,
+        input: &HolidaySetRevisionInput,
+    ) -> Result<CaseworkComplete<HolidaySetDocument>, CaseworkClientError> {
+        validate_idempotency_key(idempotency_key)?;
+        let request = self
+            .authorized(
+                self.http
+                    .post(self.url(&["v1", "directory", "holidays"])?)
+                    .json(input),
+                &auth,
+            )?
+            .header(
+                HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
+                idempotency_key,
+            );
+        self.send_json(request, StatusCode::CREATED).await
+    }
+
+    pub async fn preview_clock_recompute(
+        &self,
+        auth: CaseworkAuth<'_>,
+        input: &ClockRecomputeRequest,
+    ) -> Result<CaseworkComplete<ClockRecomputePreview>, CaseworkClientError> {
+        let request = self.authorized(
+            self.http
+                .post(self.url(&["v1", "directory", "clocks", "recompute", "preview"])?)
+                .json(input),
+            &auth,
+        )?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn apply_clock_recompute(
+        &self,
+        auth: CaseworkAuth<'_>,
+        idempotency_key: &str,
+        input: &ClockRecomputeApplyRequest,
+    ) -> Result<CaseworkComplete<ClockRecomputeResult>, CaseworkClientError> {
+        validate_idempotency_key(idempotency_key)?;
+        let request = self
+            .authorized(
+                self.http
+                    .post(self.url(&["v1", "directory", "clocks", "recompute", "apply"])?)
+                    .json(input),
+                &auth,
+            )?
+            .header(
+                HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
+                idempotency_key,
+            );
+        self.send_json(request, StatusCode::OK).await
     }
 
     async fn get_json<T: DeserializeOwned>(

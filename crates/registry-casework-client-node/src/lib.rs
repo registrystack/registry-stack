@@ -3,16 +3,19 @@
 
 #![deny(unsafe_code)]
 
+use registry_casework_client::DirectoryTeamUpdateRequest;
 use std::time::Duration;
 
 use napi::{Error as NapiError, Result};
 use napi_derive::napi;
 use registry_casework_client::{
-    BootstrapDirectoryRequest, CaseworkAction, CaseworkAuth, CaseworkClient as CoreClient,
-    CaseworkClientConfig as CoreConfig, CaseworkClientError, DecideRequest, HoldingsQuery,
-    HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest, HostedNoteRequest,
-    HostedPageQuery, HostedTerminalQuery, ListWorkItemsQuery, NextWorkItemQuery,
-    RecoverAttemptRequest, SaveDraftRequest,
+    AbsenceInput, AssignmentRequest, BootstrapDirectoryRequest, CaseloadApplyRequest,
+    CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
+    CaseworkClient as CoreClient, CaseworkClientConfig as CoreConfig, CaseworkClientError,
+    ClockRecomputeApplyRequest, ClockRecomputeRequest, DecideRequest, DelegateRequest,
+    HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest, HostedCreateRequest,
+    HostedDecisionRequest, HostedNoteRequest, HostedPageQuery, HostedTerminalQuery,
+    ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest, SaveDraftRequest,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -641,6 +644,332 @@ impl CaseworkClient {
                 )
                 .await,
         )
+    }
+}
+
+#[napi]
+impl CaseworkClient {
+    #[napi]
+    pub async fn absences(&self, token: String, profile: String) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .absences(CaseworkAuth::new(&token, &profile))
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn create_absence(
+        &self,
+        token: String,
+        profile: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let request: AbsenceInput = input(request)?;
+        outcome(
+            self.inner
+                .create_absence(
+                    CaseworkAuth::new(&token, &profile),
+                    expected_revision,
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn update_absence(
+        &self,
+        token: String,
+        profile: String,
+        absence_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let request: AbsenceInput = input(request)?;
+        outcome(
+            self.inner
+                .update_absence(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&absence_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn delete_absence(
+        &self,
+        token: String,
+        profile: String,
+        absence_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .delete_absence(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&absence_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    #[allow(clippy::too_many_arguments)] // Auth, revision and retry key remain explicit per call.
+    pub async fn assign_work_item(
+        &self,
+        token: String,
+        profile: String,
+        item_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        request: Value,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let request: AssignmentRequest = input(request)?;
+        outcome(
+            self.inner
+                .assign_work_item(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    uuid(&item_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    #[allow(clippy::too_many_arguments)] // Auth, revision and retry key remain explicit per call.
+    pub async fn delegate_work_item(
+        &self,
+        token: String,
+        profile: String,
+        item_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        request: Value,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let request: DelegateRequest = input(request)?;
+        outcome(
+            self.inner
+                .delegate_work_item(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    uuid(&item_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn preview_caseload_move(
+        &self,
+        token: String,
+        profile: String,
+        movement: Value,
+        query: Option<Value>,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let movement: CaseloadMoveRequest = input(movement)?;
+        let query: CaseloadPreviewQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .preview_caseload_move(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    &movement,
+                    &query,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn apply_caseload_move(
+        &self,
+        token: String,
+        profile: String,
+        idempotency_key: String,
+        request: Value,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let request: CaseloadApplyRequest = input(request)?;
+        for item in &request.items {
+            safe_revision(item.expected_revision)?;
+        }
+        outcome(
+            self.inner
+                .apply_caseload_move(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+}
+
+#[napi]
+impl CaseworkClient {
+    #[napi]
+    pub async fn update_directory_team(
+        &self,
+        token: String,
+        profile: String,
+        team_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let request: DirectoryTeamUpdateRequest = input(request)?;
+        outcome(
+            self.inner
+                .update_directory_team(
+                    CaseworkAuth::new(&token, &profile),
+                    &team_id,
+                    expected_revision,
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn work_item_clocks(
+        &self,
+        token: String,
+        profile: String,
+        source_profile: String,
+        item_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .work_item_clocks(auth(&token, &profile, &source_profile), uuid(&item_id)?)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn holiday_revision(
+        &self,
+        token: String,
+        profile: String,
+        holiday_set: String,
+        revision: i64,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(revision)?;
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .holiday_revision(
+                    CaseworkAuth::new(&token, &profile),
+                    &holiday_set,
+                    revision as u64,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn create_holiday_revision(
+        &self,
+        token: String,
+        profile: String,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let request: HolidaySetRevisionInput = input(request)?;
+        outcome(
+            self.inner
+                .create_holiday_revision(
+                    CaseworkAuth::new(&token, &profile),
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn preview_clock_recompute(
+        &self,
+        token: String,
+        profile: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let request: ClockRecomputeRequest = input(request)?;
+        outcome(
+            self.inner
+                .preview_clock_recompute(CaseworkAuth::new(&token, &profile), &request)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn apply_clock_recompute(
+        &self,
+        token: String,
+        profile: String,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let request: ClockRecomputeApplyRequest = input(request)?;
+        outcome(
+            self.inner
+                .apply_clock_recompute(
+                    CaseworkAuth::new(&token, &profile),
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+}
+
+fn optional_source_auth<'a>(
+    token: &'a registry_casework_client::BearerToken,
+    profile: &'a str,
+    source_profile: Option<&'a str>,
+) -> CaseworkAuth<'a> {
+    let auth = CaseworkAuth::new(token, profile);
+    match source_profile {
+        Some(source) => auth.with_source_profile(source),
+        None => auth,
     }
 }
 

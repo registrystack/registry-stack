@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
-use registry_casework_breg::{BregAdapter, BregSourceConfig};
+use registry_casework_breg::{BregAdapter, BregReviewStage, BregSourceConfig};
 use registry_casework_core::*;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use wiremock::{
     matchers::{header, method, path, query_param},
     Mock, MockServer, ResponseTemplate,
@@ -12,12 +12,64 @@ const ID: &str = "00000000-0000-4000-8000-000000000001";
 const TRACE: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 fn adapter(base: &str) -> BregAdapter {
+    adapter_with_stages(
+        base,
+        vec![BregReviewStage {
+            id: "review".into(),
+            approvals: 1,
+            exclude_submitter: false,
+            exclude_previous_reviewers: false,
+        }],
+    )
+}
+fn adapter_with_routing(base: &str) -> BregAdapter {
+    let stages = vec![BregReviewStage {
+        id: "review".into(),
+        approvals: 1,
+        exclude_submitter: false,
+        exclude_previous_reviewers: false,
+    }];
     BregAdapter::new(
         BregSourceConfig {
             source_id: "source".into(),
             entity: "correction".into(),
             route: "correction".into(),
-            stage: "review".into(),
+            stages,
+            routing_metadata: RoutingSourceMetadata {
+                stages: vec!["review".into()],
+                fields: vec![RoutingFieldDescriptor {
+                    field: "region".into(),
+                    api_name: "serviceRegion".into(),
+                    schema: json!({"type":"string","enum":["north","south"]}),
+                }],
+            },
+            binding_generation: "generation-1".into(),
+            expected_registry_revision: DIGEST.into(),
+            reader_profile: "reader".into(),
+            event_source: "urn:registrystack:registry:test:instance:test".into(),
+            event_type: "casework-lifecycle-v1".into(),
+        },
+        BaseRegistryClient::new(
+            BaseRegistryClientConfig::new(base.parse().unwrap())
+                .with_token_provider(Arc::new(StaticToken::new("reader-token").unwrap())),
+        )
+        .unwrap(),
+        vec![42; 32],
+    )
+    .unwrap()
+}
+fn adapter_with_stages(base: &str, stages: Vec<BregReviewStage>) -> BregAdapter {
+    let routing_metadata = RoutingSourceMetadata {
+        stages: stages.iter().map(|stage| stage.id.clone()).collect(),
+        fields: vec![],
+    };
+    BregAdapter::new(
+        BregSourceConfig {
+            source_id: "source".into(),
+            entity: "correction".into(),
+            route: "correction".into(),
+            stages,
+            routing_metadata,
             binding_generation: "generation-1".into(),
             expected_registry_revision: DIGEST.into(),
             reader_profile: "reader".into(),
@@ -46,6 +98,73 @@ fn record(state: &str, reason: Option<&str>) -> Value {
         decision["reason"] = json!(reason);
     }
     json!({"data":{"recordIdentifier":ID,"revisionIdentifier":"2","domainData":{"hidden":"SOURCE-CONTENT-CANARY"},"request":{"bregState":state,"proposalVersion":1,"effectDigest":DIGEST,"editable":false,"actions":[],"decisions":[decision]}},"meta":{"registryIdentifier":"test","datasetIdentifier":"primary","entityTypeIdentifier":"correction"}})
+}
+fn review_record(
+    state: &str,
+    revision: i64,
+    proposal_version: u64,
+    review: Option<Value>,
+    review_timing: Value,
+    decisions: Vec<Value>,
+) -> Value {
+    let mut value = record(state, None);
+    value["data"]["revisionIdentifier"] = json!(revision.to_string());
+    value["data"]["request"]["proposalVersion"] = json!(proposal_version);
+    value["data"]["request"]["decisions"] = Value::Array(decisions);
+    if let Some(review) = review {
+        value["data"]["request"]["review"] = review;
+    }
+    value["data"]["request"]["reviewTiming"] = review_timing;
+    value
+}
+fn stages() -> (Vec<BregReviewStage>, Value) {
+    (
+        vec![
+            BregReviewStage {
+                id: "technical".into(),
+                approvals: 2,
+                exclude_submitter: true,
+                exclude_previous_reviewers: false,
+            },
+            BregReviewStage {
+                id: "authorization".into(),
+                approvals: 1,
+                exclude_submitter: true,
+                exclude_previous_reviewers: true,
+            },
+        ],
+        json!([
+            {"id":"technical","approvals":2,"excludeSubmitter":true},
+            {"id":"authorization","approvals":1,"excludeSubmitter":true,
+                "excludePreviousReviewers":true}
+        ]),
+    )
+}
+fn timing(paused_milliseconds: u64, pause_started_at: Option<&str>) -> Value {
+    json!({
+        "firstSubmittedAt":"2026-09-10T02:00:00Z",
+        "pausedMilliseconds":paused_milliseconds,
+        "pauseStartedAt":pause_started_at,
+        "completedAt":null
+    })
+}
+async fn authoritative(
+    server: &MockServer,
+    stages: Vec<BregReviewStage>,
+    value: Value,
+) -> AuthoritativeObservation {
+    mount_metadata(server, "reader-token", "reader").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(response(value))
+        .expect(1)
+        .mount(server)
+        .await;
+    adapter_with_stages(&server.uri(), stages)
+        .read_authoritative(&subject())
+        .await
+        .unwrap()
 }
 fn response(value: Value) -> ResponseTemplate {
     response_with_etag(value, "\"breg-record-2\"")
@@ -101,6 +220,243 @@ async fn authoritative_read_retains_representation_etag_at_unchanged_record_revi
         observations[1].ordered_revision
     );
     assert_eq!(observations[0].binding, observations[1].binding);
+    assert_eq!(observations[0].submitted_at, None);
+    assert_eq!(observations[0].stage_entered_at, None);
+    assert_eq!(observations[0].review_timing, None);
+}
+
+#[tokio::test]
+async fn authoritative_read_maps_only_imported_routing_fields_and_redacts_values() {
+    let server = MockServer::start().await;
+    mount_metadata(&server, "reader-token", "reader").await;
+    let mut representation = record("submitted", None);
+    representation["data"]["domainData"]["serviceRegion"] = json!("north");
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(response(representation))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let adapter = adapter_with_routing(&server.uri());
+    assert_eq!(
+        adapter.routing_metadata().unwrap().fields[0].api_name,
+        "serviceRegion"
+    );
+    let observation = adapter.read_authoritative(&subject()).await.unwrap();
+    let routing = observation.routing_context.as_ref().unwrap();
+    assert_eq!(routing.activity, RoutingActivity::Review);
+    assert_eq!(routing.stage.as_deref(), Some("review"));
+    assert_eq!(
+        routing.fields,
+        BTreeMap::from([("region".into(), json!("north"))])
+    );
+
+    let debug = format!("{routing:?}");
+    assert!(!debug.contains("north"));
+    assert!(!debug.contains("region"));
+    let serialized = serde_json::to_value(&observation).unwrap();
+    assert!(serialized.get("routingContext").is_none());
+    assert!(!serialized.to_string().contains("SOURCE-CONTENT-CANARY"));
+}
+
+#[tokio::test]
+async fn source_pending_stage_keeps_partial_approvals_together_and_opens_the_next_stage() {
+    let (configured, frozen) = stages();
+    let submitted_at = "2026-09-10T02:00:00Z";
+    let first = authoritative(
+        &MockServer::start().await,
+        configured.clone(),
+        review_record(
+            "submitted",
+            2,
+            1,
+            Some(json!({"stages":frozen.clone(),"submittedAt":submitted_at,
+                "pendingStage":"technical","stageEnteredAt":submitted_at})),
+            timing(0, None),
+            vec![],
+        ),
+    )
+    .await;
+    let one_approval = authoritative(
+        &MockServer::start().await,
+        configured.clone(),
+        review_record(
+            "submitted",
+            3,
+            1,
+            Some(json!({"stages":frozen.clone(),"submittedAt":submitted_at,
+                "pendingStage":"technical","stageEnteredAt":submitted_at})),
+            timing(0, None),
+            vec![json!({"stageId":"technical","kind":"approve",
+                "decidedAt":"2026-09-10T03:00:00Z","reasonPresent":false})],
+        ),
+    )
+    .await;
+    let next_stage = authoritative(
+        &MockServer::start().await,
+        configured,
+        review_record(
+            "submitted",
+            4,
+            1,
+            Some(json!({"stages":frozen,"submittedAt":submitted_at,
+                "pendingStage":"authorization","stageEnteredAt":"2026-09-10T04:00:00Z"})),
+            timing(0, None),
+            vec![
+                json!({"stageId":"technical","kind":"approve",
+                    "decidedAt":"2026-09-10T03:00:00Z","reasonPresent":false}),
+                json!({"stageId":"technical","kind":"approve",
+                    "decidedAt":"2026-09-10T04:00:00Z","reasonPresent":false}),
+            ],
+        ),
+    )
+    .await;
+
+    assert_eq!(first.stage.as_deref(), Some("technical"));
+    assert_eq!(first.occurrence_key, one_approval.occurrence_key);
+    assert_eq!(next_stage.stage.as_deref(), Some("authorization"));
+    assert_ne!(first.occurrence_key, next_stage.occurrence_key);
+    assert_eq!(
+        next_stage
+            .stage_entered_at
+            .expect("source stage entry")
+            .to_rfc3339(),
+        "2026-09-10T04:00:00+00:00"
+    );
+}
+
+#[tokio::test]
+async fn correction_and_resubmission_preserve_request_timing_and_change_occurrence_once() {
+    let (configured, frozen) = stages();
+    let initial = authoritative(
+        &MockServer::start().await,
+        configured.clone(),
+        review_record(
+            "submitted",
+            2,
+            1,
+            Some(
+                json!({"stages":frozen.clone(),"submittedAt":"2026-09-10T02:00:00Z",
+                "pendingStage":"technical","stageEnteredAt":"2026-09-10T02:00:00Z"}),
+            ),
+            timing(0, None),
+            vec![],
+        ),
+    )
+    .await;
+    let correction = authoritative(
+        &MockServer::start().await,
+        configured.clone(),
+        review_record(
+            "needs_changes",
+            3,
+            1,
+            Some(
+                json!({"stages":frozen.clone(),"submittedAt":"2026-09-10T02:00:00Z",
+                "pendingStage":null,"stageEnteredAt":null}),
+            ),
+            timing(0, Some("2026-09-10T06:00:00Z")),
+            vec![json!({"stageId":"technical","kind":"request_revision",
+                "decidedAt":"2026-09-10T06:00:00Z","reasonPresent":true,
+                "reason":"Correct the request"})],
+        ),
+    )
+    .await;
+    let draft = authoritative(
+        &MockServer::start().await,
+        configured.clone(),
+        review_record(
+            "draft",
+            4,
+            2,
+            None,
+            timing(0, Some("2026-09-10T06:00:00Z")),
+            vec![],
+        ),
+    )
+    .await;
+    let resubmitted = authoritative(
+        &MockServer::start().await,
+        configured,
+        review_record(
+            "submitted",
+            5,
+            2,
+            Some(json!({"stages":frozen,"submittedAt":"2026-09-11T06:00:00Z",
+                "pendingStage":"technical","stageEnteredAt":"2026-09-11T06:00:00Z"})),
+            timing(86_400_000, None),
+            vec![],
+        ),
+    )
+    .await;
+
+    assert_eq!(correction.stage.as_deref(), Some("technical"));
+    assert_eq!(initial.occurrence_key, correction.occurrence_key);
+    assert_eq!(correction.stage_entered_at, None);
+    assert_eq!(draft.stage, None);
+    assert_eq!(draft.state, OccurrenceState::Superseded);
+    assert_ne!(draft.occurrence_key, initial.occurrence_key);
+    assert_ne!(resubmitted.occurrence_key, initial.occurrence_key);
+    let retained = resubmitted.review_timing.expect("source request timing");
+    assert_eq!(
+        retained.first_submitted_at.to_rfc3339(),
+        "2026-09-10T02:00:00+00:00"
+    );
+    assert_eq!(retained.paused_milliseconds, 86_400_000);
+    assert_eq!(
+        resubmitted
+            .submitted_at
+            .expect("current proposal submission")
+            .to_rfc3339(),
+        "2026-09-11T06:00:00+00:00"
+    );
+}
+
+#[tokio::test]
+async fn frozen_policy_survives_current_policy_evolution_but_missing_stage_metadata_does_not() {
+    let (configured, mut frozen) = stages();
+    frozen[1]["excludePreviousReviewers"] = json!(false);
+    let server = MockServer::start().await;
+    mount_metadata(&server, "reader-token", "reader").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(response(review_record(
+            "submitted",
+            2,
+            1,
+            Some(json!({"stages":frozen,"submittedAt":"2026-09-10T02:00:00Z",
+                "pendingStage":"technical","stageEnteredAt":"2026-09-10T02:00:00Z"})),
+            timing(0, None),
+            vec![],
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let frozen_observation = adapter_with_stages(&server.uri(), configured.clone())
+        .read_authoritative(&subject())
+        .await
+        .unwrap();
+    assert_eq!(frozen_observation.stage.as_deref(), Some("technical"));
+
+    let server = MockServer::start().await;
+    mount_metadata(&server, "reader-token", "reader").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(response(record("submitted", None)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert_eq!(
+        adapter_with_stages(&server.uri(), configured)
+            .read_authoritative(&subject())
+            .await
+            .unwrap_err(),
+        SourceAdapterError::Invalid
+    );
 }
 #[tokio::test]
 async fn live_registry_change_refuses_projection_under_the_imported_stage_policy() {

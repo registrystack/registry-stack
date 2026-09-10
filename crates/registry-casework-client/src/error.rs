@@ -1,6 +1,8 @@
 use registry_casework_core::HostedValidationError;
 use registry_casework_core::{
-    AUTHENTICATION_REFUSED_PROBLEM, CURSOR_EXPIRED_PROBLEM, CURSOR_INVALID_PROBLEM,
+    ABSENCE_COVER_CYCLE_PROBLEM, ABSENCE_INVALID_PERIOD_PROBLEM, ABSENCE_OVERLAP_PROBLEM,
+    ABSENCE_SELF_COVER_PROBLEM, AUTHENTICATION_REFUSED_PROBLEM,
+    CLOCK_RECOMPUTE_PREVIEW_EXPIRED_PROBLEM, CURSOR_EXPIRED_PROBLEM, CURSOR_INVALID_PROBLEM,
     IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM, OPERATION_NOT_AUTHORIZED_PROBLEM,
     PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
     PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
@@ -30,7 +32,12 @@ pub enum CaseworkProtocolFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CaseworkProblemCode {
+    AbsenceCoverCycle,
+    AbsenceInvalidPeriod,
+    AbsenceOverlap,
+    AbsenceSelfCover,
     AuthenticationRefused,
+    ClockRecomputePreviewExpired,
     CursorExpired,
     CursorInvalid,
     IdempotencyExpired,
@@ -67,7 +74,12 @@ impl CaseworkProblemCode {
     #[must_use]
     pub fn code(&self) -> &str {
         match self {
+            Self::AbsenceCoverCycle => ABSENCE_COVER_CYCLE_PROBLEM,
+            Self::AbsenceInvalidPeriod => ABSENCE_INVALID_PERIOD_PROBLEM,
+            Self::AbsenceOverlap => ABSENCE_OVERLAP_PROBLEM,
+            Self::AbsenceSelfCover => ABSENCE_SELF_COVER_PROBLEM,
             Self::AuthenticationRefused => AUTHENTICATION_REFUSED_PROBLEM,
+            Self::ClockRecomputePreviewExpired => CLOCK_RECOMPUTE_PREVIEW_EXPIRED_PROBLEM,
             Self::CursorExpired => CURSOR_EXPIRED_PROBLEM,
             Self::CursorInvalid => CURSOR_INVALID_PROBLEM,
             Self::IdempotencyExpired => IDEMPOTENCY_EXPIRED_PROBLEM,
@@ -102,7 +114,12 @@ impl CaseworkProblemCode {
 
     pub(crate) fn parse(value: &str) -> Self {
         match value {
+            ABSENCE_COVER_CYCLE_PROBLEM => Self::AbsenceCoverCycle,
+            ABSENCE_INVALID_PERIOD_PROBLEM => Self::AbsenceInvalidPeriod,
+            ABSENCE_OVERLAP_PROBLEM => Self::AbsenceOverlap,
+            ABSENCE_SELF_COVER_PROBLEM => Self::AbsenceSelfCover,
             AUTHENTICATION_REFUSED_PROBLEM => Self::AuthenticationRefused,
+            CLOCK_RECOMPUTE_PREVIEW_EXPIRED_PROBLEM => Self::ClockRecomputePreviewExpired,
             CURSOR_EXPIRED_PROBLEM => Self::CursorExpired,
             CURSOR_INVALID_PROBLEM => Self::CursorInvalid,
             IDEMPOTENCY_EXPIRED_PROBLEM => Self::IdempotencyExpired,
@@ -137,8 +154,12 @@ impl CaseworkProblemCode {
 
     pub(crate) fn expected_status(&self) -> Option<u16> {
         Some(match self {
+            Self::AbsenceCoverCycle
+            | Self::AbsenceInvalidPeriod
+            | Self::AbsenceOverlap
+            | Self::AbsenceSelfCover => 422,
             Self::AuthenticationRefused => 401,
-            Self::CursorExpired => 410,
+            Self::ClockRecomputePreviewExpired | Self::CursorExpired => 410,
             Self::CursorInvalid => 400,
             Self::IdempotencyExpired => 410,
             Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
@@ -168,35 +189,133 @@ impl CaseworkProblemCode {
 
     pub(crate) fn expected_text(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
-            Self::AuthenticationRefused => ("Authentication refused", "The bearer credential is missing, invalid, or expired. Sign in again."),
-            Self::CursorExpired => ("Cursor expired", "This cursor has expired. Start again without a cursor and deduplicate entries by eventId."),
+            Self::AbsenceCoverCycle => (
+                "Absence cover cycle",
+                "Choose cover assignments that do not return to an earlier person during a shared period.",
+            ),
+            Self::AbsenceInvalidPeriod => ("Invalid absence period", "Set until later than from."),
+            Self::AbsenceOverlap => (
+                "Absence period overlaps",
+                "Adjust the period so this person has no overlapping absence.",
+            ),
+            Self::AbsenceSelfCover => (
+                "Absence self-cover not allowed",
+                "Choose a different staff member as cover.",
+            ),
+            Self::AuthenticationRefused => (
+                "Authentication refused",
+                "The bearer credential is missing, invalid, or expired. Sign in again.",
+            ),
+            Self::ClockRecomputePreviewExpired => (
+                "Clock recompute preview expired",
+                "Create a new recompute preview and review it before applying.",
+            ),
+            Self::CursorExpired => (
+                "Cursor expired",
+                "This cursor has expired. Start again without a cursor and deduplicate entries by eventId.",
+            ),
             Self::CursorInvalid => ("Cursor invalid", "The cursor is invalid for this request."),
-            Self::IdempotencyExpired => ("Idempotency window expired", "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."),
-            Self::IdempotencyKeyReused => ("Idempotency key reused", "This idempotency key was used for a different request."),
-            Self::OperationNotAuthorized => ("Operation not authorized", "Your current Casework authority does not allow this operation."),
-            Self::PreconditionFailed => ("Precondition failed", "The item or directory changed since you loaded it. Reload and try again."),
-            Self::PreconditionRequired => ("Precondition required", "This mutation requires the revision that you loaded."),
-            Self::ProfileNotAuthorized => ("Profile not authorized", "The selected Casework profile does not authorize this request."),
-            Self::ProfileNotHuman => ("Human session required", "This action is reserved for a human session."),
-            Self::RequestBodyTooLarge => ("Request body too large", "The request body exceeds the one MiB limit."),
+            Self::IdempotencyExpired => (
+                "Idempotency window expired",
+                "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key.",
+            ),
+            Self::IdempotencyKeyReused => (
+                "Idempotency key reused",
+                "This idempotency key was used for a different request.",
+            ),
+            Self::OperationNotAuthorized => (
+                "Operation not authorized",
+                "Your current Casework authority does not allow this operation.",
+            ),
+            Self::PreconditionFailed => (
+                "Precondition failed",
+                "The item or directory changed since you loaded it. Reload and try again.",
+            ),
+            Self::PreconditionRequired => (
+                "Precondition required",
+                "This mutation requires the revision that you loaded.",
+            ),
+            Self::ProfileNotAuthorized => (
+                "Profile not authorized",
+                "The selected Casework profile does not authorize this request.",
+            ),
+            Self::ProfileNotHuman => (
+                "Human session required",
+                "This action is reserved for a human session.",
+            ),
+            Self::RequestBodyTooLarge => (
+                "Request body too large",
+                "The request body exceeds the one MiB limit.",
+            ),
             Self::RequestInvalid => ("Invalid request", "The Casework request is invalid."),
-            Self::RequestMethodNotAllowed => ("Method not allowed", "This route does not accept that HTTP method."),
-            Self::RequestNotFound => ("Route not found", "The requested Casework route does not exist."),
-            Self::RequestUnprocessable => ("Request could not be processed", "The request body does not match the Casework contract."),
-            Self::RequestUnsupportedMediaType => ("Unsupported media type", "Send a JSON request body with Content-Type application/json."),
-            Self::RuntimeFailure => ("Casework runtime failure", "Casework could not complete the request."),
-            Self::ServiceUnavailable => ("Casework service unavailable", "Casework storage is unavailable. Try again after the service recovers."),
-            Self::SourceBadGateway => ("Invalid source response", "The source returned a response that does not match its registered contract."),
-            Self::SourceNotFound => ("Source not found", "The requested source is not registered."),
-            Self::SourceSignatureInvalid => ("Source signature invalid", "The event's signature did not verify."),
-            Self::WorkItemAlreadyClaimed => ("Work item already claimed", "Someone else claimed this item a moment ago."),
-            Self::WorkItemNotHolder => ("Work item held by another person", "You do not hold this item. Claim it first, or ask a supervisor."),
-            Self::WorkItemNotOffered => ("Work item action not offered", "The registry did not offer this action to you. Refresh to check again."),
-            Self::WorkItemNotVisible => ("Work item not visible", "The registry did not show you this request, so Casework cannot show you the item."),
-            Self::WorkItemProposalChanged => ("Work item proposal changed", "The proposal changed since you read it. Your private draft is retained."),
-            Self::WorkItemRecoveryPending => ("Work item recovery pending", "We could not confirm the result of your last action. Recover the original attempt; do not decide again."),
-            Self::WorkItemSourceUnavailable => ("Work item source unavailable", "The registry is not answering. We cannot confirm the current item or its actions. Your private draft is retained."),
-            Self::WorkItemSuperseded => ("Work item superseded", "A revised proposal replaced this item. Open the current one."),
+            Self::RequestMethodNotAllowed => (
+                "Method not allowed",
+                "This route does not accept that HTTP method.",
+            ),
+            Self::RequestNotFound => (
+                "Route not found",
+                "The requested Casework route does not exist.",
+            ),
+            Self::RequestUnprocessable => (
+                "Request could not be processed",
+                "The request body does not match the Casework contract.",
+            ),
+            Self::RequestUnsupportedMediaType => (
+                "Unsupported media type",
+                "Send a JSON request body with Content-Type application/json.",
+            ),
+            Self::RuntimeFailure => (
+                "Casework runtime failure",
+                "Casework could not complete the request.",
+            ),
+            Self::ServiceUnavailable => (
+                "Casework service unavailable",
+                "Casework storage is unavailable. Try again after the service recovers.",
+            ),
+            Self::SourceBadGateway => (
+                "Invalid source response",
+                "The source returned a response that does not match its registered contract.",
+            ),
+            Self::SourceNotFound => (
+                "Source not found",
+                "The requested source is not registered.",
+            ),
+            Self::SourceSignatureInvalid => (
+                "Source signature invalid",
+                "The event's signature did not verify.",
+            ),
+            Self::WorkItemAlreadyClaimed => (
+                "Work item already claimed",
+                "Someone else claimed this item a moment ago.",
+            ),
+            Self::WorkItemNotHolder => (
+                "Work item held by another person",
+                "You do not hold this item. Claim it first, or ask a supervisor.",
+            ),
+            Self::WorkItemNotOffered => (
+                "Work item action not offered",
+                "The registry did not offer this action to you. Refresh to check again.",
+            ),
+            Self::WorkItemNotVisible => (
+                "Work item not visible",
+                "The registry did not show you this request, so Casework cannot show you the item.",
+            ),
+            Self::WorkItemProposalChanged => (
+                "Work item proposal changed",
+                "The proposal changed since you read it. Your private draft is retained.",
+            ),
+            Self::WorkItemRecoveryPending => (
+                "Work item recovery pending",
+                "We could not confirm the result of your last action. Recover the original attempt; do not decide again.",
+            ),
+            Self::WorkItemSourceUnavailable => (
+                "Work item source unavailable",
+                "The registry is not answering. We cannot confirm the current item or its actions. Your private draft is retained.",
+            ),
+            Self::WorkItemSuperseded => (
+                "Work item superseded",
+                "A revised proposal replaced this item. Open the current one.",
+            ),
             Self::Unknown(_) => return None,
         })
     }
@@ -251,6 +370,55 @@ impl CaseworkClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absence_validation_problems_have_exact_safe_contracts() {
+        for (value, expected, title, detail) in [
+            (
+                "absence.cover-cycle",
+                CaseworkProblemCode::AbsenceCoverCycle,
+                "Absence cover cycle",
+                "Choose cover assignments that do not return to an earlier person during a shared period.",
+            ),
+            (
+                "absence.invalid-period",
+                CaseworkProblemCode::AbsenceInvalidPeriod,
+                "Invalid absence period",
+                "Set until later than from.",
+            ),
+            (
+                "absence.overlap",
+                CaseworkProblemCode::AbsenceOverlap,
+                "Absence period overlaps",
+                "Adjust the period so this person has no overlapping absence.",
+            ),
+            (
+                "absence.self-cover",
+                CaseworkProblemCode::AbsenceSelfCover,
+                "Absence self-cover not allowed",
+                "Choose a different staff member as cover.",
+            ),
+        ] {
+            let code = CaseworkProblemCode::parse(value);
+            assert_eq!(code, expected);
+            assert_eq!(code.expected_status(), Some(422));
+            assert_eq!(code.expected_text(), Some((title, detail)));
+        }
+    }
+
+    #[test]
+    fn expired_clock_preview_has_actionable_recovery() {
+        let code = CaseworkProblemCode::parse("clock.recompute-preview-expired");
+        assert_eq!(code, CaseworkProblemCode::ClockRecomputePreviewExpired);
+        assert_eq!(code.expected_status(), Some(410));
+        assert_eq!(
+            code.expected_text(),
+            Some((
+                "Clock recompute preview expired",
+                "Create a new recompute preview and review it before applying."
+            ))
+        );
+    }
 
     #[test]
     fn idempotency_expiry_has_an_exact_recoverable_contract() {

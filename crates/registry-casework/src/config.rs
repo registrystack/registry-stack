@@ -5,13 +5,251 @@ use std::time::Duration;
 
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
-use registry_casework_core::CaseworkProject;
+use registry_casework_core::{check_routing_policy, CaseworkProject};
 use registry_platform_config::SecretResolver;
 use registry_platform_oidc::{
     fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
+
+pub const POLICY_PACKAGE_API_VERSION: &str =
+    "registry.registrystack.org/casework-policy-package/v1alpha1";
+pub const POLICY_PACKAGE_KIND: &str = "CaseworkPolicyPackage";
+pub const POLICY_PACKAGE_MANIFEST_FILE: &str = "casework.package.json";
+const POLICY_PACKAGE_PROJECT_FILE: &str = "casework.yaml";
+const MAXIMUM_POLICY_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
+const MAXIMUM_POLICY_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PolicyPackageManifest {
+    pub api_version: String,
+    pub kind: String,
+    pub policy_digest: String,
+    pub files: Vec<PolicyPackageFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PolicyPackageFile {
+    pub path: String,
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+impl PolicyPackageManifest {
+    /// Build the immutable identity for already validated policy inputs.
+    pub fn build(
+        files: impl IntoIterator<Item = (String, Vec<u8>)>,
+    ) -> Result<Self, PolicyPackageError> {
+        let mut files = files
+            .into_iter()
+            .map(|(path, bytes)| {
+                if normalized_relative_path(&path).is_none()
+                    || bytes.len() > MAXIMUM_POLICY_PACKAGE_FILE_BYTES
+                {
+                    return Err(PolicyPackageError::Invalid);
+                }
+                Ok(PolicyPackageFile {
+                    path,
+                    sha256: sha256_bytes(&bytes),
+                    bytes: u64::try_from(bytes.len()).map_err(|_| PolicyPackageError::Invalid)?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        if !files
+            .iter()
+            .any(|file| file.path == POLICY_PACKAGE_PROJECT_FILE)
+            || files.windows(2).any(|pair| pair[0].path == pair[1].path)
+        {
+            return Err(PolicyPackageError::Invalid);
+        }
+        let policy_digest =
+            package_digest(POLICY_PACKAGE_API_VERSION, POLICY_PACKAGE_KIND, &files)?;
+        Ok(Self {
+            api_version: POLICY_PACKAGE_API_VERSION.to_owned(),
+            kind: POLICY_PACKAGE_KIND.to_owned(),
+            policy_digest,
+            files,
+        })
+    }
+
+    pub fn verify(&self, root: &Path, project: &CaseworkProject) -> Result<(), PolicyPackageError> {
+        if self.api_version != POLICY_PACKAGE_API_VERSION
+            || self.kind != POLICY_PACKAGE_KIND
+            || self.files.is_empty()
+            || self
+                .files
+                .windows(2)
+                .any(|pair| pair[0].path >= pair[1].path)
+            || self.policy_digest != package_digest(&self.api_version, &self.kind, &self.files)?
+        {
+            return Err(PolicyPackageError::Invalid);
+        }
+
+        let mut expected = BTreeSet::from([POLICY_PACKAGE_PROJECT_FILE.to_owned()]);
+        for source in &project.sources {
+            if normalized_relative_path(&source.description).is_none()
+                || !expected.insert(source.description.clone())
+            {
+                return Err(PolicyPackageError::Invalid);
+            }
+        }
+        let declared = self
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<BTreeSet<_>>();
+        if declared != expected {
+            return Err(PolicyPackageError::Invalid);
+        }
+
+        for file in &self.files {
+            let relative =
+                normalized_relative_path(&file.path).ok_or(PolicyPackageError::Invalid)?;
+            let bytes = read_bounded_file(&root.join(relative), MAXIMUM_POLICY_PACKAGE_FILE_BYTES)?;
+            if file.bytes != u64::try_from(bytes.len()).map_err(|_| PolicyPackageError::Invalid)?
+                || file.sha256 != sha256_bytes(&bytes)
+            {
+                return Err(PolicyPackageError::Invalid);
+            }
+        }
+
+        let mut on_disk = package_files_on_disk(root)?;
+        on_disk.remove(POLICY_PACKAGE_MANIFEST_FILE);
+        if on_disk != expected {
+            return Err(PolicyPackageError::Invalid);
+        }
+        Ok(())
+    }
+}
+
+/// Verify a package next to `casework.yaml`, returning its immutable identity.
+/// An absent manifest is distinguished so local authored development remains usable.
+pub fn verify_policy_package(
+    project_path: &Path,
+    project: &CaseworkProject,
+) -> Result<Option<String>, PolicyPackageError> {
+    if project_path.file_name().and_then(|name| name.to_str()) != Some(POLICY_PACKAGE_PROJECT_FILE)
+    {
+        return Err(PolicyPackageError::Invalid);
+    }
+    let root = project_path.parent().ok_or(PolicyPackageError::Invalid)?;
+    let manifest_path = root.join(POLICY_PACKAGE_MANIFEST_FILE);
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+    let bytes = read_bounded_file(&manifest_path, MAXIMUM_POLICY_PACKAGE_MANIFEST_BYTES)?;
+    let manifest: PolicyPackageManifest =
+        serde_json::from_slice(&bytes).map_err(|_| PolicyPackageError::Invalid)?;
+    manifest.verify(root, project)?;
+    Ok(Some(manifest.policy_digest))
+}
+
+fn package_digest(
+    api_version: &str,
+    kind: &str,
+    files: &[PolicyPackageFile],
+) -> Result<String, PolicyPackageError> {
+    let identity = serde_json::json!({
+        "apiVersion": api_version,
+        "kind": kind,
+        "files": files,
+    });
+    let canonical = registry_platform_canonical_json::canonicalize_json(&identity)
+        .map_err(|_| PolicyPackageError::Invalid)?;
+    Ok(sha256_bytes(&canonical))
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+fn normalized_relative_path(value: &str) -> Option<PathBuf> {
+    let path = Path::new(value);
+    if value.is_empty() || path.is_absolute() {
+        return None;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(component) => normalized.push(component),
+            _ => return None,
+        }
+    }
+    (normalized.to_str() == Some(value)).then_some(normalized)
+}
+
+fn read_bounded_file(path: &Path, maximum: usize) -> Result<Vec<u8>, PolicyPackageError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(PolicyPackageError::Read)?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > maximum as u64
+    {
+        return Err(PolicyPackageError::Invalid);
+    }
+    std::fs::read(path).map_err(PolicyPackageError::Read)
+}
+
+fn package_files_on_disk(root: &Path) -> Result<BTreeSet<String>, PolicyPackageError> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = BTreeSet::new();
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).map_err(PolicyPackageError::Read)? {
+            let entry = entry.map_err(PolicyPackageError::Read)?;
+            let metadata =
+                std::fs::symlink_metadata(entry.path()).map_err(PolicyPackageError::Read)?;
+            if metadata.file_type().is_symlink() {
+                return Err(PolicyPackageError::Invalid);
+            }
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if metadata.is_file() {
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .map_err(|_| PolicyPackageError::Invalid)?
+                    .to_str()
+                    .ok_or(PolicyPackageError::Invalid)?
+                    .to_owned();
+                if normalized_relative_path(&relative).is_none() || !files.insert(relative) {
+                    return Err(PolicyPackageError::Invalid);
+                }
+            } else {
+                return Err(PolicyPackageError::Invalid);
+            }
+        }
+    }
+    Ok(files)
+}
+
+#[derive(Debug, Error)]
+pub enum PolicyPackageError {
+    #[error("the Casework policy package could not be read")]
+    Read(#[source] std::io::Error),
+    #[error("the Casework policy package is invalid or does not match its exact inputs")]
+    Invalid,
+}
+
+/// Validate one imported BReg description through the adapter's owning strict
+/// decoder without resolving runtime bindings or secrets.
+pub fn validate_breg_source_description(
+    source: &registry_casework_core::SourcePolicy,
+    bytes: &[u8],
+) -> Result<registry_casework_core::RoutingSourceMetadata, registry_casework_core::SourceAdapterError>
+{
+    registry_casework_breg::validate_description_input(source, bytes)
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -183,6 +421,24 @@ impl RuntimeConfig {
 
     pub fn check(&self) -> Result<(), RuntimeConfigError> {
         let project = CaseworkProject::load(&self.project).map_err(RuntimeConfigError::Project)?;
+        let package_digest = verify_policy_package(&self.project, &project)
+            .map_err(RuntimeConfigError::PolicyPackage)?;
+        if self.tls_termination == TlsTermination::OperatorControlledUpstream
+            && package_digest.is_none()
+        {
+            return Err(RuntimeConfigError::ProductionPolicyPackageRequired);
+        }
+        validate_project_source_inputs(&self.project, &project)?;
+        let declared_sources = project
+            .sources
+            .iter()
+            .map(|source| source.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let configured_sources = self
+            .sources
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
         if !valid_listener(
             self.listen.ip(),
             self.network_exposure,
@@ -201,6 +457,7 @@ impl RuntimeConfig {
             || self.database.migration_url_ref.is_empty()
             || self.audit.secret_ref.is_empty()
             || self.sources.keys().any(String::is_empty)
+            || configured_sources != declared_sources
         {
             return Err(RuntimeConfigError::Invalid);
         }
@@ -209,6 +466,13 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::PlaintextDatabase);
         }
         Ok(())
+    }
+
+    /// Return the verified deployment policy identity, if this is a packaged
+    /// local-development configuration. Production configurations always have one.
+    pub fn policy_package_digest(&self) -> Result<Option<String>, RuntimeConfigError> {
+        let project = CaseworkProject::load(&self.project).map_err(RuntimeConfigError::Project)?;
+        verify_policy_package(&self.project, &project).map_err(RuntimeConfigError::PolicyPackage)
     }
 
     pub async fn oidc_verifier(
@@ -245,6 +509,40 @@ impl RuntimeConfig {
         .with_scope_claim(self.authentication.oidc.scope_claim.clone());
         Ok((verifier, std::sync::Arc::new(fetcher)))
     }
+}
+
+fn validate_project_source_inputs(
+    project_path: &Path,
+    project: &CaseworkProject,
+) -> Result<(), RuntimeConfigError> {
+    let root = project_path.parent().ok_or(RuntimeConfigError::Invalid)?;
+    let queues = project
+        .queues
+        .iter()
+        .map(|queue| queue.id.clone())
+        .collect::<BTreeSet<_>>();
+    for source in &project.sources {
+        if source.adapter != "breg" || source.requests.len() != 1 {
+            return Err(RuntimeConfigError::SourceDescription);
+        }
+        let relative = normalized_relative_path(&source.description)
+            .ok_or(RuntimeConfigError::SourceDescription)?;
+        let bytes = read_bounded_file(&root.join(relative), MAXIMUM_POLICY_PACKAGE_FILE_BYTES)
+            .map_err(|_| RuntimeConfigError::SourceDescription)?;
+        let metadata = validate_breg_source_description(source, &bytes)
+            .map_err(|_| RuntimeConfigError::SourceDescription)?;
+        for request in &source.requests {
+            check_routing_policy(
+                &request.queue,
+                &request.projection,
+                &request.routing,
+                &queues,
+                Some(&metadata),
+            )
+            .map_err(|_| RuntimeConfigError::SourceDescription)?;
+        }
+    }
+    Ok(())
 }
 
 fn valid_listener(
@@ -302,6 +600,89 @@ fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
 mod tests {
     use super::*;
 
+    const SOURCE_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework: {id: packaged-review, version: "1"}
+accessProfiles:
+  - {id: staff, principalClaim: sub, requiredScopes: [staff], role: staff}
+  - {id: supervisor, principalClaim: sub, requiredScopes: [supervisor], role: supervisor}
+  - {id: administrator, principalClaim: sub, requiredScopes: [admin], role: administrator}
+queues: [{id: review, label: Review}]
+sources:
+  - id: professional
+    adapter: breg
+    description: sources/professional.json
+    requests: [{entity: correction, queue: review}]
+"#;
+
+    const SOURCE_DESCRIPTION: &str = r#"{
+  "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
+  "kind":"BRegCaseworkSourceDescription",
+  "origin":"bregctl explain change-requests",
+  "authority":"none",
+  "sourceId":"professional",
+  "sourceRevision":"sha256:source-revision",
+  "request":{
+    "requestEntity":"correction",
+    "requestRoute":"corrections",
+    "reviewMode":"staged",
+    "stages":[{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],
+    "fields":[],
+    "contractFingerprint":"sha256:contract",
+    "application":{"mode":"manual"}
+  }
+}
+"#;
+
+    fn write_package(root: &Path) -> PolicyPackageManifest {
+        std::fs::create_dir_all(root.join("sources")).unwrap();
+        std::fs::write(root.join("casework.yaml"), SOURCE_PROJECT).unwrap();
+        std::fs::write(root.join("sources/professional.json"), SOURCE_DESCRIPTION).unwrap();
+        let manifest = PolicyPackageManifest::build([
+            (
+                "casework.yaml".to_owned(),
+                SOURCE_PROJECT.as_bytes().to_vec(),
+            ),
+            (
+                "sources/professional.json".to_owned(),
+                SOURCE_DESCRIPTION.as_bytes().to_vec(),
+            ),
+        ])
+        .unwrap();
+        let mut bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+        bytes.push(b'\n');
+        std::fs::write(root.join(POLICY_PACKAGE_MANIFEST_FILE), bytes).unwrap();
+        manifest
+    }
+
+    fn operator_document(project: &Path, tls: &str) -> String {
+        serde_norway::to_string(&serde_json::json!({
+            "project": project,
+            "listen": "127.0.0.1:8091",
+            "tlsTermination": tls,
+            "secretProviders": {"file": {"root": "secrets"}},
+            "database": {
+                "runtimeUrlRef": "secret:env/RUNTIME",
+                "migrationUrlRef": "secret:env/MIGRATION"
+            },
+            "authentication": {"oidc": {
+                "issuer": "https://identity.example.test",
+                "audience": "urn:example:casework"
+            }},
+            "audit": {"path": "audit.ndjson", "secretRef": "secret:file/audit"},
+            "sources": {"professional": {
+                "baseUrl": "https://registry.example.test",
+                "readerProfile": "casework-reader",
+                "tokenEndpoint": "https://identity.example.test/token",
+                "clientIdRef": "secret:file/client-id",
+                "clientAssertionKeyRef": "secret:file/client-key",
+                "webhookSecretRef": "secret:file/webhook",
+                "eventSource": "urn:registrystack:registry:professional:instance:pilot"
+            }}
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn static_jwks_requires_unique_named_asymmetric_keys() {
         assert!(parse_static_jwks(
@@ -337,6 +718,97 @@ mod tests {
                 value: "human".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn package_identity_covers_exact_policy_and_imported_inputs() {
+        let package = tempfile::tempdir().unwrap();
+        let manifest = write_package(package.path());
+        let project = CaseworkProject::load(package.path().join("casework.yaml")).unwrap();
+        assert_eq!(
+            verify_policy_package(&package.path().join("casework.yaml"), &project).unwrap(),
+            Some(manifest.policy_digest)
+        );
+
+        std::fs::write(package.path().join("sources/stale.json"), b"stale").unwrap();
+        assert!(verify_policy_package(&package.path().join("casework.yaml"), &project).is_err());
+        std::fs::remove_file(package.path().join("sources/stale.json")).unwrap();
+        std::fs::write(package.path().join("sources/professional.json"), b"changed").unwrap();
+        assert!(verify_policy_package(&package.path().join("casework.yaml"), &project).is_err());
+    }
+
+    #[test]
+    fn production_requires_a_verified_package_while_loopback_accepts_authoring() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("operator.yaml");
+        std::fs::write(
+            &operator,
+            operator_document(
+                &package.join("casework.yaml"),
+                "operator-controlled-upstream",
+            ),
+        )
+        .unwrap();
+        let config = RuntimeConfig::load(&operator).unwrap();
+        assert!(config.policy_package_digest().unwrap().is_some());
+
+        std::fs::remove_file(package.join(POLICY_PACKAGE_MANIFEST_FILE)).unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::ProductionPolicyPackageRequired)
+        ));
+        std::fs::write(
+            &operator,
+            operator_document(&package.join("casework.yaml"), "development-loopback"),
+        )
+        .unwrap();
+        assert!(RuntimeConfig::load(&operator).is_ok());
+    }
+
+    #[test]
+    fn startup_redecodes_packaged_source_metadata_instead_of_trusting_its_hash() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let invalid_description = b"{}\n";
+        std::fs::write(
+            package.join("sources/professional.json"),
+            invalid_description,
+        )
+        .unwrap();
+        let manifest = PolicyPackageManifest::build([
+            (
+                "casework.yaml".to_owned(),
+                SOURCE_PROJECT.as_bytes().to_vec(),
+            ),
+            (
+                "sources/professional.json".to_owned(),
+                invalid_description.to_vec(),
+            ),
+        ])
+        .unwrap();
+        std::fs::write(
+            package.join(POLICY_PACKAGE_MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let operator = root.path().join("operator.yaml");
+        std::fs::write(
+            &operator,
+            operator_document(
+                &package.join("casework.yaml"),
+                "operator-controlled-upstream",
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(operator),
+            Err(RuntimeConfigError::SourceDescription)
+        ));
     }
 
     #[test]
@@ -394,6 +866,12 @@ pub enum RuntimeConfigError {
     Parse(#[source] serde_norway::Error),
     #[error("the Casework project is invalid")]
     Project(#[source] registry_casework_core::ConfigLoadError),
+    #[error("the Casework policy package is invalid")]
+    PolicyPackage(#[source] PolicyPackageError),
+    #[error("operator-controlled production requires a verified Casework policy package")]
+    ProductionPolicyPackageRequired,
+    #[error("an imported source description does not match the exact configured source policy")]
+    SourceDescription,
     #[error("the Casework runtime configuration is invalid")]
     Invalid,
     #[error("plaintext PostgreSQL is test-only")]

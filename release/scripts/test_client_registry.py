@@ -52,12 +52,19 @@ def write_npm_package(
             archive.addfile(info, io.BytesIO(payload))
 
 
-def write_wheel(path: Path, *, project: str = "registry-relay-client") -> None:
+def write_wheel(
+    path: Path,
+    *,
+    project: str = "registry-relay-client",
+    namespaces: tuple[str, ...] = (),
+) -> None:
     with zipfile.ZipFile(path, mode="w") as archive:
         archive.writestr(
             "registry_relay_client-1.2.3.dist-info/METADATA",
             f"Name: {project}\nVersion: 1.2.3\n",
         )
+        for namespace in namespaces:
+            archive.writestr(f"registry_client/{namespace}/__init__.py", "")
 
 
 class ClientRegistryTest(unittest.TestCase):
@@ -93,7 +100,13 @@ class ClientRegistryTest(unittest.TestCase):
             optional_dependencies=optional,
         )
         for path in self.module.wheel_paths(self.directory, self.version, client):
-            write_wheel(path, project=definition.pypi_project)
+            write_wheel(
+                path,
+                project=definition.pypi_project,
+                namespaces=(
+                    self.module.STACK_PYTHON_NAMESPACES if client == "stack" else ()
+                ),
+            )
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
@@ -125,6 +138,24 @@ class ClientRegistryTest(unittest.TestCase):
                 "package/relay-client.darwin-arm64.node",
             ],
         )
+
+    def test_rejects_a_unified_wheel_without_casework(self) -> None:
+        self._write_distribution("stack")
+        wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
+        write_wheel(
+            wheel,
+            project="registry-stack-client",
+            namespaces=tuple(
+                value
+                for value in self.module.STACK_PYTHON_NAMESPACES
+                if value != "casework"
+            ),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "has no casework namespace",
+        ):
+            self.module.validate_wheels(self.directory, self.version, "stack")
 
     def test_public_linux_wheels_use_manylinux_tags(self) -> None:
         names = {
@@ -425,9 +456,9 @@ class ClientReadmeInstallTest(unittest.TestCase):
             for pattern in ("*-client-node", "*-client-py")
             for path in (repo / "crates").glob(f"{pattern}/README.md")
         )
-        # Four products have Rust, Node and Python coverage; Casework is Rust
-        # and Node at the checkpoint, and both unified facades remain present.
-        self.assertEqual(11, len(found), found)
+        # Five products have Rust, Node and Python coverage, and both unified
+        # facades remain present.
+        self.assertEqual(12, len(found), found)
         return found
 
     def test_install_lines_name_only_the_unified_packages(self) -> None:
@@ -452,6 +483,7 @@ class ClientReadmeInstallTest(unittest.TestCase):
             "registry-evidence-client-node": "@registrystack/client",
             "registry-relay-client-node": "@registrystack/client",
             "registry-breg-client-py": "registry-stack-client",
+            "registry-casework-client-py": "registry-stack-client",
             "registry-discovery-client-py": "registry-stack-client",
             "registry-evidence-client-py": "registry-stack-client",
             "registry-relay-client-py": "registry-stack-client",

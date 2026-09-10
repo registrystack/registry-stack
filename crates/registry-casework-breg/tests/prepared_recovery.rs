@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
-use registry_casework_breg::{BregAdapter, BregSourceConfig};
+use registry_casework_breg::{BregAdapter, BregReviewStage, BregSourceConfig};
 use registry_casework_core::*;
 use serde_json::{json, Value};
 use wiremock::{
@@ -24,7 +24,16 @@ fn adapter(base: &str) -> BregAdapter {
             source_id: "source".into(),
             entity: "company".into(),
             route: "companies".into(),
-            stage: "review".into(),
+            stages: vec![BregReviewStage {
+                id: "review".into(),
+                approvals: 1,
+                exclude_submitter: false,
+                exclude_previous_reviewers: false,
+            }],
+            routing_metadata: RoutingSourceMetadata {
+                stages: vec!["review".into()],
+                fields: vec![],
+            },
             expected_registry_revision: REVISION.into(),
             binding_generation: "generation-1".into(),
             reader_profile: "reader".into(),
@@ -303,6 +312,7 @@ async fn prepared_apply_recovers_under_the_same_actor_with_a_refreshed_human_tok
     }
     let receipt = json!({
         "id": ID, "revision": 8, "snapshot": format!("breg1_{ID}"),
+        "actorReference":"opaque-breg-actor-7d3a",
         "request": {"bregState":"applied","proposalVersion":7,"effectDigest":DIGEST,
             "application":{"applicationId":"00000000-0000-4000-8000-000000000002","proposalVersion":7,"effectDigest":DIGEST,"appliedAt":"2026-09-10T01:00:00Z"}}
     });
@@ -362,8 +372,54 @@ async fn prepared_apply_recovers_under_the_same_actor_with_a_refreshed_human_tok
         .unwrap();
     assert_eq!(result.source_revision, "8");
     assert_eq!(result.resulting_state, "applied");
+    assert_eq!(
+        result.actor_reference.as_deref(),
+        Some("opaque-breg-actor-7d3a")
+    );
     assert!(result.metadata["nativeReceipt"].contains("applicationId"));
     assert!(!result.metadata["nativeReceipt"].contains("PROPOSAL"));
+}
+
+#[tokio::test]
+async fn initial_execution_preserves_only_the_opaque_source_actor_reference() {
+    let server = MockServer::start().await;
+    let (source, actor, prepared) = prepare_for_recovery(&server).await;
+    mount_recovery_metadata(&server, json_response(metadata())).await;
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/records/companies/{ID}/actions/apply")))
+        .respond_with(
+            json_response(json!({
+                "id":ID, "revision":8, "snapshot":format!("breg1_{ID}"),
+                "actorReference":"opaque-breg-actor-7d3a",
+                "request":{"bregState":"applied","proposalVersion":7,"effectDigest":DIGEST,
+                    "application":{"applicationId":"00000000-0000-4000-8000-000000000002",
+                        "proposalVersion":7,"effectDigest":DIGEST,"appliedAt":"2026-09-10T01:00:00Z"}}
+            }))
+            .insert_header("cache-control", "no-store")
+            .insert_header("vary", "authorization, accept"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let receipt = source
+        .execute_prepared(ExecutePreparedRequest {
+            prepared: &prepared,
+            execution: PreparedExecution::Initial,
+            actor: &actor,
+            source_profile_id: "reviewer",
+            idempotency_key: "casework-attempt-1",
+            credential: EphemeralCredential::new("refreshed-human-token"),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        receipt.actor_reference.as_deref(),
+        Some("opaque-breg-actor-7d3a")
+    );
+    let serialized = serde_json::to_string(&receipt).unwrap();
+    assert!(serialized.contains("opaque-breg-actor-7d3a"));
+    assert!(!serialized.contains("alice"));
+    assert!(!serialized.contains("https://idp.example"));
 }
 
 #[tokio::test]

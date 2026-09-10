@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
-PRODUCTS = ("discovery", "evidence", "relay", "breg")
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
 TAG = "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
 
 
@@ -134,15 +134,15 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
         for product in PRODUCTS:
             self.assertIn(f"`registry_client.{product}`", description)
 
-    def test_assembled_facade_imports_all_four_product_namespaces(self) -> None:
+    def test_assembled_facade_imports_all_five_product_namespaces(self) -> None:
         result = self.run_assembler()
         self.assertEqual(result.returncode, 0, result.stderr)
         # The fixture modules exercise facade imports without claiming a native
         # build. Native extension loading remains covered by the package smoke.
         import_script = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from registry_client import discovery, evidence, relay, breg; "
-            "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT)"
+            "from registry_client import discovery, evidence, relay, breg, casework; "
+            "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT, casework.PRODUCT)"
         )
         imported = subprocess.run(
             [
@@ -152,7 +152,7 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(imported.returncode, 0, imported.stderr)
-        self.assertEqual(imported.stdout.strip(), "discovery evidence relay breg")
+        self.assertEqual(imported.stdout.strip(), "discovery evidence relay breg casework")
 
     def test_unified_and_legacy_distributions_never_own_the_same_path(self) -> None:
         result = self.run_assembler()

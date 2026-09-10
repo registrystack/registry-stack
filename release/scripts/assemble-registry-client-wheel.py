@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Combine the four internal client wheels into one public wheel."""
+"""Combine the five internal client wheels into one public wheel."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FACADE = ROOT / "crates" / "registry-stack-client-py"
-PRODUCTS = ("discovery", "evidence", "relay", "breg")
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
 WHEEL_PATTERN = re.compile(r"^[^-]+-(?P<version>[^-]+)-(?P<tag>.+)\.whl$")
 
 

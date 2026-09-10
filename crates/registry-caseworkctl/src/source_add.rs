@@ -25,6 +25,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     require_ok("explain change-requests", &explained)?;
     let request = select_request(&project, &args.source_id, &explained)?;
     let request_entity = request.entity().to_owned();
+    let projection = source_projection(&project, &args.source_id, request.0)?;
     let registry_yaml = registry.join("registry.yaml");
     let bytes = fs::read(&registry_yaml).context("reading BReg registry.yaml")?;
     if bytes.len() > MAX_PROVIDER_OUTPUT {
@@ -32,11 +33,12 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     }
     let mut authored: Value = serde_norway::from_slice(&bytes)
         .context("parsing BReg registry.yaml without duplicate or custom YAML values")?;
-    let changes = apply_breg_candidate(&mut authored, &request_entity)?;
-    let proposed = render_candidate_preserving_authored_text(&bytes, &request_entity, &authored)?;
+    let changes = apply_breg_candidate(&mut authored, &request_entity, &projection)?;
+    let proposed =
+        render_candidate_preserving_authored_text(&bytes, &request_entity, &authored, &projection)?;
     let candidate_explanation = verify_candidate(&args.bregctl_bin, &registry, &proposed)?;
     let candidate_request = select_request(&project, &args.source_id, &candidate_explanation)?;
-    let (event_patch, reader_patch) = candidate_fragments(&request_entity);
+    let (event_patch, reader_patch) = candidate_fragments(&request_entity, &projection);
     let description =
         source_description(&args.source_id, candidate_request, &candidate_explanation)?;
     let description_path = project
@@ -210,13 +212,60 @@ fn select_request<'a>(
         .as_array()
         .context("BReg request stages are absent")?;
     if selected["reviewMode"] != "staged"
-        || stages.len() != 1
-        || stages[0]["approvals"] != 1
+        || !(1..=32).contains(&stages.len())
+        || stages.iter().any(|stage| {
+            stage["approvals"]
+                .as_u64()
+                .is_none_or(|count| !(1..=32).contains(&count))
+        })
         || selected.pointer("/application/mode") != Some(&Value::String("manual".into()))
     {
-        bail!("the checkpoint requires one staged approval and manual application");
+        bail!(
+            "Casework requires staged review with positive approval counts and manual application"
+        );
     }
     Ok(SelectedRequest(selected))
+}
+
+fn source_projection(project: &Path, source_id: &str, metadata: &Value) -> Result<Vec<String>> {
+    let policy = load_casework_policy(project)?;
+    let source = policy["sources"]
+        .as_array()
+        .and_then(|sources| sources.iter().find(|source| source["id"] == source_id))
+        .context("source id is not declared in casework.yaml")?;
+    let configured = &source["requests"][0];
+    let projection: Vec<String> = match configured.get("projection") {
+        None => Vec::new(),
+        Some(value) => serde_json::from_value(value.clone())
+            .context("source projection must be a list of field identifiers")?,
+    };
+    if projection.len() > registry_casework_core::MAXIMUM_ROUTING_PROJECTION_FIELDS
+        || projection
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != projection.len()
+    {
+        bail!("source projection must contain at most 32 distinct fields");
+    }
+    for field in &projection {
+        if !metadata["fields"].as_array().is_some_and(|fields| {
+            fields
+                .iter()
+                .any(|descriptor| descriptor["field"] == *field)
+        }) {
+            bail!("source projection references a field absent from BReg compiled metadata");
+        }
+    }
+    Ok(projection)
+}
+
+fn reader_fields(projection: &[String]) -> Vec<String> {
+    std::iter::once("record".to_owned())
+        .chain(projection.iter().cloned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn load_casework_policy(project: &Path) -> Result<Value> {
@@ -225,7 +274,7 @@ fn load_casework_policy(project: &Path) -> Result<Value> {
     Ok(root)
 }
 
-fn apply_breg_candidate(root: &mut Value, entity_id: &str) -> Result<Value> {
+fn apply_breg_candidate(root: &mut Value, entity_id: &str, projection: &[String]) -> Result<Value> {
     let object = root
         .as_object_mut()
         .context("BReg registry.yaml must contain an object")?;
@@ -245,7 +294,7 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str) -> Result<Value> {
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .context("BReg entity events must be an array")?;
-    let (event, profile) = candidate_fragments(entity_id);
+    let (event, profile) = candidate_fragments(entity_id, projection);
     match events
         .iter()
         .find(|item| item["id"] == "casework-lifecycle-v1")
@@ -273,13 +322,14 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str) -> Result<Value> {
     ]))
 }
 
-fn candidate_fragments(entity_id: &str) -> (Value, Value) {
+fn candidate_fragments(entity_id: &str, projection: &[String]) -> (Value, Value) {
+    let fields = reader_fields(projection);
     (
         json!({"id":"casework-lifecycle-v1","trigger":"request_lifecycle","projection":["record"],"webhook":{"destinationId":"casework"}}),
         json!({
             "id":"casework-reader", "default":false, "principalClaim":"registry_principal",
             "requiredScopes":["casework:source-reader"], "requiredPurposes":["casework-sync"],
-            "grants":[{"entity":entity_id,"operations":["get","list"],"readableFields":["record"],"readableRequestFields":[],"rowBoundaries":[]}]
+            "grants":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":[]}]
         }),
     )
 }
@@ -288,6 +338,7 @@ fn render_candidate_preserving_authored_text(
     original: &[u8],
     entity_id: &str,
     expected: &Value,
+    projection: &[String],
 ) -> Result<String> {
     let text = std::str::from_utf8(original).context("BReg registry.yaml must be UTF-8")?;
     if text.trim_start().starts_with('{') {
@@ -318,10 +369,10 @@ fn render_candidate_preserving_authored_text(
         rendered = insert_entity_event(&rendered, entity_id)?;
     }
     if !has_profile {
-        rendered = insert_access_profile(&rendered, entity_id)?;
+        rendered = insert_access_profile(&rendered, entity_id, projection)?;
     }
-    let round_trip: Value = serde_norway::from_str(&rendered)
-        .with_context(|| format!("parsing narrow BReg YAML patch:\n{rendered}"))?;
+    let round_trip: Value =
+        serde_norway::from_str(&rendered).context("parsing narrow BReg YAML patch")?;
     if &round_trip != expected {
         bail!("narrow BReg YAML patch changed unexpected authored content; no files were written");
     }
@@ -371,7 +422,8 @@ fn insert_entity_event(text: &str, entity_id: &str) -> Result<String> {
     Ok(insert_at_line(&lines, insertion, &block))
 }
 
-fn insert_access_profile(text: &str, entity_id: &str) -> Result<String> {
+fn insert_access_profile(text: &str, entity_id: &str, projection: &[String]) -> Result<String> {
+    let fields = serde_json::to_string(&reader_fields(projection))?;
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let start = lines
         .iter()
@@ -384,7 +436,7 @@ fn insert_access_profile(text: &str, entity_id: &str) -> Result<String> {
                 && !lines[*index].trim_start().starts_with('#')
         })
         .unwrap_or(lines.len());
-    let block = format!("  - id: casework-reader\n    default: false\n    principalClaim: registry_principal\n    requiredScopes: [casework:source-reader]\n    requiredPurposes: [casework-sync]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: [record]\n        readableRequestFields: []\n        rowBoundaries: []\n");
+    let block = format!("  - id: casework-reader\n    default: false\n    principalClaim: registry_principal\n    requiredScopes: [casework:source-reader]\n    requiredPurposes: [casework-sync]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
     Ok(insert_at_line(&lines, end, &block))
 }
 
@@ -522,9 +574,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn source_import_preserves_multistage_approval_and_independence_requirements() {
+        let project = tempfile::tempdir().unwrap();
+        fs::write(project.path().join("casework.yaml"), serde_json::to_vec(&json!({
+            "sources": [{"id":"professional", "adapter":"breg", "requests":[{"entity":"correction"}]}]
+        })).unwrap()).unwrap();
+        let report = json!({"explanation":{"requests":[{
+            "requestEntity":"correction", "reviewMode":"staged", "application":{"mode":"manual"},
+            "stages":[
+                {"id":"technical", "approvals":2, "excludeSubmitter":true, "excludePreviousReviewers":false},
+                {"id":"authorization", "approvals":1, "excludeSubmitter":true, "excludePreviousReviewers":true}
+            ]
+        }]}});
+        let selected = select_request(project.path(), "professional", &report).unwrap();
+        assert_eq!(
+            selected.0["stages"],
+            report["explanation"]["requests"][0]["stages"]
+        );
+        let mut invalid = report;
+        invalid["explanation"]["requests"][0]["stages"][0]["approvals"] = json!(0);
+        assert!(select_request(project.path(), "professional", &invalid).is_err());
+    }
+
+    #[test]
     fn candidate_adds_only_exact_event_and_reader() {
         let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[]});
-        apply_breg_candidate(&mut root, "request").unwrap();
+        apply_breg_candidate(&mut root, "request", &[]).unwrap();
         assert_eq!(
             root["entities"][0]["events"][0]["trigger"],
             "request_lifecycle"
@@ -535,25 +610,70 @@ mod tests {
         );
         assert_eq!(
             root["accessProfiles"][0]["grants"][0]["readableRequestFields"],
-            json!([])
+            json!(["review_state"])
         );
-        apply_breg_candidate(&mut root, "request").unwrap();
+        apply_breg_candidate(&mut root, "request", &[]).unwrap();
         assert_eq!(root["entities"][0]["events"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn routing_projection_grants_only_declared_source_fields() {
+        let project = tempfile::tempdir().unwrap();
+        let write_policy = |projection: Value| {
+            fs::write(
+                project.path().join("casework.yaml"),
+                serde_json::to_vec(&json!({
+                    "sources":[{"id":"professional", "requests":[{"projection":projection}]}]
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        let metadata = json!({"fields":[{"field":"region","apiName":"region"}, {"field":"private-note","apiName":"privateNote"}]});
+        write_policy(json!(["region"]));
+        let projection = source_projection(project.path(), "professional", &metadata).unwrap();
+        let input = "# keep authored context\nentities:\n  - id: request\n    route: requests\naccessProfiles: []\n";
+        // The narrow YAML writer expects block-style accessProfiles, as documented.
+        let input = input.replace("accessProfiles: []", "accessProfiles:");
+        let mut expected =
+            json!({"entities":[{"id":"request","route":"requests"}],"accessProfiles":[]});
+        apply_breg_candidate(&mut expected, "request", &projection).unwrap();
+        let rendered = render_candidate_preserving_authored_text(
+            input.as_bytes(),
+            "request",
+            &expected,
+            &projection,
+        )
+        .unwrap();
+        assert!(rendered.contains("# keep authored context"));
+        assert_eq!(
+            expected["accessProfiles"][0]["grants"][0]["readableFields"],
+            json!(["record", "region"])
+        );
+        assert_eq!(
+            expected["entities"][0]["events"][0]["projection"],
+            json!(["record"])
+        );
+        assert!(!rendered.contains("private-note"));
+        write_policy(json!(["unknown"]));
+        assert!(source_projection(project.path(), "professional", &metadata).is_err());
+        write_policy(json!(["region", "region"]));
+        assert!(source_projection(project.path(), "professional", &metadata).is_err());
     }
 
     #[test]
     fn candidate_refuses_conflicting_existing_grant() {
         let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","grants":[]}]});
-        assert!(apply_breg_candidate(&mut root, "request").is_err());
+        assert!(apply_breg_candidate(&mut root, "request", &[]).is_err());
     }
 
     #[test]
     fn narrow_yaml_patch_preserves_comments() {
         let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    grants: []\n";
         let mut expected: Value = serde_norway::from_str(input).unwrap();
-        apply_breg_candidate(&mut expected, "request").unwrap();
+        apply_breg_candidate(&mut expected, "request", &[]).unwrap();
         let patched =
-            render_candidate_preserving_authored_text(input.as_bytes(), "request", &expected)
+            render_candidate_preserving_authored_text(input.as_bytes(), "request", &expected, &[])
                 .unwrap();
         assert!(patched.contains("# useful"));
         assert!(patched.contains("# keep this"));

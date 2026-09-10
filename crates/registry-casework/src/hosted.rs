@@ -2,13 +2,13 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use registry_casework_core::{
-    ActorContext, CaseworkAction, CaseworkRole, HostedAccountabilityRecord, HostedCancelRequest,
-    HostedCreateRequest, HostedDecisionRequest, HostedHistoryEntry, HostedHistoryKind,
-    HostedHistoryPage, HostedKindPolicySnapshot, HostedNote, HostedNoteRequest, HostedPolicyDigest,
-    HostedTerminalPage, HostedTerminalResult, HostedTerminalState, HostedValidationError,
-    HostedValidationReason, HostedWorkItemContext, IssuerPrincipal, OccurrenceKind,
-    OccurrenceState, OpaqueActorRef, Page, PageStatus, RequesterHostedItem, SourceBinding,
-    SubjectRef, WorkItem,
+    ActorContext, AssignmentContext, CaseworkAction, CaseworkRole, HostedAccountabilityRecord,
+    HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest, HostedHistoryEntry,
+    HostedHistoryKind, HostedHistoryPage, HostedKindPolicySnapshot, HostedNote, HostedNoteRequest,
+    HostedPolicyDigest, HostedTerminalPage, HostedTerminalResult, HostedTerminalState,
+    HostedValidationError, HostedValidationReason, HostedWorkItemContext, IssuerPrincipal,
+    OccurrenceKind, OccurrenceState, OpaqueActorRef, Page, PageStatus, RequesterHostedItem,
+    SourceBinding, StaffingDiagnostic, SubjectRef, WorkItem,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -38,6 +38,7 @@ struct StoredHostedItem {
     queue_id: String,
     state: HostedState,
     holder: Option<IssuerPrincipal>,
+    assignment: Option<AssignmentContext>,
     revision: i64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -69,6 +70,31 @@ impl HostedState {
 fn stored_hosted_item(row: &Row) -> Result<StoredHostedItem, StoreError> {
     let requester = optional_principal(row, "requester_issuer", "requester_subject")?;
     let holder = optional_principal(row, "holder_issuer", "holder_subject")?;
+    let owner = optional_principal(row, "assignment_owner_issuer", "assignment_owner_subject")?;
+    let assigned_by = optional_principal(row, "assigned_by_issuer", "assigned_by_subject")?;
+    let absence_ids = row.get::<_, Vec<Uuid>>("assignment_absence_ids");
+    let staffing_diagnostic = match row
+        .get::<_, Option<String>>("staffing_diagnostic")
+        .as_deref()
+    {
+        Some("no_cover_available") => Some(StaffingDiagnostic::NoCoverAvailable),
+        None => None,
+        Some(_) => return Err(StoreError::Corrupt),
+    };
+    let assignment = if owner.is_none()
+        && assigned_by.is_none()
+        && absence_ids.is_empty()
+        && staffing_diagnostic.is_none()
+    {
+        None
+    } else {
+        Some(AssignmentContext {
+            owner,
+            assigned_by,
+            absence_ids,
+            staffing_diagnostic,
+        })
+    };
     Ok(StoredHostedItem {
         item_id: row.get("item_id"),
         requester,
@@ -88,6 +114,7 @@ fn stored_hosted_item(row: &Row) -> Result<StoredHostedItem, StoreError> {
             _ => return Err(StoreError::Corrupt),
         },
         holder,
+        assignment,
         revision: row.get("revision"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
@@ -252,7 +279,7 @@ async fn hosted_actor_reference(
         .get(0))
 }
 
-async fn append_hosted_history(
+pub(crate) async fn append_hosted_history(
     transaction: &Transaction<'_>,
     item_id: Uuid,
     item_revision: i64,
@@ -339,6 +366,7 @@ impl StoredHostedItem {
             state: occurrence_state(self.state),
             queue_id: self.queue_id.clone(),
             holder: self.holder.clone(),
+            assignment: self.assignment.clone(),
             revision: self.revision,
             first_observed_at: self.created_at,
             passive_due_at: None,
@@ -749,11 +777,12 @@ impl PostgresStore {
         let transaction = client.transaction().await?;
         let row = transaction.query_opt("SELECT * FROM casework_hosted_items WHERE item_id=$1 AND (terminal_retained_until IS NULL OR terminal_retained_until>now())", &[&item_id]).await?.ok_or(StoreError::NotFound)?;
         let item = stored_hosted_item(&row)?;
-        if !item
-            .snapshot()?
-            .deciding_profiles
-            .contains(&actor.profile_id)
-            || !has_queue_authority(&transaction, actor, &item.queue_id).await?
+        if !has_queue_authority(&transaction, actor, &item.queue_id).await?
+            || (actor.role == CaseworkRole::Staff
+                && !item
+                    .snapshot()?
+                    .deciding_profiles
+                    .contains(&actor.profile_id))
         {
             return Err(StoreError::NotFound);
         }
@@ -777,6 +806,9 @@ impl PostgresStore {
             let detail: Value = row.get(7);
             let actor_ref = match kind {
                 HostedHistoryKind::Claimed
+                | HostedHistoryKind::Assigned
+                | HostedHistoryKind::Delegated
+                | HostedHistoryKind::CaseloadMoved
                 | HostedHistoryKind::Released
                 | HostedHistoryKind::Completed => row
                     .get::<_, Option<String>>(5)
@@ -786,6 +818,20 @@ impl PostgresStore {
                 | HostedHistoryKind::NoteAdded
                 | HostedHistoryKind::Cancelled => None,
             };
+            let assignment = matches!(
+                kind,
+                HostedHistoryKind::Assigned
+                    | HostedHistoryKind::Delegated
+                    | HostedHistoryKind::CaseloadMoved
+            )
+            .then(|| detail.get("assignment").cloned())
+            .flatten()
+            .map(serde_json::from_value)
+            .transpose()?
+            .map(|mut assignment: AssignmentContext| {
+                assignment.assigned_by = None;
+                assignment
+            });
             last = Some((occurred_at, event_id));
             items.push(HostedHistoryEntry {
                 event_id,
@@ -794,6 +840,7 @@ impl PostgresStore {
                 kind,
                 occurred_at,
                 actor_ref,
+                assignment,
                 note: (kind == HostedHistoryKind::NoteAdded)
                     .then(|| row.get::<_, Option<String>>(6))
                     .flatten(),
@@ -805,14 +852,20 @@ impl PostgresStore {
                             .map(str::to_owned)
                     })
                     .flatten(),
-                reason: (kind == HostedHistoryKind::Completed)
-                    .then(|| {
-                        detail
-                            .get("reason")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .flatten(),
+                reason: matches!(
+                    kind,
+                    HostedHistoryKind::Completed
+                        | HostedHistoryKind::Assigned
+                        | HostedHistoryKind::Delegated
+                        | HostedHistoryKind::CaseloadMoved
+                )
+                .then(|| {
+                    detail
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .flatten(),
                 cancellation_reason: (kind == HostedHistoryKind::Cancelled)
                     .then(|| {
                         detail
@@ -982,6 +1035,9 @@ fn parse_hosted_history_kind(value: &str) -> Result<HostedHistoryKind, StoreErro
     match value {
         "created" => Ok(HostedHistoryKind::Created),
         "claimed" => Ok(HostedHistoryKind::Claimed),
+        "assigned" => Ok(HostedHistoryKind::Assigned),
+        "delegated" => Ok(HostedHistoryKind::Delegated),
+        "caseload_moved" => Ok(HostedHistoryKind::CaseloadMoved),
         "released" => Ok(HostedHistoryKind::Released),
         "note_added" => Ok(HostedHistoryKind::NoteAdded),
         "completed" => Ok(HostedHistoryKind::Completed),
@@ -1366,10 +1422,11 @@ impl PostgresStore {
         ).await?.ok_or(StoreError::NotFound)?;
         let item = stored_hosted_item(&row)?;
         if !has_queue_authority(&transaction, actor, &item.queue_id).await?
-            || !item
-                .snapshot()?
-                .deciding_profiles
-                .contains(&actor.profile_id)
+            || (actor.role == CaseworkRole::Staff
+                && !item
+                    .snapshot()?
+                    .deciding_profiles
+                    .contains(&actor.profile_id))
         {
             return Err(StoreError::NotFound);
         }
@@ -1637,11 +1694,17 @@ impl PostgresStore {
             (HostedState::Open, None)
         };
         transaction.execute(
-            "UPDATE casework_hosted_items SET state=$2,holder_issuer=$3,holder_subject=$4,revision=$5,updated_at=$6 WHERE item_id=$1",
-            &[&item_id,&state.name(),&holder.as_ref().map(|p|&p.issuer),&holder.as_ref().map(|p|&p.subject),&next,&now],
+            "UPDATE casework_hosted_items SET state=$2,holder_issuer=$3,holder_subject=$4,revision=$5,updated_at=$6,assignment_owner_issuer=$7,assignment_owner_subject=$8,assigned_by_issuer=NULL,assigned_by_subject=NULL,assignment_absence_ids='{}',staffing_diagnostic=NULL WHERE item_id=$1",
+            &[&item_id,&state.name(),&holder.as_ref().map(|p|&p.issuer),&holder.as_ref().map(|p|&p.subject),&next,&now,&holder.as_ref().map(|p|&p.issuer),&holder.as_ref().map(|p|&p.subject)],
         ).await?;
         item.state = state;
         item.holder = holder;
+        item.assignment = item.holder.clone().map(|owner| AssignmentContext {
+            owner: Some(owner),
+            assigned_by: None,
+            absence_ids: Vec::new(),
+            staffing_diagnostic: None,
+        });
         item.revision = next;
         item.updated_at = now;
         append_hosted_history(

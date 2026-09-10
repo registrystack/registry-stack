@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod policy;
 mod project;
 mod source_add;
 
@@ -28,6 +29,12 @@ enum Command {
     Source(SourceArgs),
     /// Validate authored inputs offline and print effective defaults.
     Check(ProjectArgs),
+    /// Explain the running policy from validated local inputs.
+    Explain(ProjectArgs),
+    /// Evaluate a fixture using its controlled clock and source facts.
+    Simulate(SimulateArgs),
+    /// Package validated policy and exact imported descriptions for deployment.
+    Package(PackageArgs),
     /// Run the project's bounded synthetic fixtures offline.
     Test(ProjectArgs),
     /// Check live database, issuer, source and directory readiness.
@@ -84,6 +91,26 @@ struct ProjectArgs {
     /// Authored Casework project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct SimulateArgs {
+    /// Authored Casework project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+    /// Synthetic fixture with source facts and a controlled clock.
+    #[arg(long, value_name = "FILE")]
+    fixture: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct PackageArgs {
+    /// Authored Casework project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+    /// New directory for the verified policy package.
+    #[arg(long, value_name = "DIRECTORY")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -158,6 +185,9 @@ fn run(cli: Cli) -> Result<Value> {
             SourceCommand::Add(args) => source_add::run(&args),
         },
         Command::Check(args) => project::check(&args.project),
+        Command::Explain(args) => project::explain(&args.project),
+        Command::Package(args) => project::package(&args.project, &args.output),
+        Command::Simulate(args) => project::simulate(&args.project, &args.fixture),
         Command::Test(args) => project::test(&args.project),
         Command::Doctor(args) => project::doctor(&args.project, args.operator.as_deref()),
         Command::Db(args) => match args.command {

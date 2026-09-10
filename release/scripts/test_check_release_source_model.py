@@ -233,6 +233,7 @@ class MonorepoFixture:
             "crates/registry-breg-client",
             "crates/registry-breg-client-node",
             "crates/registry-breg-client-py",
+            "crates/registry-casework-client-py",
             "crates/registry-stack-client-node",
             "crates/registry-stack-client-py",
         ):

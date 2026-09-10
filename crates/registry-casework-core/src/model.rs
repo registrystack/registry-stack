@@ -116,6 +116,8 @@ pub struct WorkItem {
     pub queue_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holder: Option<IssuerPrincipal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<AssignmentContext>,
     pub revision: i64,
     pub first_observed_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,6 +135,26 @@ pub struct WorkItem {
     /// Services must leave this absent for every other actor and profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_attempt: Option<AttemptStatus>,
+}
+
+/// Staff-visible routing context for a personal assignment.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AssignmentContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<IssuerPrincipal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_by: Option<IssuerPrincipal>,
+    #[serde(default)]
+    pub absence_ids: Vec<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staffing_diagnostic: Option<StaffingDiagnostic>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StaffingDiagnostic {
+    NoCoverAvailable,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -292,11 +314,17 @@ pub enum HistoryKind {
     Observed,
     Opened,
     Claimed,
+    Assigned,
+    Delegated,
+    CaseloadMoved,
     Released,
     DraftSaved,
     AttemptReserved,
     AttemptUncertain,
     ActionCompleted,
+    ClockReminder,
+    ClockStepApplied,
+    ClockRecomputed,
     Superseded,
     Completed,
 }

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "registry-casework-client-native"
+version = "0.29.0"
+description = "Internal Casework binding used by registry-stack-client."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.urls]
+Documentation = "https://docs.registrystack.org/"
+Issues = "https://github.com/registrystack/registry-stack/issues"
+Repository = "https://github.com/registrystack/registry-stack"
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "registry_casework_client.registry_casework_client"
+python-source = "python"
+features = ["extension-module"]
+strip = true

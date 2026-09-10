@@ -1,17 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Closed operator binding and offline construction of the BReg adapter.
 
-use crate::{BregAdapter, BregSourceConfig};
+use crate::{valid_stage_identifier, BregAdapter, BregReviewStage, BregSourceConfig};
 use registry_breg_client::{
     decode_exact_json, BaseRegistryClient, BaseRegistryClientConfig, PrivateKeyJwt,
-    PrivateKeyJwtConfig,
+    PrivateKeyJwtConfig, MAX_BREG_REVIEW_STAGES,
 };
-use registry_casework_core::{SourceAdapterError, SourcePolicy};
+use registry_casework_core::{
+    RoutingFieldDescriptor, RoutingSourceMetadata, SourceAdapterError, SourcePolicy,
+};
 use registry_platform_config::{sha256_uri, SecretResolver};
 use registry_platform_crypto::PrivateJwk;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{fmt, fs, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt, fs,
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
 use url::Url;
 
 const DESCRIPTION_API_VERSION: &str =
@@ -85,7 +93,7 @@ pub fn build_adapter(
         return Err(SourceAdapterError::Invalid);
     }
     let description_bytes = read_description(project_root, &source.description)?;
-    let (entity, route, stage, expected_registry_revision) =
+    let (entity, route, stages, routing_metadata, expected_registry_revision) =
         validate_description(source, &description_bytes)?;
 
     let client_id_secret = resolve_secret(secrets, &binding.client_id_ref)?;
@@ -131,7 +139,8 @@ pub fn build_adapter(
             source_id: source.id.clone(),
             entity,
             route,
-            stage,
+            stages,
+            routing_metadata,
             expected_registry_revision,
             binding_generation: generation,
             reader_profile: binding.reader_profile.clone(),
@@ -215,7 +224,16 @@ fn read_description(project_root: &Path, relative: &str) -> Result<Vec<u8>, Sour
 fn validate_description(
     source: &SourcePolicy,
     bytes: &[u8],
-) -> Result<(String, String, String, String), SourceAdapterError> {
+) -> Result<
+    (
+        String,
+        String,
+        Vec<BregReviewStage>,
+        RoutingSourceMetadata,
+        String,
+    ),
+    SourceAdapterError,
+> {
     let root = decode_exact_json(bytes).map_err(|_| SourceAdapterError::Invalid)?;
     let object = root.as_object().ok_or(SourceAdapterError::Invalid)?;
     let expected = [
@@ -263,22 +281,129 @@ fn validate_description(
     let stages = request
         .get("stages")
         .and_then(Value::as_array)
-        .filter(|stages| stages.len() == 1)
+        .filter(|stages| !stages.is_empty() && stages.len() <= MAX_BREG_REVIEW_STAGES)
         .ok_or(SourceAdapterError::Invalid)?;
-    if stages[0].get("approvals").and_then(Value::as_u64) != Some(1) {
-        return Err(SourceAdapterError::Invalid);
+    let mut parsed_stages = Vec::with_capacity(stages.len());
+    for stage in stages {
+        let stage = stage.as_object().ok_or(SourceAdapterError::Invalid)?;
+        if stage.len() > 4
+            || !["id", "approvals", "excludeSubmitter"]
+                .iter()
+                .all(|field| stage.contains_key(*field))
+            || stage.keys().any(|field| {
+                !matches!(
+                    field.as_str(),
+                    "id" | "approvals" | "excludeSubmitter" | "excludePreviousReviewers"
+                )
+            })
+        {
+            return Err(SourceAdapterError::Invalid);
+        }
+        let id = stage
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| valid_stage_identifier(value))
+            .ok_or(SourceAdapterError::Invalid)?;
+        let approvals = stage
+            .get("approvals")
+            .and_then(Value::as_u64)
+            .filter(|approvals| (1..=32).contains(approvals))
+            .ok_or(SourceAdapterError::Invalid)?;
+        let exclude_submitter = stage
+            .get("excludeSubmitter")
+            .and_then(Value::as_bool)
+            .ok_or(SourceAdapterError::Invalid)?;
+        let exclude_previous_reviewers = match stage.get("excludePreviousReviewers") {
+            None => false,
+            Some(value) => value.as_bool().ok_or(SourceAdapterError::Invalid)?,
+        };
+        if parsed_stages
+            .iter()
+            .any(|prior: &BregReviewStage| prior.id == id)
+        {
+            return Err(SourceAdapterError::Invalid);
+        }
+        parsed_stages.push(BregReviewStage {
+            id: id.to_owned(),
+            approvals,
+            exclude_submitter,
+            exclude_previous_reviewers,
+        });
     }
-    let stage = stages[0]
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|value| valid_scalar(value, 512))
-        .ok_or(SourceAdapterError::Invalid)?;
+    let routing_metadata =
+        routing_metadata(request, &source.requests[0].projection, &parsed_stages)?;
     Ok((
         entity.to_owned(),
         route.to_owned(),
-        stage.to_owned(),
+        parsed_stages,
+        routing_metadata,
         expected_registry_revision,
     ))
+}
+
+/// Validate an imported description with the same strict decoder used by
+/// adapter construction, without loading operator bindings or secrets.
+pub fn validate_description_input(
+    source: &SourcePolicy,
+    bytes: &[u8],
+) -> Result<RoutingSourceMetadata, SourceAdapterError> {
+    let (_, _, _, routing_metadata, _) = validate_description(source, bytes)?;
+    Ok(routing_metadata)
+}
+
+fn routing_metadata(
+    request: &serde_json::Map<String, Value>,
+    projection: &[String],
+    stages: &[BregReviewStage],
+) -> Result<RoutingSourceMetadata, SourceAdapterError> {
+    let fields = request
+        .get("fields")
+        .and_then(Value::as_array)
+        .ok_or(SourceAdapterError::Invalid)?;
+    let mut by_logical_name = BTreeMap::new();
+    let mut api_names = BTreeSet::new();
+    for field in fields {
+        let field = field.as_object().ok_or(SourceAdapterError::Invalid)?;
+        if field.len() != 3
+            || !["field", "apiName", "schema"]
+                .iter()
+                .all(|key| field.contains_key(*key))
+        {
+            return Err(SourceAdapterError::Invalid);
+        }
+        let logical_name = string_field(field, "field")?;
+        let api_name = string_field(field, "apiName")?;
+        if !api_names.insert(api_name) {
+            return Err(SourceAdapterError::Invalid);
+        }
+        let descriptor = RoutingFieldDescriptor {
+            field: logical_name.to_owned(),
+            api_name: api_name.to_owned(),
+            schema: field
+                .get("schema")
+                .cloned()
+                .ok_or(SourceAdapterError::Invalid)?,
+        };
+        if by_logical_name
+            .insert(logical_name.to_owned(), descriptor)
+            .is_some()
+        {
+            return Err(SourceAdapterError::Invalid);
+        }
+    }
+    let fields = projection
+        .iter()
+        .map(|field| {
+            by_logical_name
+                .get(field)
+                .cloned()
+                .ok_or(SourceAdapterError::Invalid)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RoutingSourceMetadata {
+        stages: stages.iter().map(|stage| stage.id.clone()).collect(),
+        fields,
+    })
 }
 
 fn string_field<'a>(
@@ -348,7 +473,11 @@ mod tests {
             "origin":DESCRIPTION_ORIGIN, "sourceRevision":"sha256:source",
             "request":{"requestEntity":entity,"requestRoute":"corrections",
                 "contractFingerprint":"sha256:contract","reviewMode":"staged",
-                "application":{"mode":"manual"},"stages":[{"id":"review","approvals":1}]}
+                "fields":[{"field":"region","apiName":"serviceRegion",
+                    "schema":{"type":"string","enum":["north","south"]}}],
+                "application":{"mode":"manual"},"stages":[{
+                    "id":"review","approvals":1,"excludeSubmitter":false
+                }]}
         }))
         .unwrap()
     }
@@ -377,6 +506,65 @@ mod tests {
         assert!(
             validate_description(&source(), &serde_json::to_vec(&wrong_mode).unwrap()).is_err()
         );
+    }
+
+    #[test]
+    fn imported_description_preserves_the_complete_ordered_stage_policy() {
+        let mut value: Value = serde_json::from_slice(&description("correction")).unwrap();
+        value["request"]["stages"] = json!([
+            {"id":"technical","approvals":2,"excludeSubmitter":true},
+            {"id":"authorization","approvals":1,"excludeSubmitter":true,
+                "excludePreviousReviewers":true}
+        ]);
+        let (_, _, stages, _, _) =
+            validate_description(&source(), &serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            stages,
+            vec![
+                BregReviewStage {
+                    id: "technical".into(),
+                    approvals: 2,
+                    exclude_submitter: true,
+                    exclude_previous_reviewers: false,
+                },
+                BregReviewStage {
+                    id: "authorization".into(),
+                    approvals: 1,
+                    exclude_submitter: true,
+                    exclude_previous_reviewers: true,
+                },
+            ]
+        );
+
+        value["request"]["stages"][1]["id"] = json!("technical");
+        assert!(validate_description(&source(), &serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn imported_description_maps_only_the_configured_routing_projection() {
+        let mut source = source();
+        source.requests[0].projection = vec!["region".to_owned()];
+        let (_, _, _, metadata, _) =
+            validate_description(&source, &description("correction")).unwrap();
+        assert_eq!(metadata.stages, ["review"]);
+        assert_eq!(metadata.fields.len(), 1);
+        assert_eq!(metadata.fields[0].field, "region");
+        assert_eq!(metadata.fields[0].api_name, "serviceRegion");
+        assert_eq!(
+            metadata.fields[0].schema,
+            json!({"type":"string","enum":["north","south"]})
+        );
+
+        source.requests[0].projection = vec!["not-imported".to_owned()];
+        assert!(validate_description(&source, &description("correction")).is_err());
+
+        source.requests[0].projection = vec!["region".to_owned()];
+        let mut duplicate: Value = serde_json::from_slice(&description("correction")).unwrap();
+        duplicate["request"]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"field":"region","apiName":"otherRegion","schema":{"type":"string"}}));
+        assert!(validate_description(&source, &serde_json::to_vec(&duplicate).unwrap()).is_err());
     }
 
     #[test]

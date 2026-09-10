@@ -54,6 +54,29 @@ impl CaseworkService {
         {
             return Err(ServiceError::Configuration);
         }
+        let queues = project
+            .queues
+            .iter()
+            .map(|queue| queue.id.clone())
+            .collect();
+        for source in &project.sources {
+            for request in &source.requests {
+                if request.routing.is_empty() && request.projection.is_empty() {
+                    continue;
+                }
+                let metadata = registered[&source.id]
+                    .routing_metadata()
+                    .ok_or(ServiceError::Configuration)?;
+                registry_casework_core::check_routing_policy(
+                    &request.queue,
+                    &request.projection,
+                    &request.routing,
+                    &queues,
+                    Some(metadata),
+                )
+                .map_err(|_| ServiceError::Configuration)?;
+            }
+        }
         Ok(Self {
             store,
             adapters: Arc::new(registered),
@@ -125,9 +148,16 @@ impl CaseworkService {
             let adapter = self.adapter(&subject.source_id)?;
             match adapter.read_authoritative(&subject).await {
                 Ok(observation) => {
-                    let (queue, target) = self.policy_for(&subject)?;
+                    let (routing, target) = self.routing_policy_for(&observation)?;
+                    let clock = self.clock_policy_for(&subject)?;
                     self.store
-                        .apply_observation(&observation, queue, target)
+                        .apply_observation_with_context(
+                            &observation,
+                            &routing.queue,
+                            target,
+                            Some(&routing),
+                            clock.as_ref(),
+                        )
                         .await?;
                     applied += 1;
                 }
@@ -158,9 +188,16 @@ impl CaseworkService {
         for subject in subjects {
             match adapter.read_authoritative(&subject).await {
                 Ok(observation) => {
-                    let (queue, target) = self.policy_for(&subject)?;
+                    let (routing, target) = self.routing_policy_for(&observation)?;
+                    let clock = self.clock_policy_for(&subject)?;
                     self.store
-                        .apply_observation(&observation, queue, target)
+                        .apply_observation_with_context(
+                            &observation,
+                            &routing.queue,
+                            target,
+                            Some(&routing),
+                            clock.as_ref(),
+                        )
                         .await?;
                     applied += 1;
                 }
@@ -897,26 +934,93 @@ impl CaseworkService {
         })
     }
 
-    fn adapter(&self, source_id: &str) -> Result<&Arc<dyn SourceAdapter>, ServiceError> {
+    pub(crate) fn adapter(&self, source_id: &str) -> Result<&Arc<dyn SourceAdapter>, ServiceError> {
         self.adapters.get(source_id).ok_or(ServiceError::Source)
     }
 
-    fn policy_for(&self, subject: &SubjectRef) -> Result<(&str, Option<i64>), ServiceError> {
+    pub(crate) fn request_policy_for(
+        &self,
+        subject: &SubjectRef,
+    ) -> Result<&registry_casework_core::SourceRequestPolicy, ServiceError> {
         let source = self
             .project
             .sources
             .iter()
             .find(|source| source.id == subject.source_id)
             .ok_or(ServiceError::Source)?;
-        let request = source
+        source
             .requests
             .iter()
             .find(|request| request.entity == subject.kind)
-            .ok_or(ServiceError::Source)?;
+            .ok_or(ServiceError::Source)
+    }
+
+    pub(crate) fn clock_policy_for(
+        &self,
+        subject: &SubjectRef,
+    ) -> Result<Option<crate::ResolvedClockPolicy>, ServiceError> {
+        let Some(clock_id) = self.request_policy_for(subject)?.clock.as_deref() else {
+            return Ok(None);
+        };
+        let clock = self
+            .project
+            .clocks
+            .iter()
+            .find(|clock| clock.id() == clock_id)
+            .ok_or(ServiceError::Configuration)?
+            .clone();
+        let calendar = match &clock {
+            registry_casework_core::ClockPolicy::Activity { calendar, .. } => Some(
+                self.project
+                    .calendars
+                    .iter()
+                    .find(|candidate| candidate.id == *calendar)
+                    .ok_or(ServiceError::Configuration)?
+                    .clone(),
+            ),
+            registry_casework_core::ClockPolicy::Subject { .. } => None,
+        };
+        Ok(Some(crate::ResolvedClockPolicy { clock, calendar }))
+    }
+
+    pub(crate) fn routing_policy_for(
+        &self,
+        observation: &registry_casework_core::AuthoritativeObservation,
+    ) -> Result<(registry_casework_core::RoutingDecision, Option<i64>), ServiceError> {
+        let request = self.request_policy_for(&observation.subject)?;
         let target = request.target.as_ref().and_then(|target| {
             registry_casework_core::parse_elapsed_seconds(&target.after.elapsed)
         });
-        Ok((&request.queue, target))
+        let default = registry_casework_core::RoutingDecision {
+            queue: request.queue.clone(),
+            rule_id: None,
+            because: None,
+        };
+        // Waiting and terminal observations retire or suspend work. They may
+        // have no source review stage or permitted routing projection.
+        if request.routing.is_empty()
+            || !observation.state.is_active()
+            || (observation.routing_context.is_none() && observation.state != OccurrenceState::Open)
+        {
+            return Ok((default, target));
+        }
+        let metadata = self
+            .adapter(&observation.subject.source_id)?
+            .routing_metadata()
+            .ok_or(SourceAdapterError::Invalid)?;
+        let context = observation
+            .routing_context
+            .as_ref()
+            .ok_or(SourceAdapterError::Invalid)?;
+        let decision = registry_casework_core::evaluate_routing(
+            &request.queue,
+            &request.projection,
+            &request.routing,
+            metadata,
+            context,
+        )
+        .map_err(|_| SourceAdapterError::Invalid)?;
+        Ok((decision, target))
     }
 
     #[must_use]

@@ -1,3 +1,4 @@
+use registry_casework_core::DirectoryTeamUpdateRequest;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -11,8 +12,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_casework_core::{
-    AttemptPath, BootstrapDirectoryRequest, CaseworkProject, CaseworkRole, DecideRequest,
-    Description, DirectoryResponse, DraftResponse, EventRequest, HistoryPage, HoldingsQuery,
+    AbsenceInput, AbsenceRecord, AssignmentRequest, AttemptPath, BootstrapDirectoryRequest,
+    CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage,
+    CaseloadPreviewQuery, CaseworkProject, CaseworkRole, ClockOccurrenceView,
+    ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
+    DecideRequest, DelegateRequest, Description, DirectoryResponse, DraftResponse, EventRequest,
+    HistoryPage, HoldingsQuery, HolidaySetDocument, HolidaySetRevisionInput,
     HostedAccountabilityRecord, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
     HostedHistoryPage, HostedNotePage, HostedNoteRequest, HostedPageQuery, HostedTerminalPage,
     HostedTerminalQuery, HostedTerminalResult, HostedValidationError, HostedValidationReason,
@@ -70,8 +75,11 @@ pub fn router(state: HttpState) -> Router {
             .route("/v1/work-items", get(list_items))
             .route("/v1/work-items/next", get(next_item))
             .route("/v1/work-items/{item_id}", get(get_item))
+            .route("/v1/work-items/{item_id}/clocks", get(work_item_clocks))
             .route("/v1/work-items/{item_id}/claim", post(claim))
             .route("/v1/work-items/{item_id}/release", post(release))
+            .route("/v1/work-items/{item_id}/assign", post(assign_item))
+            .route("/v1/work-items/{item_id}/delegate", post(delegate_item))
             .route(
                 "/v1/work-items/{item_id}/draft",
                 get(get_draft).put(save_draft).delete(delete_draft),
@@ -96,7 +104,34 @@ pub fn router(state: HttpState) -> Router {
             )
             .route("/v1/holdings", get(holdings))
             .route("/v1/directory", get(directory))
+            .route(
+                "/v1/directory/teams/{team_id}",
+                axum::routing::put(update_directory_team),
+            )
             .route("/v1/directory/bootstrap", post(bootstrap))
+            .route("/v1/directory/holidays", post(create_holiday_revision))
+            .route(
+                "/v1/directory/holidays/{id}/revisions/{revision}",
+                get(holiday_revision),
+            )
+            .route(
+                "/v1/directory/clocks/recompute/preview",
+                post(preview_clock_recompute),
+            )
+            .route(
+                "/v1/directory/clocks/recompute/apply",
+                post(apply_clock_recompute),
+            )
+            .route("/v1/directory/absences", get(absences).post(create_absence))
+            .route(
+                "/v1/directory/absences/{absence_id}",
+                axum::routing::put(update_absence).delete(delete_absence),
+            )
+            .route(
+                "/v1/directory/caseload/preview",
+                post(preview_caseload_move),
+            )
+            .route("/v1/directory/caseload/apply", post(apply_caseload_move))
             .route("/events/sources/{source_id}", post(source_event)),
     )
     .with_state(state)
@@ -198,6 +233,16 @@ async fn description(
             Vec::new()
         } else {
             state.project.sources.clone()
+        },
+        calendars: if actor.role == CaseworkRole::Requester {
+            Vec::new()
+        } else {
+            state.project.calendars.clone()
+        },
+        clocks: if actor.role == CaseworkRole::Requester {
+            Vec::new()
+        } else {
+            state.project.clocks.clone()
         },
         hosted_kinds: state
             .project
@@ -736,6 +781,27 @@ async fn directory(
     Ok(Json(DirectoryResponse { revision, teams }))
 }
 
+async fn update_directory_team(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(team_id): Path<String>,
+    Json(request): Json<DirectoryTeamUpdateRequest>,
+) -> Result<Json<DirectoryResponse>, HttpError> {
+    let (actor, _) = authenticate(&state, &headers).await?;
+    state
+        .service
+        .update_directory_team(
+            &actor,
+            if_match_allow_zero(&headers)?,
+            &team_id,
+            &request,
+            idempotency_key(&headers)?,
+        )
+        .await?;
+    let (revision, teams) = state.service.store().directory(&actor).await?;
+    Ok(Json(DirectoryResponse { revision, teams }))
+}
+
 async fn bootstrap(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -754,6 +820,238 @@ async fn bootstrap(
         .await?;
     let (revision, teams) = state.service.store().directory(&actor).await?;
     Ok(Json(DirectoryResponse { revision, teams }))
+}
+
+async fn work_item_clocks(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+) -> Result<Json<Vec<ClockOccurrenceView>>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .work_item_clocks(&actor, item_id, source_profile(&headers)?, token)
+            .await?,
+    ))
+}
+
+async fn create_holiday_revision(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(input): Json<HolidaySetRevisionInput>,
+) -> Result<(StatusCode, Json<HolidaySetDocument>), HttpError> {
+    let (actor, _) = authenticate(&state, &headers).await?;
+    state
+        .service
+        .create_holiday_revision(&actor, &input.document, idempotency_key(&headers)?)
+        .await?;
+    Ok((StatusCode::CREATED, Json(input.document)))
+}
+
+async fn holiday_revision(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path((id, revision)): Path<(String, u64)>,
+) -> Result<Json<HolidaySetDocument>, HttpError> {
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .holiday_revision(&actor, &id, revision)
+            .await?,
+    ))
+}
+
+async fn preview_clock_recompute(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(input): Json<ClockRecomputeRequest>,
+) -> Result<Json<ClockRecomputePreview>, HttpError> {
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .preview_clock_recompute(&actor, &input)
+            .await?,
+    ))
+}
+
+async fn apply_clock_recompute(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(input): Json<ClockRecomputeApplyRequest>,
+) -> Result<Json<ClockRecomputeResult>, HttpError> {
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .apply_clock_recompute(&actor, input.preview_id, idempotency_key(&headers)?)
+            .await
+            .map_err(|error| match error {
+                ServiceError::Store(StoreError::CursorExpired) => {
+                    HttpError::ClockRecomputePreviewExpired
+                }
+                other => HttpError::from(other),
+            })?,
+    ))
+}
+
+async fn absences(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AbsenceRecord>>, HttpError> {
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(state.service.absences(&actor).await?))
+}
+
+async fn create_absence(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(input): Json<AbsenceInput>,
+) -> Result<(StatusCode, Json<AbsenceRecord>), HttpError> {
+    let (actor, _) = authenticate(&state, &headers).await?;
+    let absence = state
+        .service
+        .create_absence(
+            &actor,
+            if_match_allow_zero(&headers)?,
+            &input,
+            idempotency_key(&headers)?,
+        )
+        .await?;
+    Ok((StatusCode::CREATED, Json(absence)))
+}
+
+async fn update_absence(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(absence_id): Path<Uuid>,
+    Json(input): Json<AbsenceInput>,
+) -> Result<Json<AbsenceRecord>, HttpError> {
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .update_absence(
+                &actor,
+                absence_id,
+                if_match(&headers)?,
+                &input,
+                idempotency_key(&headers)?,
+            )
+            .await?,
+    ))
+}
+
+async fn delete_absence(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(absence_id): Path<Uuid>,
+) -> Result<StatusCode, HttpError> {
+    let (actor, _) = authenticate(&state, &headers).await?;
+    state
+        .service
+        .delete_absence(
+            &actor,
+            absence_id,
+            if_match(&headers)?,
+            idempotency_key(&headers)?,
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn assign_item(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+    Json(request): Json<AssignmentRequest>,
+) -> Result<Json<MutationResponse>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    let item = state
+        .service
+        .assign_item(
+            &actor,
+            source_profile_optional(&headers)?,
+            token,
+            item_id,
+            if_match(&headers)?,
+            &request,
+            idempotency_key(&headers)?,
+        )
+        .await?;
+    Ok(Json(MutationResponse {
+        item,
+        attempt: None,
+    }))
+}
+
+async fn delegate_item(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+    Json(request): Json<DelegateRequest>,
+) -> Result<Json<MutationResponse>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    let item = state
+        .service
+        .delegate_item(
+            &actor,
+            source_profile_optional(&headers)?,
+            token,
+            item_id,
+            if_match(&headers)?,
+            &request,
+            idempotency_key(&headers)?,
+        )
+        .await?;
+    Ok(Json(MutationResponse {
+        item,
+        attempt: None,
+    }))
+}
+
+async fn preview_caseload_move(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<CaseloadPreviewQuery>,
+    Json(movement): Json<CaseloadMoveRequest>,
+) -> Result<Json<CaseloadPreviewPage>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .preview_caseload_move(
+                &actor,
+                source_profile_optional(&headers)?,
+                token,
+                &movement,
+                page_limit(&state, query.limit)?,
+                query.cursor.as_deref(),
+            )
+            .await?,
+    ))
+}
+
+async fn apply_caseload_move(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<CaseloadApplyRequest>,
+) -> Result<Json<Vec<CaseloadItemResult>>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .apply_caseload_move(
+                &actor,
+                source_profile_optional(&headers)?,
+                token,
+                &request,
+                idempotency_key(&headers)?,
+            )
+            .await?,
+    ))
 }
 
 async fn source_event(
@@ -891,6 +1189,8 @@ fn if_match_with_minimum(headers: &HeaderMap, minimum: i64) -> Result<i64, HttpE
 
 #[derive(Debug)]
 pub enum HttpError {
+    ClockRecomputePreviewExpired,
+    Absence(registry_casework_core::AbsenceError),
     AuthenticationRefused,
     CursorExpired,
     CursorInvalid,
@@ -921,6 +1221,7 @@ pub enum HttpError {
 impl From<StoreError> for HttpError {
     fn from(error: StoreError) -> Self {
         match error {
+            StoreError::Absence(error) => Self::Absence(error),
             StoreError::CursorExpired => Self::CursorExpired,
             StoreError::CursorInvalid => Self::CursorInvalid,
             StoreError::IdempotencyExpired => Self::IdempotencyExpired,
@@ -986,6 +1287,7 @@ impl HttpError {
 
     fn problem(&self) -> ProblemCode {
         match self {
+            Self::ClockRecomputePreviewExpired => ProblemCode::ClockRecomputePreviewExpired,
             Self::AuthenticationRefused => ProblemCode::AuthenticationRefused,
             Self::CursorExpired => ProblemCode::CursorExpired,
             Self::CursorInvalid => ProblemCode::CursorInvalid,
@@ -1011,6 +1313,16 @@ impl HttpError {
             Self::SourceUnavailable => ProblemCode::WorkItemSourceUnavailable,
             Self::Internal => ProblemCode::RuntimeFailure,
             Self::Validation(_) => ProblemCode::RequestInvalid,
+            Self::Absence(error) => match error {
+                registry_casework_core::AbsenceError::InvalidPeriod => {
+                    ProblemCode::AbsenceInvalidPeriod
+                }
+                registry_casework_core::AbsenceError::SelfCover => ProblemCode::AbsenceSelfCover,
+                registry_casework_core::AbsenceError::OverlappingPeriod => {
+                    ProblemCode::AbsenceOverlap
+                }
+                registry_casework_core::AbsenceError::CoverCycle => ProblemCode::AbsenceCoverCycle,
+            },
         }
     }
 }

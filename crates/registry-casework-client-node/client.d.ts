@@ -18,7 +18,7 @@ export type OccurrenceState = 'open' | 'claimed' | 'waiting_applicant' | 'waitin
 export type OperationName = string
 export type AttemptState = 'pending' | 'uncertain' | 'completed' | 'refused'
 export type PageStatus = 'complete' | 'budget_exhausted' | 'source_unavailable'
-export type HistoryKind = 'observed' | 'opened' | 'claimed' | 'released' | 'draft_saved' | 'attempt_reserved' | 'attempt_uncertain' | 'action_completed' | 'superseded' | 'completed'
+export type HistoryKind = 'observed' | 'opened' | 'claimed' | 'assigned' | 'delegated' | 'caseload_moved' | 'clock_reminder' | 'clock_step_applied' | 'clock_recomputed' | 'released' | 'draft_saved' | 'attempt_reserved' | 'attempt_uncertain' | 'action_completed' | 'superseded' | 'completed'
 
 export interface IssuerPrincipal { issuer: string; subject: string }
 export interface SubjectRef { sourceId: string; kind: string; id: string }
@@ -45,6 +45,7 @@ export interface WorkItem {
   state: OccurrenceState
   queueId: string
   holder?: IssuerPrincipal
+  assignment?: AssignmentContext
   revision: SafeInteger
   firstObservedAt: string
   passiveDueAt?: string
@@ -135,7 +136,20 @@ export interface HoldingSummary {
 }
 export interface QueueRecord { id: string; label: string }
 export interface PassiveTargetPolicy { id: string; after: { elapsed: string } }
-export interface SourceRequestPolicy { entity: string; queue: string; target?: PassiveTargetPolicy }
+export type RoutingPredicate = { equals: JsonValue } | { oneOf: ReadonlyArray<JsonValue> }
+export interface RoutingCondition { activity?: 'review' | 'apply'; stage?: string; fields?: Readonly<Record<string, RoutingPredicate>> }
+export interface RoutingRule { id: string; because: string; when: RoutingCondition; queue: string }
+export interface SourceRequestPolicy { entity: string; queue: string; projection?: ReadonlyArray<string>; routing?: ReadonlyArray<RoutingRule>; clock?: string; target?: PassiveTargetPolicy }
+export type WorkingWeekday = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
+export interface CalendarPolicy { id: string; timezone: string; workingWeekdays: ReadonlyArray<WorkingWeekday>; holidaySet: string }
+export interface ClockReminder { id: string; workingDaysBefore: SafeInteger }
+export interface ClockStep { id: string; because: string; at: 'due'; action: { reassign: { queue: string } } }
+export type ClockPolicy = {
+  scope: 'subject'; id: string; anchor: 'firstSubmittedAt'; completeOn: 'reviewCompleted'; after: { elapsed: string }; pauseWhile: ReadonlyArray<'awaitingApplicant'>
+} | {
+  scope: 'activity'; id: string; anchor: 'stageEnteredAt'; calendar: string; after: { workingDays: SafeInteger }; dueTime: string;
+  atRisk?: { workingDaysBefore: SafeInteger }; reminders?: ReadonlyArray<ClockReminder>; steps?: ReadonlyArray<ClockStep>
+}
 export interface SourcePolicy {
   id: string
   adapter: string
@@ -196,7 +210,7 @@ export interface HostedNote {
   itemRevision: SafeInteger
   recordedAt: string
 }
-export type HostedHistoryKind = 'created' | 'claimed' | 'released' | 'note_added' | 'completed' | 'cancelled'
+export type HostedHistoryKind = 'created' | 'claimed' | 'assigned' | 'delegated' | 'caseload_moved' | 'released' | 'note_added' | 'completed' | 'cancelled'
 export interface HostedHistoryEntry {
   eventId: string
   itemId: string
@@ -204,6 +218,7 @@ export interface HostedHistoryEntry {
   kind: HostedHistoryKind
   occurredAt: string
   actorRef?: string
+  assignment?: AssignmentContext
   note?: string
   outcome?: string
   reason?: string
@@ -225,6 +240,8 @@ export interface Description {
   policyVersion: string
   queues: ReadonlyArray<QueueRecord>
   sources: ReadonlyArray<SourcePolicy>
+  calendars: ReadonlyArray<CalendarPolicy>
+  clocks: ReadonlyArray<ClockPolicy>
   hostedKinds: ReadonlyArray<HostedKindPolicy>
 }
 export interface TeamRecord {
@@ -234,7 +251,18 @@ export interface TeamRecord {
   servedQueues: ReadonlyArray<string>
   revision: SafeInteger
 }
+export interface DirectoryTeamUpdateRequest { staff: ReadonlyArray<IssuerPrincipal>; supervisors: ReadonlyArray<IssuerPrincipal>; servedQueues: ReadonlyArray<string> }
 export interface DirectoryResponse { revision: SafeInteger; teams: ReadonlyArray<TeamRecord> }
+export interface AbsenceInput { person: IssuerPrincipal; from: string; until: string; cover: IssuerPrincipal }
+export interface AbsenceRecord extends AbsenceInput { absenceId: string; revision: SafeInteger }
+export interface AssignmentContext { owner?: IssuerPrincipal; assignedBy?: IssuerPrincipal; absenceIds: ReadonlyArray<string>; staffingDiagnostic?: 'no_cover_available' }
+export interface AssignmentRequest { assignee: IssuerPrincipal; reason?: string }
+export interface DelegateRequest { delegate: IssuerPrincipal; reason?: string }
+export interface CaseloadMoveRequest { from: IssuerPrincipal; to: IssuerPrincipal; queueId?: string; reason: string }
+export interface CaseloadItemSelection { itemId: string; expectedRevision: SafeInteger }
+export interface CaseloadApplyRequest { movement: CaseloadMoveRequest; items: ReadonlyArray<CaseloadItemSelection> }
+export interface CaseloadPreviewQuery { cursor?: string; limit?: SafeInteger }
+export interface CaseloadItemResult { itemId: string; result: 'moved' | 'not_visible' | 'not_eligible' | 'attempt_in_progress' | 'conflict'; revision?: SafeInteger }
 export interface BootstrapDirectoryRequest {
   teamId: string
   staff: ReadonlyArray<IssuerPrincipal>
@@ -245,8 +273,12 @@ export interface HoldingsQuery { cursor?: string }
 export interface CaseworkOutcome<T> { kind: 'complete'; value: T; traceId: string }
 
 export type KnownCaseworkProblemCode =
+  | 'absence.cover-cycle'
+  | 'absence.invalid-period'
+  | 'absence.overlap'
+  | 'absence.self-cover'
   | 'authentication.refused'
-  | 'cursor.expired'
+  | 'clock.recompute-preview-expired' | 'cursor.expired'
   | 'cursor.invalid'
   | 'idempotency.expired'
   | 'idempotency.key-reused'
@@ -291,6 +323,29 @@ export class CaseworkClientError extends Error {
   readonly protocolFailure?: string
 }
 
+export type ClockRuntimeState = 'running' | 'paused' | 'completed' | 'cancelled' | 'verification_pending' | 'source_facts_missing'
+export interface ClockOccurrenceView {
+  clockOccurrenceId: string
+  subject: SubjectRef
+  clockId: string
+  state: ClockRuntimeState
+  policyDigest: string
+  calculationGeneration: SafeInteger
+  recomputeGeneration: SafeInteger
+  anchorAt?: string
+  startedAt?: string
+  dueAt?: string
+  atRiskAt?: string
+  completedAt?: string
+}
+export interface HolidaySetDocument { holidaySet: string; revision: SafeInteger; dates: ReadonlyArray<string> }
+export interface HolidaySetRevisionInput { document: HolidaySetDocument }
+export interface ClockRecomputeRequest { clockId: string; holidaySet: string; holidayRevision: SafeInteger }
+export interface ClockRecomputeChange { clockOccurrenceId: string; itemId: string; expectedCalculationGeneration: SafeInteger; oldDueAt: string; proposedDueAt: string }
+export interface ClockRecomputePreview { previewId: string; clockId: string; holidaySet: string; holidayRevision: SafeInteger; expiresAt: string; changes: ReadonlyArray<ClockRecomputeChange> }
+export interface ClockRecomputeApplyRequest { previewId: string }
+export interface ClockRecomputeResult { previewId: string; appliedOccurrences: ReadonlyArray<string> }
+
 export class CaseworkClient {
   constructor(config: CaseworkClientConfig)
   description(token: string, profile: string): Promise<CaseworkOutcome<Description>>
@@ -322,4 +377,18 @@ export class CaseworkClient {
   holdings(token: string, profile: string, sourceProfile: string, query?: HoldingsQuery | null): Promise<CaseworkOutcome<Page<HoldingSummary>>>
   directory(token: string, profile: string): Promise<CaseworkOutcome<DirectoryResponse>>
   bootstrapDirectory(token: string, profile: string, expectedRevision: SafeInteger, idempotencyKey: string, request: BootstrapDirectoryRequest): Promise<CaseworkOutcome<DirectoryResponse>>
+  updateDirectoryTeam(token: string, profile: string, teamId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: DirectoryTeamUpdateRequest): Promise<CaseworkOutcome<DirectoryResponse>>
+  workItemClocks(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<ReadonlyArray<ClockOccurrenceView>>>
+  holidayRevision(token: string, profile: string, holidaySet: string, revision: SafeInteger): Promise<CaseworkOutcome<HolidaySetDocument>>
+  createHolidayRevision(token: string, profile: string, idempotencyKey: string, request: HolidaySetRevisionInput): Promise<CaseworkOutcome<HolidaySetDocument>>
+  previewClockRecompute(token: string, profile: string, request: ClockRecomputeRequest): Promise<CaseworkOutcome<ClockRecomputePreview>>
+  applyClockRecompute(token: string, profile: string, idempotencyKey: string, request: ClockRecomputeApplyRequest): Promise<CaseworkOutcome<ClockRecomputeResult>>
+  absences(token: string, profile: string): Promise<CaseworkOutcome<ReadonlyArray<AbsenceRecord>>>
+  createAbsence(token: string, profile: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AbsenceInput): Promise<CaseworkOutcome<AbsenceRecord>>
+  updateAbsence(token: string, profile: string, absenceId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AbsenceInput): Promise<CaseworkOutcome<AbsenceRecord>>
+  deleteAbsence(token: string, profile: string, absenceId: string, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<null>>
+  assignWorkItem(token: string, profile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AssignmentRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<MutationResponse>>
+  delegateWorkItem(token: string, profile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: DelegateRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<MutationResponse>>
+  previewCaseloadMove(token: string, profile: string, movement: CaseloadMoveRequest, query?: CaseloadPreviewQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<Page<WorkItem>>>
+  applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: CaseloadApplyRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<ReadonlyArray<CaseloadItemResult>>>
 }

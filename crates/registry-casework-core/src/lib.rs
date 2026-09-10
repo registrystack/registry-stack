@@ -6,18 +6,26 @@
 
 mod adapter;
 mod assignment;
+mod calendar;
+mod clock_runtime;
 mod config;
 mod hosted;
 mod http;
 mod model;
+mod policy;
+mod routing;
 mod timing;
 mod transition;
 
 pub use adapter::*;
 pub use assignment::*;
+pub use calendar::*;
+pub use clock_runtime::*;
 pub use config::*;
 pub use hosted::*;
 pub use http::*;
 pub use model::*;
+pub use policy::*;
+pub use routing::*;
 pub use timing::*;
 pub use transition::*;

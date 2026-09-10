@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Context, Result};
-use registry_casework::{secret_resolver, PostgresStore, RuntimeConfig};
+use registry_casework::{
+    secret_resolver, validate_breg_source_description, verify_policy_package,
+    PolicyPackageManifest, PostgresStore, RuntimeConfig, POLICY_PACKAGE_MANIFEST_FILE,
+};
 use registry_casework_core::{CaseworkProject, SourceAdapter as _};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
@@ -77,6 +80,26 @@ sources:
     clientAssertionKeyRef: secret:file/breg-reader-key
     webhookSecretRef: secret:file/breg-casework-webhook
     eventSource: urn:registrystack:registry:professional-licences:instance:professional-licences-starter
+"#;
+
+#[cfg(test)]
+const BREG_SOURCE_DESCRIPTION: &str = r#"{
+  "apiVersion": "registry.registrystack.org/casework-source-description/v1alpha1",
+  "kind": "BRegCaseworkSourceDescription",
+  "origin": "bregctl explain change-requests",
+  "authority": "none",
+  "sourceId": "professional-register",
+  "sourceRevision": "sha256:source-revision",
+  "request": {
+    "requestEntity": "scope-correction",
+    "requestRoute": "scope-corrections",
+    "reviewMode": "staged",
+    "stages": [{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],
+    "fields": [],
+    "contractFingerprint": "sha256:contract",
+    "application": {"mode":"manual"}
+  }
+}
 "#;
 
 const FIXTURE: &str = r#"apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
@@ -225,6 +248,7 @@ pub(super) fn check(project: &Path) -> Result<Value> {
         .all(|source| project.join(&source.description).is_file())
     {
         check_source_descriptions(project)?;
+        crate::policy::check(project, &policy)?;
         "checked"
     } else {
         "pending_source_add"
@@ -242,13 +266,13 @@ pub(super) fn check(project: &Path) -> Result<Value> {
             "sourceAdapter": source.adapter,
             "requestEntity": request.entity,
             "queue": request.queue,
-            "queueMode": "default",
-            "reviewStages": 1,
+            "queueMode": if request.routing.is_empty() { "default" } else { "first_match" },
+            "routingRules": request.routing.len(),
             "applicationMode": "manual",
             "sourceDescription": source_description,
             "queueTarget": {"clock":"first_observed_elapsed", "elapsed": request.target.as_ref().map(|target| target.after.elapsed.as_str()), "worker":false},
             "inbox": inbox,
-            "limits": {"sources":1, "queues":1, "stages":1}
+            "limits": {"sources":policy.sources.len(), "queues":policy.queues.len()}
         },
         "networkAccess": false,
         "databaseAccess": false
@@ -272,10 +296,17 @@ pub(super) fn test(project: &Path) -> Result<Value> {
     let mut reports = Vec::new();
     for path in paths {
         let fixture = load_yaml(&path, "fixture")?;
-        validate_fixture(&fixture, effective, &policy)
-            .with_context(|| format!("fixture {}", path.display()))?;
+        let name = if fixture.get("subject").is_some() || fixture.get("now").is_some() {
+            crate::policy::simulate(project, &policy, &path)
+                .with_context(|| format!("simulation fixture {}", path.display()))?["fixture"]
+                .clone()
+        } else {
+            validate_fixture(&fixture, effective, &policy)
+                .with_context(|| format!("fixture {}", path.display()))?;
+            fixture["name"].clone()
+        };
         reports.push(json!({
-            "name": fixture["name"],
+            "name": name,
             "status": "passed",
             "file": path.strip_prefix(project).unwrap_or(&path)
         }));
@@ -297,7 +328,6 @@ fn load_yaml(path: &Path, label: &str) -> Result<Value> {
     }
     serde_norway::from_slice(&bytes).with_context(|| format!("parsing {label}"))
 }
-
 fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     let policy = CaseworkProject::load(project.join("casework.yaml"))
         .context("loading and checking casework.yaml")?;
@@ -307,26 +337,124 @@ fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
         }
         return Ok(policy);
     }
-    if policy.sources.len() != 1 || policy.queues.len() != 1 {
-        bail!("the BReg starter supports exactly one source and one queue");
-    }
-    let source = &policy.sources[0];
-    if source.adapter != "breg" || source.requests.len() != 1 {
-        bail!("the checkpoint supports one breg request declaration");
-    }
-    let request = &source.requests[0];
-    if policy.queues[0].id != request.queue {
-        bail!("request queue must name the declared default queue");
-    }
-    if request
-        .target
-        .as_ref()
-        .map(|target| target.after.elapsed.as_str())
-        != Some("PT48H")
+    if policy
+        .sources
+        .iter()
+        .any(|source| source.adapter != "breg" || source.requests.len() != 1)
     {
-        bail!("the professional-review checkpoint target must be PT48H elapsed time");
+        bail!("each source must use the breg adapter and declare one request entity");
     }
     Ok(policy)
+}
+
+pub(super) fn explain(project: &Path) -> Result<Value> {
+    let policy = load_and_check_policy(project)?;
+    check_source_descriptions(project)?;
+    crate::policy::explain(project, &policy)
+}
+
+pub(super) fn simulate(project: &Path, fixture: &Path) -> Result<Value> {
+    let policy = load_and_check_policy(project)?;
+    check_source_descriptions(project)?;
+    crate::policy::simulate(project, &policy, fixture)
+}
+
+pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
+    let project = fs::canonicalize(project).context("resolving the Casework authoring project")?;
+    let policy = load_and_check_policy(&project)?;
+    check_source_descriptions(&project)?;
+    crate::policy::check(&project, &policy)?;
+
+    let mut inputs = vec![(
+        "casework.yaml".to_owned(),
+        read_package_input(&project.join("casework.yaml"))?,
+    )];
+    for source in &policy.sources {
+        let path = project_input_path(&project, &source.description)?;
+        inputs.push((source.description.clone(), read_package_input(&path)?));
+    }
+    let manifest = PolicyPackageManifest::build(inputs.clone())
+        .context("building the Casework policy package identity")?;
+
+    if output.exists() {
+        bail!("policy package output already exists");
+    }
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).context("creating the policy package parent directory")?;
+    }
+    fs::create_dir(output).context("creating the new policy package directory")?;
+    let published = (|| -> Result<()> {
+        for (relative, bytes) in &inputs {
+            let target = output.join(relative);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).context("creating policy package directories")?;
+            }
+            fs::write(&target, bytes).context("writing a policy package input")?;
+        }
+        let mut manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+        manifest_bytes.push(b'\n');
+        fs::write(output.join(POLICY_PACKAGE_MANIFEST_FILE), manifest_bytes)
+            .context("writing the policy package manifest")?;
+        let loaded = CaseworkProject::load(output.join("casework.yaml"))
+            .context("loading the staged Casework policy")?;
+        let verified = verify_policy_package(&output.join("casework.yaml"), &loaded)
+            .context("verifying the staged Casework policy package")?;
+        if verified.as_deref() != Some(manifest.policy_digest.as_str()) {
+            bail!("staged Casework policy package identity changed");
+        }
+        Ok(())
+    })();
+    if let Err(error) = published {
+        let _ = fs::remove_dir_all(output);
+        return Err(error);
+    }
+
+    Ok(json!({
+        "ok": true,
+        "command": "package",
+        "project": project,
+        "output": output,
+        "policyDigest": manifest.policy_digest,
+        "files": manifest.files,
+        "operatorConfigurationIncluded": false,
+        "secretsIncluded": false,
+        "networkAccess": false,
+        "databaseAccess": false,
+    }))
+}
+
+fn read_package_input(path: &Path) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("reading package input metadata {}", path.display()))?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > 1024 * 1024
+    {
+        bail!("package input must be a regular file of at most one MiB");
+    }
+    fs::read(path).with_context(|| format!("reading package input {}", path.display()))
+}
+
+fn project_input_path(project: &Path, relative: &str) -> Result<PathBuf> {
+    let path = Path::new(relative);
+    if relative.is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("source description path must be a normalized path inside the project");
+    }
+    let project = fs::canonicalize(project).context("resolving the Casework project")?;
+    let candidate = fs::canonicalize(project.join(path))
+        .context("resolving the imported source description")?;
+    if !candidate.starts_with(&project) {
+        bail!("source description path leaves the Casework project");
+    }
+    Ok(candidate)
 }
 
 fn validate_fixture(fixture: &Value, effective: &Value, policy: &CaseworkProject) -> Result<()> {
@@ -627,33 +755,11 @@ fn load_runtime(
 fn check_source_descriptions(project: &Path) -> Result<()> {
     let policy = load_and_check_policy(project)?;
     for source in policy.sources {
-        let path = project.join(&source.description);
-        let description: Value = serde_json::from_slice(
-            &fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
-        )
-        .with_context(|| format!("parsing {}", path.display()))?;
-        let request = &description["request"];
-        let stages = request["stages"].as_array();
-        if description["apiVersion"]
-            != "registry.registrystack.org/casework-source-description/v1alpha1"
-            || description["kind"] != "BRegCaseworkSourceDescription"
-            || description["sourceId"] != source.id
-            || description["authority"] != "none"
-            || request["requestEntity"] != source.requests[0].entity
-            || request["reviewMode"] != "staged"
-            || stages.is_none_or(|stages| {
-                stages.len() != 1 || stages[0]["approvals"].as_u64() != Some(1)
-            })
-            || request.pointer("/application/mode") != Some(&Value::String("manual".into()))
-            || request["contractFingerprint"]
-                .as_str()
-                .is_none_or(str::is_empty)
-            || description["sourceRevision"]
-                .as_str()
-                .is_none_or(str::is_empty)
-        {
-            bail!("source description {} is not the supported single-stage, one-approval, manual-application BReg contract bound to this source; repeat source add", path.display());
-        }
+        let path = project_input_path(project, &source.description)?;
+        let bytes = read_package_input(&path)?;
+        validate_breg_source_description(&source, &bytes).map_err(|_| {
+            anyhow::anyhow!("source description {} does not match the exact BReg adapter contract bound to this source; repeat source add", path.display())
+        })?;
     }
     Ok(())
 }
@@ -818,6 +924,64 @@ mod tests {
     }
 
     #[test]
+    fn package_stages_only_verified_policy_inputs_and_refuses_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        let output = root.path().join("deployment/policy");
+        init(&project, "standalone-decision").unwrap();
+
+        let report = package(&project, &output).unwrap();
+        assert_eq!(report["command"], "package");
+        assert!(report["policyDigest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+        assert_eq!(report["operatorConfigurationIncluded"], false);
+        assert_eq!(report["secretsIncluded"], false);
+        assert!(output.join("casework.yaml").is_file());
+        assert!(output.join(POLICY_PACKAGE_MANIFEST_FILE).is_file());
+        assert!(!output.join("operator.example.yaml").exists());
+        assert!(!output.join("fixtures").exists());
+        assert!(package(&project, &output).is_err());
+
+        fs::write(output.join("undeclared-input.json"), "{}\n").unwrap();
+        let policy = CaseworkProject::load(output.join("casework.yaml")).unwrap();
+        assert!(verify_policy_package(&output.join("casework.yaml"), &policy).is_err());
+    }
+
+    #[test]
+    fn package_pins_the_exact_strictly_decoded_source_description() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("authored");
+        let output = root.path().join("package");
+        fs::create_dir_all(project.join("sources")).unwrap();
+        fs::write(project.join("casework.yaml"), CASEWORK_YAML).unwrap();
+        fs::write(
+            project.join("sources/professional-register.json"),
+            BREG_SOURCE_DESCRIPTION,
+        )
+        .unwrap();
+
+        package(&project, &output).unwrap();
+        assert!(output.join("sources/professional-register.json").is_file());
+        let policy = CaseworkProject::load(output.join("casework.yaml")).unwrap();
+        assert!(
+            verify_policy_package(&output.join("casework.yaml"), &policy)
+                .unwrap()
+                .is_some()
+        );
+        fs::write(output.join("sources/professional-register.json"), "{}\n").unwrap();
+        assert!(verify_policy_package(&output.join("casework.yaml"), &policy).is_err());
+    }
+
+    #[test]
+    fn source_description_paths_cannot_leave_the_project() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(project_input_path(root.path(), "../source.json").is_err());
+        assert!(project_input_path(root.path(), "/tmp/source.json").is_err());
+    }
+
+    #[test]
     fn generated_operator_config_loads_through_runtime_contract() {
         assert_eq!(
             OPERATOR_YAML,
@@ -827,6 +991,12 @@ mod tests {
         );
         let directory = tempfile::tempdir().unwrap();
         fs::write(directory.path().join("casework.yaml"), CASEWORK_YAML).unwrap();
+        fs::create_dir(directory.path().join("sources")).unwrap();
+        fs::write(
+            directory.path().join("sources/professional-register.json"),
+            BREG_SOURCE_DESCRIPTION,
+        )
+        .unwrap();
         let operator = directory.path().join("operator.yaml");
         fs::write(&operator, OPERATOR_YAML).unwrap();
         let config = RuntimeConfig::load(operator).unwrap();

@@ -3528,6 +3528,7 @@ dependencies = [
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-httpsec",
  "registry-platform-httputil",
@@ -3538,6 +3539,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-postgres",
@@ -3602,11 +3604,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-casework-client-py"
+version = "0.29.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-casework-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "registry-casework-core"
 version = "0.29.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "chrono-tz",
  "jsonschema",
  "registry-platform-canonical-json",
  "serde",
@@ -3622,6 +3639,7 @@ name = "registry-caseworkctl"
 version = "0.29.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "registry-casework",
  "registry-casework-core",

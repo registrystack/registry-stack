@@ -10,10 +10,12 @@ use registry_casework_client::{
     CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError, CaseworkProblemCode,
 };
 use registry_casework_core::{
-    BootstrapDirectoryRequest, CaseworkAction, CaseworkProject, HostedCancelRequest,
-    HostedCreateRequest, HostedDecisionRequest, HostedHistoryKind, HostedNoteRequest,
-    HostedPageQuery, HostedTerminalQuery, HostedTerminalState, InboxView, IssuerPrincipal,
-    ListWorkItemsQuery, SourceAdapter, WorkItem,
+    AbsenceInput, AssignmentRequest, BootstrapDirectoryRequest, CaseloadApplyRequest,
+    CaseloadItemOutcome, CaseloadItemSelection, CaseloadMoveRequest, CaseloadPreviewQuery,
+    CaseworkAction, CaseworkProject, DelegateRequest, HolidaySetDocument, HolidaySetRevisionInput,
+    HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest, HostedHistoryKind,
+    HostedNoteRequest, HostedPageQuery, HostedTerminalQuery, HostedTerminalState, InboxView,
+    IssuerPrincipal, ListWorkItemsQuery, SourceAdapter, WorkItem,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::{client::BearerToken, FetchUrlPolicy};
@@ -74,10 +76,16 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
     let migration = PostgresStore::connect_migration(&database, &resolver).unwrap();
     migration.migrate().await.unwrap();
     let store = PostgresStore::connect_runtime(&database, &resolver).unwrap();
-    let project: CaseworkProject = serde_norway::from_str(include_str!(
+    let mut project: CaseworkProject = serde_norway::from_str(include_str!(
         "../../../products/casework/examples/standalone-decision/casework.yaml"
     ))
     .unwrap();
+    project.calendars.push(serde_json::from_value(json!({
+        "id":"office", "timezone":"Asia/Bangkok", "workingWeekdays":["monday","tuesday","wednesday","thursday","friday"], "holidaySet":"office-holidays"
+    })).unwrap());
+    project.clocks.push(serde_json::from_value(json!({
+        "scope":"subject", "id":"request-budget", "anchor":"firstSubmittedAt", "completeOn":"reviewCompleted", "after":{"elapsed":"PT48H"}, "pauseWhile":["awaitingApplicant"]
+    })).unwrap());
     project.check().unwrap();
     assert!(project.sources.is_empty());
     let queue = project.hosted_kinds[0].queue.clone();
@@ -126,10 +134,16 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
             &BootstrapDirectoryRequest {
                 team_id: "deciding-team".into(),
                 queue_id: queue.clone(),
-                staff: vec![IssuerPrincipal {
-                    issuer: idp.issuer(),
-                    subject: "staff".into(),
-                }],
+                staff: vec![
+                    IssuerPrincipal {
+                        issuer: idp.issuer(),
+                        subject: "staff".into(),
+                    },
+                    IssuerPrincipal {
+                        issuer: idp.issuer(),
+                        subject: "cover".into(),
+                    },
+                ],
                 supervisors: vec![IssuerPrincipal {
                     issuer: idp.issuer(),
                     subject: "supervisor".into(),
@@ -138,6 +152,251 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
         )
         .await
         .unwrap();
+
+    // Exercise the directory contract through the maintained client and real
+    // HTTP service, including typed validation and replay after a revision change.
+    let directory_revision = client
+        .directory(CaseworkAuth::new(&admin, "administrator"))
+        .await
+        .unwrap()
+        .value
+        .revision;
+    let mut absence_input = AbsenceInput {
+        person: IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "staff".into(),
+        },
+        cover: IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "cover".into(),
+        },
+        from: "2020-01-01T00:00:00Z".parse().unwrap(),
+        until: "2020-01-02T00:00:00Z".parse().unwrap(),
+    };
+    let absence = client
+        .create_absence(
+            CaseworkAuth::new(&admin, "administrator"),
+            directory_revision,
+            "absence-create",
+            &absence_input,
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        client
+            .create_absence(
+                CaseworkAuth::new(&admin, "administrator"),
+                directory_revision,
+                "absence-create",
+                &absence_input
+            )
+            .await
+            .unwrap()
+            .value,
+        absence
+    );
+    assert_eq!(
+        client
+            .absences(CaseworkAuth::new(&admin, "administrator"))
+            .await
+            .unwrap()
+            .value,
+        vec![absence.clone()]
+    );
+    let mut invalid_absence = absence_input.clone();
+    invalid_absence.until = invalid_absence.from;
+    assert!(matches!(
+        client
+            .create_absence(
+                CaseworkAuth::new(&admin, "administrator"),
+                absence.revision,
+                "absence-invalid-period",
+                &invalid_absence
+            )
+            .await,
+        Err(CaseworkClientError::Problem {
+            status: 422,
+            code: CaseworkProblemCode::AbsenceInvalidPeriod,
+            ..
+        })
+    ));
+    absence_input.until = "2020-01-03T00:00:00Z".parse().unwrap();
+    let updated = client
+        .update_absence(
+            CaseworkAuth::new(&admin, "administrator"),
+            absence.absence_id,
+            absence.revision,
+            "absence-update",
+            &absence_input,
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(updated.until, absence_input.until);
+    assert!(updated.revision > absence.revision);
+    client
+        .delete_absence(
+            CaseworkAuth::new(&admin, "administrator"),
+            updated.absence_id,
+            updated.revision,
+            "absence-delete",
+        )
+        .await
+        .unwrap();
+    assert!(client
+        .absences(CaseworkAuth::new(&admin, "administrator"))
+        .await
+        .unwrap()
+        .value
+        .is_empty());
+
+    let holiday = HolidaySetRevisionInput {
+        document: HolidaySetDocument {
+            holiday_set: "office-holidays".into(),
+            revision: 7,
+            dates: vec!["2026-09-07".into()],
+        },
+    };
+    let stored = client
+        .create_holiday_revision(
+            CaseworkAuth::new(&admin, "administrator"),
+            "holiday-revision-seven",
+            &holiday,
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(stored, holiday.document);
+    assert_eq!(
+        client
+            .create_holiday_revision(
+                CaseworkAuth::new(&admin, "administrator"),
+                "holiday-revision-seven",
+                &holiday
+            )
+            .await
+            .unwrap()
+            .value,
+        stored
+    );
+    assert_eq!(
+        client
+            .holiday_revision(
+                CaseworkAuth::new(&admin, "administrator"),
+                "office-holidays",
+                7
+            )
+            .await
+            .unwrap()
+            .value,
+        stored
+    );
+    assert!(matches!(
+        client
+            .holiday_revision(CaseworkAuth::new(&staff, "staff"), "office-holidays", 7)
+            .await,
+        Err(CaseworkClientError::Problem { status: 403, .. })
+    ));
+    let mut changed_holiday = holiday.clone();
+    changed_holiday.document.dates.push("2026-09-08".into());
+    assert!(matches!(
+        client
+            .create_holiday_revision(
+                CaseworkAuth::new(&admin, "administrator"),
+                "holiday-revision-seven",
+                &changed_holiday
+            )
+            .await,
+        Err(CaseworkClientError::Problem { status: 409, .. })
+    ));
+    assert_eq!(
+        client
+            .holiday_revision(
+                CaseworkAuth::new(&admin, "administrator"),
+                "office-holidays",
+                7
+            )
+            .await
+            .unwrap()
+            .value,
+        stored
+    );
+
+    let staff_description = client
+        .description(CaseworkAuth::new(&staff, "staff"))
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(staff_description.clocks.len(), 1);
+    assert_eq!(staff_description.clocks[0].id(), "request-budget");
+    assert_eq!(
+        staff_description.calendars[0].holiday_set,
+        "office-holidays"
+    );
+    let requester_description = client
+        .description(CaseworkAuth::new(&requester, "requester"))
+        .await
+        .unwrap()
+        .value;
+    assert!(requester_description.sources.is_empty());
+    assert!(requester_description.clocks.is_empty());
+    assert!(requester_description.calendars.is_empty());
+    let before_team_update = client
+        .directory(CaseworkAuth::new(&admin, "administrator"))
+        .await
+        .unwrap()
+        .value;
+    let team_update = registry_casework_core::DirectoryTeamUpdateRequest {
+        staff: vec![IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "cover".into(),
+        }],
+        supervisors: vec![IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "supervisor".into(),
+        }],
+        served_queues: Vec::new(),
+    };
+    let directory = client
+        .update_directory_team(
+            CaseworkAuth::new(&admin, "administrator"),
+            "backup-team",
+            before_team_update.revision,
+            "create-backup-team",
+            &team_update,
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(directory.revision > before_team_update.revision);
+    assert!(directory.teams.iter().any(|team| team.id == "backup-team"));
+    assert_eq!(
+        client
+            .update_directory_team(
+                CaseworkAuth::new(&admin, "administrator"),
+                "backup-team",
+                before_team_update.revision,
+                "create-backup-team",
+                &team_update
+            )
+            .await
+            .unwrap()
+            .value,
+        directory
+    );
+    assert!(matches!(
+        client
+            .update_directory_team(
+                CaseworkAuth::new(&supervisor, "supervisor"),
+                "backup-team",
+                directory.revision,
+                "supervisor-cannot-administer",
+                &team_update
+            )
+            .await,
+        Err(CaseworkClientError::Problem { status: 403, .. })
+    ));
 
     let mut created = Vec::new();
     for number in 0..10 {
@@ -221,6 +480,111 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
             ..
         })
     ));
+    let assigned = client
+        .assign_work_item(
+            CaseworkAuth::new(&supervisor, "supervisor"),
+            created[1].item_id,
+            created[1].revision,
+            "assign-staff",
+            &AssignmentRequest {
+                assignee: IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "staff".into(),
+                },
+                reason: Some("Route to available reviewer".into()),
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .item;
+    let delegated = client
+        .delegate_work_item(
+            CaseworkAuth::new(&staff, "staff"),
+            assigned.item_id,
+            assigned.revision,
+            "delegate-cover",
+            &DelegateRequest {
+                delegate: IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "cover".into(),
+                },
+                reason: Some("Colleague takes over review".into()),
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .item;
+    let movement = CaseloadMoveRequest {
+        from: IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "cover".into(),
+        },
+        to: IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "staff".into(),
+        },
+        queue_id: Some(queue.clone()),
+        reason: "Reviewer returned".into(),
+    };
+    let preview = client
+        .preview_caseload_move(
+            CaseworkAuth::new(&supervisor, "supervisor"),
+            &movement,
+            &CaseloadPreviewQuery::default(),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(preview.items.len(), 1);
+    assert_eq!(preview.items[0].item_id, delegated.item_id);
+    assert_eq!(preview.items[0].revision, delegated.revision);
+    let selection = CaseloadApplyRequest {
+        movement,
+        items: vec![CaseloadItemSelection {
+            item_id: preview.items[0].item_id,
+            expected_revision: preview.items[0].revision,
+        }],
+    };
+    let moved = client
+        .apply_caseload_move(
+            CaseworkAuth::new(&supervisor, "supervisor"),
+            "move-reviewed-caseload",
+            &selection,
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(moved.len(), 1);
+    assert_eq!(moved[0].result, CaseloadItemOutcome::Moved);
+    assert_eq!(moved[0].item_id, delegated.item_id);
+    assert_eq!(
+        client
+            .apply_caseload_move(
+                CaseworkAuth::new(&supervisor, "supervisor"),
+                "move-reviewed-caseload",
+                &selection
+            )
+            .await
+            .unwrap()
+            .value,
+        moved
+    );
+    let held = client
+        .get_hosted_work_item(CaseworkAuth::new(&staff, "staff"), delegated.item_id)
+        .await
+        .unwrap()
+        .value;
+    client
+        .release_hosted_work_item(
+            CaseworkAuth::new(&staff, "staff"),
+            &action(&held, "release"),
+            "release-after-caseload-move",
+        )
+        .await
+        .unwrap();
+
     let inbox = client
         .list_hosted_work_items(
             CaseworkAuth::new(&staff, "staff"),

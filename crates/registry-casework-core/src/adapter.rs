@@ -1,11 +1,12 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
     ActorContext, CallerSubjectView, EphemeralCredential, OccurrenceKind, OccurrenceState,
-    OperationName, SourceBinding, SourceReceipt, SubjectRef,
+    OperationName, RoutingContext, RoutingSourceMetadata, SourceBinding, SourceReceipt, SubjectRef,
 };
 
 /// A verified event is only an invalidation and revision hint.
@@ -40,6 +41,20 @@ pub struct AuthoritativeObservation {
     pub occurrence_kind: OccurrenceKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
+    /// Current-proposal submission time supplied by the source. This is not
+    /// synthesized from Casework observation time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submitted_at: Option<DateTime<Utc>>,
+    /// Entry time of the current pending stage, when the source has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_entered_at: Option<DateTime<Utc>>,
+    /// Request-wide timing retained by the source across corrections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_timing: Option<crate::ReviewTiming>,
+    /// Ephemeral source values used only to choose a queue. They are never
+    /// serialized into stored observations or public work-item projections.
+    #[serde(skip)]
+    pub routing_context: Option<RoutingContext>,
     pub state: OccurrenceState,
     #[serde(default)]
     pub remaining_actions: Vec<OperationName>,
@@ -181,6 +196,12 @@ pub enum SourceAdapterError {
 pub trait SourceAdapter: Send + Sync {
     fn source_id(&self) -> &str;
     fn binding_generation(&self) -> &str;
+
+    /// Imported source metadata used to validate and evaluate routing policy.
+    /// Implementations must not treat this descriptive metadata as authority.
+    fn routing_metadata(&self) -> Option<&RoutingSourceMetadata> {
+        None
+    }
 
     async fn verify_transition(
         &self,

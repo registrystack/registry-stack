@@ -31,6 +31,20 @@ export declare class CaseworkClient {
   holdings(token: string, profile: string, sourceProfile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   directory(token: string, profile: string): Promise<CaseworkOutcome>
   bootstrapDirectory(token: string, profile: string, expectedRevision: number, idempotencyKey: string, bootstrap: any): Promise<CaseworkOutcome>
+  absences(token: string, profile: string): Promise<CaseworkOutcome>
+  createAbsence(token: string, profile: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
+  updateAbsence(token: string, profile: string, absenceId: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
+  deleteAbsence(token: string, profile: string, absenceId: string, expectedRevision: number, idempotencyKey: string): Promise<CaseworkOutcome>
+  assignWorkItem(token: string, profile: string, itemId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  delegateWorkItem(token: string, profile: string, itemId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  previewCaseloadMove(token: string, profile: string, movement: any, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  updateDirectoryTeam(token: string, profile: string, teamId: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
+  workItemClocks(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
+  holidayRevision(token: string, profile: string, holidaySet: string, revision: number): Promise<CaseworkOutcome>
+  createHolidayRevision(token: string, profile: string, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
+  previewClockRecompute(token: string, profile: string, request: any): Promise<CaseworkOutcome>
+  applyClockRecompute(token: string, profile: string, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
 }
 
 export interface CaseworkClientConfig {

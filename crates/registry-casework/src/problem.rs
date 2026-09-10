@@ -4,17 +4,19 @@
 
 use axum::http::StatusCode;
 use registry_casework_core::{
-    AUTHENTICATION_REFUSED_PROBLEM, CASEWORK_PROBLEM_TYPE_BASE, CURSOR_EXPIRED_PROBLEM,
-    CURSOR_INVALID_PROBLEM, IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM,
-    OPERATION_NOT_AUTHORIZED_PROBLEM, PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM,
-    PROFILE_NOT_AUTHORIZED_PROBLEM, PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM,
-    REQUEST_INVALID_PROBLEM, REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
-    REQUEST_UNPROCESSABLE_PROBLEM, REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM,
-    SERVICE_UNAVAILABLE_PROBLEM, SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM,
-    SOURCE_SIGNATURE_INVALID_PROBLEM, WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
-    WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM, WORK_ITEM_NOT_VISIBLE_PROBLEM,
-    WORK_ITEM_PROPOSAL_CHANGED_PROBLEM, WORK_ITEM_RECOVERY_PENDING_PROBLEM,
-    WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM, WORK_ITEM_SUPERSEDED_PROBLEM,
+    ABSENCE_COVER_CYCLE_PROBLEM, ABSENCE_INVALID_PERIOD_PROBLEM, ABSENCE_OVERLAP_PROBLEM,
+    ABSENCE_SELF_COVER_PROBLEM, AUTHENTICATION_REFUSED_PROBLEM, CASEWORK_PROBLEM_TYPE_BASE,
+    CLOCK_RECOMPUTE_PREVIEW_EXPIRED_PROBLEM, CURSOR_EXPIRED_PROBLEM, CURSOR_INVALID_PROBLEM,
+    IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM, OPERATION_NOT_AUTHORIZED_PROBLEM,
+    PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
+    PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
+    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM, REQUEST_UNPROCESSABLE_PROBLEM,
+    REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM, SERVICE_UNAVAILABLE_PROBLEM,
+    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_SIGNATURE_INVALID_PROBLEM,
+    WORK_ITEM_ALREADY_CLAIMED_PROBLEM, WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM,
+    WORK_ITEM_NOT_VISIBLE_PROBLEM, WORK_ITEM_PROPOSAL_CHANGED_PROBLEM,
+    WORK_ITEM_RECOVERY_PENDING_PROBLEM, WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM,
+    WORK_ITEM_SUPERSEDED_PROBLEM,
 };
 
 /// Resolve a Casework problem code under its registered product prefix.
@@ -26,7 +28,12 @@ pub fn type_uri(code: &str) -> String {
 /// One problem the Casework runtime can emit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ProblemCode {
+    AbsenceCoverCycle,
+    AbsenceInvalidPeriod,
+    AbsenceOverlap,
+    AbsenceSelfCover,
     AuthenticationRefused,
+    ClockRecomputePreviewExpired,
     CursorExpired,
     CursorInvalid,
     IdempotencyExpired,
@@ -60,7 +67,12 @@ pub enum ProblemCode {
 impl ProblemCode {
     /// Every registered code in code-string order.
     pub const ALL: &'static [Self] = &[
+        Self::AbsenceCoverCycle,
+        Self::AbsenceInvalidPeriod,
+        Self::AbsenceOverlap,
+        Self::AbsenceSelfCover,
         Self::AuthenticationRefused,
+        Self::ClockRecomputePreviewExpired,
         Self::CursorExpired,
         Self::CursorInvalid,
         Self::IdempotencyExpired,
@@ -94,7 +106,12 @@ impl ProblemCode {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
+            Self::AbsenceCoverCycle => ABSENCE_COVER_CYCLE_PROBLEM,
+            Self::AbsenceInvalidPeriod => ABSENCE_INVALID_PERIOD_PROBLEM,
+            Self::AbsenceOverlap => ABSENCE_OVERLAP_PROBLEM,
+            Self::AbsenceSelfCover => ABSENCE_SELF_COVER_PROBLEM,
             Self::AuthenticationRefused => AUTHENTICATION_REFUSED_PROBLEM,
+            Self::ClockRecomputePreviewExpired => CLOCK_RECOMPUTE_PREVIEW_EXPIRED_PROBLEM,
             Self::CursorExpired => CURSOR_EXPIRED_PROBLEM,
             Self::CursorInvalid => CURSOR_INVALID_PROBLEM,
             Self::IdempotencyExpired => IDEMPOTENCY_EXPIRED_PROBLEM,
@@ -129,7 +146,12 @@ impl ProblemCode {
     #[must_use]
     pub const fn status(self) -> StatusCode {
         match self {
+            Self::AbsenceCoverCycle
+            | Self::AbsenceInvalidPeriod
+            | Self::AbsenceOverlap
+            | Self::AbsenceSelfCover => StatusCode::UNPROCESSABLE_ENTITY,
             Self::AuthenticationRefused => StatusCode::UNAUTHORIZED,
+            Self::ClockRecomputePreviewExpired => StatusCode::GONE,
             Self::CursorExpired => StatusCode::GONE,
             Self::CursorInvalid => StatusCode::BAD_REQUEST,
             Self::IdempotencyExpired => StatusCode::GONE,
@@ -164,7 +186,12 @@ impl ProblemCode {
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
+            Self::AbsenceCoverCycle => "Absence cover cycle",
+            Self::AbsenceInvalidPeriod => "Invalid absence period",
+            Self::AbsenceOverlap => "Absence period overlaps",
+            Self::AbsenceSelfCover => "Absence self-cover not allowed",
             Self::AuthenticationRefused => "Authentication refused",
+            Self::ClockRecomputePreviewExpired => "Clock recompute preview expired",
             Self::CursorExpired => "Cursor expired",
             Self::CursorInvalid => "Cursor invalid",
             Self::IdempotencyExpired => "Idempotency window expired",
@@ -199,8 +226,17 @@ impl ProblemCode {
     #[must_use]
     pub const fn detail(self) -> &'static str {
         match self {
+            Self::AbsenceCoverCycle => {
+                "Choose cover assignments that do not return to an earlier person during a shared period."
+            }
+            Self::AbsenceInvalidPeriod => "Set until later than from.",
+            Self::AbsenceOverlap => "Adjust the period so this person has no overlapping absence.",
+            Self::AbsenceSelfCover => "Choose a different staff member as cover.",
             Self::AuthenticationRefused => {
                 "The bearer credential is missing, invalid, or expired. Sign in again."
+            }
+            Self::ClockRecomputePreviewExpired => {
+                "Create a new recompute preview and review it before applying."
             }
             Self::CursorExpired => {
                 "This cursor has expired. Start again without a cursor and deduplicate entries by eventId."
@@ -209,18 +245,14 @@ impl ProblemCode {
             Self::IdempotencyExpired => {
                 "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
             }
-            Self::IdempotencyKeyReused => {
-                "This idempotency key was used for a different request."
-            }
+            Self::IdempotencyKeyReused => "This idempotency key was used for a different request.",
             Self::OperationNotAuthorized => {
                 "Your current Casework authority does not allow this operation."
             }
             Self::PreconditionFailed => {
                 "The item or directory changed since you loaded it. Reload and try again."
             }
-            Self::PreconditionRequired => {
-                "This mutation requires the revision that you loaded."
-            }
+            Self::PreconditionRequired => "This mutation requires the revision that you loaded.",
             Self::ProfileNotAuthorized => {
                 "The selected Casework profile does not authorize this request."
             }
@@ -229,9 +261,7 @@ impl ProblemCode {
             Self::RequestInvalid => "The Casework request is invalid.",
             Self::RequestMethodNotAllowed => "This route does not accept that HTTP method.",
             Self::RequestNotFound => "The requested Casework route does not exist.",
-            Self::RequestUnprocessable => {
-                "The request body does not match the Casework contract."
-            }
+            Self::RequestUnprocessable => "The request body does not match the Casework contract.",
             Self::RequestUnsupportedMediaType => {
                 "Send a JSON request body with Content-Type application/json."
             }
@@ -477,6 +507,165 @@ const DIRECTORY: &[ProblemCode] = &[
     ProblemCode::ServiceUnavailable,
     ProblemCode::RuntimeFailure,
 ];
+const ABSENCE_CREATE: &[ProblemCode] = &[
+    ProblemCode::AbsenceCoverCycle,
+    ProblemCode::AbsenceInvalidPeriod,
+    ProblemCode::AbsenceOverlap,
+    ProblemCode::AbsenceSelfCover,
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::PreconditionFailed,
+    ProblemCode::PreconditionRequired,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+const ABSENCE_UPDATE: &[ProblemCode] = &[
+    ProblemCode::AbsenceCoverCycle,
+    ProblemCode::AbsenceInvalidPeriod,
+    ProblemCode::AbsenceOverlap,
+    ProblemCode::AbsenceSelfCover,
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::PreconditionFailed,
+    ProblemCode::PreconditionRequired,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+const ABSENCE_DELETE: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::PreconditionFailed,
+    ProblemCode::PreconditionRequired,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+const ASSIGNMENT_MUTATION: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::PreconditionFailed,
+    ProblemCode::PreconditionRequired,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::WorkItemRecoveryPending,
+    ProblemCode::WorkItemSourceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+const CASELOAD_PREVIEW: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::CursorExpired,
+    ProblemCode::CursorInvalid,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::WorkItemSourceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+const CASELOAD_APPLY: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::WorkItemSourceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+const CLOCK_ITEM_READ: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::WorkItemProposalChanged,
+    ProblemCode::WorkItemSourceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+const HOLIDAY_CREATE: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::PreconditionFailed,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+const HOLIDAY_READ: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+const CLOCK_RECOMPUTE_PREVIEW: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+const CLOCK_RECOMPUTE_APPLY: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ClockRecomputePreviewExpired,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::PreconditionFailed,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
 const BOOTSTRAP: &[ProblemCode] = &[
     ProblemCode::AuthenticationRefused,
     ProblemCode::ProfileNotAuthorized,
@@ -556,10 +745,109 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         problems: DIRECTORY,
     },
     OperationContract {
+        method: "GET",
+        path: "/v1/directory/absences",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: false,
+        accepts_json: false,
+        problems: DIRECTORY,
+    },
+    OperationContract {
+        method: "POST",
+        path: "/v1/directory/absences",
+        success_statuses: &[201],
+        extracts_path: false,
+        extracts_query: false,
+        accepts_json: true,
+        problems: ABSENCE_CREATE,
+    },
+    OperationContract {
+        method: "DELETE",
+        path: "/v1/directory/absences/{absence_id}",
+        success_statuses: &[204],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: false,
+        problems: ABSENCE_DELETE,
+    },
+    OperationContract {
+        method: "PUT",
+        path: "/v1/directory/absences/{absence_id}",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: true,
+        problems: ABSENCE_UPDATE,
+    },
+    OperationContract {
         method: "POST",
         path: "/v1/directory/bootstrap",
         success_statuses: &[200],
         extracts_path: false,
+        extracts_query: false,
+        accepts_json: true,
+        problems: BOOTSTRAP,
+    },
+    OperationContract {
+        method: "POST",
+        path: "/v1/directory/caseload/apply",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: false,
+        accepts_json: true,
+        problems: CASELOAD_APPLY,
+    },
+    OperationContract {
+        method: "POST",
+        path: "/v1/directory/caseload/preview",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: true,
+        accepts_json: true,
+        problems: CASELOAD_PREVIEW,
+    },
+    OperationContract {
+        method: "POST",
+        path: "/v1/directory/clocks/recompute/apply",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: false,
+        accepts_json: true,
+        problems: CLOCK_RECOMPUTE_APPLY,
+    },
+    OperationContract {
+        method: "POST",
+        path: "/v1/directory/clocks/recompute/preview",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: false,
+        accepts_json: true,
+        problems: CLOCK_RECOMPUTE_PREVIEW,
+    },
+    OperationContract {
+        method: "POST",
+        path: "/v1/directory/holidays",
+        success_statuses: &[201],
+        extracts_path: false,
+        extracts_query: false,
+        accepts_json: true,
+        problems: HOLIDAY_CREATE,
+    },
+    OperationContract {
+        method: "GET",
+        path: "/v1/directory/holidays/{id}/revisions/{revision}",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: false,
+        problems: HOLIDAY_READ,
+    },
+    OperationContract {
+        method: "PUT",
+        path: "/v1/directory/teams/{team_id}",
+        success_statuses: &[200],
+        extracts_path: true,
         extracts_query: false,
         accepts_json: true,
         problems: BOOTSTRAP,
@@ -665,6 +953,15 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
     },
     OperationContract {
         method: "POST",
+        path: "/v1/work-items/{item_id}/assign",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: true,
+        problems: ASSIGNMENT_MUTATION,
+    },
+    OperationContract {
+        method: "POST",
         path: "/v1/work-items/{item_id}/attempts/recover",
         success_statuses: &[200],
         extracts_path: true,
@@ -691,6 +988,15 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         problems: CLAIM,
     },
     OperationContract {
+        method: "GET",
+        path: "/v1/work-items/{item_id}/clocks",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: false,
+        problems: CLOCK_ITEM_READ,
+    },
+    OperationContract {
         method: "POST",
         path: "/v1/work-items/{item_id}/decisions",
         success_statuses: &[200],
@@ -698,6 +1004,15 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_query: false,
         accepts_json: true,
         problems: DECISION,
+    },
+    OperationContract {
+        method: "POST",
+        path: "/v1/work-items/{item_id}/delegate",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: true,
+        problems: ASSIGNMENT_MUTATION,
     },
     OperationContract {
         method: "POST",

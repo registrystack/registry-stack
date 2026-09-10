@@ -44,6 +44,18 @@ void client.hostedWorkItemHistory(token, profile, item.itemId, { limit: 25 })
 void client.hostedAccountabilityRecord(token, 'supervisor', '00000000-0000-0000-0000-000000000000')
 void client.decideHostedWorkItem(token, profile, item.actions[0], 'decide-42', hostedDecision)
 
+const officer = { issuer: 'https://idp.example', subject: 'officer' }
+const cover = { issuer: 'https://idp.example', subject: 'cover' }
+void client.createAbsence(token, 'administrator', 1, 'absence-1', {
+  person: officer, cover, from: '2026-09-14T00:00:00Z', until: '2026-09-19T00:00:00Z',
+})
+void client.assignWorkItem(token, 'supervisor', item.itemId, item.revision, 'assign-1', { assignee: officer }, sourceProfile)
+const movement = { from: officer, to: cover, reason: 'Cover the absent officer' }
+void client.previewCaseloadMove(token, 'supervisor', movement, { limit: 25 }, sourceProfile)
+void client.applyCaseloadMove(token, 'supervisor', 'move-1', {
+  movement, items: [{ itemId: item.itemId, expectedRevision: item.revision }],
+}, sourceProfile)
+
 if (item.occurrenceKind === 'hosted') {
   const requesterReference: string | undefined = item.hosted?.requesterReference
   void requesterReference
@@ -60,3 +72,11 @@ function recoveryReference(error: CaseworkClientError): string | undefined {
   return code === 'work-item.recovery-pending' ? error.originalAttemptId : undefined
 }
 void recoveryReference
+
+void client.workItemClocks(token, profile, sourceProfile, item.itemId)
+void client.holidayRevision(token, 'administrator', 'office', 7)
+void client.createHolidayRevision(token, 'administrator', 'holiday-7', { document: { holidaySet: 'office', revision: 7, dates: ['2026-09-07'] } })
+void client.previewClockRecompute(token, 'administrator', { clockId: 'review-deadline', holidaySet: 'office', holidayRevision: 7 })
+void client.applyClockRecompute(token, 'administrator', 'apply-preview', { previewId: item.itemId })
+
+void client.updateDirectoryTeam(token, 'administrator', 'review-team', 4, 'team-update', { staff: [officer], supervisors: [cover], servedQueues: ['review'] })

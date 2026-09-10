@@ -6,8 +6,10 @@ mod support;
 use std::sync::Arc;
 
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
-use registry_casework_breg::{BregAdapter, BregSourceConfig};
-use registry_casework_core::{EventRequest, SourceAdapter, SourceAdapterError};
+use registry_casework_breg::{BregAdapter, BregReviewStage, BregSourceConfig};
+use registry_casework_core::{
+    EventRequest, RoutingSourceMetadata, SourceAdapter, SourceAdapterError,
+};
 use registry_platform_crypto::breg_webhook::{sign_v1, SignatureFields};
 use serde_json::{json, Value};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
@@ -42,7 +44,16 @@ fn adapter_at(
             source_id: source_id.to_owned(),
             entity: "correction".to_owned(),
             route: "corrections".to_owned(),
-            stage: "review".to_owned(),
+            stages: vec![BregReviewStage {
+                id: "review".to_owned(),
+                approvals: 1,
+                exclude_submitter: false,
+                exclude_previous_reviewers: false,
+            }],
+            routing_metadata: RoutingSourceMetadata {
+                stages: vec!["review".into()],
+                fields: vec![],
+            },
             expected_registry_revision: REGISTRY_REVISION.to_owned(),
             binding_generation: "generation-1".to_owned(),
             reader_profile: "reader".to_owned(),
@@ -254,7 +265,16 @@ async fn route_target_and_route_segment_are_closed_before_intake() {
                 source_id: "source/a".into(),
                 entity: "correction".into(),
                 route: "corrections".into(),
-                stage: "review".into(),
+                stages: vec![BregReviewStage {
+                    id: "review".into(),
+                    approvals: 1,
+                    exclude_submitter: false,
+                    exclude_previous_reviewers: false,
+                }],
+                routing_metadata: RoutingSourceMetadata {
+                    stages: vec!["review".into()],
+                    fields: vec![],
+                },
                 expected_registry_revision: REGISTRY_REVISION.into(),
                 binding_generation: "generation-1".into(),
                 reader_profile: "reader".into(),

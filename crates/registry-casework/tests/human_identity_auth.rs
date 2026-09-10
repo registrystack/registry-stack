@@ -228,6 +228,8 @@ fn project() -> CaseworkProject {
         }],
         sources: Vec::new(),
         hosted_kinds: vec![standalone_decision_starter_kind()],
+        calendars: Vec::new(),
+        clocks: Vec::new(),
         inbox: InboxPolicy::default(),
     }
 }

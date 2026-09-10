@@ -27,7 +27,7 @@ readable form of the recipe.
 
 Python wheels use the release profile by default. `--python-profile ci` opts
 into the workspace's cheaper CI profile for installed-package tutorial checks;
-it still assembles all four bindings with the same platform and package layout.
+it still assembles all five bindings with the same platform and package layout.
 
 The checked-in `crates/registry-stack-client-node/package.json` is never
 modified: the optional platform dependencies bind in a staging copy, because
@@ -47,15 +47,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = ("discovery", "evidence", "relay", "breg")
-NODE_PRODUCTS = (*PRODUCTS, "casework")
-# `registry-breg-client-py` publishes nothing on its own, so its wheel keeps
-# the name that says so; the other three carry their product name.
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
+NODE_PRODUCTS = PRODUCTS
+# BReg and Casework publish no standalone wheel, so their internal wheels use
+# explicit native stems. The other product wheels retain their historical stems.
 WHEEL_STEMS = {
     "discovery": "registry_discovery_client",
     "evidence": "registry_evidence_client",
     "relay": "registry_relay_client",
     "breg": "registry_breg_client_native",
+    "casework": "registry_casework_client_native",
 }
 # The platform, wheel tag, and maturin flags each release matrix entry uses.
 PLATFORMS = {
