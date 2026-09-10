@@ -50,13 +50,15 @@ pub(crate) async fn install(
                  ('draft','submitted','approved','needs_changes','rejected','canceled','applied')),
              proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
              workflow_revision bigint NOT NULL CHECK (workflow_revision > 0),
+             review_completed_at timestamptz,
              detail_erased_at timestamptz,
              created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
              updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
              PRIMARY KEY (request_entity_id, request_id)
          );
          ALTER TABLE registry_internal.registry_request_state
-             ADD COLUMN IF NOT EXISTS detail_erased_at timestamptz;
+             ADD COLUMN IF NOT EXISTS detail_erased_at timestamptz,
+             ADD COLUMN IF NOT EXISTS review_completed_at timestamptz;
          ALTER TABLE registry_internal.registry_request_state
              DROP CONSTRAINT IF EXISTS registry_request_state_detail_erasure_terminal;
          ALTER TABLE registry_internal.registry_request_state
@@ -199,7 +201,54 @@ pub(crate) async fn install(
                      (entity_id, record_id, record_revision),
              FOREIGN KEY (request_entity_id, request_id)
                  REFERENCES registry_internal.registry_request_state
-         );"
+         );
+         UPDATE registry_internal.registry_request_state s
+            SET review_completed_at = CASE
+                WHEN s.state IN ('approved', 'applied') THEN COALESCE(
+                    (SELECT max(d.decided_at)
+                       FROM registry_internal.registry_request_decisions d
+                      WHERE d.request_entity_id = s.request_entity_id
+                        AND d.request_id = s.request_id
+                        AND d.proposal_version = s.proposal_version
+                        AND d.decision = 'approve'),
+                    (SELECT p.created_at
+                       FROM registry_internal.registry_request_proposals p
+                      WHERE p.request_entity_id = s.request_entity_id
+                        AND p.request_id = s.request_id
+                        AND p.proposal_version = s.proposal_version))
+                WHEN s.state = 'rejected' THEN
+                    (SELECT min(d.decided_at)
+                       FROM registry_internal.registry_request_decisions d
+                      WHERE d.request_entity_id = s.request_entity_id
+                        AND d.request_id = s.request_id
+                        AND d.decision = 'reject')
+                WHEN s.state = 'canceled' THEN COALESCE(
+                    (SELECT min(d.decided_at)
+                       FROM registry_internal.registry_request_decisions d
+                      WHERE d.request_entity_id = s.request_entity_id
+                        AND d.request_id = s.request_id
+                        AND d.decision = 'reject'),
+                    CASE WHEN NOT EXISTS (
+                        SELECT 1
+                          FROM registry_internal.registry_request_decisions d
+                         WHERE d.request_entity_id = s.request_entity_id
+                           AND d.request_id = s.request_id
+                           AND d.decision = 'approve'
+                    ) THEN
+                        (SELECT max(r.created_at)
+                           FROM registry_internal.registry_request_revision_links l
+                           JOIN registry_internal.registry_revisions r
+                             ON r.entity_id = l.entity_id
+                            AND r.record_id = l.record_id
+                            AND r.record_revision = l.record_revision
+                          WHERE l.request_entity_id = s.request_entity_id
+                            AND l.request_id = s.request_id
+                            AND l.link_kind = 'request_lifecycle')
+                    ELSE NULL END)
+                ELSE NULL
+            END
+          WHERE s.review_completed_at IS NULL
+            AND s.state IN ('approved', 'rejected', 'canceled', 'applied');"
     ).await.map_err(|_| MutationError::Unavailable)?;
     crate::attachment_store::install(client, runtime_role).await?;
     for (table, privileges) in REQUEST_TABLES {
@@ -216,7 +265,7 @@ pub(crate) async fn install(
     Ok(())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 #[allow(dead_code)]
 pub(crate) struct RequestWorkflowHeader {
     pub owner_reference: String,
@@ -224,6 +273,29 @@ pub(crate) struct RequestWorkflowHeader {
     pub proposal_version: i64,
     pub workflow_revision: i64,
     pub current_proposal_erased: bool,
+    pub applier_reference: Option<String>,
+}
+
+impl std::fmt::Debug for RequestWorkflowHeader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RequestWorkflowHeader")
+            .field("has_owner_reference", &!self.owner_reference.is_empty())
+            .field("state", &self.state)
+            .field("proposal_version", &self.proposal_version)
+            .field("workflow_revision", &self.workflow_revision)
+            .field("current_proposal_erased", &self.current_proposal_erased)
+            .field("has_applier_reference", &self.applier_reference.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RequestReviewTiming {
+    pub first_submitted_at: String,
+    pub paused_milliseconds: i64,
+    pub pause_started_at: Option<String>,
+    pub completed_at: Option<String>,
 }
 
 impl RequestWorkflowHeader {
@@ -232,6 +304,83 @@ impl RequestWorkflowHeader {
     pub(crate) fn is_terminal(&self) -> bool {
         matches!(self.state.as_str(), "rejected" | "canceled" | "applied")
     }
+}
+
+/// Loads the bounded, request-wide clock facts retained independently from
+/// proposal payload detail. Correction intervals are derived from durable
+/// decision and proposal rows and stop changing after the first completion.
+pub(crate) async fn load_review_timing(
+    transaction: &Transaction<'_>,
+    entity_id: &str,
+    record_id: Uuid,
+) -> Result<Option<RequestReviewTiming>, MutationError> {
+    let row = transaction
+        .query_one(
+            "WITH request_summary AS (
+                 SELECT review_completed_at
+                   FROM registry_internal.registry_request_state
+                  WHERE request_entity_id = $1 AND request_id = $2
+             ), first_submission AS (
+                 SELECT min(created_at) AS first_submitted_at
+                   FROM registry_internal.registry_request_proposals
+                  WHERE request_entity_id = $1 AND request_id = $2
+             ), correction_pauses AS (
+                 SELECT d.decided_at AS started_at,
+                        (SELECT min(p.created_at)
+                           FROM registry_internal.registry_request_proposals p
+                          WHERE p.request_entity_id = d.request_entity_id
+                            AND p.request_id = d.request_id
+                            AND p.proposal_version > d.proposal_version) AS resumed_at
+                   FROM registry_internal.registry_request_decisions d
+                  WHERE d.request_entity_id = $1
+                    AND d.request_id = $2
+                    AND d.decision = 'request_revision'
+             ), bounded_pauses AS (
+                 SELECT started_at,
+                        CASE
+                            WHEN r.review_completed_at IS NOT NULL
+                             AND (resumed_at IS NULL OR r.review_completed_at < resumed_at)
+                                THEN r.review_completed_at
+                            ELSE resumed_at
+                        END AS ended_at,
+                        r.review_completed_at
+                   FROM correction_pauses
+                   CROSS JOIN request_summary r
+                  WHERE r.review_completed_at IS NULL
+                     OR started_at < r.review_completed_at
+             ), pause_summary AS (
+                 SELECT COALESCE(sum(GREATEST(
+                            0,
+                            floor(extract(epoch FROM (ended_at - started_at)) * 1000)::bigint
+                        )) FILTER (WHERE ended_at IS NOT NULL), 0)::bigint AS paused_milliseconds,
+                        max(started_at) FILTER (
+                            WHERE ended_at IS NULL AND review_completed_at IS NULL
+                        ) AS pause_started_at
+                   FROM bounded_pauses
+             )
+             SELECT to_char(f.first_submitted_at AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    p.paused_milliseconds,
+                    to_char(p.pause_started_at AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    to_char(r.review_completed_at AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
+               FROM request_summary r
+               CROSS JOIN first_submission f
+               CROSS JOIN pause_summary p",
+            &[&entity_id, &record_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let Some(first_submitted_at) = row.get::<_, Option<String>>(0) else {
+        return Ok(None);
+    };
+    Ok(Some(RequestReviewTiming {
+        first_submitted_at,
+        paused_milliseconds: row.get(1),
+        pause_started_at: row.get(2),
+        completed_at: row.get(3),
+    }))
 }
 
 /// Called in the same transaction as the intake CREATE, including batch CREATE.
@@ -518,12 +667,16 @@ pub(crate) async fn load_header(
     let sql = format!(
         "SELECT s.owner_reference, s.state, s.proposal_version, s.workflow_revision,
                 COALESCE(s.detail_erased_at IS NOT NULL, false)
-                    OR COALESCE(p.erased_at IS NOT NULL, false)
+                    OR COALESCE(p.erased_at IS NOT NULL, false), a.applied_by
            FROM registry_internal.registry_request_state s
            LEFT JOIN registry_internal.registry_request_proposals p
              ON p.request_entity_id = s.request_entity_id
             AND p.request_id = s.request_id
             AND p.proposal_version = s.proposal_version
+          LEFT JOIN registry_internal.registry_request_applications a
+            ON a.request_entity_id = s.request_entity_id
+           AND a.request_id = s.request_id
+           AND a.proposal_version = s.proposal_version
           WHERE s.request_entity_id = $1 AND s.request_id = $2{}",
         if lock { " FOR UPDATE OF s" } else { "" }
     );
@@ -550,6 +703,7 @@ pub(crate) async fn load_header(
         proposal_version,
         workflow_revision,
         current_proposal_erased: row.get(4),
+        applier_reference: row.get(5),
     })
 }
 
@@ -754,6 +908,19 @@ pub(crate) async fn save(
     let version = i64::from(workflow.current_version().get());
     let revision = i64::try_from(workflow.workflow_revision().get())
         .map_err(|_| MutationError::Unavailable)?;
+    let review_completed_at = match workflow.state() {
+        RequestState::Approved | RequestState::Rejected | RequestState::Applied => workflow
+            .decisions()
+            .last()
+            .map(|decision| decision.decided_at().as_str())
+            .or_else(|| {
+                workflow
+                    .current_proposal()
+                    .map(|proposal| proposal.submitted_at().as_str())
+            }),
+        RequestState::Draft | RequestState::Submitted | RequestState::NeedsChanges => None,
+        RequestState::Canceled => None,
+    };
     if revision
         != previous_revision
             .checked_add(1)
@@ -878,7 +1045,12 @@ pub(crate) async fn save(
         .execute(
             "UPDATE registry_internal.registry_request_state
          SET state = $3, proposal_version = $4, workflow_revision = $5,
-             updated_at = transaction_timestamp()
+             updated_at = transaction_timestamp(),
+             review_completed_at = COALESCE(
+                 review_completed_at,
+                 CASE WHEN $3 IN ('approved', 'rejected', 'canceled', 'applied')
+                      THEN COALESCE($7::text::timestamptz, transaction_timestamp())
+                      ELSE NULL END)
          WHERE request_entity_id = $1 AND request_id = $2 AND workflow_revision = $6",
             &[
                 &entity_id,
@@ -887,6 +1059,7 @@ pub(crate) async fn save(
                 &version,
                 &revision,
                 &previous_revision,
+                &review_completed_at,
             ],
         )
         .await
@@ -1263,6 +1436,23 @@ mod tests {
         TrustedTransitionContext::from_verified_context(actor(actor_ref), timestamp(second))
     }
 
+    #[test]
+    fn workflow_header_debug_redacts_actor_references() {
+        let header = RequestWorkflowHeader {
+            owner_reference: "private-owner-reference-canary".to_owned(),
+            state: "applied".to_owned(),
+            proposal_version: 2,
+            workflow_revision: 9,
+            current_proposal_erased: false,
+            applier_reference: Some("private-applier-reference-canary".to_owned()),
+        };
+        let debug = format!("{header:?}");
+        assert!(!debug.contains("private-owner-reference-canary"));
+        assert!(!debug.contains("private-applier-reference-canary"));
+        assert!(debug.contains("has_owner_reference: true"));
+        assert!(debug.contains("has_applier_reference: true"));
+    }
+
     fn workflow(request_id: Uuid) -> RequestWorkflow {
         RequestWorkflow::new_draft(
             RequestKey::new(entity(REQUEST_ENTITY), record(request_id.to_string())),
@@ -1578,6 +1768,230 @@ mod tests {
             .expect("presence count")
             .get::<_, i64>(0);
         assert_eq!(retained, 0);
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn review_timing_is_bounded_by_first_completion_and_survives_detail_erasure() {
+        let (database, mut migration, migration_task) = install_schema().await;
+        let request_id = Uuid::new_v4();
+        let direct_cancel_id = Uuid::new_v4();
+        let transaction = migration.transaction().await.expect("timing transaction");
+        initialize_draft(&transaction, REQUEST_ENTITY, request_id, "submitter")
+            .await
+            .expect("draft initializes");
+        for (version, created_at) in [
+            (1_i64, "2026-09-10T00:00:01Z"),
+            (2, "2026-09-10T00:00:06Z"),
+            (3, "2026-09-10T00:00:20Z"),
+        ] {
+            transaction
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_proposals
+                         (request_entity_id, request_id, proposal_version,
+                          request_record_revision, contract_fingerprint, effect_digest,
+                          snapshot, created_at)
+                     VALUES ($1, $2, $3, 1, $4, $5, '{}'::jsonb, $6::text::timestamptz)",
+                    &[
+                        &REQUEST_ENTITY,
+                        &request_id,
+                        &version,
+                        &format!("sha256:{}", "a".repeat(64)),
+                        &format!("sha256:{}", "b".repeat(64)),
+                        &created_at,
+                    ],
+                )
+                .await
+                .expect("proposal timing row inserts");
+        }
+        for (version, index, decided_at) in [
+            (1_i64, 0_i32, "2026-09-10T00:00:02Z"),
+            (2, 0, "2026-09-10T00:00:08Z"),
+            (3, 0, "2026-09-10T00:00:21Z"),
+        ] {
+            transaction
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_decisions
+                         (request_entity_id, request_id, proposal_version, decision_index,
+                          stage_id, actor_reference, decision, effect_digest, decided_at)
+                     VALUES ($1, $2, $3, $4, 'review', $5, 'request_revision', $6,
+                             $7::text::timestamptz)",
+                    &[
+                        &REQUEST_ENTITY,
+                        &request_id,
+                        &version,
+                        &index,
+                        &format!("actor-{version}"),
+                        &format!("sha256:{}", "b".repeat(64)),
+                        &decided_at,
+                    ],
+                )
+                .await
+                .expect("pause boundary inserts");
+        }
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_decisions
+                     (request_entity_id, request_id, proposal_version, decision_index,
+                      stage_id, actor_reference, decision, effect_digest, decided_at)
+                 VALUES ($1, $2, 2, 1, 'review', 'rejecting-actor', 'reject', $3,
+                         '2026-09-10T00:00:10Z'::timestamptz)",
+                &[
+                    &REQUEST_ENTITY,
+                    &request_id,
+                    &format!("sha256:{}", "b".repeat(64)),
+                ],
+            )
+            .await
+            .expect("legacy rejection before revision and cancellation inserts");
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_request_state
+                    SET state = 'canceled', proposal_version = 3, workflow_revision = 9,
+                        detail_erased_at = '2026-09-10T00:00:30Z'::timestamptz,
+                        updated_at = '2026-09-10T00:00:30Z'::timestamptz,
+                        review_completed_at = NULL
+                  WHERE request_entity_id = $1 AND request_id = $2",
+                &[&REQUEST_ENTITY, &request_id],
+            )
+            .await
+            .expect("legacy terminal row saves without a completion summary");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_revisions
+                     (entity_id, record_id, record_reference, record_revision,
+                      predecessor_revision, record_lifecycle, package_revision, operation_id,
+                      mutation_kind, principal_reference, request_reference, snapshot, created_at)
+                 VALUES ($1, $2, 'legacy-request', 1, NULL, 'active', 'legacy-package',
+                         'cancel', 'patch', 'legacy-actor', 'legacy-request',
+                         '{}'::text::bytea, '2026-09-10T00:00:25Z'::timestamptz)",
+                &[&REQUEST_ENTITY, &request_id],
+            )
+            .await
+            .expect("retained cancellation revision inserts");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_revision_links
+                     (entity_id, record_id, record_revision, request_entity_id, request_id,
+                      proposal_version, link_kind, created_at)
+                 VALUES ($1, $2, 1, $1, $2, 3, 'request_lifecycle',
+                         '2026-09-10T00:00:25Z'::timestamptz)",
+                &[&REQUEST_ENTITY, &request_id],
+            )
+            .await
+            .expect("retained cancellation link inserts");
+        initialize_draft(
+            &transaction,
+            REQUEST_ENTITY,
+            direct_cancel_id,
+            "direct-cancel-submitter",
+        )
+        .await
+        .expect("direct-cancel draft initializes");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_proposals
+                     (request_entity_id, request_id, proposal_version,
+                      request_record_revision, contract_fingerprint, effect_digest,
+                      snapshot, created_at)
+                 VALUES ($1, $2, 1, 1, $3, $4, '{}'::jsonb,
+                         '2026-09-10T00:00:01Z'::timestamptz)",
+                &[
+                    &REQUEST_ENTITY,
+                    &direct_cancel_id,
+                    &format!("sha256:{}", "a".repeat(64)),
+                    &format!("sha256:{}", "b".repeat(64)),
+                ],
+            )
+            .await
+            .expect("direct-cancel proposal inserts");
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_request_state
+                    SET state = 'canceled', detail_erased_at = '2026-09-10T00:00:30Z',
+                        updated_at = '2026-09-10T00:00:30Z', review_completed_at = NULL
+                  WHERE request_entity_id = $1 AND request_id = $2",
+                &[&REQUEST_ENTITY, &direct_cancel_id],
+            )
+            .await
+            .expect("direct-cancel erased state saves");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_revisions
+                     (entity_id, record_id, record_reference, record_revision,
+                      predecessor_revision, record_lifecycle, package_revision, operation_id,
+                      mutation_kind, principal_reference, request_reference, snapshot, created_at)
+                 VALUES ($1, $2, 'direct-cancel', 1, NULL, 'active', 'legacy-package',
+                         'cancel', 'patch', 'legacy-actor', 'direct-cancel',
+                         '{}'::text::bytea, '2026-09-10T00:00:10Z'::timestamptz)",
+                &[&REQUEST_ENTITY, &direct_cancel_id],
+            )
+            .await
+            .expect("direct cancellation revision inserts");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_revision_links
+                     (entity_id, record_id, record_revision, request_entity_id, request_id,
+                      proposal_version, link_kind, created_at)
+                 VALUES ($1, $2, 1, $1, $2, 1, 'request_lifecycle',
+                         '2026-09-10T00:00:10Z'::timestamptz)",
+                &[&REQUEST_ENTITY, &direct_cancel_id],
+            )
+            .await
+            .expect("direct cancellation link inserts");
+        transaction
+            .commit()
+            .await
+            .expect("legacy timing rows commit");
+
+        install_mutation_schema(&migration, &database.runtime_role)
+            .await
+            .expect("schema upgrade backfills the terminal completion boundary");
+        let transaction = migration
+            .transaction()
+            .await
+            .expect("timing read transaction");
+
+        let before_erasure = load_review_timing(&transaction, REQUEST_ENTITY, request_id)
+            .await
+            .expect("review timing loads")
+            .expect("submitted request has timing");
+        assert_eq!(
+            before_erasure.first_submitted_at,
+            "2026-09-10T00:00:01.000000Z"
+        );
+        assert_eq!(before_erasure.paused_milliseconds, 6_000);
+        assert_eq!(before_erasure.pause_started_at, None);
+        assert_eq!(
+            before_erasure.completed_at.as_deref(),
+            Some("2026-09-10T00:00:10.000000Z")
+        );
+        let direct_cancel = load_review_timing(&transaction, REQUEST_ENTITY, direct_cancel_id)
+            .await
+            .expect("direct cancellation timing loads")
+            .expect("direct cancellation was submitted");
+        assert_eq!(
+            direct_cancel.completed_at.as_deref(),
+            Some("2026-09-10T00:00:10.000000Z")
+        );
+
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_request_proposals
+                    SET snapshot = NULL, erased_at = transaction_timestamp()
+                  WHERE request_entity_id = $1 AND request_id = $2",
+                &[&REQUEST_ENTITY, &request_id],
+            )
+            .await
+            .expect("proposal detail erases");
+        let after_erasure = load_review_timing(&transaction, REQUEST_ENTITY, request_id)
+            .await
+            .expect("retained timing loads")
+            .expect("proposal timestamps survive erasure");
+        assert_eq!(after_erasure, before_erasure);
+
+        transaction.commit().await.expect("timing commits");
         migration_task.abort();
         database.cleanup().await;
     }

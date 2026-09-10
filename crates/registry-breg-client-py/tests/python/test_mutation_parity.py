@@ -217,7 +217,20 @@ def metadata() -> dict:
                         "possibleWriteCount": 1,
                         "possibleWriteOperations": ["patch"],
                     },
-                    "reviewMode": "none",
+                    "reviewMode": "staged",
+                    "stages": [
+                        {
+                            "id": "legal-review",
+                            "approvals": 2,
+                            "excludeSubmitter": True,
+                            "excludePreviousReviewers": True,
+                        },
+                        {
+                            "id": "operations",
+                            "approvals": 1,
+                            "excludeSubmitter": False,
+                        },
+                    ],
                     "application": {
                         "mode": "planner",
                         "allowedDispositions": ["apply", "queue"],
@@ -416,6 +429,23 @@ class MutationParityTests(unittest.TestCase):
         capability = self.contract.change_request_capability("company")
         self.assertEqual(capability["planner"]["kind"], "rhai")
         self.assertEqual(capability["planner"]["limits"]["maximum_modules"], 0)
+        self.assertEqual(
+            capability["stages"],
+            [
+                {
+                    "id": "legal-review",
+                    "approvals": 2,
+                    "exclude_submitter": True,
+                    "exclude_previous_reviewers": True,
+                },
+                {
+                    "id": "operations",
+                    "approvals": 1,
+                    "exclude_submitter": False,
+                    "exclude_previous_reviewers": False,
+                },
+            ],
+        )
         self.assertEqual(
             capability["application"]["queue_reasons"],
             [{"code": "manual-check", "label": "Manual check"}],

@@ -101,7 +101,10 @@ function otherCreateOperation() {
 const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'1',
   entities:[{id:'item',datasetIdentifier:'items',route:'items',schema:'/v1/schemas/item',
     operations:['create','patch','list','lookup','apply_request','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id),
-    changeRequest:{planner:{kind:'declarative'},reviewMode:'none',application:{mode:'automatic',allowedDispositions:['apply'],queueReasons:[]}}},
+    changeRequest:{planner:{kind:'declarative'},reviewMode:'staged',stages:[
+      {id:'legal-review',approvals:2,excludeSubmitter:true,excludePreviousReviewers:true},
+      {id:'operations',approvals:1,excludeSubmitter:false},
+    ],application:{mode:'automatic',allowedDispositions:['apply'],queueReasons:[]}}},
     {id:'other',datasetIdentifier:'other-items',route:'others',schema:'/v1/schemas/other',
       operations:[{operation:'create',accessProfile:profile}],readableFields:fields.map(f=>f.id)}],
   operations:[...['create','patch','list'].map(operation), lookupOperation(), lifecycleOperation(), tombstoneOperation(), batchOperation(), otherCreateOperation()],
@@ -116,6 +119,10 @@ const lifecycleRecord = JSON.stringify({
     recordIdentifier: lifecycleRecordId, revisionIdentifier: String(lifecycleRecordRevision), domainData: {},
     request: {
       bregState: 'submitted', proposalVersion, editable: false, effectDigest: digest,
+      submitterReference: 'opaque-submitter',
+      review: {stages:[{id:'legal-review',approvals:2,excludeSubmitter:true}],submittedAt:'2026-09-01T10:00:00Z',pendingStage:null,stageEnteredAt:null},
+      reviewTiming: {firstSubmittedAt:'2026-09-01T10:00:00Z',pausedMilliseconds:0,pauseStartedAt:null,completedAt:null},
+      decisions: [{stageId:'legal-review',kind:'approve',decidedAt:'2026-09-01T11:00:00Z',reasonPresent:false,actorReference:'opaque-reviewer'}],
       actions: [{operation:'apply_request', method:'POST', href:lifecycleActionHref, ifMatch:actionIfMatch, proposalVersion, effectDigest:digest}],
     },
   },
@@ -123,6 +130,7 @@ const lifecycleRecord = JSON.stringify({
 });
 const receipt = {
   id: lifecycleRecordId, revision: receiptRevision, snapshot: `breg1_${lifecycleRecordId}`,
+  actorReference: 'opaque-applier',
   request: {
     bregState: 'applied', proposalVersion, effectDigest: digest,
     application: {applicationId, proposalVersion, effectDigest: digest, appliedAt},
@@ -177,6 +185,10 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.equal(lookupDescriptor.selectors[0].requestFields[0],'wide');
     assert.equal(lookupDescriptor.readPath.id,'related-items');
     assert.equal(contract.changeRequestCapability('item').application.mode,'automatic');
+    assert.deepEqual(contract.changeRequestCapability('item').stages,[
+      {id:'legal-review',approvals:2,excludeSubmitter:true,excludePreviousReviewers:true},
+      {id:'operations',approvals:1,excludeSubmitter:false,excludePreviousReviewers:false},
+    ]);
     list.id = 'forged';
     assert.equal(contract.operations.find(op=>op.kind === 'list').id,'records.item.list');
     const binding = contract.selectCreate('records.item.create',profile);
@@ -269,6 +281,12 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.equal(actions[0].operation,'apply_request');
     assert.equal(actions[0].stage,null);
     assert.equal(actions[0].href,lifecycleActionHref);
+    const malformedLifecycleRecord = JSON.parse(lifecycleRecord);
+    malformedLifecycleRecord.data.request.review.stages[0].excludePreviousReviewers = null;
+    assert.throws(
+      () => client.lifecycleActions(authority,malformedLifecycleRecord),
+      error => error.kind === 'lifecycle_promotion' && error.code === 'binding',
+    );
     const preparedLifecycle = client.prepareLifecycleActionJson(
       authority,lifecycleRecord,actions[0],'recover-apply',
     );
@@ -294,6 +312,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const executedValue = JSON.parse(executed.valueJson);
     assert.equal(executedValue.id,lifecycleRecordId);
     assert.equal(executedValue.revision,receiptRevision);
+    assert.equal(executedValue.actorReference,'opaque-applier');
     assert.equal(executedValue.request.application.id,applicationId);
     assert.equal(executedValue.request.application.proposalVersion,proposalVersion);
     assert.equal(executedValue.request.application.effectDigest,digest);

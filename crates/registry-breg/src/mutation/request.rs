@@ -772,6 +772,7 @@ impl MutationCoordinator {
                     current.record_revision,
                     snapshot_reference,
                     &workflow,
+                    &actor_reference,
                 )?;
                 let metadata = StoredResultMetadata::Application {
                     record_reference: record_reference(
@@ -1194,6 +1195,7 @@ impl MutationCoordinator {
             current.record_revision,
             committed.reference.to_string(),
             &next,
+            &actor_reference,
         )?;
         fault.fail_at(MutationFaultPoint::BeforeTerminalAudit)?;
         append_terminal_audit(
@@ -2057,6 +2059,7 @@ fn request_action_response(
     record_revision: i64,
     snapshot_reference: String,
     workflow: &RequestWorkflow,
+    actor_reference: &str,
 ) -> Result<HeldResponse, MutationError> {
     let mut request = json!({
         "bregState": workflow.state(),
@@ -2096,6 +2099,7 @@ fn request_action_response(
             "id": record_id,
             "revision": record_revision,
             "snapshot": snapshot_reference,
+            "actorReference": actor_reference,
             "request": request,
         }),
         BTreeMap::from([(

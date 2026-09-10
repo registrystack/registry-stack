@@ -201,7 +201,7 @@ impl RequestWorkflow {
                 return Err(WorkflowError::DigestMismatch);
             }
             let pending_stage = self
-                .pending_stage(proposal)
+                .pending_review_stage()
                 .ok_or(WorkflowError::InvalidTransition)?
                 .clone();
             let is_last_stage = proposal
@@ -397,14 +397,42 @@ impl RequestWorkflow {
         })
     }
 
-    fn pending_stage<'a>(
-        &self,
-        proposal: &'a ProposalSnapshot,
-    ) -> Option<&'a CompiledChangeRequestStage> {
+    /// Returns the next stage from the current proposal's frozen review policy.
+    /// A stage is pending only while the request is submitted.
+    pub fn pending_review_stage(&self) -> Option<&CompiledChangeRequestStage> {
+        if self.state != RequestState::Submitted {
+            return None;
+        }
+        let proposal = self.current_proposal()?;
         proposal
             .stages
             .iter()
             .find(|stage| !self.stage_is_satisfied(proposal, &stage.id))
+    }
+
+    /// Returns the authoritative entry time of the current pending stage.
+    /// The first stage begins at submission. A later stage begins when the
+    /// approval that satisfied the preceding stage was recorded.
+    pub fn pending_review_stage_entered_at(&self) -> Option<&TrustedTimestamp> {
+        let proposal = self.current_proposal()?;
+        let pending = self.pending_review_stage()?;
+        let pending_index = proposal
+            .stages
+            .iter()
+            .position(|stage| stage.id == pending.id)?;
+        let Some(previous_index) = pending_index.checked_sub(1) else {
+            return Some(proposal.submitted_at());
+        };
+        let previous = &proposal.stages[previous_index];
+        self.decisions
+            .iter()
+            .filter(|decision| {
+                decision.version == proposal.version
+                    && decision.stage_id == previous.id
+                    && decision.kind == ReviewDecisionKind::Approve
+            })
+            .nth(usize::from(previous.approvals) - 1)
+            .map(ReviewDecision::decided_at)
     }
 
     fn stage_is_satisfied(&self, proposal: &ProposalSnapshot, stage_id: &str) -> bool {
@@ -2972,6 +3000,14 @@ mod tests {
             .expect("proposal")
             .effect_digest()
             .clone();
+        assert_eq!(submitted.pending_review_stage().unwrap().id, "review");
+        assert_eq!(
+            submitted
+                .pending_review_stage_entered_at()
+                .unwrap()
+                .as_str(),
+            "2026-08-31T00:00:01Z"
+        );
         assert_eq!(submitted.state(), RequestState::Submitted);
 
         let tampered = proposal(vec![patch_effect("site-c", 3)], one_stage())
@@ -3177,6 +3213,14 @@ mod tests {
             .expect("first approval")
             .into_workflow();
         assert_eq!(after_first.state(), RequestState::Submitted);
+        assert_eq!(after_first.pending_review_stage().unwrap().id, "review");
+        assert_eq!(
+            after_first
+                .pending_review_stage_entered_at()
+                .unwrap()
+                .as_str(),
+            "2026-08-31T00:00:01Z"
+        );
 
         let duplicate = after_first.clone().decide(
             context("reviewer-a", 5),
@@ -3201,6 +3245,14 @@ mod tests {
             .expect("second approval")
             .into_workflow();
         assert_eq!(after_second.state(), RequestState::Submitted);
+        assert_eq!(after_second.pending_review_stage().unwrap().id, "quality");
+        assert_eq!(
+            after_second
+                .pending_review_stage_entered_at()
+                .unwrap()
+                .as_str(),
+            "2026-08-31T00:00:06Z"
+        );
 
         let approved = after_second
             .decide(
@@ -3213,6 +3265,8 @@ mod tests {
             .expect("quality approval")
             .into_workflow();
         assert_eq!(approved.state(), RequestState::Approved);
+        assert!(approved.pending_review_stage().is_none());
+        assert!(approved.pending_review_stage_entered_at().is_none());
     }
 
     #[test]
@@ -3399,6 +3453,8 @@ mod tests {
             .expect("request revision")
             .into_workflow();
         assert_eq!(needs_changes.state(), RequestState::NeedsChanges);
+        assert!(needs_changes.pending_review_stage().is_none());
+        assert!(needs_changes.pending_review_stage_entered_at().is_none());
 
         let draft = needs_changes
             .revise(context("submitter", 3))
@@ -3414,6 +3470,13 @@ mod tests {
             )
             .expect("resubmit")
             .into_workflow();
+        assert_eq!(
+            resubmitted
+                .pending_review_stage_entered_at()
+                .unwrap()
+                .as_str(),
+            "2026-08-31T00:00:04Z"
+        );
         let stale = resubmitted.decide(
             context("reviewer-b", 5),
             "review",

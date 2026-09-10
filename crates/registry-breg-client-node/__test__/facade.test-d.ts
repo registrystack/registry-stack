@@ -114,6 +114,13 @@ continuation.entityTypeIdentifier.toUpperCase()
 if (action.stage !== null) action.stage.toUpperCase()
 if (action.review !== null) action.review.targets.map((target) => target.operation)
 if (metadata.etag !== null) metadata.etag.toUpperCase()
+metadata.changeRequestCapability('person')?.stages?.map((stage) => stage.excludePreviousReviewers)
+record.data.request?.review?.stages.map((stage) => stage.approvals)
+record.data.request?.reviewTiming?.pausedMilliseconds.toFixed()
+record.data.request?.submitterReference?.toUpperCase()
+record.data.request?.decisions?.map((decision) => decision.actorReference?.toUpperCase())
+record.data.request?.history?.proposals.flatMap((proposal) => proposal.decisions ?? []).map((decision) => decision.actorReference?.toUpperCase())
+client.executeLifecycleAction(action, 'actor-receipt').then((outcome) => outcome.value.actorReference?.toUpperCase())
 
 // @ts-expect-error Direct writes require metadata-selected opaque authority.
 client.createRecord({}, { name: 'Ada' }, 'create-person-1')

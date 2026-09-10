@@ -856,6 +856,7 @@ pub(crate) fn request_capability_metadata(
     json!({
         "planner": planner,
         "reviewMode": render_request_review_mode(request.review_mode),
+        "stages": request.stages,
         "application": render_request_application(&request.application),
     })
 }
@@ -3258,8 +3259,12 @@ fn request_record_metadata_schema() -> Value {
         "properties": {
             "bregState": request_state_schema(),
             "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
+            "submitterReference": {"type": "string", "minLength": 1, "maxLength": 512},
+            "applierReference": {"type": "string", "minLength": 1, "maxLength": 512},
             "effectDigest": nullable_effect_digest_schema(),
             "proposal": request_proposal_schema(),
+            "review": request_review_metadata_schema(),
+            "reviewTiming": request_review_timing_metadata_schema(),
             "editable": {"type": "boolean"},
             "detailErased": {"const": true},
             "actions": {
@@ -3270,6 +3275,48 @@ fn request_record_metadata_schema() -> Value {
             "application": request_application_metadata_schema(false),
             "history": retained_request_history_schema(),
             "decisions": request_decisions_schema(),
+        }
+    })
+}
+
+fn request_review_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stages", "submittedAt", "pendingStage", "stageEnteredAt"],
+        "properties": {
+            "stages": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "approvals", "excludeSubmitter"],
+                    "properties": {
+                        "id": review_stage_id_schema(),
+                        "approvals": {"type": "integer", "minimum": 1, "maximum": 32},
+                        "excludeSubmitter": {"type": "boolean"},
+                        "excludePreviousReviewers": {"type": "boolean"}
+                    }
+                }
+            },
+            "submittedAt": {"type": "string", "format": "date-time", "maxLength": 128},
+            "pendingStage": {"anyOf": [review_stage_id_schema(), {"type": "null"}]},
+            "stageEnteredAt": {"type": ["string", "null"], "format": "date-time", "maxLength": 128}
+        }
+    })
+}
+
+fn request_review_timing_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["firstSubmittedAt", "pausedMilliseconds", "pauseStartedAt", "completedAt"],
+        "properties": {
+            "firstSubmittedAt": {"type": "string", "format": "date-time", "maxLength": 128},
+            "pausedMilliseconds": {"type": "integer", "format": "int64", "minimum": 0, "maximum": 9_007_199_254_740_991_i64},
+            "pauseStartedAt": {"type": ["string", "null"], "format": "date-time", "maxLength": 128},
+            "completedAt": {"type": ["string", "null"], "format": "date-time", "maxLength": 128}
         }
     })
 }
@@ -3378,6 +3425,7 @@ fn request_decisions_schema() -> Value {
                 "kind": {"enum": ["approve", "reject", "request_revision"]},
                 "decidedAt": {"type": "string", "format": "date-time", "maxLength": 128},
                 "reasonPresent": {"type": "boolean"},
+                "actorReference": {"type": "string", "minLength": 1, "maxLength": 512},
                 "reason": review_reason_schema()
             }
         }
@@ -3754,11 +3802,12 @@ fn request_action_response_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "revision", "snapshot", "request"],
+        "required": ["id", "revision", "snapshot", "actorReference", "request"],
         "properties": {
             "id": {"type": "string", "format": "uuid"},
             "revision": {"type": "integer", "format": "int64", "minimum": 1},
             "snapshot": snapshot_reference_schema(),
+            "actorReference": {"type": "string", "minLength": 1, "maxLength": 512},
             "request": {
                 "type": "object",
                 "additionalProperties": false,

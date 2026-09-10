@@ -98,6 +98,8 @@ pub struct RetainedRequestDecision {
     pub stage_id: String,
     pub kind: String,
     pub decided_at: String,
+    #[serde(skip_serializing)]
+    pub actor_reference: String,
     pub reason_present: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -110,6 +112,7 @@ impl std::fmt::Debug for RetainedRequestDecision {
             .field("stage_id", &self.stage_id)
             .field("kind", &self.kind)
             .field("decided_at", &self.decided_at)
+            .field("has_actor_reference", &!self.actor_reference.is_empty())
             .field("reason_present", &self.reason_present)
             .field("reason", &"[redacted]")
             .finish()
@@ -1006,12 +1009,14 @@ async fn load_retained_decisions_for_versions(
         return Err(RequestRetentionError::Unavailable);
     }
     let rows = client.query(
-        "SELECT version, d.stage_id, d.decision, d.decided_at, d.reason_present, d.reason
+        "SELECT version, d.stage_id, d.decision, d.decided_at, d.actor_reference,
+                d.reason_present, d.reason
            FROM unnest($3::bigint[]) version
            CROSS JOIN LATERAL (
                SELECT stage_id, decision,
                       to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS decided_at,
-                      reason_present, CASE WHEN $4::boolean THEN reason ELSE NULL END AS reason,
+                      actor_reference, reason_present,
+                      CASE WHEN $4::boolean THEN reason ELSE NULL END AS reason,
                       decision_index
                  FROM registry_internal.registry_request_decisions
                 WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = version
@@ -1030,8 +1035,9 @@ async fn load_retained_decisions_for_versions(
             stage_id: row.get(1),
             kind: row.get(2),
             decided_at: row.get(3),
-            reason_present: row.get(4),
-            reason: row.get(5),
+            actor_reference: row.get(4),
+            reason_present: row.get(5),
+            reason: row.get(6),
         });
     }
     Ok(grouped)
@@ -1683,15 +1689,18 @@ mod tests {
             stage_id: "review".to_owned(),
             kind: "reject".to_owned(),
             decided_at: "2026-09-09T12:00:00Z".to_owned(),
+            actor_reference: "private-actor-reference-canary".to_owned(),
             reason_present: true,
             reason: Some(reason.to_owned()),
         };
         let debug = format!("{decision:?}");
         assert!(!debug.contains(reason));
+        assert!(!debug.contains("private-actor-reference-canary"));
         assert!(debug.contains("reason_present: true"));
         assert!(debug.contains("review"));
         let serialized = serde_json::to_value(&decision).expect("decision serializes");
         assert_eq!(serialized["reason"], reason);
         assert_eq!(serialized["reasonPresent"], true);
+        assert!(serialized.get("actorReference").is_none());
     }
 }

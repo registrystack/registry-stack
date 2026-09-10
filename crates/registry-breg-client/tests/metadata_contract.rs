@@ -320,7 +320,16 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
             "possibleWriteCount": 1,
             "possibleWriteOperations": ["patch"]
         },
-        "reviewMode": "none",
+        "reviewMode": "staged",
+        "stages": [
+            {
+                "id": "legal-review",
+                "approvals": 2,
+                "excludeSubmitter": true,
+                "excludePreviousReviewers": true
+            },
+            {"id": "operations", "approvals": 1, "excludeSubmitter": false}
+        ],
         "application": {
             "mode": "planner",
             "allowedDispositions": ["apply", "queue"],
@@ -363,8 +372,17 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
     ));
     assert_eq!(
         change_request.review_mode(),
-        BRegChangeRequestReviewMode::None
+        BRegChangeRequestReviewMode::Staged
     );
+    let stages = change_request
+        .stages()
+        .expect("new servers advertise stages");
+    assert_eq!(stages.len(), 2);
+    assert_eq!(stages[0].identifier(), "legal-review");
+    assert_eq!(stages[0].approvals(), 2);
+    assert!(stages[0].exclude_submitter());
+    assert!(stages[0].exclude_previous_reviewers());
+    assert!(!stages[1].exclude_previous_reviewers());
     assert_eq!(
         change_request.application().mode(),
         BRegChangeRequestApplicationMode::Planner
@@ -385,12 +403,23 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         "Manual check"
     );
     assert!(!format!("{change_request:?}").contains("Manual check"));
+    assert!(!format!("{change_request:?}").contains("legal-review"));
     assert!(matches!(
         metadata
             .select_direct_write("records.company.patch", "company-writer")
             .expect("descriptive capability does not alter direct-write authority"),
         BRegDirectWrite::Patch(_)
     ));
+
+    let mut legacy_capability = capability.clone();
+    legacy_capability.as_object_mut().unwrap().remove("stages");
+    let mut legacy = fixture();
+    legacy["entities"][0]["changeRequest"] = legacy_capability;
+    assert!(parse(&legacy)
+        .change_request_capability("company")
+        .unwrap()
+        .stages()
+        .is_none());
 
     for malformed in [
         {
@@ -404,8 +433,28 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
             malformed
         },
         {
-            let mut malformed = capability;
+            let mut malformed = capability.clone();
             malformed["planner"]["possibleWriteOperations"] = json!(["patch", "patch"]);
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["stages"][1]["id"] = json!("legal-review");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["stages"][0]["approvals"] = json!(33);
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["stages"][0]["excludePreviousReviewers"] = Value::Null;
+            malformed
+        },
+        {
+            let mut malformed = capability;
+            malformed["stages"][0]["privateGrant"] = json!("reviewers");
             malformed
         },
     ] {

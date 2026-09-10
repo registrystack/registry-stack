@@ -2579,6 +2579,10 @@ async fn breg_client_drives_every_real_postgres_change_request_lifecycle_operati
         .execute_lifecycle_action(&submit_action, &submit_key)
         .await
         .expect("the metadata- and record-bound submit action succeeds");
+    assert!(
+        submitted.value.actor_reference().is_some(),
+        "a lifecycle receipt carries the acting caller's opaque correlation reference"
+    );
     exercised.insert(BRegLifecycleOperation::SubmitRequest);
     let after_submit =
         client_request_record(&submitter_client, &applied_request.id, "submitter").await;
@@ -5343,6 +5347,10 @@ async fn execute_client_action_and_refetch(
         .execute_lifecycle_action(action, &idempotency_key(key))
         .await
         .expect("promoted lifecycle action succeeds with its action-specific If-Match");
+    assert!(
+        receipt.value.actor_reference().is_some(),
+        "each lifecycle receipt carries the acting caller's opaque correlation reference"
+    );
     let refetched = client_request_record(client, record_identifier, access_profile).await;
     assert_client_receipt_matches_refetch(&receipt.value, &refetched);
     refetched

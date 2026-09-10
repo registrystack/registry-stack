@@ -1437,7 +1437,7 @@ fn proposal_value(value: &BRegRequestProposal) -> Value {
 
 fn receipt_value(value: &BRegLifecycleActionReceipt) -> Value {
     let request = value.request();
-    json!({
+    let mut receipt = json!({
         "id": value.record_identifier(),
         "revision": value.revision(),
         "snapshot": value.snapshot(),
@@ -1453,7 +1453,11 @@ fn receipt_value(value: &BRegLifecycleActionReceipt) -> Value {
                 "appliedAt": application.applied_at(),
             })),
         },
-    })
+    });
+    if let Some(actor_reference) = value.actor_reference() {
+        receipt["actorReference"] = Value::String(actor_reference.to_owned());
+    }
+    receipt
 }
 
 fn review_value(value: &BRegRequestReview) -> Value {
@@ -1536,6 +1540,14 @@ fn change_request_capability_value(
             registry_breg_client::BRegChangeRequestReviewMode::None => "none",
             registry_breg_client::BRegChangeRequestReviewMode::Staged => "staged",
         },
+        "stages": value.stages().map(|stages| {
+            stages.iter().map(|stage| json!({
+                "id": stage.identifier(),
+                "approvals": stage.approvals(),
+                "excludeSubmitter": stage.exclude_submitter(),
+                "excludePreviousReviewers": stage.exclude_previous_reviewers(),
+            })).collect::<Vec<_>>()
+        }),
         "application": {
             "mode": match value.application().mode() {
                 registry_breg_client::BRegChangeRequestApplicationMode::Manual => "manual",

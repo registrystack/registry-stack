@@ -48,7 +48,9 @@ class ReviewReasonTests(unittest.TestCase):
                 requests.append((body, self.headers["idempotency-key"], self.headers["if-match"]))
                 operation = next(name for name, record in FIXTURE["records"].items() if record["data"]["request"]["actions"][0]["href"] == self.path)
                 disappeared_actions.add(self.path)
-                self.respond(FIXTURE["receipts"][operation])
+                receipt = copy.deepcopy(FIXTURE["receipts"][operation])
+                receipt["actorReference"] = "opaque-reviewer"
+                self.respond(receipt)
 
             def respond(self, value):
                 body = json.dumps(value).encode()
@@ -98,7 +100,8 @@ class ReviewReasonTests(unittest.TestCase):
                 self.assertEqual(len(requests), before)
                 reason = "  Please correct the values.\nเหตุผล 📝  "
                 decision = action.with_reason(reason)
-                client.execute_lifecycle_action(decision, f"decision-{operation}")
+                receipt = client.execute_lifecycle_action(decision, f"decision-{operation}")
+                self.assertEqual(receipt["value"]["actor_reference"], "opaque-reviewer")
                 client.execute_lifecycle_action(decision, f"decision-{operation}")
                 self.assertEqual(json.loads(requests[-1][0])["reason"], reason)
                 self.assertEqual(requests[-1], requests[-2])

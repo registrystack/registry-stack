@@ -6892,11 +6892,21 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
     let requests = compiled
         .entities()
         .values()
-        .filter_map(|entity| {
-            let request = entity.change_request.as_ref()?;
-            Some(json!({
+        .filter(|entity| entity.change_request.is_some())
+        .map(|entity| {
+            let request = entity.change_request.as_ref().expect("filtered request entity");
+            let artifact = compiled.artifacts()
+                .get(&format!("generated/schemas/{}.schema.json", entity.id))
+                .expect("compiled entities have generated schemas");
+            let schema: Value = serde_json::from_slice(&artifact.bytes)?;
+            Ok(json!({
                 "requestEntity": entity.id,
                 "requestRoute": entity.route,
+                "fields": entity.stored_fields.iter().map(|field| json!({
+                    "field": field.logical.id,
+                    "apiName": field.logical.api_name,
+                    "schema": schema["properties"][&field.logical.api_name],
+                })).collect::<Vec<_>>(),
                 "contractFingerprint": request.contract_fingerprint,
                 "bounds": {
                     "maximumTargets": request.maximum_targets,
@@ -6913,6 +6923,7 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                     "id": stage.id,
                     "approvals": stage.approvals,
                     "excludeSubmitter": stage.exclude_submitter,
+                    "excludePreviousReviewers": stage.exclude_previous_reviewers,
                 })).collect::<Vec<_>>(),
                 "effects": request.effects.iter().map(|effect| {
                     let target = compiled.entities().get(&effect.target.entity_id);
@@ -6983,7 +6994,7 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                 })).collect::<Vec<_>>(),
             }))
         })
-        .collect::<Vec<_>>();
+        .collect::<serde_json::Result<Vec<_>>>()?;
     let controlled_writes = compiled
         .entities()
         .values()
@@ -10371,6 +10382,39 @@ mod tests {
                 })
             })
             .expect("Rhai request is explained");
+        let entity = &compiled.entities()["person-name-change-request"];
+        let schema: Value = serde_json::from_slice(
+            &compiled
+                .artifacts()
+                .get("generated/schemas/person-name-change-request.schema.json")
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
+        let fields = request["fields"].as_array().unwrap();
+        assert!(!fields.is_empty());
+        assert_eq!(fields.len(), entity.stored_fields.len());
+        for (field, descriptor) in entity.stored_fields.iter().zip(fields) {
+            assert_eq!(descriptor["field"], field.logical.id);
+            assert_eq!(descriptor["apiName"], field.logical.api_name);
+            assert_eq!(
+                descriptor["schema"],
+                schema["properties"][&field.logical.api_name]
+            );
+        }
+        for (stage, descriptor) in entity
+            .change_request
+            .as_ref()
+            .unwrap()
+            .stages
+            .iter()
+            .zip(request["stages"].as_array().unwrap())
+        {
+            assert_eq!(
+                descriptor["excludePreviousReviewers"],
+                stage.exclude_previous_reviewers
+            );
+        }
         assert_eq!(request["planner"]["kind"], "rhai");
         assert_eq!(
             request["planner"]["abi"],

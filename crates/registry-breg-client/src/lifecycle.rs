@@ -30,6 +30,8 @@ pub const MAX_BREG_REVIEW_OBJECT_MEMBERS: usize = 128;
 pub const MAX_BREG_ACTION_HREF_BYTES: usize = 2_048;
 /// Maximum bytes accepted for an opaque snapshot reference.
 pub const MAX_BREG_SNAPSHOT_REFERENCE_BYTES: usize = 4_096;
+/// Maximum authored review stages accepted in one request projection.
+pub const MAX_BREG_REVIEW_STAGES: usize = 32;
 
 const MAX_REQUEST_EXTENSION_BYTES: usize = 2_097_152;
 const MAX_IDENTIFIER_BYTES: usize = 512;
@@ -513,6 +515,7 @@ pub struct BRegRequestDecision {
     decided_at: String,
     reason_present: bool,
     reason: Option<String>,
+    actor_reference: Option<String>,
 }
 
 impl BRegRequestDecision {
@@ -536,6 +539,12 @@ impl BRegRequestDecision {
     #[must_use]
     pub fn reason(&self) -> Option<&str> {
         self.reason.as_deref()
+    }
+
+    /// Opaque actor correlation disclosed only by an explicitly authorized profile.
+    #[must_use]
+    pub fn actor_reference(&self) -> Option<&str> {
+        self.actor_reference.as_deref()
     }
 }
 
@@ -565,7 +574,7 @@ fn decode_decisions(value: Value) -> Result<Vec<BRegRequestDecision>, BRegLifecy
             let mut object = exact_object(
                 value,
                 &["stageId", "kind", "decidedAt", "reasonPresent"],
-                &["reason"],
+                &["reason", "actorReference"],
             )?;
             let stage_id = take_string(&mut object, "stageId")?;
             validate_identifier(&stage_id)?;
@@ -595,15 +604,141 @@ fn decode_decisions(value: Value) -> Result<Vec<BRegRequestDecision>, BRegLifecy
                 }
                 _ => return Err(BRegLifecycleDecodeError::Profile),
             };
+            let actor_reference = take_optional_identifier(&mut object, "actorReference")?;
             Ok(BRegRequestDecision {
                 stage_id,
                 kind,
                 decided_at,
                 reason_present,
                 reason,
+                actor_reference,
             })
         })
         .collect()
+}
+
+/// One frozen stage in the current proposal's review policy.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegRequestReviewStage {
+    id: String,
+    approvals: u64,
+    exclude_submitter: bool,
+    exclude_previous_reviewers: bool,
+}
+
+impl fmt::Debug for BRegRequestReviewStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegRequestReviewStage")
+            .field("identifier", &"<redacted>")
+            .field("approvals", &self.approvals)
+            .field("exclude_submitter", &self.exclude_submitter)
+            .field(
+                "exclude_previous_reviewers",
+                &self.exclude_previous_reviewers,
+            )
+            .finish()
+    }
+}
+
+impl BRegRequestReviewStage {
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn approvals(&self) -> u64 {
+        self.approvals
+    }
+
+    #[must_use]
+    pub const fn exclude_submitter(&self) -> bool {
+        self.exclude_submitter
+    }
+
+    #[must_use]
+    pub const fn exclude_previous_reviewers(&self) -> bool {
+        self.exclude_previous_reviewers
+    }
+}
+
+/// Caller-visible timing and stage state for the current retained proposal.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegRequestReviewState {
+    stages: Vec<BRegRequestReviewStage>,
+    submitted_at: String,
+    pending_stage: Option<String>,
+    stage_entered_at: Option<String>,
+}
+
+impl fmt::Debug for BRegRequestReviewState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegRequestReviewState")
+            .field("stage_count", &self.stages.len())
+            .field("has_pending_stage", &self.pending_stage.is_some())
+            .field("has_stage_entered_at", &self.stage_entered_at.is_some())
+            .finish()
+    }
+}
+
+impl BRegRequestReviewState {
+    #[must_use]
+    pub fn stages(&self) -> &[BRegRequestReviewStage] {
+        &self.stages
+    }
+    #[must_use]
+    pub fn submitted_at(&self) -> &str {
+        &self.submitted_at
+    }
+    #[must_use]
+    pub fn pending_stage(&self) -> Option<&str> {
+        self.pending_stage.as_deref()
+    }
+    #[must_use]
+    pub fn stage_entered_at(&self) -> Option<&str> {
+        self.stage_entered_at.as_deref()
+    }
+}
+
+/// Bounded lifecycle timing retained independently from proposal detail.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegRequestReviewTiming {
+    first_submitted_at: String,
+    paused_milliseconds: u64,
+    pause_started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+impl fmt::Debug for BRegRequestReviewTiming {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegRequestReviewTiming")
+            .field("paused_milliseconds", &self.paused_milliseconds)
+            .field("has_pause_started_at", &self.pause_started_at.is_some())
+            .field("has_completed_at", &self.completed_at.is_some())
+            .finish()
+    }
+}
+
+impl BRegRequestReviewTiming {
+    #[must_use]
+    pub fn first_submitted_at(&self) -> &str {
+        &self.first_submitted_at
+    }
+    #[must_use]
+    pub const fn paused_milliseconds(&self) -> u64 {
+        self.paused_milliseconds
+    }
+    #[must_use]
+    pub fn pause_started_at(&self) -> Option<&str> {
+        self.pause_started_at.as_deref()
+    }
+    #[must_use]
+    pub fn completed_at(&self) -> Option<&str> {
+        self.completed_at.as_deref()
+    }
 }
 
 /// Validated but inert change-request metadata extracted from a Registry
@@ -620,6 +755,11 @@ pub struct BRegRequestMetadata {
     application: Option<BRegRecordApplication>,
     retained_history: Option<Value>,
     decisions: Vec<BRegRequestDecision>,
+    retained_decisions: Vec<BRegRequestDecision>,
+    review: Option<BRegRequestReviewState>,
+    review_timing: Option<BRegRequestReviewTiming>,
+    submitter_reference: Option<String>,
+    applier_reference: Option<String>,
 }
 
 impl BRegRequestMetadata {
@@ -663,6 +803,10 @@ impl BRegRequestMetadata {
                 "application",
                 "history",
                 "decisions",
+                "review",
+                "reviewTiming",
+                "submitterReference",
+                "applierReference",
             ],
         )?;
 
@@ -718,13 +862,30 @@ impl BRegRequestMetadata {
             None => Vec::new(),
             Some(value) => decode_decisions(value)?,
         };
+        let review = object
+            .remove("review")
+            .map(decode_request_review_state)
+            .transpose()?;
+        if detail_erased && review.is_some() {
+            return Err(BRegLifecycleDecodeError::Profile);
+        }
+        let review_timing = object
+            .remove("reviewTiming")
+            .map(decode_request_review_timing)
+            .transpose()?;
+        let submitter_reference = take_optional_identifier(&mut object, "submitterReference")?;
+        let applier_reference = take_optional_identifier(&mut object, "applierReference")?;
+        if applier_reference.is_some() && application.is_none() {
+            return Err(BRegLifecycleDecodeError::Profile);
+        }
+        let mut retained_decisions = Vec::new();
         let retained_history = match object.remove("history") {
             None => None,
             Some(Value::Object(history)) => {
                 if let Some(Value::Array(proposals)) = history.get("proposals") {
                     for proposal in proposals {
                         if let Some(decisions) = proposal.get("decisions") {
-                            decode_decisions(decisions.clone())?;
+                            retained_decisions.extend(decode_decisions(decisions.clone())?);
                         }
                     }
                 }
@@ -744,6 +905,11 @@ impl BRegRequestMetadata {
             application,
             retained_history,
             decisions,
+            retained_decisions,
+            review,
+            review_timing,
+            submitter_reference,
+            applier_reference,
         })
     }
 
@@ -788,6 +954,32 @@ impl BRegRequestMetadata {
     #[must_use]
     pub fn decisions(&self) -> &[BRegRequestDecision] {
         &self.decisions
+    }
+
+    /// Caller-visible decisions from retained proposals, in proposal and decision order.
+    #[must_use]
+    pub fn retained_decisions(&self) -> &[BRegRequestDecision] {
+        &self.retained_decisions
+    }
+
+    #[must_use]
+    pub fn review(&self) -> Option<&BRegRequestReviewState> {
+        self.review.as_ref()
+    }
+
+    #[must_use]
+    pub fn review_timing(&self) -> Option<&BRegRequestReviewTiming> {
+        self.review_timing.as_ref()
+    }
+
+    #[must_use]
+    pub fn submitter_reference(&self) -> Option<&str> {
+        self.submitter_reference.as_deref()
+    }
+
+    #[must_use]
+    pub fn applier_reference(&self) -> Option<&str> {
+        self.applier_reference.as_deref()
     }
 
     /// Returns retained history as inert JSON. It is never consulted for
@@ -850,6 +1042,15 @@ impl fmt::Debug for BRegRequestMetadata {
             .field("detail_erased", &self.detail_erased)
             .field("action_count", &self.actions.len())
             .field("application", &self.application)
+            .field("decision_count", &self.decisions.len())
+            .field("retained_decision_count", &self.retained_decisions.len())
+            .field("review", &self.review)
+            .field("review_timing", &self.review_timing)
+            .field(
+                "has_submitter_reference",
+                &self.submitter_reference.is_some(),
+            )
+            .field("has_applier_reference", &self.applier_reference.is_some())
             .field(
                 "retained_history",
                 &self.retained_history.as_ref().map(|_| "<redacted>"),
@@ -1776,6 +1977,7 @@ pub struct BRegLifecycleActionReceipt {
     record_identifier: String,
     revision: u64,
     snapshot: String,
+    actor_reference: Option<String>,
     request: BRegLifecycleReceiptRequest,
 }
 
@@ -1787,7 +1989,11 @@ impl BRegLifecycleActionReceipt {
     }
 
     pub fn from_value(value: Value) -> Result<Self, BRegLifecycleDecodeError> {
-        let mut object = exact_object(value, &["id", "revision", "snapshot", "request"], &[])?;
+        let mut object = exact_object(
+            value,
+            &["id", "revision", "snapshot", "request"],
+            &["actorReference"],
+        )?;
         let record_identifier = take_string(&mut object, "id")?;
         validate_canonical_uuid(&record_identifier)?;
         let revision = object
@@ -1807,10 +2013,12 @@ impl BRegLifecycleActionReceipt {
                 .remove("request")
                 .ok_or(BRegLifecycleDecodeError::Profile)?,
         )?;
+        let actor_reference = take_optional_identifier(&mut object, "actorReference")?;
         Ok(Self {
             record_identifier,
             revision,
             snapshot,
+            actor_reference,
             request,
         })
     }
@@ -1830,6 +2038,12 @@ impl BRegLifecycleActionReceipt {
         &self.snapshot
     }
 
+    /// Opaque acting identity correlation. Older compatible servers may omit it.
+    #[must_use]
+    pub fn actor_reference(&self) -> Option<&str> {
+        self.actor_reference.as_deref()
+    }
+
     #[must_use]
     pub fn request(&self) -> &BRegLifecycleReceiptRequest {
         &self.request
@@ -1839,12 +2053,16 @@ impl BRegLifecycleActionReceipt {
     /// accountability storage. This contains no credential or record fields.
     #[must_use]
     pub fn to_value(&self) -> Value {
-        json!({
+        let mut value = json!({
             "id": self.record_identifier,
             "revision": self.revision,
             "snapshot": self.snapshot,
             "request": self.request.to_value(),
-        })
+        });
+        if let Some(actor_reference) = &self.actor_reference {
+            value["actorReference"] = Value::String(actor_reference.clone());
+        }
+        value
     }
 }
 
@@ -1855,6 +2073,7 @@ impl fmt::Debug for BRegLifecycleActionReceipt {
             .field("record_identifier", &"<redacted>")
             .field("revision", &self.revision)
             .field("snapshot", &"<redacted>")
+            .field("has_actor_reference", &self.actor_reference.is_some())
             .field("request", &self.request)
             .finish()
     }
@@ -2161,6 +2380,108 @@ fn decode_erased_application(
     })
 }
 
+fn decode_request_review_stage(
+    value: Value,
+) -> Result<BRegRequestReviewStage, BRegLifecycleDecodeError> {
+    let mut object = exact_object(
+        value,
+        &["id", "approvals", "excludeSubmitter"],
+        &["excludePreviousReviewers"],
+    )?;
+    let id = take_string(&mut object, "id")?;
+    validate_review_stage_identifier(&id)?;
+    let approvals = object
+        .remove("approvals")
+        .and_then(|value| value.as_u64())
+        .filter(|value| (1..=32).contains(value))
+        .ok_or(BRegLifecycleDecodeError::Profile)?;
+    let exclude_submitter = object
+        .remove("excludeSubmitter")
+        .and_then(|value| value.as_bool())
+        .ok_or(BRegLifecycleDecodeError::Profile)?;
+    let exclude_previous_reviewers = match object.remove("excludePreviousReviewers") {
+        None => false,
+        Some(Value::Bool(value)) => value,
+        Some(_) => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    Ok(BRegRequestReviewStage {
+        id,
+        approvals,
+        exclude_submitter,
+        exclude_previous_reviewers,
+    })
+}
+
+fn decode_request_review_state(
+    value: Value,
+) -> Result<BRegRequestReviewState, BRegLifecycleDecodeError> {
+    let mut object = exact_object(
+        value,
+        &["stages", "submittedAt", "pendingStage", "stageEnteredAt"],
+        &[],
+    )?;
+    let stages = match object.remove("stages") {
+        Some(Value::Array(values)) if values.len() <= MAX_BREG_REVIEW_STAGES => values
+            .into_iter()
+            .map(decode_request_review_stage)
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let mut identifiers = BTreeSet::new();
+    if stages
+        .iter()
+        .any(|stage| !identifiers.insert(stage.id.as_str()))
+    {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    let submitted_at = take_string(&mut object, "submittedAt")?;
+    validate_timestamp(&submitted_at)?;
+    let pending_stage = take_required_nullable_identifier(&mut object, "pendingStage")?;
+    let stage_entered_at = take_required_nullable_timestamp(&mut object, "stageEnteredAt")?;
+    if pending_stage
+        .as_deref()
+        .is_some_and(|pending| !identifiers.contains(pending))
+    {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    Ok(BRegRequestReviewState {
+        stages,
+        submitted_at,
+        pending_stage,
+        stage_entered_at,
+    })
+}
+
+fn decode_request_review_timing(
+    value: Value,
+) -> Result<BRegRequestReviewTiming, BRegLifecycleDecodeError> {
+    let mut object = exact_object(
+        value,
+        &[
+            "firstSubmittedAt",
+            "pausedMilliseconds",
+            "pauseStartedAt",
+            "completedAt",
+        ],
+        &[],
+    )?;
+    let first_submitted_at = take_string(&mut object, "firstSubmittedAt")?;
+    validate_timestamp(&first_submitted_at)?;
+    let paused_milliseconds = object
+        .remove("pausedMilliseconds")
+        .and_then(|value| value.as_u64())
+        .filter(|value| *value <= 9_007_199_254_740_991)
+        .ok_or(BRegLifecycleDecodeError::Profile)?;
+    let pause_started_at = take_required_nullable_timestamp(&mut object, "pauseStartedAt")?;
+    let completed_at = take_required_nullable_timestamp(&mut object, "completedAt")?;
+    Ok(BRegRequestReviewTiming {
+        first_submitted_at,
+        paused_milliseconds,
+        pause_started_at,
+        completed_at,
+    })
+}
+
 fn decode_receipt_request(
     value: Value,
 ) -> Result<BRegLifecycleReceiptRequest, BRegLifecycleDecodeError> {
@@ -2239,6 +2560,34 @@ fn take_optional_identifier(
     }
 }
 
+fn take_required_nullable_identifier(
+    object: &mut Map<String, Value>,
+    member: &str,
+) -> Result<Option<String>, BRegLifecycleDecodeError> {
+    match object.remove(member) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            validate_identifier(&value)?;
+            Ok(Some(value))
+        }
+        _ => Err(BRegLifecycleDecodeError::Profile),
+    }
+}
+
+fn take_required_nullable_timestamp(
+    object: &mut Map<String, Value>,
+    member: &str,
+) -> Result<Option<String>, BRegLifecycleDecodeError> {
+    match object.remove(member) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            validate_timestamp(&value)?;
+            Ok(Some(value))
+        }
+        _ => Err(BRegLifecycleDecodeError::Profile),
+    }
+}
+
 fn take_optional_proposal_version(
     object: &mut Map<String, Value>,
     member: &str,
@@ -2304,6 +2653,19 @@ fn validate_identifier(value: &str) -> Result<(), BRegLifecycleDecodeError> {
         || value
             .chars()
             .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    Ok(())
+}
+
+fn validate_review_stage_identifier(value: &str) -> Result<(), BRegLifecycleDecodeError> {
+    let mut bytes = value.bytes();
+    if value.len() > 64
+        || !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        || !bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
     {
         return Err(BRegLifecycleDecodeError::Profile);
     }

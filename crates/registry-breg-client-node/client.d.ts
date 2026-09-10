@@ -114,7 +114,70 @@ export interface RegistryRecord {
   recordIdentifier: string
   revisionIdentifier: string
   domainData: Readonly<Record<string, JsonValue>>
+  request?: BRegRequestMetadata
   readonly [member: string]: JsonValue | undefined
+}
+
+export type BRegRequestReviewStage = JsonObject & {
+  readonly id: string
+  readonly approvals: SafeInteger
+  readonly excludeSubmitter: boolean
+  readonly excludePreviousReviewers?: boolean
+}
+export type BRegRequestReviewState = JsonObject & {
+  readonly stages: ReadonlyArray<BRegRequestReviewStage>
+  readonly submittedAt: string
+  readonly pendingStage: string | null
+  readonly stageEnteredAt: string | null
+}
+export type BRegRequestReviewTiming = JsonObject & {
+  readonly firstSubmittedAt: string
+  readonly pausedMilliseconds: SafeInteger
+  readonly pauseStartedAt: string | null
+  readonly completedAt: string | null
+}
+export type BRegRequestDecision = JsonObject & {
+  readonly stageId: string
+  readonly kind: 'approve' | 'reject' | 'request_revision'
+  readonly decidedAt: string
+  readonly reasonPresent: boolean
+  readonly reason?: string
+  readonly actorReference?: string
+}
+export type BRegRequestState = 'draft' | 'submitted' | 'approved' | 'needs_changes' | 'rejected' | 'canceled' | 'applied'
+export type BRegRetainedRequestProposal = JsonObject & {
+  readonly requestEntityId: string
+  readonly requestId: string
+  readonly proposalVersion: SafeInteger
+  readonly bregState: BRegRequestState
+  readonly current: boolean
+  readonly contractFingerprint: string
+  readonly detailErased: boolean
+  readonly applicationId: string | null
+  readonly resultLinkCount: SafeInteger
+  readonly resultLinks: ReadonlyArray<JsonObject>
+  readonly effectDigest?: string
+  readonly decisions?: ReadonlyArray<BRegRequestDecision>
+}
+export type BRegRetainedRequestHistory = JsonObject & {
+  readonly proposals: ReadonlyArray<BRegRetainedRequestProposal>
+  readonly nextAfterProposalVersion: SafeInteger | null
+}
+export type BRegRequestMetadata = JsonObject & {
+  readonly bregState: BRegRequestState
+  readonly proposalVersion: SafeInteger
+  readonly effectDigest?: string | null
+  readonly proposal?: JsonObject | null
+  readonly editable: boolean
+  readonly detailErased?: true
+  readonly actions?: ReadonlyArray<JsonObject>
+  readonly application?: JsonObject | null
+  readonly history?: BRegRetainedRequestHistory
+  readonly review?: BRegRequestReviewState
+  readonly reviewTiming?: BRegRequestReviewTiming
+  readonly submitterReference?: string
+  readonly applierReference?: string
+  readonly decisions?: ReadonlyArray<BRegRequestDecision>
 }
 
 export interface RecordMetadata {
@@ -193,11 +256,20 @@ export interface LifecycleReviewTarget {
 
 export interface LifecycleReview { targets: ReadonlyArray<LifecycleReviewTarget> }
 
-export interface LifecycleReceipt extends JsonObject {
-  id: string
-  revision: SafeInteger
-  snapshot: string
-  request: JsonObject
+export type LifecycleReceipt = JsonObject & {
+  readonly id: string
+  readonly revision: SafeInteger
+  readonly snapshot: string
+  readonly actorReference?: string
+  readonly request: BRegLifecycleReceiptRequest
+}
+
+export type BRegLifecycleReceiptRequest = JsonObject & {
+  readonly bregState: BRegRequestState
+  readonly proposalVersion: SafeInteger | null
+  readonly effectDigest: string | null
+  readonly proposal?: JsonObject | null
+  readonly application: JsonObject | null
 }
 
 /** Exact validated JSON text, serialized before conversion to JavaScript numbers.
@@ -442,6 +514,12 @@ export interface BRegChangeRequestCapability {
     readonly possibleWriteOperations: ReadonlyArray<string>
   }
   readonly reviewMode: 'none' | 'staged'
+  readonly stages: ReadonlyArray<{
+    readonly id: string
+    readonly approvals: SafeInteger
+    readonly excludeSubmitter: boolean
+    readonly excludePreviousReviewers: boolean
+  }> | null
   readonly application: {
     readonly mode: 'manual' | 'automatic' | 'planner'
     readonly allowedDispositions: ReadonlyArray<'apply' | 'queue'>
