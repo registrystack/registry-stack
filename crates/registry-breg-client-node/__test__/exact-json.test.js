@@ -86,20 +86,25 @@ function tombstoneOperation() {
 function batchOperation() {
   const value = operation('batch');
   return {...value, id:'records.item.batch', method:'POST', path:'/v1/records/items:batch', operation:'batch',
-    createWritableFields:fields.map(f=>f.id), patchWritableFields:fields.map(f=>f.id),
+    createWritableFields:fields.map(f=>f.id), patchWritableFields:[],
     request:{fieldNames:'api',queryParameters:[],body:'batch',contentType:'application/json',
       idempotencyKeyRequired:true,mutationSemantics:'direct',maximumItems:4,maximumBodyBytes:16384,
-      allowCreate:true,allowPatch:true,schema:{type:'object',additionalProperties:false,required:['items'],
+      allowCreate:true,allowPatch:false,schema:{type:'object',additionalProperties:false,required:['items'],
         properties:{items:{type:'array',minItems:1,maxItems:4,items:{oneOf:[
           {type:'object',properties:{operation:{const:'create'},data:{type:'object'}}},
-          {type:'object',properties:{operation:{const:'patch'},recordId:{type:'string'}}},
         ]}}}}}};
+}
+function otherCreateOperation() {
+  return {...operation('create'),id:'records.other.create',path:'/v1/records/others',
+    sourceEntity:'other',responseEntity:'other'};
 }
 const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'1',
   entities:[{id:'item',datasetIdentifier:'items',route:'items',schema:'/v1/schemas/item',
     operations:['create','patch','list','lookup','apply_request','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id),
-    changeRequest:{planner:{kind:'declarative'},reviewMode:'none',application:{mode:'automatic',allowedDispositions:['apply'],queueReasons:[]}}}],
-  operations:[...['create','patch','list'].map(operation), lookupOperation(), lifecycleOperation(), tombstoneOperation(), batchOperation()],
+    changeRequest:{planner:{kind:'declarative'},reviewMode:'none',application:{mode:'automatic',allowedDispositions:['apply'],queueReasons:[]}}},
+    {id:'other',datasetIdentifier:'other-items',route:'others',schema:'/v1/schemas/other',
+      operations:[{operation:'create',accessProfile:profile}],readableFields:fields.map(f=>f.id)}],
+  operations:[...['create','patch','list'].map(operation), lookupOperation(), lifecycleOperation(), tombstoneOperation(), batchOperation(), otherCreateOperation()],
 };
 const meta = {registryIdentifier:'test-registry',datasetIdentifier:'items',entityTypeIdentifier:'item'};
 const record = `{"recordIdentifier":"${id}","revisionIdentifier":"1","snapshot":"breg1_${id}","domainData":{"wide":9007199254740992,"decimal":"12.3400","date":"2026-09-08","nullable":null,"reference":"${id}"}}`;
@@ -176,6 +181,9 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.equal(contract.operations.find(op=>op.kind === 'list').id,'records.item.list');
     const binding = contract.selectCreate('records.item.create',profile);
     const data = `{"wide":9007199254740992,"decimal":"12.3400","date":"2026-09-08","nullable":null,"reference":"${id}"}`;
+    const structuredCreateCount = requests.length;
+    assert.throws(() => client.createRecord(binding,{wide:Number.MAX_SAFE_INTEGER + 1},'unsafe-create'),error=>error.kind === 'invalid_request');
+    assert.equal(requests.length,structuredCreateCount);
     const preparedCreate = client.prepareCreateJson(binding,data,'recover-create');
     const preparedCreateBytes = preparedCreate.toBytes();
     assert.match(util.inspect(preparedCreate),/^BRegPreparedCreate\(<redacted>\)$/);
@@ -189,6 +197,10 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const recoveredCreated = await restartedClient.executeRecoveredCreateJson(restartedBinding,recoveredCreate);
     assert.match(recoveredCreated.valueJson,/"wide":9007199254740992/);
     assert.equal(requests.at(-1).headers['idempotency-key'],'recover-create');
+    const recoveryRequestCount = requests.length;
+    const otherBinding = restartedContract.selectCreate('records.other.create',profile);
+    await assert.rejects(restartedClient.executeRecoveredCreate(otherBinding,recoveredCreate),error=>error.kind === 'invalid_request');
+    assert.equal(requests.length,recoveryRequestCount);
     const created = await client.createRecordJson(binding,data,'exact-create');
     assert.match(created.valueJson,/"wide":9007199254740992/);
     assert.match(requests.at(-1).body,/"wide":9007199254740992/);
@@ -201,10 +213,17 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     }
     assert.equal(requests.length,before);
     const patch = contract.selectPatch('records.item.patch',profile);
+    const structuredPatchCount = requests.length;
+    assert.throws(() => client.patchRecord(patch,id,created.etag,[{op:'replace',field:'wide',value:Number.MAX_SAFE_INTEGER + 1}],'unsafe-patch'),error=>error.kind === 'invalid_request');
+    assert.equal(requests.length,structuredPatchCount);
     await client.patchRecordJson(patch,id,created.etag,'[{"op":"replace","field":"wide","value":9007199254740992}]','exact-patch');
     assert.equal(requests.at(-1).headers['if-match'],created.etag);
     assert.match(requests.at(-1).body,/"path":"\/data\/wide"/);
     const batch = contract.selectBatch('item',profile);
+    const batchDescriptor = contract.operations.find(op=>op.kind === 'batch');
+    assert.equal(batchDescriptor.request.allowCreate,true);
+    assert.equal(batchDescriptor.request.allowPatch,false);
+    assert.equal(contract.operations.find(op=>op.kind === 'tombstone').request.allowCreate,null);
     const batchResult = await client.batchRecords(batch,{items:[{operation:'create',data:{wide:1}}],
       changeContext:{kind:'correction',reasonCode:'verified-source',reasonText:'Correct source',sourceReferences:['case:1']}},'batch-one');
     assert.equal(batchResult.value.results[0].revision,2);
@@ -221,6 +240,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.match(removedJson.valueJson,/9007199254740992/);
     const mutationRequestCount = requests.length;
     await assert.rejects(client.batchRecords(batch,{items:[]},'empty-batch'),error=>error.kind === 'invalid_request');
+    assert.throws(() => client.batchRecords(batch,{items:[{operation:'create',data:{wide:Number.MAX_SAFE_INTEGER + 1}}]},'unsafe-batch'),error=>error.kind === 'invalid_request');
     await assert.rejects(client.tombstoneRecord(tombstone,'not-a-uuid','"breg-record-000000000001"','bad-remove'),error=>error.kind === 'invalid_request');
     const foreign = new BaseRegistryClient({baseUrl:'http://127.0.0.1:1'});
     await assert.rejects(foreign.batchRecords(batch,{items:[{operation:'create',data:{wide:1}}]},'foreign-batch'),error=>error.kind === 'invalid_request');

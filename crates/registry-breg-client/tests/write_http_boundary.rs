@@ -11,11 +11,11 @@ use axum::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
 use registry_breg_client::{
-    BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey, BRegLifecycleOperation,
-    BRegMetadataSelectionErrorKind, BRegPatchRequest, BRegPlanRefusal, BRegProblemCode,
-    BRegProtocolFailure, BRegRecordFormat, BRegRecordOptions, BRegRefusalCode, BaseRegistryClient,
-    BaseRegistryClientConfig, BaseRegistryClientError, RegistryRecordRepresentation,
-    RegistryRecordResponse, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
+    BRegBatchBuilder, BRegBatchError, BRegCreateRequest, BRegDirectWrite, BRegEtag,
+    BRegIdempotencyKey, BRegLifecycleOperation, BRegMetadataSelectionErrorKind, BRegPatchRequest,
+    BRegPlanRefusal, BRegProblemCode, BRegProtocolFailure, BRegRecordFormat, BRegRecordOptions,
+    BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
+    RegistryRecordRepresentation, RegistryRecordResponse, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use serde_json::{json, Map, Value};
@@ -326,6 +326,62 @@ fn metadata_fixture() -> Value {
     })
 }
 
+fn metadata_fixture_with_create_batch() -> Value {
+    let mut metadata = metadata_fixture();
+    metadata["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(operation(
+            "records.company.batch",
+            "POST",
+            "/v1/records/companies:batch",
+            "batch",
+            json!([]),
+            json!({
+                "fieldNames": "api",
+                "queryParameters": [],
+                "body": "batch",
+                "contentType": "application/json",
+                "idempotencyKeyRequired": true,
+                "mutationSemantics": "direct",
+                "maximumItems": 20,
+                "maximumBodyBytes": 4096,
+                "allowCreate": true,
+                "allowPatch": false,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["items"],
+                    "properties": {
+                        "items": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 20,
+                            "items": {
+                                "oneOf": [{
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["operation", "data"],
+                                    "properties": {
+                                        "operation": {"const": "create"},
+                                        "data": {"type": "object"}
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                }
+            }),
+            json!(["legal-name"]),
+            json!([]),
+        ));
+    metadata["entities"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"operation": "batch", "accessProfile": "company-writer"}));
+    metadata
+}
+
 fn record_body(format: BRegRecordFormat, record_identifier: &str) -> Value {
     let mut value = json!({
         "data": {
@@ -452,8 +508,15 @@ fn key(value: &str) -> BRegIdempotencyKey {
 fn create_binding(
     metadata: &registry_breg_client::BRegMetadata,
 ) -> registry_breg_client::BRegCreateBinding {
+    create_binding_for(metadata, "company-writer")
+}
+
+fn create_binding_for(
+    metadata: &registry_breg_client::BRegMetadata,
+    profile: &str,
+) -> registry_breg_client::BRegCreateBinding {
     let BRegDirectWrite::Create(binding) = metadata
-        .select_direct_write("records.company.create", "company-writer")
+        .select_direct_write("records.company.create", profile)
         .expect("select exact Create contract")
     else {
         panic!("Create binding expected")
@@ -1681,25 +1744,40 @@ async fn source_mismatch_and_invalid_bodies_are_refused_before_token_or_io() {
 #[tokio::test]
 async fn prepared_create_roundtrip_reuses_exact_request_and_refuses_changed_bindings() {
     use registry_breg_client::BRegPreparedCreate;
-    let mut changed_metadata = metadata_fixture();
-    changed_metadata["revision"] =
+
+    let mut route_metadata = metadata_fixture();
+    route_metadata["entities"][0]["route"] = json!("alternate-companies");
+    route_metadata["operations"][0]["path"] = json!("/v1/records/alternate-companies");
+    route_metadata["operations"][1]["path"] = json!("/v1/records/alternate-companies/{record_id}");
+    route_metadata["operations"][2]["path"] =
+        json!("/v1/records/alternate-companies/{record_id}/actions/submit");
+
+    let mut profile_metadata = metadata_fixture();
+    profile_metadata["operations"][0]["accessProfile"] = json!("recovery-writer");
+    profile_metadata["entities"][0]["operations"][0]["accessProfile"] = json!("recovery-writer");
+
+    let mut revision_metadata = metadata_fixture();
+    revision_metadata["revision"] =
         json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+
     let fixture = test_client(vec![
-        metadata_response(),
+        MockResponse::json(StatusCode::OK, metadata_fixture_with_create_batch()),
         mutation_response(
             StatusCode::CREATED,
             BRegRecordFormat::JsonLd,
             RECORD_ID,
             true,
         ),
-        metadata_response(),
+        MockResponse::json(StatusCode::OK, metadata_fixture_with_create_batch()),
+        MockResponse::json(StatusCode::OK, route_metadata),
+        MockResponse::json(StatusCode::OK, profile_metadata),
+        MockResponse::json(StatusCode::OK, revision_metadata),
         mutation_response(
             StatusCode::CREATED,
             BRegRecordFormat::JsonLd,
             RECORD_ID,
             true,
         ),
-        MockResponse::json(StatusCode::OK, changed_metadata),
     ])
     .await;
     let metadata = fixture
@@ -1709,6 +1787,9 @@ async fn prepared_create_roundtrip_reuses_exact_request_and_refuses_changed_bind
         .unwrap()
         .value;
     let binding = create_binding(&metadata);
+    let batch_binding = metadata
+        .select_batch("company", "company-writer")
+        .expect("select exact batch contract");
     let prepared = fixture
         .client
         .prepare_create(
@@ -1738,29 +1819,108 @@ async fn prepared_create_roundtrip_reuses_exact_request_and_refuses_changed_bind
         .unwrap()
         .value;
     let binding = create_binding(&metadata);
+    let route_binding = create_binding(
+        &fixture
+            .client
+            .registry_contract(Some("company-writer"))
+            .await
+            .unwrap()
+            .value,
+    );
+    let profile_binding = create_binding_for(
+        &fixture
+            .client
+            .registry_contract(Some("recovery-writer"))
+            .await
+            .unwrap()
+            .value,
+        "recovery-writer",
+    );
+    let revision_binding = create_binding(
+        &fixture
+            .client
+            .registry_contract(Some("company-writer"))
+            .await
+            .unwrap()
+            .value,
+    );
     let (request, idempotency, format) =
         fixture.client.recover_create(&binding, &prepared).unwrap();
+    assert!(!format!("{request:?}").contains("attempt-create"));
+
+    let request_count = fixture.requests.lock().unwrap().len();
+    let token_count = fixture.token.0.load(Ordering::SeqCst);
+    for changed_binding in [&route_binding, &profile_binding, &revision_binding] {
+        assert!(matches!(
+            fixture
+                .client
+                .create_record(changed_binding, &request, &idempotency, format)
+                .await,
+            Err(BaseRegistryClientError::InvalidRequest { .. })
+        ));
+        assert!(fixture
+            .client
+            .prepare_create(changed_binding, &request, &idempotency, format)
+            .is_err());
+    }
+    let changed_key = key("changed-recovery-key");
+    assert!(fixture
+        .client
+        .create_record(&binding, &request, &changed_key, format)
+        .await
+        .is_err());
+    assert!(fixture
+        .client
+        .prepare_create(&binding, &request, &changed_key, format)
+        .is_err());
+    assert!(fixture
+        .client
+        .create_record(&binding, &request, &idempotency, BRegRecordFormat::Json,)
+        .await
+        .is_err());
+    assert!(fixture
+        .client
+        .prepare_create(&binding, &request, &idempotency, BRegRecordFormat::Json,)
+        .is_err());
+    assert!(matches!(
+        BRegBatchBuilder::new(&batch_binding).create(&request),
+        Err(BRegBatchError::ItemContractMismatch)
+    ));
+
+    let ordinary = create_request();
+    for compatible_binding in [
+        &binding,
+        &route_binding,
+        &profile_binding,
+        &revision_binding,
+    ] {
+        fixture
+            .client
+            .prepare_create(
+                compatible_binding,
+                &ordinary,
+                &key("new-explicit-attempt"),
+                BRegRecordFormat::Json,
+            )
+            .expect("ordinary request remains reusable with compatible authority");
+    }
+    assert_eq!(fixture.requests.lock().unwrap().len(), request_count);
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), token_count);
+
     fixture
         .client
         .create_record(&binding, &request, &idempotency, format)
         .await
         .unwrap();
     let requests = fixture.requests.lock().unwrap().clone();
-    let replay = &requests[3];
+    let replay = &requests[6];
     assert_eq!(requests[1].uri, replay.uri);
     assert_eq!(requests[1].body, replay.body);
     assert_eq!(requests[1].accept, replay.accept);
     assert_eq!(requests[1].idempotency_key, replay.idempotency_key);
-    let changed = fixture
-        .client
-        .registry_contract(Some("company-writer"))
-        .await
-        .unwrap()
-        .value;
-    let token_count = fixture.token.0.load(Ordering::SeqCst);
     assert!(fixture
         .client
-        .recover_create(&create_binding(&changed), &prepared)
+        .recover_create(&revision_binding, &prepared)
         .is_err());
     let other = test_client(vec![]).await;
     assert!(other.client.recover_create(&binding, &prepared).is_err());
@@ -1769,7 +1929,7 @@ async fn prepared_create_roundtrip_reuses_exact_request_and_refuses_changed_bind
     tampered["body"] = json!("{\"data\":{\"secret\":\"canary\"}}");
     let tampered = BRegPreparedCreate::from_slice(&serde_json::to_vec(&tampered).unwrap()).unwrap();
     assert!(fixture.client.recover_create(&binding, &tampered).is_err());
-    assert_eq!(fixture.token.0.load(Ordering::SeqCst), token_count);
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), token_count + 1);
     assert!(!format!("{tampered:?}").contains("canary"));
     assert!(BRegPreparedCreate::from_slice(b"{\"version\":1,\"version\":1}").is_err());
 }

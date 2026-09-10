@@ -155,6 +155,9 @@ impl<'a> BRegBatchBuilder<'a> {
         if !self.binding.allows_create() {
             return Err(BRegBatchError::OperationNotPermitted);
         }
+        if request.is_recovery_bound() {
+            return Err(BRegBatchError::ItemContractMismatch);
+        }
         request
             .validate_fields(
                 self.binding.create_writable_api_names(),

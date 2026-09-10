@@ -832,6 +832,8 @@ fn metadata_operation_value(value: &breg_client_sdk::BRegMetadataOperation) -> V
             "remove_semantics": request.remove_semantics(),
             "maximum_items": request.maximum_items(),
             "maximum_body_bytes": request.maximum_body_bytes(),
+            "allow_create": request.allow_create(),
+            "allow_patch": request.allow_patch(),
         },
     })
 }

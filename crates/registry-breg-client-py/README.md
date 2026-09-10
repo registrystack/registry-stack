@@ -10,6 +10,10 @@ returned create, patch, action, Tombstone, Batch, lifecycle, and attachment
 objects are opaque authority values tied to the client source and registry
 revision.
 
+Each item in `contract.operations` includes a snake-case `request` projection.
+Its optional `allow_create` and `allow_patch` values are `True`, `False`, or
+`None`; an explicit `False` is preserved.
+
 ## Reads
 
 `get_record` and `list_records` return strict Registry Record projections.

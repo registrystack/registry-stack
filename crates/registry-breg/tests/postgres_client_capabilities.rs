@@ -36,6 +36,15 @@ fn registry() -> registry_breg::CompiledRegistry {
         ],
         "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["code"]},
         "constraints":[{"kind":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
+      },{
+        "id":"timestamp-entry","primaryDataset":"test-dataset","route":"timestamp-entries","mutationMode":"mutable","classification":"internal",
+        "fields":[
+          {"id":"code","type":"string","maxLength":64,"required":true,"classification":"internal"},
+          {"id":"valid-from","type":"timestamp","required":true,"classification":"internal"},
+          {"id":"valid-to","type":"timestamp","classification":"internal"}
+        ],
+        "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["code"]},
+        "constraints":[{"kind":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
       }],
       "accessProfiles":[{
         "id":"operator","default":true,"principalClaim":"registry_principal",
@@ -43,6 +52,8 @@ fn registry() -> registry_breg::CompiledRegistry {
         "grants":[{"entity":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
           "readableFields":["code","label","valid-from","valid-to"],"writableFields":["code","label","valid-from","valid-to"],
           "filterableFields":["code"],"sortableFields":["valid-from"],"allowCount":true,"revisionAccess":true,"rowBoundaries":[]
+        },{"entity":"timestamp-entry","operations":["snapshot"],
+          "readableFields":["code","valid-from","valid-to"],"writableFields":[],"rowBoundaries":[]
         }]
       }]
     }"#).expect("SDK fixture follows ordinary authoring contract");
@@ -192,6 +203,19 @@ async fn sdk_atomic_corrections_snapshots_revisions_tombstone_and_recovery_use_r
     assert_eq!(
         historical.value.value.items[0].record_identifier,
         old.value.data.record_identifier
+    );
+    let normalized_valid_at = client
+        .list_snapshot_records(
+            "timestamp-entries",
+            &BRegSnapshotListRequest::default()
+                .valid_at("2020-04-01T00:00:00.000Z")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        normalized_valid_at.value.valid_at.as_deref(),
+        Some("2020-04-01T00:00:00Z")
     );
 
     let first = client
