@@ -456,15 +456,38 @@ fn state_name(state: BRegRequestState) -> &'static str {
     }
 }
 
+const LEGACY_SAVED_ATTEMPT_VERSION: u32 = 0;
+const CURRENT_SAVED_ATTEMPT_VERSION: u32 = 1;
+
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SavedAttempt {
+    /// Version 0 is the legacy shape, where this field was absent. Compatible
+    /// additive fields retain version 1 so version-1 readers can ignore them;
+    /// incompatible shape changes must increment the version and fail closed.
+    #[serde(default)]
+    version: u32,
     subject: SubjectRef,
     actor: IssuerPrincipal,
     casework_profile: String,
     source_profile: String,
     binding: SourceBinding,
     native: Vec<u8>,
+}
+
+fn encode_saved_attempt(saved: &SavedAttempt) -> Result<Vec<u8>, SourceAdapterError> {
+    serde_json::to_vec(saved).map_err(|_| SourceAdapterError::Invalid)
+}
+
+fn decode_saved_attempt(bytes: &[u8]) -> Result<SavedAttempt, SourceAdapterError> {
+    let saved: SavedAttempt =
+        serde_json::from_slice(bytes).map_err(|_| SourceAdapterError::Invalid)?;
+    if !matches!(
+        saved.version,
+        LEGACY_SAVED_ATTEMPT_VERSION | CURRENT_SAVED_ATTEMPT_VERSION
+    ) {
+        return Err(SourceAdapterError::Invalid);
+    }
+    Ok(saved)
 }
 
 #[async_trait]
@@ -753,6 +776,7 @@ impl SourceAdapter for BregAdapter {
             .prepare_lifecycle_action(&authority, &record, &action, &key)
             .map_err(|_| SourceAdapterError::Invalid)?;
         let saved = SavedAttempt {
+            version: CURRENT_SAVED_ATTEMPT_VERSION,
             subject: input.subject.clone(),
             actor: input.actor.principal.clone(),
             casework_profile: input.actor.profile_id.clone(),
@@ -762,9 +786,7 @@ impl SourceAdapter for BregAdapter {
         };
         Ok(PreparedSourceAttempt {
             source_binding: binding,
-            recovery_evidence: RecoveryEvidence::new(
-                serde_json::to_vec(&saved).map_err(|_| SourceAdapterError::Invalid)?,
-            )?,
+            recovery_evidence: RecoveryEvidence::new(encode_saved_attempt(&saved)?)?,
         })
     }
 
@@ -772,9 +794,7 @@ impl SourceAdapter for BregAdapter {
         &self,
         input: ExecutePreparedRequest<'_>,
     ) -> Result<SourceReceipt, SourceAdapterError> {
-        let saved: SavedAttempt =
-            serde_json::from_slice(input.prepared.recovery_evidence.as_bytes())
-                .map_err(|_| SourceAdapterError::Invalid)?;
+        let saved = decode_saved_attempt(input.prepared.recovery_evidence.as_bytes())?;
         self.validate_subject(&saved.subject)?;
         if saved.actor != input.actor.principal
             || saved.casework_profile != input.actor.profile_id
@@ -857,6 +877,54 @@ impl SourceAdapter for BregAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn saved_attempt(version: u32) -> SavedAttempt {
+        SavedAttempt {
+            version,
+            subject: SubjectRef {
+                source_id: "source".into(),
+                kind: "company".into(),
+                id: "company-1".into(),
+            },
+            actor: IssuerPrincipal {
+                issuer: "https://idp.example".into(),
+                subject: "alice".into(),
+            },
+            casework_profile: "staff".into(),
+            source_profile: "reviewer".into(),
+            binding: SourceBinding {
+                source_revision: "7".into(),
+                version: "proposal-1".into(),
+                integrity: None,
+                generation: "generation-1".into(),
+            },
+            native: vec![1, 2, 3],
+        }
+    }
+
+    #[test]
+    fn saved_attempt_current_version_round_trips_with_additive_fields() {
+        let expected = saved_attempt(CURRENT_SAVED_ATTEMPT_VERSION);
+        let encoded = encode_saved_attempt(&expected).expect("encode current saved attempt");
+        let mut value: Value = serde_json::from_slice(&encoded).expect("saved attempt JSON");
+        assert_eq!(value["version"], CURRENT_SAVED_ATTEMPT_VERSION);
+        value.as_object_mut().expect("saved attempt object").insert(
+            "future_optional_note".into(),
+            Value::String("ignored".into()),
+        );
+
+        let decoded = decode_saved_attempt(
+            &serde_json::to_vec(&value).expect("encode additive saved attempt"),
+        )
+        .expect("decode current saved attempt");
+        assert_eq!(decoded.version, CURRENT_SAVED_ATTEMPT_VERSION);
+        assert_eq!(decoded.subject, expected.subject);
+        assert_eq!(decoded.actor, expected.actor);
+        assert_eq!(decoded.casework_profile, expected.casework_profile);
+        assert_eq!(decoded.source_profile, expected.source_profile);
+        assert_eq!(decoded.binding, expected.binding);
+        assert_eq!(decoded.native, expected.native);
+    }
 
     #[test]
     fn revision_order_is_canonical_positive_int64_only() {

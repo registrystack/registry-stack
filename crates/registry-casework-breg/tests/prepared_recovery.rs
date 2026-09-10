@@ -285,7 +285,7 @@ async fn metadata_refusal_cannot_masquerade_as_a_definitive_post_refusal() {
 }
 
 #[tokio::test]
-async fn prepared_apply_recovers_under_the_same_actor_with_a_refreshed_human_token() {
+async fn legacy_pre_version_apply_recovers_under_the_same_actor_with_a_refreshed_human_token() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(format!("/v1/records/companies/{ID}")))
@@ -342,7 +342,7 @@ async fn prepared_apply_recovers_under_the_same_actor_with_a_refreshed_human_tok
         generation: "generation-1".into(),
     };
     let original_actor = actor("alice");
-    let prepared = source
+    let current_prepared = source
         .prepare_action(PrepareActionRequest {
             subject: &subject(),
             displayed_binding: &displayed,
@@ -355,10 +355,19 @@ async fn prepared_apply_recovers_under_the_same_actor_with_a_refreshed_human_tok
         })
         .await
         .unwrap();
-    let evidence = String::from_utf8(prepared.recovery_evidence.as_bytes().to_vec()).unwrap();
+    let evidence =
+        String::from_utf8(current_prepared.recovery_evidence.as_bytes().to_vec()).unwrap();
     for forbidden in ["PROPOSAL-BODY-CANARY", "first-human-token"] {
         assert!(!evidence.contains(forbidden));
     }
+    let mut legacy_evidence: Value = serde_json::from_str(&evidence).unwrap();
+    assert_eq!(legacy_evidence["version"], 1);
+    legacy_evidence.as_object_mut().unwrap().remove("version");
+    let prepared = PreparedSourceAttempt {
+        source_binding: current_prepared.source_binding,
+        recovery_evidence: RecoveryEvidence::new(serde_json::to_vec(&legacy_evidence).unwrap())
+            .unwrap(),
+    };
     let result = source
         .execute_prepared(ExecutePreparedRequest {
             prepared: &prepared,
@@ -447,6 +456,44 @@ async fn recovery_refuses_a_different_actor_before_source_io() {
         .await
         .unwrap_err();
     assert_eq!(error, SourceAdapterError::Denied);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn recovery_refuses_an_unsupported_saved_attempt_version_before_source_io() {
+    let server = MockServer::start().await;
+    let source = adapter(&server.uri());
+    let original_actor = actor("alice");
+    let prepared = PreparedSourceAttempt {
+        source_binding: SourceBinding {
+            source_revision: "7".into(),
+            version: "7".into(),
+            integrity: Some(DIGEST.into()),
+            generation: "generation-1".into(),
+        },
+        recovery_evidence: RecoveryEvidence::new(
+            serde_json::to_vec(&json!({
+                "version": 2,
+                "subject": subject(),
+                "actor": original_actor.principal,
+                "casework_profile": "staff",
+                "source_profile": "reviewer",
+                "binding": {
+                    "sourceRevision": "7",
+                    "version": "7",
+                    "integrity": DIGEST,
+                    "generation": "generation-1"
+                },
+                "native": []
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    };
+    let error = execute_recovery(&source, &original_actor, &prepared)
+        .await
+        .unwrap_err();
+    assert_eq!(error, SourceAdapterError::Invalid);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
