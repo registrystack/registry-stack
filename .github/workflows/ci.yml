@@ -670,6 +670,7 @@ jobs:
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_hosted
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_hosted_acceptance
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_clocks
+          docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_inbox_ordering
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_source_retention
       - name: Verify hosted authorization, assignment, replay, and retention
         env:
@@ -681,6 +682,10 @@ jobs:
         env:
           CASEWORK_CLOCK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_clocks
         run: cargo test --locked --profile ci -p registry-casework --features postgres-test --lib clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget
+      - name: Verify effective-due inbox ordering and exact source selection
+        env:
+          CASEWORK_INBOX_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_inbox_ordering
+        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test inbox_ordering_postgres
       - name: Verify standalone hosted work through the maintained client
         env:
           CASEWORK_HOSTED_ACCEPTANCE_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_hosted_acceptance
