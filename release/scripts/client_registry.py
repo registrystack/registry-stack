@@ -56,7 +56,6 @@ CLIENTS = {
             "evidence-client",
             "relay-client",
             "breg-client",
-            "casework-client",
         ),
         pypi_project="registry-stack-client",
         wheel_stem="registry_stack_client",
@@ -68,7 +67,8 @@ WHEEL_PLATFORMS = (
     "manylinux_2_17_aarch64.manylinux2014_aarch64",
     "macosx_11_0_arm64",
 )
-STACK_PYTHON_NAMESPACES = ("breg", "casework", "discovery", "evidence", "relay")
+STACK_PYTHON_NAMESPACES = ("breg", "discovery", "evidence", "relay")
+CASEWORK_CLIENT_MINIMUM_VERSION = (0, 30, 0)
 MAXIMUM_ARCHIVE_MEMBERS = 128
 MAXIMUM_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 MAXIMUM_REGISTRY_METADATA_BYTES = 4 * 1024 * 1024
@@ -101,14 +101,55 @@ def client_definition(client: str) -> ClientDefinition:
         raise ClientRegistryError(f"unknown client {client!r}") from exc
 
 
-def npm_platforms(client: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+def release_version(version: str) -> tuple[int, int, int]:
+    parts = version.split(".")
+    if len(parts) != 3 or any(not part.isdigit() for part in parts):
+        raise ClientRegistryError(f"unsupported client version {version!r}")
+    major, minor, patch = (int(part) for part in parts)
+    return major, minor, patch
+
+
+def includes_casework(version: str, *, include_casework: bool = False) -> bool:
+    """Select Casework automatically only after it joins the public roster.
+
+    The explicit override is for local candidate integration. It must never be
+    inferred from the current checkout when validating already-published bytes.
+    """
+    return include_casework or release_version(version) >= CASEWORK_CLIENT_MINIMUM_VERSION
+
+
+def native_binary_stems(
+    client: str, version: str, *, include_casework: bool = False
+) -> tuple[str, ...]:
     definition = client_definition(client)
+    stems = definition.native_binary_stems
+    if client == "stack" and includes_casework(
+        version, include_casework=include_casework
+    ):
+        stems += ("casework-client",)
+    return stems
+
+
+def stack_python_namespaces(
+    version: str, *, include_casework: bool = False
+) -> tuple[str, ...]:
+    namespaces = STACK_PYTHON_NAMESPACES
+    if includes_casework(version, include_casework=include_casework):
+        namespaces += ("casework",)
+    return tuple(sorted(namespaces))
+
+
+def npm_platforms(
+    client: str, version: str, *, include_casework: bool = False
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
     return tuple(
         (
             platform,
             tuple(
                 f"{stem}.{platform}.node"
-                for stem in definition.native_binary_stems
+                for stem in native_binary_stems(
+                    client, version, include_casework=include_casework
+                )
             ),
         )
         for platform in NPM_PLATFORM_NAMES
@@ -119,7 +160,7 @@ def expected_optional_dependencies(client: str, version: str) -> dict[str, str]:
     definition = client_definition(client)
     return {
         f"{definition.npm_root_package}-{platform}": version
-        for platform, _binaries in npm_platforms(client)
+        for platform in NPM_PLATFORM_NAMES
     }
 
 
@@ -162,7 +203,7 @@ def npm_tarballs(directory: Path, version: str, client: str) -> list[Path]:
     return [
         *(
             directory / f"{definition.npm_tarball_stem}-{platform}-{version}.tgz"
-            for platform, _binaries in npm_platforms(client)
+            for platform in NPM_PLATFORM_NAMES
         ),
         directory / f"{definition.npm_tarball_stem}-{version}.tgz",
     ]
@@ -229,7 +270,13 @@ def npm_package_metadata(path: Path) -> tuple[dict[str, Any], set[str]]:
     return metadata, names
 
 
-def validate_npm_packages(directory: Path, version: str, client: str) -> list[Path]:
+def validate_npm_packages(
+    directory: Path,
+    version: str,
+    client: str,
+    *,
+    include_casework: bool = False,
+) -> list[Path]:
     definition = client_definition(client)
     expected_optional = expected_optional_dependencies(client, version)
     paths = npm_tarballs(directory, version, client)
@@ -237,7 +284,9 @@ def validate_npm_packages(directory: Path, version: str, client: str) -> list[Pa
         metadata, names = npm_package_metadata(path)
         expected_name = definition.npm_root_package
         expected_binaries = None
-        for platform, binaries in npm_platforms(client):
+        for platform, binaries in npm_platforms(
+            client, version, include_casework=include_casework
+        ):
             if path.name == f"{definition.npm_tarball_stem}-{platform}-{version}.tgz":
                 expected_name = f"{definition.npm_root_package}-{platform}"
                 expected_binaries = binaries
@@ -267,7 +316,13 @@ def validate_npm_packages(directory: Path, version: str, client: str) -> list[Pa
     return paths
 
 
-def validate_wheels(directory: Path, version: str, client: str) -> list[Path]:
+def validate_wheels(
+    directory: Path,
+    version: str,
+    client: str,
+    *,
+    include_casework: bool = False,
+) -> list[Path]:
     definition = client_definition(client)
     paths = wheel_paths(directory, version, client)
     for path in paths:
@@ -293,12 +348,21 @@ def validate_wheels(directory: Path, version: str, client: str) -> list[Path]:
         if len(names) != len(set(names)):
             raise ClientRegistryError(f"Python wheel {path.name} repeats a member")
         if client == "stack":
-            for namespace in STACK_PYTHON_NAMESPACES:
+            expected_namespaces = stack_python_namespaces(
+                version, include_casework=include_casework
+            )
+            for namespace in expected_namespaces:
                 prefix = f"registry_client/{namespace}/"
                 if not any(name.startswith(prefix) for name in names):
                     raise ClientRegistryError(
                         f"Python wheel {path.name} has no {namespace} namespace"
                     )
+            if "casework" not in expected_namespaces and any(
+                name.startswith("registry_client/casework/") for name in names
+            ):
+                raise ClientRegistryError(
+                    f"Python wheel {path.name} unexpectedly contains the casework namespace"
+                )
         metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
         if len(metadata_names) != 1:
             raise ClientRegistryError(
@@ -324,9 +388,17 @@ def validate_wheels(directory: Path, version: str, client: str) -> list[Path]:
     return paths
 
 
-def validate_distribution(directory: Path, version: str, client: str) -> None:
-    validate_npm_packages(directory, version, client)
-    validate_wheels(directory, version, client)
+def validate_distribution(
+    directory: Path,
+    version: str,
+    client: str,
+    *,
+    include_casework: bool = False,
+) -> None:
+    validate_npm_packages(
+        directory, version, client, include_casework=include_casework
+    )
+    validate_wheels(directory, version, client, include_casework=include_casework)
 
 
 def npm_registry_state(
@@ -443,6 +515,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate.add_argument("--directory", type=Path, required=True)
     validate.add_argument("--version", required=True)
     validate.add_argument("--client", choices=sorted(CLIENTS), required=True)
+    validate.add_argument("--include-casework", action="store_true")
     bind = subparsers.add_parser("bind-optional-deps")
     bind.add_argument("--package-json", type=Path, required=True)
     bind.add_argument("--version", required=True)
@@ -453,6 +526,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     pypi.add_argument("--directory", type=Path, required=True)
     pypi.add_argument("--version", required=True)
     pypi.add_argument("--client", choices=sorted(CLIENTS), required=True)
+    pypi.add_argument("--include-casework", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -460,7 +534,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         if args.command == "validate-dist":
-            validate_distribution(args.directory, args.version, args.client)
+            validate_distribution(
+                args.directory,
+                args.version,
+                args.client,
+                include_casework=args.include_casework,
+            )
             print("validated")
         elif args.command == "bind-optional-deps":
             bind_optional_dependencies(args.package_json, args.version, args.client)
@@ -468,7 +547,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "npm-state":
             print(npm_registry_state(args.tarball, npm_metadata(args.tarball)))
         elif args.command == "pypi-state":
-            wheels = validate_wheels(args.directory, args.version, args.client)
+            wheels = validate_wheels(
+                args.directory,
+                args.version,
+                args.client,
+                include_casework=args.include_casework,
+            )
             print(
                 pypi_registry_state(
                     wheels,

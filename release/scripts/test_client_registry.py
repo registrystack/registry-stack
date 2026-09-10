@@ -57,11 +57,12 @@ def write_wheel(
     *,
     project: str = "registry-relay-client",
     namespaces: tuple[str, ...] = (),
+    version: str = "1.2.3",
 ) -> None:
     with zipfile.ZipFile(path, mode="w") as archive:
         archive.writestr(
-            "registry_relay_client-1.2.3.dist-info/METADATA",
-            f"Name: {project}\nVersion: 1.2.3\n",
+            f"registry_relay_client-{version}.dist-info/METADATA",
+            f"Name: {project}\nVersion: {version}\n",
         )
         for namespace in namespaces:
             archive.writestr(f"registry_client/{namespace}/__init__.py", "")
@@ -76,15 +77,21 @@ class ClientRegistryTest(unittest.TestCase):
         self.client = "relay"
         self._write_distribution(self.client)
 
-    def _write_distribution(self, client: str) -> None:
+    def _write_distribution(
+        self, client: str, *, include_casework: bool = False
+    ) -> None:
         definition = self.module.client_definition(client)
         optional = {
             f"{definition.npm_root_package}-{platform}": self.version
-            for platform, _binary in self.module.npm_platforms(client)
+            for platform, _binary in self.module.npm_platforms(
+                client, self.version, include_casework=include_casework
+            )
         }
         for path, (platform, binary) in zip(
             self.module.npm_tarballs(self.directory, self.version, client)[:-1],
-            self.module.npm_platforms(client),
+            self.module.npm_platforms(
+                client, self.version, include_casework=include_casework
+            ),
             strict=True,
         ):
             write_npm_package(
@@ -104,8 +111,13 @@ class ClientRegistryTest(unittest.TestCase):
                 path,
                 project=definition.pypi_project,
                 namespaces=(
-                    self.module.STACK_PYTHON_NAMESPACES if client == "stack" else ()
+                    self.module.stack_python_namespaces(
+                        self.version, include_casework=include_casework
+                    )
+                    if client == "stack"
+                    else ()
                 ),
+                version=self.version,
             )
 
     def tearDown(self) -> None:
@@ -139,6 +151,66 @@ class ClientRegistryTest(unittest.TestCase):
             ],
         )
 
+    def test_published_0_29_validation_keeps_the_historical_roster(self) -> None:
+        self.version = "0.29.0"
+        self._write_distribution("stack")
+        self.module.validate_distribution(self.directory, self.version, "stack")
+        platform = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[0]
+        _metadata, names = self.module.npm_package_metadata(platform)
+        native = sorted(name for name in names if name.endswith(".node"))
+        self.assertNotIn("package/casework-client.darwin-arm64.node", native)
+        wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
+        with zipfile.ZipFile(wheel) as archive:
+            self.assertFalse(
+                any(name.startswith("registry_client/casework/") for name in archive.namelist())
+            )
+
+    def test_explicit_0_29_candidate_validation_includes_casework(self) -> None:
+        self.version = "0.29.0"
+        self._write_distribution("stack", include_casework=True)
+        self.module.validate_distribution(
+            self.directory,
+            self.version,
+            "stack",
+            include_casework=True,
+        )
+        platform = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[0]
+        _metadata, names = self.module.npm_package_metadata(platform)
+        self.assertIn("package/casework-client.darwin-arm64.node", names)
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "wrong native payload",
+        ):
+            self.module.validate_npm_packages(
+                self.directory, self.version, "stack"
+            )
+        wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "unexpectedly contains the casework namespace",
+        ):
+            self.module.validate_wheels(self.directory, self.version, "stack")
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = self.module.main(
+                [
+                    "validate-dist",
+                    "--directory",
+                    str(self.directory),
+                    "--version",
+                    self.version,
+                    "--client",
+                    "stack",
+                    "--include-casework",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "validated\n")
+
     def test_rejects_a_unified_wheel_without_casework(self) -> None:
         self._write_distribution("stack")
         wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
@@ -147,7 +219,7 @@ class ClientRegistryTest(unittest.TestCase):
             project="registry-stack-client",
             namespaces=tuple(
                 value
-                for value in self.module.STACK_PYTHON_NAMESPACES
+                for value in self.module.stack_python_namespaces(self.version)
                 if value != "casework"
             ),
         )
@@ -186,7 +258,9 @@ class ClientRegistryTest(unittest.TestCase):
             binary="relay-client.linux-x64-gnu.node",
             optional_dependencies={
                 f"{definition.npm_root_package}-{platform}": self.version
-                for platform, _binary in self.module.npm_platforms(self.client)
+                for platform, _binary in self.module.npm_platforms(
+                    self.client, self.version
+                )
             },
         )
         with self.assertRaisesRegex(
@@ -309,7 +383,9 @@ class BindOptionalDependenciesTest(unittest.TestCase):
     def _expected(self) -> dict[str, str]:
         return {
             f"{self.definition.npm_root_package}-{platform}": self.version
-            for platform, _binary in self.module.npm_platforms(self.client)
+            for platform, _binary in self.module.npm_platforms(
+                self.client, self.version
+            )
         }
 
     def test_binds_every_platform_at_the_exact_version(self) -> None:
@@ -338,7 +414,7 @@ class BindOptionalDependenciesTest(unittest.TestCase):
         )
         for path, (platform, binary) in zip(
             tarballs[:-1],
-            self.module.npm_platforms(self.client),
+            self.module.npm_platforms(self.client, self.version),
             strict=True,
         ):
             write_npm_package(

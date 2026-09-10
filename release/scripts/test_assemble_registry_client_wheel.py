@@ -54,7 +54,7 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             self.wheels[product] = wheel
 
     def run_assembler(
-        self, *, version: str | None = None
+        self, *, version: str | None = None, include_casework: bool = True
     ) -> subprocess.CompletedProcess[str]:
         command = [
             "python3",
@@ -64,6 +64,8 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             "--output-dir",
             str(self.directory / "dist"),
         ]
+        if include_casework:
+            command.append("--include-casework")
         for product, wheel in self.wheels.items():
             command.extend((f"--{product}-wheel", str(wheel)))
         return subprocess.run(command, capture_output=True, text=True, check=False)
@@ -173,6 +175,11 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
         result = self.run_assembler(version="99.0.0")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("facade version does not match 99.0.0", result.stderr)
+
+    def test_0_29_refuses_the_casework_facade_without_explicit_selection(self) -> None:
+        result = self.run_assembler(include_casework=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("explicit --include-casework", result.stderr)
 
     def test_repeated_assembly_is_byte_for_byte_deterministic(self) -> None:
         first = self.run_assembler()
