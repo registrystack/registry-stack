@@ -18,6 +18,37 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+## v0.29.0 beta-41
+
+- BREAKING: request-lifecycle webhook bodies add required
+  `request.reasonPresent` and optional `request.reason`. Update strict receiver
+  schemas before activating this release. Deliveries that can match rejection
+  or revision now need a destination `classificationCeiling` of at least
+  `internal`, or lifecycle filters that exclude both outcomes. See
+  [Base Registry Engine API](../reference/breg-api/) and
+  [deliver declared events](../operate/breg-webhooks/).
+
+{/* Evidence: crates/registry-breg/src/postgres/request_read.rs;
+    crates/registry-breg/src/request_events.rs. */}
+
+- Base Registry Engine adds governed request attachment slots, PostgreSQL or
+  operator-bound S3 storage, and asynchronous external verification. Select
+  storage and verification before the first upload, which pins both bindings.
+  Request-detail erasure now includes attachment references; external cleanup
+  retries remain an operator responsibility. See
+  [runtime configuration](../reference/breg-configuration/) and
+  [retain, erase, and audit](../operate/breg-retention/).
+- Reject and request-revision actions accept an optional explanation. Request
+  grants default to showing retained reason text; set `readableRequestFields`
+  to `[]` to hide it. Current and retained proposal decisions follow the selected
+  profile's authority. See [Base Registry Engine API](../reference/breg-api/).
+- `bregctl dev events` inspects receipts from the local webhook receiver, with
+  captured values available only through `--include-payload`. See
+  [deliver declared events](../operate/breg-webhooks/).
+
+{/* Evidence: crates/registry-breg/src/{attachment_storage,attachment_verification,request_retention,request_workflow}.rs;
+    crates/registry-bregctl/src/dev/events.rs. */}
+
 - `bregctl dev` reports the check that refused a start instead of only the
   private log directory. The rehearsal, package build, activation, and
   verification run inside a detached supervisor, so a refused journey step now
@@ -79,11 +110,10 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg-client-node/client.d.ts;
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi. */}
 
-- The attachment download operation no longer promises a filename in
-  `Content-Disposition`. The route sends the bare `attachment` disposition, and
-  no stored slot metadata holds a filename, so the served OpenAPI document now
-  pins the header to that exact value. A caller that read the old description
-  and expected a name to save the bytes under has to choose one itself. See
+- The attachment download operation sends the bare `attachment` disposition in
+  `Content-Disposition`. No stored slot metadata holds a filename, and the served
+  OpenAPI document pins the header to that exact value. Callers choose their own
+  filename when saving the bytes. See
   [Base Registry Engine API](../reference/breg-api/).
 
 {/* Evidence: crates/registry-breg/src/attachment.rs, DOWNLOAD_CONTENT_DISPOSITION;
