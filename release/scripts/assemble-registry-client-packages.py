@@ -15,8 +15,8 @@ It produces, into `--output-dir`:
 
 Prerequisites this script does not perform:
 
-  * the four Node bindings built for this platform, from each of
-    `crates/registry-{discovery,evidence,relay,breg}-client-node`:
+  * the five Node bindings built for this platform, from each of
+    `crates/registry-{discovery,evidence,relay,breg,casework}-client-node`:
     `npm ci && npm run build:debug` (or `npm run build` for a release build)
   * a maturin for the Python half, passed with `--maturin`; the release
     workflows install the pinned one from
@@ -48,6 +48,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PRODUCTS = ("discovery", "evidence", "relay", "breg")
+NODE_PRODUCTS = (*PRODUCTS, "casework")
 # `registry-breg-client-py` publishes nothing on its own, so its wheel keeps
 # the name that says so; the other three carry their product name.
 WHEEL_STEMS = {
@@ -150,7 +151,7 @@ def node_steps(
             root,
         ),
     ]
-    for product in PRODUCTS:
+    for product in NODE_PRODUCTS:
         binding = root / "crates" / f"registry-{product}-client-node"
         steps.append(
             Step(

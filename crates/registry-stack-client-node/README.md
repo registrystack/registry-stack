@@ -1,7 +1,7 @@
 # @registrystack/client
 
-One versioned Node.js package for the Discovery, Evidence, Relay, and Base
-Registry Engine client APIs in Registry Stack.
+One versioned Node.js package for the Discovery, Evidence, Relay, Base Registry
+Engine, and Casework client APIs in Registry Stack.
 
 ## Install
 
@@ -11,16 +11,19 @@ npm install "@registrystack/client@<version>"
 
 Requires Node.js 22.12 or newer. Supported targets are macOS arm64, Linux
 arm64 with glibc, and Linux x64 with glibc; installing the package pulls in
-one platform-specific optional dependency containing all four native
+one platform-specific optional dependency containing all five native
 bindings.
 
 ## Usage
 
 ```js
-const { discovery, evidence, relay, breg } = require('@registrystack/client');
+const { discovery, evidence, relay, breg, casework } = require('@registrystack/client');
 
 const registry = new breg.BaseRegistryClient({
   baseUrl: 'https://registry.example.invalid/',
+});
+const work = new casework.CaseworkClient({
+  baseUrl: 'https://casework.example.invalid/',
 });
 ```
 
@@ -32,6 +35,8 @@ const registry = new breg.BaseRegistryClient({
   assertions.
 - `relay`: Registry Relay, scoped read-only APIs over existing sources.
 - `breg`: Base Registry Engine, records, contracts, writes, and lifecycle.
+- `casework`: Registry Casework, staff inbox, claims, drafts, decisions,
+  recovery, history, holdings, and directory bootstrap.
 
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different.
@@ -80,6 +85,23 @@ package is published beginning with Registry Stack v0.26.1. Existing
 standalone client packages remain available for earlier versions, but the
 release process does not publish new standalone versions once this package
 is active.
+
+Casework is available from a candidate package built from source that contains
+the Casework crates. The already-published `0.29.0` package predates Casework;
+matching the workspace version in a local candidate does not replace those
+published bytes or claim that the registry package contains this module.
+
+## Casework notes
+
+The Casework module is for a trusted server host. Each call takes that request's
+bearer token and selected Casework profile; source-reading calls also take the
+selected source profile. The client does not retain them. Browsers should send
+only the host's session cookie. Claim, release, and decide consume the
+caller-filtered action returned on the item, including its exact route and
+`ifMatch` revision. Mutations require a caller-controlled idempotency key and
+are never retried automatically. After a lost response, use
+`recoverDecisionByKey` with the original key so recovery does not depend on the
+attempt identifier being received.
 
 ## Documentation
 

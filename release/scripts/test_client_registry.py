@@ -119,6 +119,7 @@ class ClientRegistryTest(unittest.TestCase):
             sorted(name for name in names if name.endswith(".node")),
             [
                 "package/breg-client.darwin-arm64.node",
+                "package/casework-client.darwin-arm64.node",
                 "package/discovery-client.darwin-arm64.node",
                 "package/evidence-client.darwin-arm64.node",
                 "package/relay-client.darwin-arm64.node",
@@ -399,6 +400,7 @@ class CheckedInClientManifestTest(unittest.TestCase):
             "discovery": repo / "crates/registry-discovery-client-node",
             "evidence": repo / "crates/registry-evidence-client-node",
             "relay": repo / "crates/registry-relay-client-node",
+            "casework": repo / "crates/registry-casework-client-node",
             "stack": repo / "crates/registry-stack-client-node",
         }
         for client, root in roots.items():
@@ -423,7 +425,9 @@ class ClientReadmeInstallTest(unittest.TestCase):
             for pattern in ("*-client-node", "*-client-py")
             for path in (repo / "crates").glob(f"{pattern}/README.md")
         )
-        self.assertEqual(10, len(found), found)
+        # Four products have Rust, Node and Python coverage; Casework is Rust
+        # and Node at the checkpoint, and both unified facades remain present.
+        self.assertEqual(11, len(found), found)
         return found
 
     def test_install_lines_name_only_the_unified_packages(self) -> None:

@@ -57,6 +57,7 @@ jobs:
       relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
       relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
       breg_contracts: ${{ steps.filter.outputs.breg_contracts }}
+      casework_postgres: ${{ steps.filter.outputs.casework_postgres }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
@@ -613,6 +614,56 @@ jobs:
       - name: Relay client source neutrality
         run: products/relay-v2/scripts/check-source-neutrality.sh
 
+  casework-postgres:
+    name: Casework PostgreSQL transactions
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.casework_postgres == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: casework
+          POSTGRES_USER: casework
+          POSTGRES_PASSWORD: casework_test
+        options: >-
+          --health-cmd "pg_isready -U casework -d casework"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Verify Casework HTTP contract and dependency direction
+        run: |
+          python3 products/casework/scripts/generate_openapi.py --check
+          python3 products/casework/scripts/check_dependency_direction.py
+          python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'
+      - name: Verify claims, reconciliation, and durable attempts
+        env:
+          CASEWORK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
+        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test postgres_transactions
+      - name: Create isolated visibility-test database
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_visibility
+      - name: Verify caller visibility and bounded source reads
+        env:
+          CASEWORK_VISIBILITY_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_visibility
+        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test service_visibility
+
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})
     needs: changes
@@ -754,6 +805,7 @@ jobs:
       - relay-client-contracts
       - breg-contracts
       - identifiers
+      - casework-postgres
     runs-on: ubuntu-slim
     env:
       RUST_JOB_RESULTS: ${{ toJSON(needs) }}
@@ -1472,13 +1524,14 @@ jobs:
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
+            crates/registry-casework-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Build and test Node bindings
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node registry-breg-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node registry-breg-client-node registry-casework-client-node; do
             (
               cd "crates/${client}"
               npm ci
@@ -1548,6 +1601,7 @@ jobs:
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
+            crates/registry-casework-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Install pinned Linux client build tools
@@ -1564,7 +1618,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in discovery evidence relay breg; do
+          for client in discovery evidence relay breg casework; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             release/scripts/build-linux-node-client \
@@ -1572,8 +1626,14 @@ jobs:
               --target "${{ matrix.target }}" \
               --napi-platform "${{ matrix.napi_platform }}" \
               --zig-python "${RUNNER_TEMP}/maturin/bin/python"
-            if [[ "${client}" == breg ]]; then
-              node -e "const { BaseRegistryClient } = require('${client_dir}/client'); new BaseRegistryClient({ baseUrl: 'https://registry.invalid' })"
+            if [[ "${client}" == breg || "${client}" == casework ]]; then
+              class_name=BaseRegistryClient
+              base_url=https://registry.invalid
+              if [[ "${client}" == casework ]]; then
+                class_name=CaseworkClient
+                base_url=https://casework.invalid
+              fi
+              node -e "const Client = require('${client_dir}/client')['${class_name}']; new Client({ baseUrl: '${base_url}' })"
               continue
             fi
             smoke="${RUNNER_TEMP}/node-smoke-${client}"
@@ -1586,7 +1646,7 @@ jobs:
           done
           client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
           platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
-          for client in discovery evidence relay breg; do
+          for client in discovery evidence relay breg casework; do
             cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
               "${platform_dir}/"
           done
@@ -1623,6 +1683,7 @@ jobs:
       - relay-client-contracts
       - breg-contracts
       - identifiers
+      - casework-postgres
       - release-tool
       - release-source-proof
       - evidence-tutorials

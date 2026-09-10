@@ -637,6 +637,7 @@ jobs:
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
+            crates/registry-casework-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Restore native client Cargo cache
@@ -646,7 +647,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+          key: registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
             registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
 
@@ -793,7 +794,7 @@ jobs:
           fi
           clients=(discovery evidence relay)
           if [[ "${unified_client}" -eq 1 ]]; then
-            clients+=(breg)
+            clients+=(breg casework)
           fi
           for client in "${clients[@]}"; do
             if [[ "${client}" == discovery ]] &&
@@ -851,7 +852,7 @@ jobs:
           done
           if [[ "${unified_client}" -eq 1 ]]; then
             platform_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node/npm/${{ matrix.napi_platform }}"
-            for client in discovery evidence relay breg; do
+            for client in discovery evidence relay breg casework; do
               cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
                 "${platform_dir}/"
             done
@@ -892,7 +893,7 @@ jobs:
               test -z "$(find node_modules/@registrystack/client \
                 -maxdepth 1 -name '*.node' -print -quit)"
               test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
-                -maxdepth 1 -name '*.node' | wc -l)" -eq 4
+                -maxdepth 1 -name '*.node' | wc -l)" -eq 5
               cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
                 "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" .
               node smoke-registry-client-package.js

@@ -24,6 +24,7 @@ from ci_changes import (
     IDENTIFIER_CATALOG_INPUTS,
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     BREG_PACKAGES,
+    CASEWORK_PACKAGES,
     RELAY_CLIENT_PACKAGES,
     RELAY_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
@@ -269,6 +270,7 @@ class CiChangesTest(unittest.TestCase):
         self,
     ) -> None:
         selectors = {
+            "casework-postgres": "needs.changes.outputs.casework_postgres == 'true'",
             "platform-fuzz": "needs.changes.outputs.platform == 'true'",
             "platform-coverage": "needs.changes.outputs.platform == 'true'",
             "rust-quality": "needs.changes.outputs.rust == 'true'",
@@ -329,6 +331,7 @@ class CiChangesTest(unittest.TestCase):
             "breg-contracts",
             "identifiers",
             "rust-result",
+            "casework-postgres",
             "release-tool",
             "release-tool-required",
             "release-source-proof",
@@ -359,6 +362,7 @@ class CiChangesTest(unittest.TestCase):
                 "relay-client-contracts",
                 "breg-contracts",
                 "identifiers",
+                "casework-postgres",
             ),
             "release-tool-required": ("changes", "release-tool"),
             "release-source-proof-required": ("changes", "release-source-proof"),
@@ -380,6 +384,7 @@ class CiChangesTest(unittest.TestCase):
                 "relay-client-contracts",
                 "breg-contracts",
                 "identifiers",
+                "casework-postgres",
                 "release-tool",
                 "release-source-proof",
                 "evidence-tutorials",
@@ -433,7 +438,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(26, len(final_needs))
+        self.assertEqual(27, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]
@@ -703,6 +708,16 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertTrue(outputs["relay_v2_contracts"])
         self.assertTrue(outputs["editors"])
+
+    def test_casework_product_and_core_select_the_checkpoint_crates(self) -> None:
+        product = classify(self.workspace, ("products/casework/README.md",))
+        self.assertEqual(set(product["rust_packages"]) & CASEWORK_PACKAGES, set(CASEWORK_PACKAGES))
+        selected = {row["name"] for row in product["rust_matrix"]["include"]}
+        self.assertIn("casework", selected)
+        self.assertTrue(product["casework_postgres"])
+        core = classify(self.workspace, ("crates/registry-casework-core/src/adapter.rs",))
+        self.assertTrue(CASEWORK_PACKAGES <= set(core["rust_packages"]))
+        self.assertTrue(core["casework_postgres"])
 
     def test_breg_paths_select_its_shard_and_product_gate(self) -> None:
         for path in (
@@ -1256,7 +1271,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("registry-relay-client", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"breg", "stack-client", "developer-tools"},
+            {"breg", "casework", "stack-client", "developer-tools"},
         )
 
     def test_registry_record_change_runs_both_product_clients_and_facade(self) -> None:

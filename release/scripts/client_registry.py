@@ -56,6 +56,7 @@ CLIENTS = {
             "evidence-client",
             "relay-client",
             "breg-client",
+            "casework-client",
         ),
         pypi_project="registry-stack-client",
         wheel_stem="registry_stack_client",

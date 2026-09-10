@@ -53,6 +53,14 @@ SHARDS = {
         "registry-bregctl",
         "registry-linkml",
     ),
+    "casework": (
+        "registry-casework-core",
+        "registry-casework-breg",
+        "registry-casework",
+        "registry-caseworkctl",
+        "registry-casework-client",
+        "registry-casework-client-node",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -78,6 +86,7 @@ MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 BREG_PACKAGES = frozenset(SHARDS["breg"])
+CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # These are the cross-product semantic commitments implemented independently by
@@ -639,6 +648,8 @@ def classify(
                 seeds.update(RELAY_V2_PACKAGES)
             elif path.startswith("products/breg/"):
                 seeds.update(BREG_PACKAGES)
+            elif path.startswith("products/casework/"):
+                seeds.update(CASEWORK_PACKAGES)
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
@@ -875,6 +886,7 @@ def classify(
         or bool(affected & BREG_PACKAGES)
         or "registry-evidence" in affected,
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
+        "casework_postgres": bool(affected & CASEWORK_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,

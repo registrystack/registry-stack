@@ -1,4 +1,4 @@
-import { breg, discovery, evidence, relay } from '..'
+import { breg, casework, discovery, evidence, relay } from '..'
 
 const bregClient = new breg.BaseRegistryClient({ baseUrl: 'https://registry.example.invalid/' })
 const discoveryClient = new discovery.DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/' })
@@ -9,10 +9,12 @@ const evidenceClient = new evidence.EvidenceClient({
   token: { static: 'placeholder-token' },
 })
 const relayClient = new relay.RelayClient({ baseUrl: 'https://relay.example.invalid/' })
+const caseworkClient = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' })
 
 bregClient.listRecords('people', { top: 25 })
 relayClient.listRecords('people', { pageSize: 25 })
 void discoveryClient
+void caseworkClient.description('header.payload.signature', 'staff')
 
 // The progressive request surface refines the generated declaration: it names
 // the request shape and discriminates the result on its response format.

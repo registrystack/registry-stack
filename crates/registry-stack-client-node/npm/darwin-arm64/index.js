@@ -4,4 +4,5 @@ module.exports = {
   evidence: require('./evidence-client.darwin-arm64.node'),
   relay: require('./relay-client.darwin-arm64.node'),
   breg: require('./breg-client.darwin-arm64.node'),
+  casework: require('./casework-client.darwin-arm64.node'),
 };
