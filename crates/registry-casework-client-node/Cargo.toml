@@ -1,0 +1,27 @@
+[package]
+name = "registry-casework-client-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Node.js binding for the Registry Casework client, via napi-rs."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi.workspace = true
+napi-derive.workspace = true
+registry-casework-client.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

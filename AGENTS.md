@@ -4,7 +4,7 @@ This is the Registry Stack monorepo: registry-facing services over the data
 institutions already hold and the registries they do not hold yet. Pre-1.0;
 APIs and deployment contracts may change.
 
-Three independent runtime products are relevant:
+Four independent runtime products are relevant:
 
 - **Base Registry Engine** compiles a declared registry project into a
   PostgreSQL-backed writable registry: schema, REST API, per-profile
@@ -13,10 +13,15 @@ Three independent runtime products are relevant:
   existing sources.
 - **Evidence** returns signed, minimum-disclosure assertions from fixed
   requests to authoritative sources.
+- **Registry Casework** gives authorized human teams a coordinated inbox over
+  source-owned work while leaving eligibility and registry mutations with the
+  source system.
 
-The three compose without merging their product boundaries: Evidence may use a
-Base Registry Engine route or a Relay-protected API as a fixed HTTP source, and
-inherits neither one's authorization.
+The products compose without merging their boundaries. Evidence may use a Base
+Registry Engine route or a Relay-protected API as a fixed HTTP source and
+inherits neither one's authorization. Casework may present source-owned work
+from a Base Registry Engine through its adapter, while current source
+visibility and action authority remain with that registry.
 
 A Base Registry Engine governed action may also consume an Evidence assertion
 as an ordinary relying party: a Rhai handler declaring handler ABI
@@ -73,6 +78,12 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-linkml` | LinkML reader and embedded PublicSchema snapshot behind `bregctl init --from publicschema` |
+| `crates/registry-casework-core` | Source-neutral Casework model, HTTP DTOs, transition rules, and source adapter contract |
+| `crates/registry-casework-breg` | BReg source adapter for Casework discovery, current visibility, promoted actions, and attempt recovery |
+| `crates/registry-casework` | PostgreSQL-backed Casework runtime and the `casework` binary |
+| `crates/registry-caseworkctl` | Casework authoring and local operator tooling and the `caseworkctl` binary |
+| `crates/registry-casework-client` | Rust Casework client and its bounded problem and recovery contract |
+| `crates/registry-casework-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-record` | Product-neutral Registry Record v1 response DTOs shared by the Base Registry Engine and Relay clients |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
 | `crates/registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
@@ -111,6 +122,15 @@ Its approved contracts, acceptance journeys, quickstart, generated examples, and
 gates live under `products/breg`. A registry project is configuration: the
 runtime has no built-in business, facility, authority, permit, or asset model,
 and none may become a Rust type, built-in operation, or special route.
+
+Registry Casework is implemented by `registry-casework`,
+`registry-casework-core`, `registry-casework-breg`, `registry-caseworkctl`, and
+its Rust and Node.js client crates. Its product contracts, generated OpenAPI,
+examples, checkpoint demo, and focused gates live under `products/casework`.
+Casework coordinates claims, private drafts, accountable attempts, and
+caller-visible inboxes. Source adapters retain source visibility and action
+authority. The source-neutral core and generic clients must not depend on BReg
+protocol types, and BReg must not depend on Casework.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.

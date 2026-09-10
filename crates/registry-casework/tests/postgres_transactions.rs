@@ -1,0 +1,696 @@
+use std::collections::BTreeMap;
+use std::env;
+use std::sync::Arc;
+
+use registry_casework::{DatabaseConfig, PostgresStore, StoreError};
+use registry_casework_core::{
+    ActorContext, AuthoritativeObservation, BootstrapDirectoryRequest, CaseworkRole,
+    IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PreparedSourceAttempt,
+    RecoveryEvidence, SourceBinding, SourceReceipt, SubjectRef, TransitionHint,
+};
+use registry_platform_config::{SecretProvider, SecretResolver};
+
+fn actor(subject: &str, role: CaseworkRole, profile: &str) -> ActorContext {
+    ActorContext {
+        principal: IssuerPrincipal {
+            issuer: "https://issuer.test".to_owned(),
+            subject: subject.to_owned(),
+        },
+        profile_id: profile.to_owned(),
+        role,
+    }
+}
+
+fn binding_generation(revision: i64, version: &str, generation: &str) -> SourceBinding {
+    SourceBinding {
+        source_revision: revision.to_string(),
+        version: version.to_owned(),
+        integrity: Some(format!("digest-{version}")),
+        generation: generation.to_owned(),
+    }
+}
+
+fn observation(
+    revision: i64,
+    version: &str,
+    kind: OccurrenceKind,
+    state: OccurrenceState,
+) -> AuthoritativeObservation {
+    observation_generation(revision, version, kind, state, "binding-a")
+}
+
+fn observation_generation(
+    revision: i64,
+    version: &str,
+    kind: OccurrenceKind,
+    state: OccurrenceState,
+    generation: &str,
+) -> AuthoritativeObservation {
+    observation_generation_with_etag(
+        revision,
+        version,
+        kind,
+        state,
+        generation,
+        &format!("\"representation-{revision}\""),
+    )
+}
+
+fn observation_generation_with_etag(
+    revision: i64,
+    version: &str,
+    kind: OccurrenceKind,
+    state: OccurrenceState,
+    generation: &str,
+    representation_etag: &str,
+) -> AuthoritativeObservation {
+    let value = serde_json::json!({
+        "subject": SubjectRef {
+            source_id: "source-a".to_owned(),
+            kind: "request-a".to_owned(),
+            id: "subject-a".to_owned(),
+        },
+        "occurrenceKey": format!("{kind:?}:{version}:{generation}"),
+        "orderedRevision": revision,
+        "binding": binding_generation(revision, version, generation),
+        "representationEtag": representation_etag,
+        "occurrenceKind": kind,
+        "stage": (kind == OccurrenceKind::Review).then(|| "review".to_owned()),
+        "state": state,
+        "remainingActions": [OperationName::parse("approve").expect("approve operation")],
+    });
+    serde_json::from_value(value).expect("strong representation ETag is an observation fact")
+}
+
+fn observation_with_representation_etag(
+    revision: i64,
+    version: &str,
+    state: OccurrenceState,
+    representation_etag: &str,
+) -> AuthoritativeObservation {
+    let mut value = serde_json::to_value(observation_generation(
+        revision,
+        version,
+        OccurrenceKind::Review,
+        state,
+        "binding-a",
+    ))
+    .expect("serialize observation fixture");
+    value["representationEtag"] = serde_json::Value::String(representation_etag.to_owned());
+    serde_json::from_value(value).expect("strong representation ETag is an observation fact")
+}
+
+fn observation_for_subject(
+    subject_id: &str,
+    revision: i64,
+    version: &str,
+    state: OccurrenceState,
+) -> AuthoritativeObservation {
+    let mut observation = observation(revision, version, OccurrenceKind::Review, state);
+    observation.subject.source_id = "source-cycle".to_owned();
+    observation.subject.id = subject_id.to_owned();
+    observation.binding.generation = "binding-cycle".to_owned();
+    observation.occurrence_key = format!("Review:{version}:binding-cycle");
+    observation
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transactional_checkpoint_invariants_hold_in_postgresql() {
+    let _ = observation_with_representation_etag(1, "proposal-1", OccurrenceState::Open, "\"r1\"");
+    let url = env::var("CASEWORK_TEST_DATABASE_URL")
+        .expect("CASEWORK_TEST_DATABASE_URL is required for the real PostgreSQL test");
+    let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+        .await
+        .expect("connect dedicated test database");
+    tokio::spawn(async move { connection.await.expect("test connection") });
+    client
+        .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+        .await
+        .expect("reset only the dedicated Casework test database");
+
+    let secrets =
+        SecretResolver::new([SecretProvider::Environment], "/private/tmp").expect("test resolver");
+    let config = DatabaseConfig {
+        runtime_url_ref: "secret:env/CASEWORK_TEST_DATABASE_URL".to_owned(),
+        migration_url_ref: "secret:env/CASEWORK_TEST_DATABASE_URL".to_owned(),
+        trusted_root_certificate_ref: None,
+        test_only_plaintext: true,
+    };
+    let store = PostgresStore::connect_migration(&config, &secrets).expect("migration pool");
+    store.migrate().await.expect("migrate");
+    let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("runtime pool");
+    item_identity_does_not_require_a_subject_ledger_parent(&client, &runtime).await;
+
+    let admin = actor("admin", CaseworkRole::Administrator, "administrator");
+    let officer_one = actor("officer-1", CaseworkRole::Staff, "staff");
+    let officer_two = actor("officer-2", CaseworkRole::Staff, "staff");
+    let supervisor = actor("supervisor", CaseworkRole::Supervisor, "supervisor");
+    runtime
+        .bootstrap_directory(
+            &admin,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team-a".to_owned(),
+                staff: vec![officer_one.principal.clone(), officer_two.principal.clone()],
+                supervisors: vec![supervisor.principal.clone()],
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap-a",
+        )
+        .await
+        .expect("authorized bootstrap");
+
+    let proposal_v1 = runtime
+        .apply_observation(
+            &observation_for_subject(
+                "proposal-cycle-subject",
+                1,
+                "proposal-v1",
+                OccurrenceState::Open,
+            ),
+            "default",
+            Some(172_800),
+        )
+        .await
+        .expect("proposal v1 observation")
+        .expect("proposal v1 opens a review occurrence");
+    runtime
+        .apply_observation(
+            &observation_for_subject(
+                "proposal-cycle-subject",
+                2,
+                "proposal-v2",
+                OccurrenceState::Superseded,
+            ),
+            "default",
+            Some(172_800),
+        )
+        .await
+        .expect("proposal v2 supersedes the prior occurrence");
+    let proposal_v2 = runtime
+        .apply_observation(
+            &observation_for_subject(
+                "proposal-cycle-subject",
+                3,
+                "proposal-v2",
+                OccurrenceState::Open,
+            ),
+            "default",
+            Some(172_800),
+        )
+        .await
+        .expect("resubmitted proposal v2 does not collide with historical v1")
+        .expect("resubmitted proposal opens a review occurrence");
+    assert_ne!(proposal_v2.item_id, proposal_v1.item_id);
+    assert_eq!(proposal_v2.binding.version, "proposal-v2");
+    assert_eq!(proposal_v2.state, OccurrenceState::Open);
+    assert_eq!(proposal_v2.holder, None);
+    let historical_v1 = runtime
+        .item(proposal_v1.item_id)
+        .await
+        .expect("historical proposal v1 occurrence");
+    assert_eq!(historical_v1.binding.version, "proposal-v1");
+    assert_eq!(historical_v1.state, OccurrenceState::Superseded);
+
+    let hint = TransitionHint {
+        subject: observation(
+            1,
+            "proposal-1",
+            OccurrenceKind::Review,
+            OccurrenceState::Open,
+        )
+        .subject,
+        deduplication_key: "event-1".to_owned(),
+        ordered_revision: 1,
+    };
+    let (first, second) = tokio::join!(
+        runtime.ingest_transition("binding-a", &hint),
+        runtime.ingest_transition("binding-a", &hint)
+    );
+    assert_ne!(first.expect("first ingest"), second.expect("second ingest"));
+
+    let item = runtime
+        .apply_observation(
+            &observation(
+                1,
+                "proposal-1",
+                OccurrenceKind::Review,
+                OccurrenceState::Open,
+            ),
+            "default",
+            Some(172_800),
+        )
+        .await
+        .expect("initial observation")
+        .expect("item opened");
+    assert!(item.passive_due_at.is_some());
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let claim_one = {
+        let runtime = runtime.clone();
+        let actor = officer_one.clone();
+        let barrier = barrier.clone();
+        tokio::spawn(async move {
+            barrier.wait().await;
+            runtime
+                .claim(&actor, item.item_id, item.revision, "claim-one")
+                .await
+        })
+    };
+    let claim_two = {
+        let runtime = runtime.clone();
+        let actor = officer_two.clone();
+        let barrier = barrier.clone();
+        tokio::spawn(async move {
+            barrier.wait().await;
+            runtime
+                .claim(&actor, item.item_id, item.revision, "claim-two")
+                .await
+        })
+    };
+    barrier.wait().await;
+    let result_one = claim_one.await.expect("first task");
+    let result_two = claim_two.await.expect("second task");
+    assert_eq!(
+        usize::from(result_one.is_ok()) + usize::from(result_two.is_ok()),
+        1
+    );
+    let (holder, claimed) = if let Ok(item) = result_one {
+        (officer_one.clone(), item)
+    } else {
+        (officer_two.clone(), result_two.expect("other claim wins"))
+    };
+    assert_eq!(claimed.state, OccurrenceState::Claimed);
+    assert_eq!(claimed.holder, Some(holder.principal.clone()));
+
+    let refreshed = runtime
+        .apply_observation(
+            &observation(
+                3,
+                "proposal-1",
+                OccurrenceKind::Review,
+                OccurrenceState::Open,
+            ),
+            "default",
+            Some(172_800),
+        )
+        .await
+        .expect("newer observation")
+        .expect("same item updated");
+    assert_eq!(refreshed.holder, Some(holder.principal.clone()));
+    assert_eq!(refreshed.state, OccurrenceState::Claimed);
+    let higher_hint = TransitionHint {
+        subject: refreshed.subject.clone(),
+        deduplication_key: "event-higher-than-read".to_owned(),
+        ordered_revision: 5,
+    };
+    assert!(runtime
+        .ingest_transition("binding-a", &higher_hint)
+        .await
+        .expect("higher source watermark is retained"));
+    let same_revision_changed_representation = observation_generation_with_etag(
+        3,
+        "proposal-1",
+        OccurrenceKind::Review,
+        OccurrenceState::Open,
+        "binding-a",
+        "\"representation-3-attachments-verified\"",
+    );
+    let refreshed_representation = runtime
+        .apply_observation(
+            &same_revision_changed_representation,
+            "default",
+            Some(172_800),
+        )
+        .await
+        .expect("equal-revision observation")
+        .expect("changed representation ETag refreshes the claimed occurrence");
+    assert_eq!(refreshed_representation.item_id, refreshed.item_id);
+    assert_eq!(refreshed_representation.holder, refreshed.holder);
+    assert_eq!(refreshed_representation.state, OccurrenceState::Claimed);
+    assert_eq!(
+        refreshed_representation.first_observed_at,
+        refreshed.first_observed_at
+    );
+    assert_eq!(
+        refreshed_representation.passive_due_at,
+        refreshed.passive_due_at
+    );
+    assert_eq!(refreshed_representation.revision, refreshed.revision + 1);
+    let subject_sync = client
+        .query_one(
+            "SELECT wanted_revision,applied_revision,representation_etag,sync_pending FROM casework_subjects WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'",
+            &[],
+        )
+        .await
+        .expect("subject synchronization state");
+    assert_eq!(subject_sync.get::<_, i64>(0), 5);
+    assert_eq!(subject_sync.get::<_, i64>(1), 3);
+    assert_eq!(
+        subject_sync.get::<_, Option<String>>(2).as_deref(),
+        Some("\"representation-3-attachments-verified\"")
+    );
+    assert!(subject_sync.get::<_, bool>(3));
+    assert!(runtime
+        .apply_observation(
+            &same_revision_changed_representation,
+            "default",
+            Some(172_800),
+        )
+        .await
+        .expect("unchanged representation is accepted idempotently")
+        .is_none());
+    assert_eq!(
+        runtime
+            .item(refreshed.item_id)
+            .await
+            .expect("unchanged representation leaves item intact")
+            .revision,
+        refreshed_representation.revision
+    );
+    assert!(runtime
+        .apply_observation(
+            &observation(
+                2,
+                "proposal-1",
+                OccurrenceKind::Review,
+                OccurrenceState::Open
+            ),
+            "default",
+            Some(172_800),
+        )
+        .await
+        .expect("stale observation ignored")
+        .is_none());
+    let representation_after_stale = client
+        .query_one(
+            "SELECT representation_etag FROM casework_subjects WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'",
+            &[],
+        )
+        .await
+        .expect("representation after stale observation");
+    assert_eq!(
+        representation_after_stale
+            .get::<_, Option<String>>(0)
+            .as_deref(),
+        Some("\"representation-3-attachments-verified\"")
+    );
+
+    let draft = runtime
+        .save_draft(
+            &holder,
+            refreshed_representation.item_id,
+            refreshed_representation.revision,
+            &refreshed_representation.binding,
+            "Please correct the bounded field.",
+            &["field-a".to_owned()],
+            "draft-a",
+        )
+        .await
+        .expect("draft saved");
+    let replay = runtime
+        .save_draft(
+            &holder,
+            refreshed_representation.item_id,
+            refreshed_representation.revision,
+            &refreshed_representation.binding,
+            "Please correct the bounded field.",
+            &["field-a".to_owned()],
+            "draft-a",
+        )
+        .await
+        .expect("lost draft response replays despite advanced item revision");
+    assert_eq!(draft, replay);
+    assert!(
+        runtime
+            .read_draft(&officer_one, item.item_id)
+            .await
+            .expect("private read")
+            .is_some()
+            == (holder.principal == officer_one.principal)
+    );
+    assert!(
+        runtime
+            .read_draft(&officer_two, item.item_id)
+            .await
+            .expect("private read")
+            .is_some()
+            == (holder.principal == officer_two.principal)
+    );
+
+    let current = runtime.item(item.item_id).await.expect("current item");
+    let offered_binding_reference = current.binding_reference.clone();
+    let prepared = PreparedSourceAttempt {
+        source_binding: current.binding.clone(),
+        recovery_evidence: RecoveryEvidence::new(b"inert recovery capsule".to_vec())
+            .expect("bounded evidence"),
+    };
+    let (attempt, execution_token) = runtime
+        .reserve_attempt_for_execution(
+            &holder,
+            current.item_id,
+            current.revision,
+            "reviewer",
+            OperationName::parse("approve").expect("approve operation"),
+            None,
+            &[],
+            "decision-a",
+            "sha256:request-a",
+            &prepared,
+        )
+        .await
+        .expect("attempt reserved before egress");
+    let fenced_representation = observation_generation_with_etag(
+        3,
+        "proposal-1",
+        OccurrenceKind::Review,
+        OccurrenceState::Open,
+        "binding-a",
+        "\"representation-3-after-attempt\"",
+    );
+    assert!(runtime
+        .apply_observation(&fenced_representation, "default", Some(172_800))
+        .await
+        .expect("pending attempt fences representation refresh")
+        .is_none());
+    let fenced_subject = client
+        .query_one(
+            "SELECT representation_etag,sync_pending FROM casework_subjects WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'",
+            &[],
+        )
+        .await
+        .expect("fenced synchronization state");
+    assert_eq!(
+        fenced_subject.get::<_, Option<String>>(0).as_deref(),
+        Some("\"representation-3-attachments-verified\"")
+    );
+    assert!(fenced_subject.get::<_, bool>(1));
+    assert!(matches!(
+        runtime
+            .release(
+                &holder,
+                current.item_id,
+                attempt.item_revision,
+                "release-blocked"
+            )
+            .await,
+        Err(StoreError::AttemptPending)
+    ));
+    assert!(
+        runtime
+            .load_prepared_attempt(&officer_one, attempt.attempt_id)
+            .await
+            .is_ok()
+            == (holder.principal == officer_one.principal)
+    );
+    assert!(
+        runtime
+            .load_prepared_attempt(&officer_two, attempt.attempt_id)
+            .await
+            .is_ok()
+            == (holder.principal == officer_two.principal)
+    );
+
+    runtime
+        .mark_attempt_uncertain(&holder, attempt.attempt_id, execution_token)
+        .await
+        .expect("uncertain remains durable");
+    assert!(matches!(
+        runtime
+            .register_source_generation("source-a", "binding-b")
+            .await,
+        Err(StoreError::AttemptPending)
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let recovery_token = runtime
+        .acquire_recovery_execution(&holder, attempt.attempt_id)
+        .await
+        .expect("released uncertain attempt can acquire a recovery lease");
+    assert!(matches!(
+        runtime
+            .mark_attempt_uncertain(&holder, attempt.attempt_id, execution_token)
+            .await,
+        Err(StoreError::AttemptPending)
+    ));
+    assert!(matches!(
+        runtime
+            .acquire_recovery_execution(&holder, attempt.attempt_id)
+            .await,
+        Err(StoreError::AttemptPending)
+    ));
+    runtime
+        .mark_attempt_uncertain(&holder, attempt.attempt_id, recovery_token)
+        .await
+        .expect("current recovery lease can release itself");
+
+    let receipt = SourceReceipt {
+        source_revision: "4".to_owned(),
+        resulting_state: "approved".to_owned(),
+        binding: current.binding.clone(),
+        actor_reference: None,
+        metadata: BTreeMap::from([
+            (
+                "nativeReceipt".to_owned(),
+                r#"{"action":"approve","requestId":"native-request-a"}"#.to_owned(),
+            ),
+            ("traceId".to_owned(), "source-trace-a".to_owned()),
+        ]),
+    };
+    runtime
+        .complete_attempt(&holder, attempt.attempt_id, &receipt)
+        .await
+        .expect("authoritative receipt settles the old-generation attempt");
+    runtime
+        .register_source_generation("source-a", "binding-b")
+        .await
+        .expect("settled old generation can rebind");
+    let rebound_subject = client
+        .query_one(
+            "SELECT binding_generation,applied_revision,representation_etag FROM casework_subjects WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'",
+            &[],
+        )
+        .await
+        .expect("rebound subject state");
+    assert_eq!(rebound_subject.get::<_, String>(0), "binding-b");
+    assert_eq!(rebound_subject.get::<_, i64>(1), 0);
+    assert_eq!(rebound_subject.get::<_, Option<String>>(2), None);
+
+    let delayed_old_hint = TransitionHint {
+        subject: hint.subject.clone(),
+        deduplication_key: "delayed-binding-a".to_owned(),
+        ordered_revision: 100,
+    };
+    runtime
+        .ingest_transition("binding-a", &delayed_old_hint)
+        .await
+        .expect("old hint is durably deduplicated without crossing generations");
+    let rebound = runtime
+        .apply_observation(
+            &observation_generation(
+                1,
+                "proposal-b",
+                OccurrenceKind::Review,
+                OccurrenceState::Open,
+                "binding-b",
+            ),
+            "default",
+            Some(172_800),
+        )
+        .await
+        .expect("lower new-generation revision converges")
+        .expect("new-generation item opens");
+    assert_eq!(rebound.binding.generation, "binding-b");
+    assert_ne!(rebound.binding_reference, offered_binding_reference);
+    assert!(runtime
+        .claim_sync_batch(10, 30)
+        .await
+        .expect("inspect post-rebind watermark")
+        .is_empty());
+
+    let by_key = runtime
+        .terminal_attempt_by_key(&holder, current.item_id, "decision-a")
+        .await
+        .expect("terminal response-loss lookup by original key")
+        .expect("terminal attempt exists");
+    assert_eq!(by_key.1.attempt_id, attempt.attempt_id);
+    let by_id = runtime
+        .terminal_attempt_by_id(&holder, attempt.attempt_id)
+        .await
+        .expect("terminal lookup by attempt id")
+        .expect("terminal attempt exists");
+    assert_eq!(by_id.1.receipt, Some(receipt.clone()));
+
+    let history = runtime
+        .history(&holder, item.item_id, 100)
+        .await
+        .expect("history");
+    assert!(history
+        .iter()
+        .any(|event| event.kind == registry_casework_core::HistoryKind::Claimed));
+    assert!(history
+        .iter()
+        .any(|event| event.kind == registry_casework_core::HistoryKind::AttemptReserved));
+    let reserved = history
+        .iter()
+        .find(|event| event.kind == registry_casework_core::HistoryKind::AttemptReserved)
+        .expect("reserved history");
+    let completed = history
+        .iter()
+        .find(|event| event.kind == registry_casework_core::HistoryKind::ActionCompleted)
+        .expect("completed history");
+    assert_eq!(
+        reserved.detail["bindingReference"],
+        offered_binding_reference
+    );
+    assert_eq!(reserved.detail["operation"], "approve");
+    assert!(reserved.detail.get("reason").is_none());
+    assert_eq!(
+        completed.detail["bindingReference"],
+        offered_binding_reference
+    );
+    assert_eq!(completed.detail["operation"], "approve");
+    assert!(completed.detail.get("reason").is_none());
+    assert_eq!(
+        completed.detail["sourceReceipt"],
+        serde_json::to_value(&receipt).expect("serialize receipt")
+    );
+    assert_eq!(
+        runtime
+            .events(None, 100)
+            .await
+            .expect("durable events")
+            .into_iter()
+            .filter(|event| event.item_id == item.item_id)
+            .count(),
+        history.len()
+    );
+}
+
+async fn item_identity_does_not_require_a_subject_ledger_parent(
+    client: &tokio_postgres::Client,
+    store: &PostgresStore,
+) {
+    let item_id = uuid::Uuid::new_v4();
+    let binding = serde_json::to_value(binding_generation(1, "orphan-v1", "binding-a"))
+        .expect("binding JSON");
+    client.execute(
+        "INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,stage,binding,state,queue_id,revision,first_observed_at,updated_at) VALUES($1,'source-a','request-a','adapter-owned-subject','review','adapter-occurrence','review',$2,'open','default',1,now(),now())",
+        &[&item_id, &binding],
+    ).await.expect("adapter-owned item does not require a subject ledger row");
+    let has_parent: bool = client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM casework_subjects WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='adapter-owned-subject')",
+            &[],
+        )
+        .await
+        .expect("read subject ledger")
+        .get(0);
+    assert!(!has_parent);
+    let item = store.item(item_id).await.expect("read adapter-owned item");
+    assert_eq!(item.subject.id, "adapter-owned-subject");
+    assert_eq!(item.state, OccurrenceState::Open);
+    client
+        .execute("DELETE FROM casework_items WHERE item_id=$1", &[&item_id])
+        .await
+        .expect("delete isolated adapter-owned item fixture");
+}

@@ -1,0 +1,1062 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use registry_casework_core::{
+    ActiveSubjectsPage, ActorContext, AttemptStatus, CallerSubjectView, CaseworkAction,
+    CaseworkProject, DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest,
+    HoldingSummary, InboxPolicy, InboxView, OccurrenceState, OperationName, Page, PageStatus,
+    PrepareActionRequest, SourceAdapter, SourceAdapterError, SourceBinding, SourceReceipt,
+    SubjectRef, WorkItem,
+};
+use sha2::{Digest, Sha256};
+use thiserror::Error;
+use uuid::Uuid;
+
+use crate::{PostgresStore, StoreError};
+
+#[derive(Clone)]
+pub struct CaseworkService {
+    store: PostgresStore,
+    adapters: Arc<BTreeMap<String, Arc<dyn SourceAdapter>>>,
+    project: Arc<CaseworkProject>,
+}
+
+impl std::fmt::Debug for CaseworkService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CaseworkService")
+            .field("sources", &self.adapters.keys())
+            .field("project", &self.project.casework.id)
+            .finish()
+    }
+}
+
+impl CaseworkService {
+    pub fn new(
+        store: PostgresStore,
+        project: CaseworkProject,
+        adapters: impl IntoIterator<Item = Arc<dyn SourceAdapter>>,
+    ) -> Result<Self, ServiceError> {
+        let mut registered = BTreeMap::new();
+        for adapter in adapters {
+            if registered
+                .insert(adapter.source_id().to_owned(), adapter)
+                .is_some()
+            {
+                return Err(ServiceError::Configuration);
+            }
+        }
+        if project
+            .sources
+            .iter()
+            .any(|source| !registered.contains_key(&source.id))
+        {
+            return Err(ServiceError::Configuration);
+        }
+        Ok(Self {
+            store,
+            adapters: Arc::new(registered),
+            project: Arc::new(project),
+        })
+    }
+
+    #[must_use]
+    pub fn store(&self) -> &PostgresStore {
+        &self.store
+    }
+
+    pub async fn receive_event(
+        &self,
+        source_id: &str,
+        request: EventRequest,
+    ) -> Result<bool, ServiceError> {
+        let adapter = self.adapter(source_id)?;
+        let hint = match adapter.verify_transition(request).await {
+            Ok(hint) => hint,
+            Err(error) => {
+                tracing::warn!(
+                    source_id,
+                    outcome = "refused",
+                    reason = "verification",
+                    "Casework source event refused"
+                );
+                return Err(error.into());
+            }
+        };
+        if hint.subject.source_id != source_id {
+            tracing::warn!(
+                source_id,
+                outcome = "refused",
+                reason = "source_mismatch",
+                "Casework source event refused"
+            );
+            return Err(ServiceError::SourceProtocol);
+        }
+        let accepted = self
+            .store
+            .ingest_transition(adapter.binding_generation(), &hint)
+            .await
+            .map_err(ServiceError::from)?;
+        let event_id = bounded_event_identifier(&hint.deduplication_key);
+        tracing::info!(
+            source_id,
+            event_id,
+            event_id_truncated = hint.deduplication_key.len() > event_id.len(),
+            source_revision = hint.ordered_revision,
+            outcome = if accepted { "accepted" } else { "duplicate" },
+            "Casework source event recorded"
+        );
+        if accepted {
+            self.store
+                .set_source_status(source_id, adapter.binding_generation(), false, false)
+                .await?;
+        }
+        Ok(accepted)
+    }
+
+    /// Process queued invalidations with authoritative reads outside database
+    /// transactions. The store rechecks generation and monotonic revision at
+    /// commit, so delayed reads cannot replace a newer observation.
+    pub async fn synchronize_pending(&self, maximum: i64) -> Result<usize, ServiceError> {
+        let subjects = self.store.claim_sync_batch(maximum.min(100), 30).await?;
+        let mut applied = 0;
+        for subject in subjects {
+            let adapter = self.adapter(&subject.source_id)?;
+            match adapter.read_authoritative(&subject).await {
+                Ok(observation) => {
+                    let (queue, target) = self.policy_for(&subject)?;
+                    self.store
+                        .apply_observation(&observation, queue, target)
+                        .await?;
+                    applied += 1;
+                }
+                Err(SourceAdapterError::Unavailable | SourceAdapterError::Concealed) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(applied)
+    }
+
+    async fn synchronize_source_pending(
+        &self,
+        source_id: &str,
+        maximum: i64,
+    ) -> Result<(usize, bool), ServiceError> {
+        let adapter = self.adapter(source_id)?;
+        let subjects = self
+            .store
+            .claim_source_sync_batch(
+                source_id,
+                adapter.binding_generation(),
+                maximum.min(100),
+                30,
+            )
+            .await?;
+        let mut applied = 0;
+        let mut unavailable = false;
+        for subject in subjects {
+            match adapter.read_authoritative(&subject).await {
+                Ok(observation) => {
+                    let (queue, target) = self.policy_for(&subject)?;
+                    self.store
+                        .apply_observation(&observation, queue, target)
+                        .await?;
+                    applied += 1;
+                }
+                Err(SourceAdapterError::Unavailable | SourceAdapterError::Concealed) => {
+                    unavailable = true
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok((applied, unavailable))
+    }
+
+    /// Run the two independent repair passes: remote-active discovery, then
+    /// authoritative reads of every locally active subject.
+    pub async fn reconcile_source(&self, source_id: &str) -> Result<usize, ServiceError> {
+        let adapter = self.adapter(source_id)?;
+        self.store
+            .set_source_status(source_id, adapter.binding_generation(), false, false)
+            .await?;
+        let mut cursor: Option<DiscoveryCursor> = None;
+        let mut discovered = 0;
+        let mut discovery_error = None;
+        let mut remote_complete = false;
+        for _ in 0..100 {
+            let ActiveSubjectsPage {
+                subjects,
+                next_cursor,
+            } = match adapter.discover_active(cursor.as_ref(), 100).await {
+                Ok(page) => page,
+                Err(error) => {
+                    self.store
+                        .set_source_status(source_id, adapter.binding_generation(), false, true)
+                        .await?;
+                    discovery_error = Some(error);
+                    break;
+                }
+            };
+            self.store
+                .enqueue_discovered(adapter.binding_generation(), &subjects)
+                .await?;
+            discovered += subjects.len();
+            cursor = next_cursor;
+            if cursor.is_none() {
+                remote_complete = true;
+                break;
+            }
+        }
+        for subject in self.store.local_active_subjects(source_id, 10_000).await? {
+            self.store
+                .enqueue_discovered(adapter.binding_generation(), &[subject])
+                .await?;
+        }
+        let (_, sync_unavailable) = self.synchronize_source_pending(source_id, 100).await?;
+        if let Some(error) = discovery_error {
+            return Err(error.into());
+        }
+        if sync_unavailable {
+            self.store
+                .set_source_status(source_id, adapter.binding_generation(), false, true)
+                .await?;
+            return Err(ServiceError::Adapter(SourceAdapterError::Unavailable));
+        }
+        let pending = self
+            .store
+            .source_has_pending(source_id, adapter.binding_generation())
+            .await?;
+        self.store
+            .set_source_status(
+                source_id,
+                adapter.binding_generation(),
+                remote_complete && !pending,
+                false,
+            )
+            .await?;
+        Ok(discovered)
+    }
+
+    pub async fn caller_item(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        token: &str,
+    ) -> Result<(WorkItem, CallerSubjectView), ServiceError> {
+        let mut item = self.store.item(item_id).await?;
+        if !self.store.can_view_item(actor, &item).await? {
+            return Err(ServiceError::NotFound);
+        }
+        let view = self
+            .adapter(&item.subject.source_id)?
+            .read_for_caller(
+                &item.subject,
+                source_profile_id,
+                EphemeralCredential::new(token),
+            )
+            .await?;
+        item.live_attempt = self
+            .store
+            .live_attempt_status_for_actor(actor, item.item_id, source_profile_id)
+            .await?;
+        if view.binding.generation != item.binding.generation {
+            if item.live_attempt.is_some() {
+                return Ok((item, view));
+            }
+            return Err(ServiceError::BindingMoved);
+        }
+        item.routing_copy = self.filtered_routing_copy(item.item_id, &view).await?;
+        item.actions = local_actions(actor, &item, &view);
+        Ok((item, view))
+    }
+
+    pub async fn inbox(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: &str,
+        token: &str,
+        limit: usize,
+        cursor_context: &str,
+        cursor: Option<&str>,
+    ) -> Result<Page<WorkItem>, ServiceError> {
+        self.inbox_for_view(
+            actor,
+            source_profile_id,
+            token,
+            InboxView::MyTeams,
+            limit,
+            cursor_context,
+            cursor,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn inbox_for_view(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: &str,
+        token: &str,
+        view: InboxView,
+        limit: usize,
+        cursor_context: &str,
+        cursor: Option<&str>,
+    ) -> Result<Page<WorkItem>, ServiceError> {
+        let policy = &self.project.inbox;
+        let after = self
+            .store
+            .resolve_cursor(actor, source_profile_id, cursor_context, cursor)
+            .await?;
+        let desired = limit.clamp(1, 100);
+        let started = Instant::now();
+        let deadline = Duration::from_millis(policy.page_deadline_milliseconds);
+        let queue = cursor_context.rsplit_once(':').and_then(|(prefix, value)| {
+            (prefix.starts_with("list:") || prefix == "next")
+                .then_some(value)
+                .filter(|value| !value.is_empty())
+        });
+        let candidates = self
+            .store
+            .inbox_candidates_for_view(actor, view, policy.maximum_candidate_scan, after, queue)
+            .await?;
+        let mut unavailable = false;
+        let mut discovery_pending = false;
+        let relevant_sources = self
+            .project
+            .sources
+            .iter()
+            .filter(|source| {
+                source
+                    .requests
+                    .iter()
+                    .any(|request| queue.is_none_or(|queue| request.queue == queue))
+            })
+            .collect::<Vec<_>>();
+        for source in &relevant_sources {
+            let adapter = self.adapter(&source.id)?;
+            let pending = self
+                .store
+                .source_has_pending(&source.id, adapter.binding_generation())
+                .await?;
+            match self
+                .store
+                .source_status(&source.id, adapter.binding_generation())
+                .await?
+            {
+                Some((true, false)) => {}
+                Some((_, true)) => unavailable = true,
+                _ => discovery_pending = true,
+            }
+            discovery_pending |= pending;
+        }
+        if after.is_none() && candidates.items.is_empty() {
+            unavailable = false;
+            discovery_pending = false;
+            for source in relevant_sources {
+                let remaining = deadline.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    unavailable = true;
+                    break;
+                }
+                match tokio::time::timeout(
+                    remaining,
+                    self.adapter(&source.id)?.discover_active(None, 1),
+                )
+                .await
+                {
+                    Ok(Ok(page)) => {
+                        if !page.subjects.is_empty() {
+                            self.store
+                                .enqueue_discovered(
+                                    self.adapter(&source.id)?.binding_generation(),
+                                    &page.subjects,
+                                )
+                                .await?;
+                        }
+                        let complete = page.subjects.is_empty() && page.next_cursor.is_none();
+                        self.store
+                            .set_source_status(
+                                &source.id,
+                                self.adapter(&source.id)?.binding_generation(),
+                                complete,
+                                false,
+                            )
+                            .await?;
+                        discovery_pending |= !complete;
+                    }
+                    Ok(Err(
+                        SourceAdapterError::Unavailable
+                        | SourceAdapterError::Concealed
+                        | SourceAdapterError::Denied,
+                    ))
+                    | Err(_) => {
+                        unavailable = true;
+                        self.store
+                            .set_source_status(
+                                &source.id,
+                                self.adapter(&source.id)?.binding_generation(),
+                                false,
+                                true,
+                            )
+                            .await?;
+                    }
+                    Ok(Err(error)) => return Err(error.into()),
+                }
+            }
+        }
+        let mut reads = 0;
+        let mut examined = 0;
+        let mut last_examined = after;
+        let mut items = Vec::new();
+        let candidate_count = candidates.items.len();
+        for mut item in candidates.items {
+            if items.len() == desired
+                || reads == policy.maximum_source_reads
+                || started.elapsed() >= deadline
+            {
+                break;
+            }
+            reads += 1;
+            let adapter = self.adapter(&item.subject.source_id)?;
+            let remaining = deadline.saturating_sub(started.elapsed());
+            let read = tokio::time::timeout(
+                remaining,
+                adapter.read_for_caller(
+                    &item.subject,
+                    source_profile_id,
+                    EphemeralCredential::new(token),
+                ),
+            )
+            .await;
+            match read {
+                Err(_) => {
+                    unavailable = true;
+                    break;
+                }
+                Ok(Ok(view)) => {
+                    examined += 1;
+                    last_examined = Some((item.passive_due_at, item.item_id));
+                    item.live_attempt = self
+                        .store
+                        .live_attempt_status_for_actor(actor, item.item_id, source_profile_id)
+                        .await?;
+                    if view.binding.generation != item.binding.generation {
+                        if item.live_attempt.is_some() {
+                            items.push(item);
+                            continue;
+                        }
+                        return Err(ServiceError::BindingMoved);
+                    }
+                    item.routing_copy = self.filtered_routing_copy(item.item_id, &view).await?;
+                    item.actions = local_actions(actor, &item, &view);
+                    items.push(item);
+                }
+                Ok(Err(SourceAdapterError::Concealed | SourceAdapterError::Denied)) => {
+                    examined += 1;
+                    last_examined = Some((item.passive_due_at, item.item_id));
+                }
+                Ok(Err(SourceAdapterError::Unavailable)) => {
+                    unavailable = true;
+                    break;
+                }
+                Ok(Err(error)) => return Err(error.into()),
+            }
+        }
+        let exhausted = reads == policy.maximum_source_reads
+            || started.elapsed() >= deadline
+            || discovery_pending
+            || items.len() < desired && candidates.next_cursor.is_some();
+        let status = if unavailable {
+            PageStatus::SourceUnavailable
+        } else if exhausted {
+            PageStatus::BudgetExhausted
+        } else {
+            PageStatus::Complete
+        };
+        let unvisited =
+            discovery_pending || examined < candidate_count || candidates.next_cursor.is_some();
+        let next_cursor = if unvisited {
+            Some(
+                self.store
+                    .issue_cursor(actor, source_profile_id, cursor_context, last_examined)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        Ok(Page {
+            items,
+            next_cursor,
+            status,
+        })
+    }
+
+    pub async fn next_item(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: &str,
+        token: &str,
+        queue: Option<&str>,
+        cursor: Option<&str>,
+    ) -> Result<WorkItem, ServiceError> {
+        let page = self
+            .inbox(
+                actor,
+                source_profile_id,
+                token,
+                1,
+                &format!("next:{}", queue.unwrap_or("")),
+                cursor,
+            )
+            .await?;
+        let item = if let Some(item) = page.items.into_iter().next() {
+            item
+        } else if page.status == PageStatus::Complete {
+            return Err(ServiceError::NotFound);
+        } else {
+            return Err(ServiceError::Adapter(SourceAdapterError::Unavailable));
+        };
+        Ok(item)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn decide(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        source_profile_id: &str,
+        operation: OperationName,
+        reason: Option<&str>,
+        flagged_fields: &[String],
+        displayed_binding: &SourceBinding,
+        idempotency_key: &str,
+        token: &str,
+    ) -> Result<(AttemptStatus, Option<SourceReceipt>), ServiceError> {
+        let (item, view) = self
+            .caller_item(actor, item_id, source_profile_id, token)
+            .await?;
+        let request_hash = decision_hash(
+            expected_revision,
+            source_profile_id,
+            &operation,
+            reason,
+            flagged_fields,
+            displayed_binding,
+        )?;
+        if let Some(attempt) = self
+            .store
+            .attempt_by_key(actor, item_id, idempotency_key, &request_hash)
+            .await?
+        {
+            return Ok((attempt.clone(), attempt.receipt));
+        }
+        if let Some(attempt_id) = self
+            .store
+            .live_attempt_for_actor(actor, item_id, source_profile_id)
+            .await?
+        {
+            return Err(ServiceError::UncertainAttempt(attempt_id));
+        }
+        if item.state != OccurrenceState::Claimed
+            || item.holder.as_ref() != Some(&actor.principal)
+            || !view.permitted_operations.contains(&operation)
+        {
+            return Err(ServiceError::Forbidden);
+        }
+        let adapter = self.adapter(&item.subject.source_id)?;
+        let prepared = adapter
+            .prepare_action(PrepareActionRequest {
+                subject: &item.subject,
+                displayed_binding,
+                operation: operation.clone(),
+                reason,
+                actor,
+                source_profile_id,
+                idempotency_key,
+                credential: EphemeralCredential::new(token),
+            })
+            .await?;
+        let reservation = self
+            .store
+            .reserve_attempt_for_execution(
+                actor,
+                item_id,
+                expected_revision,
+                source_profile_id,
+                operation,
+                reason,
+                flagged_fields,
+                idempotency_key,
+                &request_hash,
+                &prepared,
+            )
+            .await;
+        let (attempt, execution_token) = match reservation {
+            Ok(reservation) => reservation,
+            Err(error @ StoreError::Conflict) => {
+                if let Some(attempt_id) = self
+                    .store
+                    .live_attempt_for_actor(actor, item_id, source_profile_id)
+                    .await?
+                {
+                    return Err(ServiceError::UncertainAttempt(attempt_id));
+                }
+                return Err(error.into());
+            }
+            Err(StoreError::AttemptPending) => {
+                if let Some(attempt_id) = self
+                    .store
+                    .live_attempt_for_actor(actor, item_id, source_profile_id)
+                    .await?
+                {
+                    return Err(ServiceError::UncertainAttempt(attempt_id));
+                }
+                return Err(ServiceError::Forbidden);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let execution = tokio::time::timeout(
+            Duration::from_secs(300),
+            adapter.execute_prepared(ExecutePreparedRequest {
+                prepared: &prepared,
+                execution: registry_casework_core::PreparedExecution::Initial,
+                actor,
+                source_profile_id,
+                idempotency_key,
+                credential: EphemeralCredential::new(token),
+            }),
+        )
+        .await
+        .unwrap_or(Err(SourceAdapterError::Uncertain));
+        match execution {
+            Ok(receipt) => {
+                let settled = self
+                    .store
+                    .complete_attempt(actor, attempt.attempt_id, &receipt)
+                    .await?;
+                Ok((settled, Some(receipt)))
+            }
+            Err(SourceAdapterError::DefinitiveRefusal) => {
+                if let Err(error) = self
+                    .store
+                    .refuse_original_attempt(actor, attempt.attempt_id, execution_token)
+                    .await
+                {
+                    if matches!(error, StoreError::AttemptPending) {
+                        return Err(ServiceError::UncertainAttempt(attempt.attempt_id));
+                    }
+                    return Err(error.into());
+                }
+                Err(ServiceError::Adapter(SourceAdapterError::DefinitiveRefusal))
+            }
+            Err(error) => {
+                let unsettled = match self
+                    .store
+                    .mark_attempt_uncertain(actor, attempt.attempt_id, execution_token)
+                    .await
+                {
+                    Ok(unsettled) => unsettled,
+                    Err(StoreError::AttemptPending) => {
+                        return Err(ServiceError::UncertainAttempt(attempt.attempt_id));
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                if error == SourceAdapterError::Uncertain {
+                    Ok((unsettled, None))
+                } else {
+                    Err(ServiceError::UncertainAttempt(unsettled.attempt_id))
+                }
+            }
+        }
+    }
+
+    pub async fn recover(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        attempt_id: Uuid,
+        requested_source_profile_id: &str,
+        token: &str,
+    ) -> Result<(AttemptStatus, Option<SourceReceipt>), ServiceError> {
+        let (item, _) = self
+            .caller_item(actor, item_id, requested_source_profile_id, token)
+            .await?;
+        if let Some((saved_profile, attempt)) =
+            self.store.terminal_attempt_by_id(actor, attempt_id).await?
+        {
+            if saved_profile != requested_source_profile_id || attempt.item_id != item_id {
+                return Err(ServiceError::NotFound);
+            }
+            return Ok((attempt.clone(), attempt.receipt));
+        }
+        let (source_profile_id, idempotency_key, prepared) =
+            self.store.load_prepared_attempt(actor, attempt_id).await?;
+        if source_profile_id != requested_source_profile_id {
+            return Err(ServiceError::Forbidden);
+        }
+        if self.store.attempt_item_id(attempt_id).await? != item_id {
+            return Err(ServiceError::NotFound);
+        }
+        let execution_token = match self
+            .store
+            .acquire_recovery_execution(actor, attempt_id)
+            .await
+        {
+            Ok(token) => token,
+            Err(StoreError::AttemptPending) => {
+                return Err(ServiceError::UncertainAttempt(attempt_id));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let adapter = self.adapter(&item.subject.source_id)?;
+        let execution = tokio::time::timeout(
+            Duration::from_secs(300),
+            adapter.execute_prepared(ExecutePreparedRequest {
+                prepared: &prepared,
+                execution: registry_casework_core::PreparedExecution::Recovery,
+                actor,
+                source_profile_id: &source_profile_id,
+                idempotency_key: &idempotency_key,
+                credential: EphemeralCredential::new(token),
+            }),
+        )
+        .await
+        .unwrap_or(Err(SourceAdapterError::Uncertain));
+        match execution {
+            Ok(receipt) => {
+                let settled = self
+                    .store
+                    .complete_attempt(actor, attempt_id, &receipt)
+                    .await?;
+                Ok((settled, Some(receipt)))
+            }
+            Err(SourceAdapterError::DefinitiveRefusal) => {
+                if let Err(error) = self
+                    .store
+                    .refuse_original_attempt(actor, attempt_id, execution_token)
+                    .await
+                {
+                    if matches!(error, StoreError::AttemptPending) {
+                        return Err(ServiceError::UncertainAttempt(attempt_id));
+                    }
+                    return Err(error.into());
+                }
+                Err(ServiceError::Adapter(SourceAdapterError::DefinitiveRefusal))
+            }
+            Err(_) => {
+                let unsettled = match self
+                    .store
+                    .mark_attempt_uncertain(actor, attempt_id, execution_token)
+                    .await
+                {
+                    Ok(unsettled) => unsettled,
+                    Err(StoreError::AttemptPending) => {
+                        return Err(ServiceError::UncertainAttempt(attempt_id));
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                Ok((unsettled, None))
+            }
+        }
+    }
+
+    pub async fn recover_by_key(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        requested_source_profile_id: &str,
+        idempotency_key: &str,
+        token: &str,
+    ) -> Result<(AttemptStatus, Option<SourceReceipt>), ServiceError> {
+        let (item, _) = self
+            .caller_item(actor, item_id, requested_source_profile_id, token)
+            .await?;
+        if let Some((saved_profile, attempt)) = self
+            .store
+            .terminal_attempt_by_key(actor, item_id, idempotency_key)
+            .await?
+        {
+            if saved_profile != requested_source_profile_id {
+                return Err(ServiceError::Forbidden);
+            }
+            return Ok((attempt.clone(), attempt.receipt));
+        }
+        let (attempt_id, source_profile_id, prepared) = self
+            .store
+            .load_prepared_attempt_by_key(actor, item_id, idempotency_key)
+            .await?;
+        if source_profile_id != requested_source_profile_id {
+            return Err(ServiceError::Forbidden);
+        }
+        let execution_token = match self
+            .store
+            .acquire_recovery_execution(actor, attempt_id)
+            .await
+        {
+            Ok(token) => token,
+            Err(StoreError::AttemptPending) => {
+                return Err(ServiceError::UncertainAttempt(attempt_id));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let adapter = self.adapter(&item.subject.source_id)?;
+        let execution = tokio::time::timeout(
+            Duration::from_secs(300),
+            adapter.execute_prepared(ExecutePreparedRequest {
+                prepared: &prepared,
+                execution: registry_casework_core::PreparedExecution::Recovery,
+                actor,
+                source_profile_id: &source_profile_id,
+                idempotency_key,
+                credential: EphemeralCredential::new(token),
+            }),
+        )
+        .await
+        .unwrap_or(Err(SourceAdapterError::Uncertain));
+        match execution {
+            Ok(receipt) => {
+                let settled = self
+                    .store
+                    .complete_attempt(actor, attempt_id, &receipt)
+                    .await?;
+                Ok((settled, Some(receipt)))
+            }
+            Err(SourceAdapterError::DefinitiveRefusal) => {
+                if let Err(error) = self
+                    .store
+                    .refuse_original_attempt(actor, attempt_id, execution_token)
+                    .await
+                {
+                    if matches!(error, StoreError::AttemptPending) {
+                        return Err(ServiceError::UncertainAttempt(attempt_id));
+                    }
+                    return Err(error.into());
+                }
+                Err(ServiceError::Adapter(SourceAdapterError::DefinitiveRefusal))
+            }
+            Err(_) => {
+                let unsettled = match self
+                    .store
+                    .mark_attempt_uncertain(actor, attempt_id, execution_token)
+                    .await
+                {
+                    Ok(unsettled) => unsettled,
+                    Err(StoreError::AttemptPending) => {
+                        return Err(ServiceError::UncertainAttempt(attempt_id));
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                Ok((unsettled, None))
+            }
+        }
+    }
+
+    pub async fn caller_visible_holdings(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: &str,
+        token: &str,
+        cursor: Option<&str>,
+    ) -> Result<Page<HoldingSummary>, ServiceError> {
+        if actor.role != registry_casework_core::CaseworkRole::Supervisor {
+            return Err(ServiceError::Forbidden);
+        }
+        let page = self
+            .inbox(actor, source_profile_id, token, 100, "holdings", cursor)
+            .await?;
+        let status = page.status;
+        let next_cursor = page.next_cursor;
+        let mut holdings: BTreeMap<(registry_casework_core::IssuerPrincipal, String), (u32, u32)> =
+            BTreeMap::new();
+        let now = chrono::Utc::now();
+        for item in page.items {
+            if let Some(holder) = item.holder {
+                let counts = holdings.entry((holder, item.queue_id)).or_insert((0, 0));
+                counts.0 += 1;
+                counts.1 += u32::from(item.passive_due_at.is_some_and(|due| due < now));
+            }
+        }
+        let items = holdings
+            .into_iter()
+            .map(
+                |((principal, queue_id), (active_items, overdue_items))| HoldingSummary {
+                    principal,
+                    queue_id,
+                    active_items,
+                    overdue_items,
+                },
+            )
+            .collect();
+        Ok(Page {
+            items,
+            next_cursor,
+            status,
+        })
+    }
+
+    fn adapter(&self, source_id: &str) -> Result<&Arc<dyn SourceAdapter>, ServiceError> {
+        self.adapters.get(source_id).ok_or(ServiceError::Source)
+    }
+
+    fn policy_for(&self, subject: &SubjectRef) -> Result<(&str, Option<i64>), ServiceError> {
+        let source = self
+            .project
+            .sources
+            .iter()
+            .find(|source| source.id == subject.source_id)
+            .ok_or(ServiceError::Source)?;
+        let request = source
+            .requests
+            .iter()
+            .find(|request| request.entity == subject.kind)
+            .ok_or(ServiceError::Source)?;
+        let target = request.target.as_ref().and_then(|target| {
+            registry_casework_core::parse_elapsed_seconds(&target.after.elapsed)
+        });
+        Ok((&request.queue, target))
+    }
+
+    #[must_use]
+    pub fn inbox_policy(&self) -> &InboxPolicy {
+        &self.project.inbox
+    }
+
+    async fn filtered_routing_copy(
+        &self,
+        item_id: Uuid,
+        view: &CallerSubjectView,
+    ) -> Result<Option<registry_casework_core::CorrectionRoutingCopy>, ServiceError> {
+        let Some(mut copy) = self.store.correction_routing_copy(item_id).await? else {
+            return Ok(None);
+        };
+        let reasons = view
+            .disclosed
+            .get("reasons")
+            .and_then(serde_json::Value::as_array);
+        if !reasons.is_some_and(|values| {
+            copy.reason
+                .as_ref()
+                .is_some_and(|reason| values.iter().any(|value| value.as_str() == Some(reason)))
+        }) {
+            copy.reason = None;
+        }
+        let readable = view
+            .disclosed
+            .get("readableFields")
+            .and_then(serde_json::Value::as_array);
+        copy.flagged_fields.retain(|field| {
+            !field.contains('.')
+                && readable
+                    .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(field)))
+        });
+        if copy.reason.is_none() && copy.flagged_fields.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(copy))
+        }
+    }
+}
+
+fn bounded_event_identifier(value: &str) -> &str {
+    const MAX_BYTES: usize = 256;
+    if value.len() <= MAX_BYTES {
+        return value;
+    }
+    let mut end = MAX_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn decision_hash(
+    expected_revision: i64,
+    source_profile_id: &str,
+    operation: &OperationName,
+    reason: Option<&str>,
+    flagged_fields: &[String],
+    binding: &SourceBinding,
+) -> Result<String, ServiceError> {
+    let bytes = serde_json::to_vec(&(
+        expected_revision,
+        source_profile_id,
+        operation,
+        reason,
+        flagged_fields,
+        binding,
+    ))
+    .map_err(|_| ServiceError::Configuration)?;
+    let digest = Sha256::digest(bytes);
+    Ok(format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+fn local_actions(
+    actor: &ActorContext,
+    item: &WorkItem,
+    source: &CallerSubjectView,
+) -> Vec<CaseworkAction> {
+    let if_match = format!("\"{}\"", item.revision);
+    if actor.role == registry_casework_core::CaseworkRole::Staff
+        && item.holder.is_none()
+        && item.state == registry_casework_core::OccurrenceState::Open
+    {
+        return vec![CaseworkAction {
+            operation: "claim".to_owned(),
+            href: format!("/v1/work-items/{}/claim", item.item_id),
+            if_match,
+        }];
+    }
+    if actor.role != registry_casework_core::CaseworkRole::Staff
+        || item.holder.as_ref() != Some(&actor.principal)
+        || item.state != registry_casework_core::OccurrenceState::Claimed
+    {
+        return Vec::new();
+    }
+    let mut actions = vec![CaseworkAction {
+        operation: "release".to_owned(),
+        href: format!("/v1/work-items/{}/release", item.item_id),
+        if_match: if_match.clone(),
+    }];
+    actions.extend(
+        source
+            .permitted_operations
+            .iter()
+            .map(|operation| CaseworkAction {
+                operation: operation.as_str().to_owned(),
+                href: format!("/v1/work-items/{}/decisions", item.item_id),
+                if_match: if_match.clone(),
+            }),
+    );
+    actions
+}
+
+#[derive(Debug, Error)]
+pub enum ServiceError {
+    #[error("the Casework service configuration is invalid")]
+    Configuration,
+    #[error("the source is not registered")]
+    Source,
+    #[error("the source response does not match its registration")]
+    SourceProtocol,
+    #[error("the requested work item was not found")]
+    NotFound,
+    #[error("the caller is not authorized")]
+    Forbidden,
+    #[error("the displayed binding is no longer current")]
+    BindingMoved,
+    #[error("the source attempt remains uncertain")]
+    UncertainAttempt(Uuid),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error(transparent)]
+    Adapter(#[from] SourceAdapterError),
+}

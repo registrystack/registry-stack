@@ -19,6 +19,20 @@ pub mod breg {
     };
 }
 
+pub mod casework {
+    pub use registry_casework_client::{
+        AttemptState, AttemptStatus, BearerToken, BootstrapDirectoryRequest, CallerSubjectView,
+        CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError,
+        CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, ClaimRequest,
+        CorrectionRoutingCopy, DecideRequest, Description, DirectoryResponse, Draft, DraftResponse,
+        HistoryEntry, HistoryKind, HistoryPage, HoldingSummary, HoldingsPage, HoldingsQuery,
+        InboxView, IssuerPrincipal, ListWorkItemsQuery, MutationResponse, NextWorkItemQuery,
+        OccurrenceKind, OccurrenceState, OperationName, Page, PageStatus, QueueRecord,
+        RecoverAttemptRequest, ReleaseRequest, SaveDraftRequest, SourceBinding, SourceReceipt,
+        SubjectRef, TeamRecord, WorkItem, WorkItemPage,
+    };
+}
+
 pub mod relay {
     pub use registry_relay_client::{
         BoundingBox, CollectionContinuation, CollectionContinuationProjection, CollectionPage,
