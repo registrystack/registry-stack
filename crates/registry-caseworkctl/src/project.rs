@@ -5,9 +5,7 @@ use registry_casework::{
     secret_resolver, validate_breg_source_description, verify_policy_package,
     PolicyPackageManifest, PostgresStore, RuntimeConfig, POLICY_PACKAGE_MANIFEST_FILE,
 };
-use registry_casework_core::{
-    CaseworkProject, SourceAdapter as _, SourceRetentionReport, SourceRetentionSelector,
-};
+use registry_casework_core::{CaseworkProject, SourceRetentionReport, SourceRetentionSelector};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
@@ -116,6 +114,8 @@ expect:
   applicationMode: manual
   targetElapsed: PT48H
 "#;
+
+const EVENT_WIRING_GUIDANCE: &str = "The configured source reader cannot attest that BReg sends lifecycle events to this Casework receiver with the same key. Run bregctl doctor against the BReg runtime configuration, then cause and confirm one lifecycle delivery.";
 
 const STANDALONE_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
@@ -533,6 +533,7 @@ pub(super) fn doctor(project: &Path, operator: Option<&Path>) -> Result<Value> {
     if config.sources.len() != policy.sources.len() {
         bail!("operator source bindings do not exactly match the authored Casework sources");
     }
+    let mut source_checks = Vec::with_capacity(policy.sources.len());
     for source in &policy.sources {
         let binding = config
             .sources
@@ -542,13 +543,14 @@ pub(super) fn doctor(project: &Path, operator: Option<&Path>) -> Result<Value> {
             .build_adapter(source, &project, &resolver)
             .with_context(|| format!("source binding {} is invalid", source.id))?;
         runtime
-            .block_on(adapter.discover_active(None, 1))
+            .block_on(adapter.verify_reader_readiness())
             .with_context(|| {
                 format!(
-                    "source {} is unavailable or its read-only profile cannot list active requests",
+                    "source {} is unavailable, unready, or its configured reader lacks exact get/list access to the declared request projection",
                     source.id
                 )
             })?;
+        source_checks.push(doctor_source_check(&source.id));
     }
     let store = PostgresStore::connect_runtime(&config.database, &resolver)
         .context("the Casework runtime database configuration is invalid")?;
@@ -576,8 +578,20 @@ pub(super) fn doctor(project: &Path, operator: Option<&Path>) -> Result<Value> {
             "database": "ready",
             "oidcIssuer": "ready",
             "directory": "ready"
-        }
+        },
+        "sourceChecks": source_checks,
+        "eventWiringGuidance": EVENT_WIRING_GUIDANCE
     }))
+}
+
+fn doctor_source_check(source_id: &str) -> Value {
+    json!({
+        "sourceId": source_id,
+        "runtime": "ready",
+        "readerProfile": "ready",
+        "requiredGrants": "ready",
+        "eventWiring": "unknown"
+    })
 }
 
 pub(super) fn db_migrate(project: &Path, operator: Option<&Path>) -> Result<Value> {
@@ -930,6 +944,19 @@ mod tests {
         policy.check().unwrap();
         assert_eq!(policy.sources.len(), 1);
         assert_eq!(policy.queues.len(), 1);
+    }
+
+    #[test]
+    fn doctor_never_reports_unattested_event_wiring_as_ready() {
+        let check = doctor_source_check("professional-register");
+        assert_eq!(check["sourceId"], "professional-register");
+        assert_eq!(check["runtime"], "ready");
+        assert_eq!(check["readerProfile"], "ready");
+        assert_eq!(check["requiredGrants"], "ready");
+        assert_eq!(check["eventWiring"], "unknown");
+        assert!(!check.to_string().contains("eventWiring\":\"ready"));
+        assert!(EVENT_WIRING_GUIDANCE.contains("bregctl doctor"));
+        assert!(EVENT_WIRING_GUIDANCE.contains("confirm one lifecycle delivery"));
     }
 
     #[test]

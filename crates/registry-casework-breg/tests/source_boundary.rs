@@ -187,6 +187,218 @@ async fn mount_metadata_revision(server: &MockServer, token: &str, profile: &str
         .expect(1)
         .mount(server).await;
 }
+
+fn diagnostic_field(id: &str, api_name: &str) -> Value {
+    json!({
+        "id": id,
+        "apiName": api_name,
+        "label": id,
+        "schema": {"type": "string"},
+        "required": false,
+        "nullable": true,
+        "readOnly": false,
+        "removable": false
+    })
+}
+
+fn diagnostic_operation(kind: &str, path: &str, fields: &[(&str, &str)]) -> Value {
+    json!({
+        "id": format!("records.correction.{kind}"),
+        "method": "GET",
+        "path": path,
+        "operation": kind,
+        "sourceEntity": "correction",
+        "responseEntity": "correction",
+        "accessProfile": "reader",
+        "requiredCapabilities": [],
+        "entityLabel": "Corrections",
+        "identifier": {"apiName": "id", "location": "envelope"},
+        "titleFields": [],
+        "fields": fields
+            .iter()
+            .map(|(id, api_name)| diagnostic_field(id, api_name))
+            .collect::<Vec<_>>(),
+        "readableFields": fields.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        "createWritableFields": [],
+        "patchWritableFields": [],
+        "selectors": [],
+        "query": null,
+        "request": {"fieldNames": "api", "queryParameters": ["$select"]}
+    })
+}
+
+fn diagnostic_metadata(kinds: &[&str], fields: &[(&str, &str)]) -> Value {
+    json!({
+        "id": "test",
+        "version": "1.0.0",
+        "revision": DIGEST,
+        "metadataVersion": "1",
+        "entities": [{
+            "id": "correction",
+            "datasetIdentifier": "primary",
+            "route": "correction",
+            "operations": kinds
+                .iter()
+                .map(|kind| json!({"operation": kind, "accessProfile": "reader"}))
+                .collect::<Vec<_>>(),
+            "readableFields": fields.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            "schema": "/v1/schemas/correction"
+        }],
+        "operations": kinds
+            .iter()
+            .map(|kind| diagnostic_operation(
+                kind,
+                if *kind == "get" {
+                    "/v1/records/correction/{record_id}"
+                } else {
+                    "/v1/records/correction"
+                },
+                fields,
+            ))
+            .collect::<Vec<_>>()
+    })
+}
+
+async fn mount_reader_diagnostic(
+    server: &MockServer,
+    metadata: Value,
+    ready_status: u16,
+    expect_list: bool,
+) {
+    let ready = if ready_status == 200 {
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"status": "ready"}))
+            .insert_header("traceparent", TRACE)
+    } else {
+        ResponseTemplate::new(ready_status)
+    };
+    Mock::given(method("GET"))
+        .and(path("/ready"))
+        .respond_with(ready)
+        .expect(1)
+        .mount(server)
+        .await;
+    if ready_status != 200 {
+        return;
+    }
+    Mock::given(method("GET"))
+        .and(path("/v1/registry"))
+        .and(header("authorization", "Bearer reader-token"))
+        .and(query_param("accessProfile", "reader"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("traceparent", TRACE)
+                .set_body_json(metadata),
+        )
+        .expect(1)
+        .mount(server)
+        .await;
+    if expect_list {
+        Mock::given(method("GET"))
+            .and(path("/v1/records/correction"))
+            .and(header("authorization", "Bearer reader-token"))
+            .and(query_param("accessProfile", "reader"))
+            .and(query_param("$top", "1"))
+            .and(query_param(
+                "$filter",
+                "bregState eq 'submitted' or bregState eq 'approved' or bregState eq 'needs_changes'",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("traceparent", TRACE)
+                    .insert_header("cache-control", "no-store")
+                    .insert_header(
+                        "link",
+                        "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/correction>; rel=\"describedby\"",
+                    )
+                    .set_body_json(json!({
+                        "items": [],
+                        "pageInfo": {"nextCursor": null},
+                        "meta": {
+                            "registryIdentifier": "test",
+                            "datasetIdentifier": "primary",
+                            "entityTypeIdentifier": "correction"
+                        }
+                    })),
+            )
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn reader_diagnostic_proves_exact_get_list_projection_on_an_empty_registry() {
+    let server = MockServer::start().await;
+    mount_reader_diagnostic(
+        &server,
+        diagnostic_metadata(&["get", "list"], &[("record", "record")]),
+        200,
+        true,
+    )
+    .await;
+
+    adapter(&server.uri())
+        .verify_reader_readiness()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn reader_diagnostic_refuses_missing_get_or_routing_projection_grants() {
+    let server = MockServer::start().await;
+    mount_reader_diagnostic(
+        &server,
+        diagnostic_metadata(&["list"], &[("record", "record")]),
+        200,
+        false,
+    )
+    .await;
+    assert_eq!(
+        adapter(&server.uri()).verify_reader_readiness().await,
+        Err(SourceAdapterError::Denied)
+    );
+
+    let server = MockServer::start().await;
+    mount_reader_diagnostic(
+        &server,
+        diagnostic_metadata(&["get", "list"], &[("record", "record")]),
+        200,
+        false,
+    )
+    .await;
+    assert_eq!(
+        adapter_with_routing(&server.uri())
+            .verify_reader_readiness()
+            .await,
+        Err(SourceAdapterError::Denied)
+    );
+}
+
+#[tokio::test]
+async fn reader_diagnostic_refuses_a_registry_revision_that_moved() {
+    let server = MockServer::start().await;
+    let mut metadata = diagnostic_metadata(&["get", "list"], &[("record", "record")]);
+    metadata["revision"] =
+        json!("sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    mount_reader_diagnostic(&server, metadata, 200, false).await;
+
+    assert_eq!(
+        adapter(&server.uri()).verify_reader_readiness().await,
+        Err(SourceAdapterError::BindingMoved)
+    );
+}
+
+#[tokio::test]
+async fn reader_diagnostic_refuses_an_unready_source_before_using_reader_credentials() {
+    let server = MockServer::start().await;
+    mount_reader_diagnostic(&server, json!({}), 503, false).await;
+
+    assert_eq!(
+        adapter(&server.uri()).verify_reader_readiness().await,
+        Err(SourceAdapterError::Unavailable)
+    );
+}
 #[tokio::test]
 async fn authoritative_read_retains_representation_etag_at_unchanged_record_revision() {
     let mut observations = Vec::new();

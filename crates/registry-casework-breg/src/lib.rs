@@ -124,6 +124,81 @@ impl BregAdapter {
         })
     }
 
+    /// Verify the configured BReg runtime and the complete read contract
+    /// Casework needs without requiring a specimen request to exist.
+    ///
+    /// This proves only the caller-filtered reader surface. BReg's readiness
+    /// response does not disclose its event destination, and this method must
+    /// therefore not be used as evidence of end-to-end webhook delivery.
+    pub async fn verify_reader_readiness(&self) -> Result<(), SourceAdapterError> {
+        self.reader.ready().await.map_err(read_error)?;
+        let metadata = self
+            .metadata(&self.reader, &self.config.reader_profile)
+            .await?;
+        self.verify_reader_operation(
+            &metadata,
+            BRegOperationKind::Get,
+            &format!("/v1/records/{}/{{record_id}}", self.config.route),
+        )?;
+        self.verify_reader_operation(
+            &metadata,
+            BRegOperationKind::List,
+            &format!("/v1/records/{}", self.config.route),
+        )?;
+
+        let request = BRegListRequest::default()
+            .options(Self::options(&self.config.reader_profile)?)
+            .top(1)
+            .map_err(|_| SourceAdapterError::Invalid)?
+            .filter(
+                "bregState eq 'submitted' or bregState eq 'approved' or bregState eq 'needs_changes'",
+            )
+            .map_err(|_| SourceAdapterError::Invalid)?;
+        self.reader
+            .list_records(&self.config.route, &request)
+            .await
+            .map_err(read_error)?;
+        Ok(())
+    }
+
+    fn verify_reader_operation(
+        &self,
+        metadata: &BRegMetadata,
+        kind: BRegOperationKind,
+        expected_path: &str,
+    ) -> Result<(), SourceAdapterError> {
+        let identifier = format!("records.{}.{}", self.config.entity, kind.as_str());
+        let operation = metadata
+            .operation(&identifier)
+            .ok_or(SourceAdapterError::Denied)?;
+        let required_fields = std::iter::once("record")
+            .chain(
+                self.config
+                    .routing_metadata
+                    .fields
+                    .iter()
+                    .map(|field| field.field.as_str()),
+            )
+            .collect::<Vec<_>>();
+        if operation.kind() != &kind
+            || operation.method() != "GET"
+            || operation.path() != expected_path
+            || operation.source_entity() != self.config.entity
+            || operation.response_entity() != self.config.entity
+            || operation.access_profile() != self.config.reader_profile
+            || !operation.required_capabilities().is_empty()
+            || required_fields.iter().any(|required| {
+                !operation
+                    .readable_fields()
+                    .iter()
+                    .any(|readable| readable == required)
+            })
+        {
+            return Err(SourceAdapterError::Denied);
+        }
+        Ok(())
+    }
+
     fn validate_subject(&self, subject: &SubjectRef) -> Result<(), SourceAdapterError> {
         if subject.source_id != self.config.source_id
             || subject.kind != self.config.entity
