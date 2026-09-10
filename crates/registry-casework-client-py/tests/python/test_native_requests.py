@@ -4,6 +4,7 @@ import json
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 from bootstrap import ensure_built
 
@@ -35,7 +36,34 @@ class _Handler(BaseHTTPRequestHandler):
                 "This cursor has expired. Start again without a cursor and deduplicate entries by eventId.",
             )
             return
-        if self.path == f"/tenant/v1/work-items/{ITEM_ID}/clocks":
+        if self.path == f"/tenant/v1/work-items/{ITEM_ID}":
+            self.respond({
+                "itemId": ITEM_ID,
+                "subject": {
+                    "sourceId": "source-one",
+                    "kind": "case",
+                    "id": "case-one",
+                },
+                "occurrenceKind": "review",
+                "binding": {
+                    "sourceRevision": "revision-1",
+                    "version": "version-1",
+                    "generation": "generation-1",
+                },
+                "bindingReference": "binding-one",
+                "state": "claimed",
+                "queueId": "review",
+                "holder": {
+                    "issuer": "https://id.example",
+                    "subject": "officer-one",
+                },
+                "heldSince": "2026-09-11T03:04:05Z",
+                "revision": 2,
+                "firstObservedAt": "2026-09-11T03:00:00Z",
+                "updatedAt": "2026-09-11T03:04:05Z",
+                "actions": [],
+            })
+        elif self.path == f"/tenant/v1/work-items/{ITEM_ID}/clocks":
             self.respond([{
                 "clockOccurrenceId": CLOCK_OCCURRENCE_ID,
                 "subject": {"sourceId": "source-one", "kind": "case", "id": "case-one"},
@@ -47,6 +75,22 @@ class _Handler(BaseHTTPRequestHandler):
                 "anchorAt": "2026-09-10T00:00:00Z",
                 "startedAt": "2026-09-10T00:00:00Z",
                 "dueAt": "2026-09-14T00:00:00Z",
+                "nextEffect": {
+                    "kind": "reminder",
+                    "id": "at-risk",
+                    "at": "2026-09-12T00:00:00Z",
+                },
+                "upcomingEffects": [{
+                    "kind": "reminder",
+                    "id": "at-risk",
+                    "at": "2026-09-12T00:00:00Z",
+                }, {
+                    "kind": "reassign",
+                    "id": "escalate",
+                    "at": "2026-09-14T00:00:00Z",
+                    "because": "Deadline reached",
+                    "queueId": "appeals",
+                }],
             }])
         elif self.path == "/tenant/v1/directory/holidays/statutory/revisions/7":
             self.respond({
@@ -57,7 +101,11 @@ class _Handler(BaseHTTPRequestHandler):
         elif self.path.startswith(f"/tenant/v1/work-items/{ITEM_ID}/history?"):
             self.respond({"items": [], "nextCursor": "next-cursor", "status": "complete"})
         elif self.path.startswith("/tenant/v1/work-items"):
-            self.respond({"items": [], "status": "complete"})
+            self.respond({
+                "items": [],
+                "servedQueues": ["appeals", "review"],
+                "status": "complete",
+            })
         else:
             self.respond({
                 "projectId": "fixture",
@@ -207,9 +255,22 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(created["trace_id"], TRACE_ID)
         self.assertEqual(created["value"]["itemId"], ITEM_ID)
         page = self.client.list_work_items(
-            "staff-token", "staff", "source-one", {"view": "mine", "limit": 25}
+            "staff-token",
+            "staff",
+            "source-one",
+            {
+                "view": "mine",
+                "sourceId": "source-one",
+                "subjectKind": "resident-record",
+                "subjectId": "human-reference-42",
+                "limit": 25,
+            },
         )
-        self.assertEqual(page["value"], {"items": [], "status": "complete"})
+        self.assertEqual(page["value"], {
+            "items": [],
+            "servedQueues": ["appeals", "review"],
+            "status": "complete",
+        })
         preview = self.client.preview_caseload_move(
             "supervisor-token",
             "supervisor",
@@ -231,6 +292,16 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(staff["authorization"], "Bearer staff-token")
         self.assertEqual(staff["profile"], "staff")
         self.assertEqual(staff["source_profile"], "source-one")
+        self.assertEqual(
+            parse_qs(urlsplit(staff["path"]).query),
+            {
+                "view": ["mine"],
+                "sourceId": ["source-one"],
+                "subjectKind": ["resident-record"],
+                "subjectId": ["human-reference-42"],
+                "limit": ["25"],
+            },
+        )
         self.assertEqual(supervisor["authorization"], "Bearer supervisor-token")
         self.assertEqual(supervisor["profile"], "supervisor")
         self.assertEqual(supervisor["source_profile"], "source-one")
@@ -277,6 +348,14 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
 
+    def test_native_client_preserves_optional_held_timestamp(self) -> None:
+        item = self.client.get_work_item(
+            "staff-token", "staff", "source-one", ITEM_ID
+        )
+
+        self.assertEqual(item["value"]["heldSince"], "2026-09-11T03:04:05Z")
+        self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
+
     def test_clock_calls_preserve_source_profile_revision_and_explicit_keys(self) -> None:
         clocks = self.client.work_item_clocks(
             "staff-token", "staff", "source-one", ITEM_ID
@@ -313,6 +392,11 @@ class NativeRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(clocks["value"][0]["clockOccurrenceId"], CLOCK_OCCURRENCE_ID)
+        self.assertEqual(clocks["value"][0]["nextEffect"]["id"], "at-risk")
+        self.assertEqual(
+            [effect["id"] for effect in clocks["value"][0]["upcomingEffects"]],
+            ["at-risk", "escalate"],
+        )
         self.assertEqual(holiday["value"]["revision"], 7)
         self.assertEqual(created["value"]["revision"], 8)
         self.assertEqual(preview["value"]["previewId"], PREVIEW_ID)

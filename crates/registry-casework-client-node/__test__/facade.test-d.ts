@@ -1,6 +1,7 @@
 import {
   CaseworkClient,
   CaseworkClientError,
+  type ClockNextEffect,
   type CaseworkProblemCode,
   type DecideRequest,
   type HostedCreateRequest,
@@ -30,6 +31,14 @@ void client.recoverDecisionByKey(
   { sourceProfileId: sourceProfile },
 )
 void client.workItemHistory(token, profile, sourceProfile, item.itemId, { cursor: 'opaque', limit: 25 })
+void client.listWorkItems(token, profile, sourceProfile, {
+  view: 'my_teams', sourceId: 'source-one', subjectKind: 'resident-record', subjectId: 'human-reference-42',
+}).then((page) => {
+  const servedQueue: string | undefined = page.value.servedQueues[0]
+  void servedQueue
+})
+// @ts-expect-error subject selectors must include all three fields
+void client.listWorkItems(token, profile, sourceProfile, { view: 'my_teams', sourceId: 'source-one' })
 
 const hostedCreate: HostedCreateRequest = {
   kind: 'decision',
@@ -63,13 +72,17 @@ if (item.occurrenceKind === 'hosted') {
 }
 const routedBy: string | undefined = item.routing?.ruleId
 const nextClockEffect = item.clockOccurrences?.[0]?.nextEffect
+const upcomingClockEffect: ClockNextEffect | undefined = item.clockOccurrences?.[0]?.upcomingEffects?.[0]
 if (nextClockEffect?.kind === 'reassign') {
   const queueId: string = nextClockEffect.queueId
   void queueId
 }
 void routedBy
+void upcomingClockEffect
 const liveAttemptId: string | undefined = item.liveAttempt?.attemptId
 void liveAttemptId
+const heldSince: string | undefined = item.heldSince
+void heldSince
 
 function completedAccountability(entry: HistoryEntry): string | undefined {
   if (entry.kind !== 'action_completed') return undefined

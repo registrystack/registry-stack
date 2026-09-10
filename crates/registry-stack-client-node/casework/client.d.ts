@@ -50,6 +50,7 @@ export interface WorkItem {
   state: OccurrenceState
   queueId: string
   holder?: IssuerPrincipal
+  heldSince?: string
   assignment?: AssignmentContext
   revision: SafeInteger
   firstObservedAt: string
@@ -63,12 +64,16 @@ export interface WorkItem {
   liveAttempt?: AttemptStatus
 }
 export interface Page<T> { items: ReadonlyArray<T>; nextCursor?: string; status: PageStatus }
-export interface ListWorkItemsQuery {
+export interface WorkItemPage extends Page<WorkItem> { servedQueues: ReadonlyArray<string> }
+export type ListWorkItemsQuery = {
   view: InboxView
   queue?: string
   cursor?: string
   limit?: SafeInteger
-}
+} & (
+  | { sourceId: string; subjectKind: string; subjectId: string }
+  | { sourceId?: never; subjectKind?: never; subjectId?: never }
+)
 export interface NextWorkItemQuery { queue?: string; cursor?: string }
 export interface SaveDraftRequest {
   binding: SourceBinding
@@ -349,6 +354,7 @@ export interface ClockOccurrenceView {
   atRiskAt?: string
   completedAt?: string
   nextEffect?: ClockNextEffect
+  upcomingEffects?: ReadonlyArray<ClockNextEffect>
 }
 export interface HolidaySetDocument { holidaySet: string; revision: SafeInteger; dates: ReadonlyArray<string> }
 export interface HolidaySetRevisionInput { document: HolidaySetDocument }
@@ -367,14 +373,14 @@ export class CaseworkClient {
   requesterHostedNotes(token: string, profile: string, itemId: string, query?: HostedPageQuery | null): Promise<CaseworkOutcome<Page<HostedNote>>>
   cancelHostedItem(token: string, profile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, cancellation: HostedCancelRequest): Promise<CaseworkOutcome<HostedTerminalResult>>
   hostedTerminalItems(token: string, profile: string, query?: HostedTerminalQuery | null): Promise<CaseworkOutcome<Page<HostedTerminalResult>>>
-  listHostedWorkItems(token: string, profile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<Page<WorkItem>>>
+  listHostedWorkItems(token: string, profile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<WorkItemPage>>
   getHostedWorkItem(token: string, profile: string, itemId: string): Promise<CaseworkOutcome<WorkItem>>
   hostedWorkItemHistory(token: string, profile: string, itemId: string, query?: HostedPageQuery | null): Promise<CaseworkOutcome<Page<HostedHistoryEntry>>>
   hostedAccountabilityRecord(token: string, profile: string, eventId: string): Promise<CaseworkOutcome<HostedAccountabilityRecord>>
   claimHostedWorkItem(token: string, profile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
   releaseHostedWorkItem(token: string, profile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
   decideHostedWorkItem(token: string, profile: string, action: CaseworkAction, idempotencyKey: string, decision: HostedDecisionRequest): Promise<CaseworkOutcome<HostedTerminalResult>>
-  listWorkItems(token: string, profile: string, sourceProfile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<Page<WorkItem>>>
+  listWorkItems(token: string, profile: string, sourceProfile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<WorkItemPage>>
   nextWorkItem(token: string, profile: string, sourceProfile: string, query?: NextWorkItemQuery | null): Promise<CaseworkOutcome<WorkItem | null>>
   getWorkItem(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<WorkItem>>
   claimWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>

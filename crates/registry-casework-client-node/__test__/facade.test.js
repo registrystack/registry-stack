@@ -99,6 +99,77 @@ test('source history forwards cursor and limit and returns the continuation', as
   assert.equal(observed.headers['registry-source-profile'], 'reviewer');
 });
 
+test('source inbox forwards one complete exact subject selector', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { url: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({ items: [], servedQueues: ['appeals', 'review'], status: 'complete' }));
+    });
+  });
+  await listen(server);
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
+  const page = await client.listWorkItems('one-call-secret', 'staff', 'reviewer', {
+    view: 'my_teams',
+    sourceId: 'source-one',
+    subjectKind: 'resident-record',
+    subjectId: 'human-reference-42',
+    limit: 25,
+  });
+
+  const query = new URL(observed.url, 'http://fixture.invalid').searchParams;
+  assert.equal(query.get('sourceId'), 'source-one');
+  assert.equal(query.get('subjectKind'), 'resident-record');
+  assert.equal(query.get('subjectId'), 'human-reference-42');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+  assert.deepEqual(page.value.servedQueues, ['appeals', 'review']);
+});
+
+test('native client preserves the optional held timestamp', async (context) => {
+  const itemId = '00000000-0000-4000-8000-000000000001';
+  const heldSince = '2026-09-11T03:04:05Z';
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        itemId,
+        subject: { sourceId: 'source-one', kind: 'case', id: 'case-one' },
+        occurrenceKind: 'review',
+        binding: { sourceRevision: 'revision-1', version: 'version-1', generation: 'generation-1' },
+        bindingReference: 'binding-one',
+        state: 'claimed',
+        queueId: 'review',
+        holder: { issuer: 'https://id.example', subject: 'officer-one' },
+        heldSince,
+        revision: 2,
+        firstObservedAt: '2026-09-11T03:00:00Z',
+        updatedAt: heldSince,
+        actions: [],
+      }));
+    });
+  });
+  await listen(server);
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
+  const outcome = await client.getWorkItem('one-call-secret', 'staff', 'reviewer', itemId);
+
+  assert.equal(outcome.value.heldSince, heldSince);
+});
+
 test('recovery-pending problem preserves the original attempt reference', async (context) => {
   const originalAttemptId = '10000000-0000-4000-8000-000000000001';
   const server = problemServer('work-item.recovery-pending', {
@@ -220,6 +291,7 @@ test('clock views and recompute expiry preserve source authority and explicit re
       observed.push({ path: request.url, headers: request.headers, body });
       const expired = request.url.endsWith('/recompute/apply');
       const creating = request.url === '/v1/directory/holidays';
+      const readingClocks = request.url.endsWith('/clocks');
       response.writeHead(expired ? 410 : creating ? 201 : 200, {
         'content-type': expired ? 'application/problem+json' : 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
@@ -229,14 +301,27 @@ test('clock views and recompute expiry preserve source authority and explicit re
         code: 'clock.recompute-preview-expired', title: 'Clock recompute preview expired',
         status: 410, detail: 'Create a new recompute preview and review it before applying.',
         traceId: '0123456789abcdef0123456789abcdef',
-      } : creating ? body.document : []));
+      } : creating ? body.document : readingClocks ? [{
+        clockOccurrenceId: previewId,
+        subject: { sourceId: 'source-one', kind: 'case', id: 'case-one' },
+        clockId: 'decision-due', state: 'running',
+        policyDigest: `sha256:${'1'.repeat(64)}`,
+        calculationGeneration: 1, recomputeGeneration: 0,
+        nextEffect: { kind: 'reminder', id: 'at-risk', at: '2026-09-12T00:00:00Z' },
+        upcomingEffects: [
+          { kind: 'reminder', id: 'at-risk', at: '2026-09-12T00:00:00Z' },
+          { kind: 'reassign', id: 'escalate', at: '2026-09-14T00:00:00Z', because: 'Deadline reached', queueId: 'appeals' },
+        ],
+      }] : []));
     });
   });
   await listen(server);
   context.after(() => new Promise((resolve) => server.close(resolve)));
   const { CaseworkClient } = require('../client');
   const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
-  assert.deepEqual((await client.workItemClocks('synthetic-token', 'staff', 'reviewer', previewId)).value, []);
+  const clocks = (await client.workItemClocks('synthetic-token', 'staff', 'reviewer', previewId)).value;
+  assert.equal(clocks[0].nextEffect.id, 'at-risk');
+  assert.deepEqual(clocks[0].upcomingEffects.map((effect) => effect.id), ['at-risk', 'escalate']);
   const document = { holidaySet: 'office', revision: 7, dates: ['2026-09-07'] };
   assert.deepEqual((await client.createHolidayRevision('synthetic-token', 'administrator', 'holiday-7', { document })).value, document);
   await assert.rejects(client.applyClockRecompute('synthetic-token', 'administrator', 'apply-reviewed-preview', { previewId }), (error) => {

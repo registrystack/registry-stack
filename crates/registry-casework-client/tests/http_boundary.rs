@@ -357,6 +357,49 @@ async fn invalid_mutation_input_fails_before_network_io() {
 }
 
 #[tokio::test]
+async fn invalid_subject_selectors_fail_before_network_io() {
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse("http://127.0.0.1:1/").expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let partial = registry_casework_client::ListWorkItemsQuery {
+        view: registry_casework_client::InboxView::MyTeams,
+        queue: None,
+        source_id: Some("source-one".into()),
+        subject_kind: None,
+        subject_id: None,
+        cursor: None,
+        limit: Some(10),
+    };
+    assert!(matches!(
+        client
+            .list_work_items(
+                CaseworkAuth::new(&token, "staff").with_source_profile("reader"),
+                &partial,
+            )
+            .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+
+    let complete = registry_casework_client::ListWorkItemsQuery {
+        view: registry_casework_client::InboxView::MyTeams,
+        queue: None,
+        source_id: Some("source-one".into()),
+        subject_kind: Some("resident-record".into()),
+        subject_id: Some("human-reference-42".into()),
+        cursor: None,
+        limit: Some(10),
+    };
+    assert!(matches!(
+        client
+            .list_hosted_work_items(CaseworkAuth::new(&token, "staff"), &complete)
+            .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+}
+
+#[tokio::test]
 async fn hosted_client_refuses_a_source_profile_before_network_io() {
     let client = CaseworkClient::new(CaseworkClientConfig::new(
         Url::parse("http://127.0.0.1:1/").expect("fixture URL"),
@@ -369,6 +412,9 @@ async fn hosted_client_refuses_a_source_profile_before_network_io() {
             &registry_casework_client::ListWorkItemsQuery {
                 view: registry_casework_client::InboxView::MyTeams,
                 queue: None,
+                source_id: None,
+                subject_kind: None,
+                subject_id: None,
                 cursor: None,
                 limit: Some(10),
             },

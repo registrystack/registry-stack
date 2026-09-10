@@ -591,6 +591,9 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
             &ListWorkItemsQuery {
                 view: InboxView::MyTeams,
                 queue: Some(queue),
+                source_id: None,
+                subject_kind: None,
+                subject_id: None,
                 cursor: None,
                 limit: Some(25),
             },

@@ -60,6 +60,7 @@ class _ClockOccurrenceViewOptional(TypedDict, total=False):
     atRiskAt: str
     completedAt: str
     nextEffect: ClockNextEffect
+    upcomingEffects: list[ClockNextEffect]
 
 class ClockOccurrenceView(_ClockOccurrenceViewOptional):
     clockOccurrenceId: str
@@ -149,6 +150,7 @@ class WorkItemRouting(_WorkItemRoutingOptional):
 class _WorkItemOptional(TypedDict, total=False):
     stage: str
     holder: IssuerPrincipal
+    heldSince: str
     assignment: AssignmentContext
     passiveDueAt: str
     routingCopy: CorrectionRoutingCopy
@@ -169,6 +171,14 @@ class WorkItem(_WorkItemOptional):
     firstObservedAt: str
     updatedAt: str
     actions: list[CaseworkAction]
+
+class _WorkItemPageOptional(TypedDict, total=False):
+    nextCursor: str
+
+class WorkItemPage(_WorkItemPageOptional):
+    items: list[WorkItem]
+    servedQueues: list[str]
+    status: PageStatus
 
 class HostedCreateRequest(TypedDict):
     kind: str
@@ -200,8 +210,18 @@ class _ListWorkItemsQueryOptional(TypedDict, total=False):
     cursor: str
     limit: int
 
-class ListWorkItemsQuery(_ListWorkItemsQueryOptional):
+class _ListWorkItemsQueryBase(_ListWorkItemsQueryOptional):
     view: InboxView
+
+class ListWorkItemsUnfilteredQuery(_ListWorkItemsQueryBase):
+    pass
+
+class ListWorkItemsBySubjectQuery(_ListWorkItemsQueryBase):
+    sourceId: str
+    subjectKind: str
+    subjectId: str
+
+ListWorkItemsQuery: TypeAlias = ListWorkItemsUnfilteredQuery | ListWorkItemsBySubjectQuery
 
 class NextWorkItemQuery(TypedDict, total=False):
     queue: str
@@ -595,14 +615,14 @@ class CaseworkClient:
     def requester_hosted_notes(self, token: str, profile: str, item_id: str, query: HostedPageQuery | None = None) -> Complete[Page[HostedNote]]: ...
     def cancel_hosted_item(self, token: str, profile: str, item_id: str, expected_revision: int, idempotency_key: str, cancellation: HostedCancelRequest) -> Complete[HostedTerminalResult]: ...
     def hosted_terminal_items(self, token: str, profile: str, query: HostedTerminalQuery | None = None) -> Complete[Page[HostedTerminalResult]]: ...
-    def list_hosted_work_items(self, token: str, profile: str, query: ListWorkItemsQuery) -> Complete[Page[WorkItem]]: ...
+    def list_hosted_work_items(self, token: str, profile: str, query: ListWorkItemsQuery) -> Complete[WorkItemPage]: ...
     def get_hosted_work_item(self, token: str, profile: str, item_id: str) -> Complete[WorkItem]: ...
     def hosted_work_item_history(self, token: str, profile: str, item_id: str, query: HostedPageQuery | None = None) -> Complete[Page[HostedHistoryEntry]]: ...
     def hosted_accountability_record(self, token: str, profile: str, event_id: str) -> Complete[HostedAccountabilityRecord]: ...
     def claim_hosted_work_item(self, token: str, profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...
     def release_hosted_work_item(self, token: str, profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...
     def decide_hosted_work_item(self, token: str, profile: str, action: CaseworkAction, idempotency_key: str, decision: HostedDecisionRequest) -> Complete[HostedTerminalResult]: ...
-    def list_work_items(self, token: str, profile: str, source_profile: str, query: ListWorkItemsQuery) -> Complete[Page[WorkItem]]: ...
+    def list_work_items(self, token: str, profile: str, source_profile: str, query: ListWorkItemsQuery) -> Complete[WorkItemPage]: ...
     def next_work_item(self, token: str, profile: str, source_profile: str, query: NextWorkItemQuery | None = None) -> Complete[WorkItem | None]: ...
     def get_work_item(self, token: str, profile: str, source_profile: str, item_id: str) -> Complete[WorkItem]: ...
     def claim_work_item(self, token: str, profile: str, source_profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...

@@ -789,6 +789,14 @@
           },
           "subject": {
             "$ref": "#/components/schemas/SubjectRef"
+          },
+          "upcomingEffects": {
+            "description": "For running or verification-pending clocks, the earliest unapplied reminder and earliest unapplied reassignment, ordered by time, effect kind, and identifier. Omitted when no firing instant can be promised, including while paused. These are pinned authored instants, not scheduler retry times.",
+            "items": {
+              "$ref": "#/components/schemas/ClockNextEffect"
+            },
+            "maxItems": 2,
+            "type": "array"
           }
         },
         "required": [
@@ -3745,6 +3753,10 @@
             "format": "date-time",
             "type": "string"
           },
+          "heldSince": {
+            "format": "date-time",
+            "type": "string"
+          },
           "holder": {
             "anyOf": [
               {
@@ -3883,6 +3895,14 @@
               }
             ]
           },
+          "servedQueues": {
+            "description": "Sorted unique queue identifiers currently served by the authenticated Staff or Supervisor. Present even when items is empty.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
           "status": {
             "enum": [
               "complete",
@@ -3894,6 +3914,7 @@
         },
         "required": [
           "items",
+          "servedQueues",
           "status"
         ],
         "type": "object"
@@ -10120,7 +10141,7 @@
     },
     "/v1/work-items": {
       "get": {
-        "description": "With Registry-Source-Profile, reads BReg-backed work under that separate authority. Without it, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order.",
+        "description": "With Registry-Source-Profile, reads BReg-backed work under that separate authority. An optional complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject; callers must follow every page and handle every visible occurrence rather than assuming the subject is unique. The cursor is bound to the full selector. Without Registry-Source-Profile, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order; hosted requests reject the subject selector.",
         "operationId": "listWorkItems",
         "parameters": [
           {
@@ -10178,6 +10199,36 @@
             "name": "queue",
             "required": false,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact source identifier. For source-backed requests, supply this together with subjectKind and subjectId or omit all three. The component must be nonempty and is carried without normalization.",
+            "in": "query",
+            "name": "sourceId",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact source-neutral subject kind. Supply together with sourceId and subjectId or omit all three. The component must be nonempty and is carried without normalization.",
+            "in": "query",
+            "name": "subjectKind",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact source-neutral subject identifier. Supply together with sourceId and subjectKind or omit all three. The component must be nonempty, is carried without normalization, and is not restricted to UUID syntax.",
+            "in": "query",
+            "name": "subjectId",
+            "required": false,
+            "schema": {
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -14964,6 +15015,7 @@
     },
     "/v1/work-items/{item_id}/release": {
       "post": {
+        "description": "Staff release only an item they currently hold. A human Supervisor may force-release a held item for a queue served by a team they currently supervise, regardless of its holder. The source-backed form requires Registry-Source-Profile and a successful current source read; the hosted form omits that header. If-Match, Idempotency-Key, current visibility, queue authority, and any live source-attempt fence are checked before the mutation. Success clears the holder and assignment, returns the item to open, and records the previous holder in protected lifecycle history. Supervisor authority does not grant hosted decision authority.",
         "operationId": "releaseWorkItem",
         "parameters": [
           {

@@ -128,6 +128,8 @@ class GeneratedOpenApiTests(unittest.TestCase):
             set(schemas["HistoryEntry"]["properties"]["kind"]["enum"]),
         )
         work_item = schemas["WorkItem"]["properties"]
+        self.assertEqual("date-time", work_item["heldSince"]["format"])
+        self.assertNotIn("heldSince", schemas["WorkItem"]["required"])
         self.assertEqual(
             {"ruleId", "because", "policyDigest"},
             set(schemas["WorkItemRouting"]["properties"]),
@@ -143,6 +145,12 @@ class GeneratedOpenApiTests(unittest.TestCase):
             {"kind", "id", "at", "because", "queueId"},
             set(next_effects[1]["required"]),
         )
+        release_description = self.openapi["paths"][
+            "/v1/work-items/{item_id}/release"
+        ]["post"]["description"]
+        self.assertIn("Supervisor may force-release", release_description)
+        self.assertIn("successful current source read", release_description)
+        self.assertIn("live source-attempt fence", release_description)
         self.assertEqual(
             "^[a-z][a-z0-9_]{0,63}$", schemas["OperationName"]["pattern"]
         )
@@ -153,6 +161,27 @@ class GeneratedOpenApiTests(unittest.TestCase):
             ]
             if parameter["name"] == "limit"
         )
+        list_operation = self.openapi["paths"]["/v1/work-items"]["get"]
+        work_item_page = schemas["WorkItemPage"]
+        self.assertIn("servedQueues", work_item_page["required"])
+        self.assertTrue(work_item_page["properties"]["servedQueues"]["uniqueItems"])
+        self.assertNotIn("maxItems", work_item_page["properties"]["servedQueues"])
+        self.assertIn(
+            "Present even when items is empty",
+            work_item_page["properties"]["servedQueues"]["description"],
+        )
+        list_parameters = {
+            parameter["name"]: parameter for parameter in list_operation["parameters"]
+        }
+        for name in ("sourceId", "subjectKind", "subjectId"):
+            self.assertFalse(list_parameters[name]["required"])
+            self.assertEqual(1, list_parameters[name]["schema"]["minLength"])
+            self.assertNotIn("maxLength", list_parameters[name]["schema"])
+        self.assertIn("supply this together", list_parameters["sourceId"]["description"])
+        self.assertIn("without normalization", list_parameters["sourceId"]["description"])
+        self.assertIn("not restricted to UUID", list_parameters["subjectId"]["description"])
+        self.assertIn("follow every page", list_operation["description"])
+        self.assertIn("cursor is bound to the full selector", list_operation["description"])
         self.assertEqual(100, limit["schema"]["maximum"])
 
     def test_source_unavailable_can_identify_a_durable_mutation_attempt(self) -> None:
@@ -395,6 +424,12 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertIn("policyDigest", occurrence["properties"])
         self.assertIn("calculationGeneration", occurrence["required"])
         self.assertIn("recomputeGeneration", occurrence["required"])
+        upcoming = occurrence["properties"]["upcomingEffects"]
+        self.assertNotIn("upcomingEffects", occurrence["required"])
+        self.assertEqual(2, upcoming["maxItems"])
+        self.assertIn("ordered by time, effect kind, and identifier", upcoming["description"])
+        self.assertIn("including while paused", upcoming["description"])
+        self.assertIn("not scheduler retry times", upcoming["description"])
         self.assertNotIn("maxItems", schemas["ClockOccurrenceList"])
         self.assertEqual(
             100,

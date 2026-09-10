@@ -394,6 +394,7 @@ async fn list_items(
     let (actor, token) = authenticate(&state, &headers).await?;
     let source_profile = source_profile_optional(&headers)?;
     let limit = page_limit(&state, query.limit)?;
+    let subject = query.subject().map_err(|_| HttpError::Invalid)?;
     let page = if let Some(source_profile) = source_profile {
         state
             .service
@@ -404,10 +405,14 @@ async fn list_items(
                 query.view,
                 limit,
                 query.queue.as_deref(),
+                subject.as_ref(),
                 query.cursor.as_deref(),
             )
             .await?
     } else {
+        if subject.is_some() {
+            return Err(HttpError::Invalid);
+        }
         state
             .service
             .hosted_staff_inbox(

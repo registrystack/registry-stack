@@ -314,6 +314,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             "state": {"type": "string", "enum": ["open", "claimed", "waiting_applicant", "waiting_application", "synchronizing", "completed", "superseded", "cancelled"]},
             "queueId": text,
             "holder": nullable(ref("IssuerPrincipal")),
+            "heldSince": instant,
             "assignment": nullable(ref("AssignmentContext")),
             "revision": integer,
             "firstObservedAt": instant,
@@ -586,7 +587,20 @@ def schemas(problem_entries: list[dict]) -> dict:
             ["sourceBinding", "flaggedFields"],
         ),
         "WorkItem": work_item,
-        "WorkItemPage": obj({"items": array(ref("WorkItem")), "nextCursor": nullable(text), "status": page_status}, ["items", "status"]),
+        "WorkItemPage": obj(
+            {
+                "items": array(ref("WorkItem")),
+                "servedQueues": {
+                    "type": "array",
+                    "uniqueItems": True,
+                    "items": text,
+                    "description": "Sorted unique queue identifiers currently served by the authenticated Staff or Supervisor. Present even when items is empty.",
+                },
+                "nextCursor": nullable(text),
+                "status": page_status,
+            },
+            ["items", "servedQueues", "status"],
+        ),
         "AbsenceRecord": obj(
             {
                 "absenceId": uuid,
@@ -975,6 +989,12 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "atRiskAt": nullable(instant),
                 "completedAt": nullable(instant),
                 "nextEffect": nullable(ref("ClockNextEffect")),
+                "upcomingEffects": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "items": ref("ClockNextEffect"),
+                    "description": "For running or verification-pending clocks, the earliest unapplied reminder and earliest unapplied reassignment, ordered by time, effect kind, and identifier. Omitted when no firing instant can be promised, including while paused. These are pinned authored instants, not scheduler retry times.",
+                },
             },
             [
                 "clockOccurrenceId",
@@ -1376,16 +1396,19 @@ def document(contract: dict) -> dict:
         "/v1/work-items": {"get": operation("List a caller-authorized inbox view", "WorkItemPage", source=True, source_required=False, parameters=[
             parameter("view", "query", "Required view evaluated before pagination.", {"type": "string", "enum": ["mine", "my_teams", "team_holdings", "overdue", "completed_by_me"]}),
             parameter("queue", "query", "Optional queue identifier.", required=False),
+            parameter("sourceId", "query", "Exact source identifier. For source-backed requests, supply this together with subjectKind and subjectId or omit all three. The component must be nonempty and is carried without normalization.", {"type": "string", "minLength": 1}, required=False),
+            parameter("subjectKind", "query", "Exact source-neutral subject kind. Supply together with sourceId and subjectId or omit all three. The component must be nonempty and is carried without normalization.", {"type": "string", "minLength": 1}, required=False),
+            parameter("subjectId", "query", "Exact source-neutral subject identifier. Supply together with sourceId and subjectKind or omit all three. The component must be nonempty, is carried without normalization, and is not restricted to UUID syntax.", {"type": "string", "minLength": 1}, required=False),
             parameter("cursor", "query", "Opaque cursor bound to this authorized query.", required=False),
             parameter("limit", "query", "Bounded page size; values above 100 are served as 100.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
-        ], description="With Registry-Source-Profile, reads BReg-backed work under that separate authority. Without it, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order.")},
+        ], description="With Registry-Source-Profile, reads BReg-backed work under that separate authority. An optional complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject; callers must follow every page and handle every visible occurrence rather than assuming the subject is unique. The cursor is bound to the full selector. Without Registry-Source-Profile, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order; hosted requests reject the subject selector.")},
         "/v1/work-items/next": {"get": operation("Get the next caller-visible item", "WorkItem", source=True, parameters=[parameter("queue", "query", "Optional queue identifier.", required=False), parameter("cursor", "query", "Opaque cursor.", required=False)])},
         "/v1/work-items/{item_id}": {"get": operation("Read one currently visible item", "WorkItem", source=True, source_required=False, parameters=[ITEM_ID])},
         "/v1/work-items/{item_id}/clocks": {"get": operation("Read the item's clock occurrences", "ClockOccurrenceList", source=True, parameters=[ITEM_ID], description="Staff or Supervisor read under the same current source visibility as the item. Registry-Source-Profile is required. Returns occurrences ordered by clockId and clockOccurrenceId with pinned policy digest and separate calculation and recompute generations.")},
         "/v1/work-items/{item_id}/claim": {"post": operation("Claim an item", "MutationResponse", source=True, source_required=False, mutation=True, idempotency_contract=SHARED_HOSTED_IDEMPOTENCY, parameters=[ITEM_ID])},
         "/v1/work-items/{item_id}/assign": {"post": operation("Assign an item", "MutationResponse", source=True, source_required=False, mutation=True, body="AssignmentRequest", parameters=[ITEM_ID], description="Supervisor-only assignment for a currently served queue. Without Registry-Source-Profile the target is a hosted item; a source-backed item requires the source profile. The assignee is resolved through any active absence cover chain. If no eligible cover is available, the item remains open in its queue with staffingDiagnostic no_cover_available.")},
         "/v1/work-items/{item_id}/delegate": {"post": operation("Delegate a held item", "MutationResponse", source=True, source_required=False, mutation=True, body="DelegateRequest", parameters=[ITEM_ID], description="The current Staff holder delegates an item. Without Registry-Source-Profile the target is a hosted item; a source-backed item requires the source profile. Current item visibility, holder, revision, queue eligibility, and any live source attempt are checked before mutation.")},
-        "/v1/work-items/{item_id}/release": {"post": operation("Release an item", "MutationResponse", source=True, source_required=False, mutation=True, idempotency_contract=SHARED_HOSTED_IDEMPOTENCY, parameters=[ITEM_ID])},
+        "/v1/work-items/{item_id}/release": {"post": operation("Release an item", "MutationResponse", source=True, source_required=False, mutation=True, idempotency_contract=SHARED_HOSTED_IDEMPOTENCY, parameters=[ITEM_ID], description="Staff release only an item they currently hold. A human Supervisor may force-release a held item for a queue served by a team they currently supervise, regardless of its holder. The source-backed form requires Registry-Source-Profile and a successful current source read; the hosted form omits that header. If-Match, Idempotency-Key, current visibility, queue authority, and any live source-attempt fence are checked before the mutation. Success clears the holder and assignment, returns the item to open, and records the previous holder in protected lifecycle history. Supervisor authority does not grant hosted decision authority.")},
         "/v1/work-items/{item_id}/draft": {
             "get": operation("Read the current actor's private draft", "DraftResponse", source=True, parameters=[ITEM_ID]),
             "put": operation("Save the current actor's private draft", "DraftResponse", source=True, mutation=True, body="SaveDraftRequest", parameters=[ITEM_ID]),
@@ -1627,8 +1650,11 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
                     f"rust_only={sorted(rust_fields - schema_fields)}"
                 )
     page_fields = {"items", "nextCursor", "status"}
+    if set(openapi_schemas["WorkItemPage"]["properties"]) != page_fields | {
+        "servedQueues"
+    }:
+        raise ValueError("OpenAPI page shape drifted for WorkItemPage")
     for schema_name in (
-        "WorkItemPage",
         "HoldingsPage",
         "HostedTerminalPage",
         "HostedNotePage",

@@ -182,6 +182,15 @@ impl CaseworkClient {
         query: &ListWorkItemsQuery,
     ) -> Result<CaseworkComplete<WorkItemPage>, CaseworkClientError> {
         reject_source_profile(&auth)?;
+        if query
+            .subject()
+            .map_err(|_| CaseworkClientError::invalid_request("the subject selector is invalid"))?
+            .is_some()
+        {
+            return Err(CaseworkClientError::invalid_request(
+                "hosted inboxes do not accept a subject selector",
+            ));
+        }
         validate_page(query.cursor.as_deref(), query.limit)?;
         let url = self.url_from_constant(WORK_ITEMS_PATH)?;
         let request = self.authorized(self.http.get(url).query(query), &auth)?;
@@ -276,6 +285,9 @@ impl CaseworkClient {
         query: &ListWorkItemsQuery,
     ) -> Result<CaseworkComplete<WorkItemPage>, CaseworkClientError> {
         require_source_profile(&auth)?;
+        query
+            .subject()
+            .map_err(|_| CaseworkClientError::invalid_request("the subject selector is invalid"))?;
         validate_page(query.cursor.as_deref(), query.limit)?;
         let url = self.url_from_constant(WORK_ITEMS_PATH)?;
         let request = self.authorized(self.http.get(url).query(query), &auth)?;

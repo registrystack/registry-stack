@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     AttemptStatus, Draft, HoldingSummary, IssuerPrincipal, OperationName, Page, SourceBinding,
-    TeamRecord, WorkItem,
+    SubjectRef, TeamRecord, WorkItem,
 };
 
 pub const CASEWORK_PROFILE_HEADER: &str = "registry-casework-profile";
@@ -89,9 +89,49 @@ pub struct ListWorkItemsQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SubjectSelectorError {
+    #[error("the subject selector must provide all three components")]
+    Incomplete,
+    #[error("a subject selector component is invalid")]
+    InvalidComponent,
+}
+
+impl ListWorkItemsQuery {
+    /// Returns the exact source-neutral subject selector, when supplied.
+    ///
+    /// The three wire fields are kept flat for query-string interoperability,
+    /// but partial selectors are never interpreted as broader searches.
+    pub fn subject(&self) -> Result<Option<SubjectRef>, SubjectSelectorError> {
+        match (&self.source_id, &self.subject_kind, &self.subject_id) {
+            (None, None, None) => Ok(None),
+            (Some(source_id), Some(kind), Some(id)) => {
+                if [source_id, kind, id]
+                    .into_iter()
+                    .any(|value| value.is_empty())
+                {
+                    return Err(SubjectSelectorError::InvalidComponent);
+                }
+                Ok(Some(SubjectRef {
+                    source_id: source_id.clone(),
+                    kind: kind.clone(),
+                    id: id.clone(),
+                }))
+            }
+            _ => Err(SubjectSelectorError::Incomplete),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -208,7 +248,16 @@ pub struct Description {
     pub hosted_kinds: Vec<crate::HostedKindPolicy>,
 }
 
-pub type WorkItemPage = Page<WorkItem>;
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemPage {
+    pub items: Vec<WorkItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    pub status: crate::PageStatus,
+    pub served_queues: Vec<String>,
+}
+
 pub type HoldingsPage = Page<HoldingSummary>;
 pub type HistoryPage = Page<crate::HistoryEntry>;
 pub type HostedNotePage = Page<crate::HostedNote>;
@@ -296,5 +345,74 @@ mod tests {
             "surprise": true
         }"#;
         assert!(serde_json::from_str::<DecideRequest>(body).is_err());
+    }
+
+    #[test]
+    fn list_query_requires_one_complete_subject_selector() {
+        let exact: ListWorkItemsQuery = serde_json::from_value(serde_json::json!({
+            "view": "my_teams",
+            "sourceId": "source-one",
+            "subjectKind": "resident-record",
+            "subjectId": "human reference 42"
+        }))
+        .expect("complete selector decodes");
+        assert_eq!(
+            exact.subject().expect("complete selector validates"),
+            Some(SubjectRef {
+                source_id: "source-one".to_owned(),
+                kind: "resident-record".to_owned(),
+                id: "human reference 42".to_owned(),
+            })
+        );
+
+        for invalid in [
+            serde_json::json!({"view": "my_teams", "sourceId": "source-one"}),
+            serde_json::json!({
+                "view": "my_teams",
+                "sourceId": "source-one",
+                "subjectKind": "resident-record",
+                "subjectId": ""
+            }),
+        ] {
+            let query: ListWorkItemsQuery =
+                serde_json::from_value(invalid).expect("wire shape decodes");
+            assert!(query.subject().is_err());
+        }
+
+        let long_source_id = "s".repeat(512);
+        let admitted: ListWorkItemsQuery = serde_json::from_value(serde_json::json!({
+            "view": "my_teams",
+            "sourceId": long_source_id,
+            "subjectKind": "resident-record",
+            "subjectId": "00000000-0000-4000-8000-000000000001"
+        }))
+        .expect("the admitted selector decodes");
+        assert_eq!(
+            admitted
+                .subject()
+                .expect("the query adds no narrower component ceiling")
+                .expect("the selector is present")
+                .source_id
+                .len(),
+            512
+        );
+    }
+
+    #[test]
+    fn work_item_page_always_carries_the_current_served_queues() {
+        let page = WorkItemPage {
+            items: Vec::new(),
+            next_cursor: None,
+            status: crate::PageStatus::Complete,
+            served_queues: Vec::new(),
+        };
+        let wire = serde_json::to_value(page).expect("page serializes");
+        assert_eq!(wire["servedQueues"], serde_json::json!([]));
+        assert!(wire.get("nextCursor").is_none());
+        assert!(serde_json::from_value::<WorkItemPage>(serde_json::json!({
+            "items": [],
+            "status": "complete"
+        }))
+        .is_err());
     }
 }
