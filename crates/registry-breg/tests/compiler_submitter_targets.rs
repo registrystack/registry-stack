@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
+use registry_breg::model::CompiledQueryFilterOperator;
 use serde_json::{json, Value};
 
 fn source() -> Value {
@@ -81,4 +82,40 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
             "{case}: {failure:?}"
         );
     }
+}
+
+#[test]
+fn professional_reviewer_can_filter_requests_by_readable_target_without_granting_editor_search() {
+    let project = parse_project_json(&serde_json::to_vec(&source()).unwrap()).unwrap();
+    let compiled = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+
+    let reviewer = compiled
+        .queries()
+        .operations
+        .iter()
+        .find(|operation| operation.id == "records.scope-correction.reviewer.list")
+        .expect("reviewer correction list compiles");
+    let record = reviewer
+        .filter_fields
+        .iter()
+        .find(|field| field.field == "record")
+        .expect("reviewer may filter by the already-readable target reference");
+    assert!(record
+        .operators
+        .contains(&CompiledQueryFilterOperator::Equals));
+    assert!(record.operators.contains(&CompiledQueryFilterOperator::In));
+
+    let editor = compiled
+        .queries()
+        .operations
+        .iter()
+        .find(|operation| operation.id == "records.scope-correction.editor.list")
+        .expect("editor correction list compiles");
+    assert!(
+        editor
+            .filter_fields
+            .iter()
+            .all(|field| field.field != "record"),
+        "reading the target reference must not implicitly grant filtering"
+    );
 }
