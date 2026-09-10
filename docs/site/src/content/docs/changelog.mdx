@@ -18,6 +18,19 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- The Base Registry Engine access-token verifier admits both RFC 9068
+  spellings of the access-token media type as one configured token type:
+  `accessTokenType: at+jwt` and `accessTokenType: application/at+jwt` each
+  accept tokens whose `typ` header carries either spelling, while every other
+  `typ` value is still refused. An issuer switching between the two permitted
+  spellings — ThunderID emits `at+jwt`, other providers may emit the full media
+  type — no longer needs an engine configuration change. See
+  [operating Base Registry Engine](../operate/breg/).
+
+{/* Evidence: crates/registry-platform-oidc/src/lib.rs, access_token_typ_set();
+    crates/registry-breg/src/auth.rs, admits_one_access_token_type();
+    crates/registry-breg/src/runtime_config.rs, token_verifier_config(). */}
+
 - The Rust, Node.js, and Python Base Registry Engine clients accept the
   `action.refused` problem an immediate action answers a declared business rule
   with. No client registered that code, so the one refusal a caller is meant to

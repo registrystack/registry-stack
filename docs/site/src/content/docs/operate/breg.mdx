@@ -318,7 +318,7 @@ are never accepted by a running server.
 
 | Token part | Requirement |
 | --- | --- |
-| `alg`, `typ`, `kid` headers | `alg` equals `allowedAlgorithm`; `typ` equals `accessTokenType`; `kid` is present in the JWKS and absent from `deniedKids`. |
+| `alg`, `typ`, `kid` headers | `alg` equals `allowedAlgorithm`; `typ` equals `accessTokenType`, and when `accessTokenType` names the RFC 9068 access-token media type (`at+jwt` or `application/at+jwt`), either spelling of that one type is accepted; `kid` is present in the JWKS and absent from `deniedKids`. |
 | `iss` | Equals `issuer`. |
 | `aud` | A string equal to `audience`, or an array of 1 to 16 distinct nonempty strings containing that exact resource audience. |
 | `exp`, `iat`, `nbf` | The lifetime is at most `maxTokenLifetimeSeconds`; clock skew up to `leewayMilliseconds` is tolerated. |
