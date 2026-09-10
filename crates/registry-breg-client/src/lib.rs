@@ -4,30 +4,39 @@
 //! follow redirects, use an ambient proxy, retry, fetch linked resources, or
 //! advance a collection on its own.
 
+mod actions;
 mod attachment;
+mod batch;
 mod client;
 mod config;
 mod error;
+mod extended_mutation;
+mod geojson;
 mod lifecycle;
 mod metadata;
 mod mutation;
 mod query;
+mod read;
 mod recovery;
 mod response;
 mod strict_json;
 mod transport;
 
+pub use actions::*;
 pub use attachment::*;
+pub use batch::*;
 pub use client::BaseRegistryClient;
 pub use config::BaseRegistryClientConfig;
 pub use error::{
     BRegPlanRefusal, BRegProblemCode, BRegProtocolFailure, BRegRefusalCode,
     BaseRegistryClientError, TransportKind,
 };
+pub use geojson::*;
 pub use lifecycle::*;
 pub use metadata::*;
 pub use mutation::*;
 pub use query::*;
+pub use read::*;
 pub use recovery::{BRegPreparedCreate, BRegPreparedLifecycle};
 pub use registry_platform_httputil::client::{
     BearerToken, PrivateKeyJwt, PrivateKeyJwtConfig, StaticToken, TokenError, TokenProvider,

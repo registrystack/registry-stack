@@ -2,11 +2,24 @@ import {
   BaseRegistryClient,
   BRegAttachmentSlot,
   BRegAttachmentUpload,
+  BRegActionTargetConditions,
+  BRegBatchBinding,
   BRegCreateBinding,
+  BRegImmediateActionBinding,
   BRegLifecycleAction,
   BRegLifecycleAuthority,
   BRegMetadata,
   BRegPatchBinding,
+  BRegPreparedCreate,
+  BRegPreparedLifecycle,
+  BRegRecoveredCreate,
+  BRegRecoveredLifecycle,
+  BRegTombstoneBinding,
+  AsOfListContinuation,
+  CurrentListContinuation,
+  GeoJsonListContinuation,
+  RelationshipListContinuation,
+  SnapshotListContinuation,
   ListContinuation,
   ListOptions,
   RecordEnvelope,
@@ -22,8 +35,21 @@ declare const record: RecordEnvelope
 declare const continuation: ListContinuation
 declare const slot: BRegAttachmentSlot
 declare const upload: BRegAttachmentUpload
+declare const preparedCreate: BRegPreparedCreate
+declare const preparedLifecycle: BRegPreparedLifecycle
+declare const recoveredCreate: BRegRecoveredCreate
+declare const recoveredLifecycle: BRegRecoveredLifecycle
+declare const immediateAction: BRegImmediateActionBinding
+declare const conditions: BRegActionTargetConditions
+declare const batch: BRegBatchBinding
+declare const tombstone: BRegTombstoneBinding
+declare const currentContinuation: CurrentListContinuation
+declare const asOfContinuation: AsOfListContinuation
+declare const snapshotContinuation: SnapshotListContinuation
+declare const relationshipContinuation: RelationshipListContinuation
+declare const geoJsonContinuation: GeoJsonListContinuation
 
-const options: ListOptions = { top: 25, filter: 'status eq active', count: true }
+const options: ListOptions = { top: 25, filter: 'status eq active', count: true, bbox: ['100.1', '13.1', '100.2', '13.2'] }
 client.listRecords('people', options)
 client.createRecord(create, { name: 'Ada' }, 'create-person-1')
 client.patchRecord(patch, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', [
@@ -31,6 +57,51 @@ client.patchRecord(patch, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', [
 ], 'patch-person-1')
 client.lifecycleActions(authority, record)
 client.executeLifecycleAction(action, 'approve-request-1')
+client.recordRevisions('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'auditor')
+client.getRecordRevision('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 2)
+client.getRecord('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', { requestHistoryAfterProposalVersion: 2 })
+client.getGeoJsonRecord('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')
+client.getGeoJsonRecordJson('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')
+client.listGeoJsonRecords('people', { bbox: ['100.1', '13.1', '100.2', '13.2'] })
+client.listGeoJsonRecordsJson('people')
+client.continueGeoJsonList(geoJsonContinuation)
+client.continueGeoJsonListJson(geoJsonContinuation)
+client.listCurrentRecords('people')
+client.listCurrentRecordsJson('people')
+client.continueCurrentList(currentContinuation)
+client.continueCurrentListJson(currentContinuation)
+client.listRecordsAsOf('people', { asOf: '2026-09-10T00:00:00Z' })
+client.listRecordsAsOfJson('people', { asOf: '2026-09-10T00:00:00Z' })
+client.continueAsOfList(asOfContinuation)
+client.continueAsOfListJson(asOfContinuation)
+client.listSnapshotRecords('people', { snapshot: 'breg1_opaque', validAt: '2026-09-10T00:00:00Z' })
+client.listSnapshotRecordsJson('people')
+client.continueSnapshotList(snapshotContinuation)
+client.continueSnapshotListJson(snapshotContinuation)
+client.listRelationshipRecords('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'related')
+client.listRelationshipRecordsJson('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'related')
+client.continueRelationshipList(relationshipContinuation)
+client.continueRelationshipListJson(relationshipContinuation)
+client.actionTargetConditions(immediateAction, { targetId: '9f6973f9-10b3-4c58-b41b-494cba26796f' })
+client.actionTargetConditionsJson(immediateAction, '{"targetId":"9f6973f9-10b3-4c58-b41b-494cba26796f"}')
+client.invokeAction(immediateAction, { targetId: '9f6973f9-10b3-4c58-b41b-494cba26796f' }, 'invoke-1', conditions)
+client.invokeActionJson(immediateAction, '{"targetId":"9f6973f9-10b3-4c58-b41b-494cba26796f"}', 'invoke-2', conditions)
+client.batchRecords(batch, { items: [{ operation: 'create', data: { name: 'Ada' } }], changeContext: { kind: 'correction', reasonCode: 'source-fix' } }, 'batch-1')
+client.batchRecordsJson(batch, '{"items":[{"operation":"create","data":{"name":"Ada"}}]}', 'batch-2')
+client.tombstoneRecord(tombstone, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', 'remove-1')
+client.tombstoneRecordJson(tombstone, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', 'remove-2')
+client.prepareCreate(create, { name: 'Ada' }, 'prepared-create-1').toBytes()
+client.prepareCreateJson(create, '{"wide":9007199254740992}', 'prepared-create-2').toBytes()
+BRegPreparedCreate.fromBytes(preparedCreate.toBytes())
+client.recoverCreate(create, preparedCreate)
+client.executeRecoveredCreate(create, recoveredCreate)
+client.executeRecoveredCreateJson(create, recoveredCreate)
+client.prepareLifecycleAction(authority, record, action, 'prepared-action-1').toBytes()
+client.prepareLifecycleActionJson(authority, '{}', action, 'prepared-action-2').toBytes()
+BRegPreparedLifecycle.fromBytes(preparedLifecycle.toBytes())
+client.recoverLifecycleAction(authority, preparedLifecycle)
+client.executeRecoveredLifecycleAction(recoveredLifecycle)
+client.executeRecoveredLifecycleActionJson(recoveredLifecycle)
 client.continueList(continuation)
 record.data.recordIdentifier.toUpperCase()
 record.data.revisionIdentifier.toUpperCase()

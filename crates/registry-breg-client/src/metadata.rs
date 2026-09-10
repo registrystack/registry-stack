@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use jsonschema::{Draft, JSONSchema};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 use uuid::Uuid;
@@ -23,6 +24,9 @@ const MAX_STRING_BYTES: usize = 64 * 1024;
 const MAX_TOTAL_NODES: usize = 524_288;
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_PATH_BYTES: usize = 2_048;
+const MAX_SUPPORTED_ACTION_TARGETS: u64 = 16;
+const MAX_SUPPORTED_ACTION_FIELD_MUTATIONS: u64 = 128;
+const MAX_SUPPORTED_ACTION_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024;
 
 /// A coarse, response-value-free reason that runtime metadata was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -389,15 +393,97 @@ pub struct BRegMetadataField {
     nullable: bool,
     read_only: bool,
     removable: bool,
-    reference_target_entity: Option<String>,
-    references: Vec<BRegMetadataReference>,
+    storage_validation: Option<BRegStorageValidationDescriptor>,
+    code_labels: BTreeMap<String, String>,
+    reference: Option<BRegReferenceDescriptor>,
 }
 
+/// Native storage validation advertised for one field.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BRegStorageValidationDescriptor {
+    kind: String,
+    pattern: String,
+}
+
+impl BRegStorageValidationDescriptor {
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    #[must_use]
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
+}
+
+/// One independently authorized operation for resolving a record reference.
 #[derive(Clone, PartialEq)]
-struct BRegMetadataReference {
+pub struct BRegReferenceOperationDescriptor {
     operation_id: String,
     access_profile: String,
     label_fields: Vec<String>,
+}
+
+impl BRegReferenceOperationDescriptor {
+    #[must_use]
+    pub fn operation_identifier(&self) -> &str {
+        &self.operation_id
+    }
+
+    #[must_use]
+    pub fn access_profile(&self) -> &str {
+        &self.access_profile
+    }
+
+    #[must_use]
+    pub fn label_fields(&self) -> &[String] {
+        &self.label_fields
+    }
+}
+
+impl fmt::Debug for BRegReferenceOperationDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegReferenceOperationDescriptor")
+            .field("label_field_count", &self.label_fields.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Descriptive record-reference capability for one visible field.
+#[derive(Clone, PartialEq)]
+pub struct BRegReferenceDescriptor {
+    manual_entry: bool,
+    target_entity: Option<String>,
+    operations: Vec<BRegReferenceOperationDescriptor>,
+}
+
+impl BRegReferenceDescriptor {
+    #[must_use]
+    pub const fn manual_entry(&self) -> bool {
+        self.manual_entry
+    }
+
+    #[must_use]
+    pub fn target_entity(&self) -> Option<&str> {
+        self.target_entity.as_deref()
+    }
+
+    #[must_use]
+    pub fn operations(&self) -> &[BRegReferenceOperationDescriptor] {
+        &self.operations
+    }
+}
+
+impl fmt::Debug for BRegReferenceDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegReferenceDescriptor")
+            .field("manual_entry", &self.manual_entry)
+            .field("operation_count", &self.operations.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl BRegMetadataField {
@@ -420,7 +506,24 @@ impl BRegMetadataField {
     /// This is metadata, not authority to read or mutate the target entity.
     #[must_use]
     pub fn reference_target_entity(&self) -> Option<&str> {
-        self.reference_target_entity.as_deref()
+        self.reference
+            .as_ref()
+            .and_then(BRegReferenceDescriptor::target_entity)
+    }
+
+    #[must_use]
+    pub fn reference(&self) -> Option<&BRegReferenceDescriptor> {
+        self.reference.as_ref()
+    }
+
+    #[must_use]
+    pub fn code_labels(&self) -> &BTreeMap<String, String> {
+        &self.code_labels
+    }
+
+    #[must_use]
+    pub const fn storage_validation(&self) -> Option<&BRegStorageValidationDescriptor> {
+        self.storage_validation.as_ref()
     }
 
     /// Returns the bounded, inert JSON Schema value advertised by the BReg.
@@ -450,6 +553,115 @@ impl BRegMetadataField {
     }
 }
 
+/// One selector field accepted by a caller-visible Lookup operation.
+#[derive(Clone, PartialEq)]
+pub struct BRegLookupSelectorFieldDescriptor {
+    id: String,
+    api_name: String,
+    label: String,
+    schema: Value,
+    required: bool,
+}
+
+impl BRegLookupSelectorFieldDescriptor {
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.id
+    }
+    #[must_use]
+    pub fn api_name(&self) -> &str {
+        &self.api_name
+    }
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+    #[must_use]
+    pub fn schema(&self) -> &Value {
+        &self.schema
+    }
+    #[must_use]
+    pub const fn required(&self) -> bool {
+        self.required
+    }
+}
+
+impl fmt::Debug for BRegLookupSelectorFieldDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegLookupSelectorFieldDescriptor")
+            .field("required", &self.required)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One complete caller-visible Lookup selector.
+#[derive(Clone, PartialEq)]
+pub struct BRegLookupSelectorDescriptor {
+    id: String,
+    label: String,
+    value_origin: String,
+    fields: Vec<BRegLookupSelectorFieldDescriptor>,
+    request_fields: Vec<String>,
+}
+
+impl BRegLookupSelectorDescriptor {
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.id
+    }
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+    #[must_use]
+    pub fn value_origin(&self) -> &str {
+        &self.value_origin
+    }
+    #[must_use]
+    pub fn fields(&self) -> &[BRegLookupSelectorFieldDescriptor] {
+        &self.fields
+    }
+    #[must_use]
+    pub fn request_fields(&self) -> &[String] {
+        &self.request_fields
+    }
+}
+
+impl fmt::Debug for BRegLookupSelectorDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegLookupSelectorDescriptor")
+            .field("field_count", &self.fields.len())
+            .field("request_field_count", &self.request_fields.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A related-record path advertised for one operation.
+#[derive(Clone, PartialEq)]
+pub struct BRegReadPathDescriptor {
+    id: String,
+    label: String,
+}
+
+impl BRegReadPathDescriptor {
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.id
+    }
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+impl fmt::Debug for BRegReadPathDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegReadPathDescriptor(<descriptive>)")
+    }
+}
+
 impl fmt::Debug for BRegMetadataField {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -476,6 +688,10 @@ pub struct BRegOperationRequest {
     patch_path_prefix: Option<String>,
     patch_operations: Vec<String>,
     remove_semantics: Option<String>,
+    maximum_items: Option<u64>,
+    maximum_body_bytes: Option<u64>,
+    allow_create: Option<bool>,
+    allow_patch: Option<bool>,
 }
 
 impl BRegOperationRequest {
@@ -533,6 +749,26 @@ impl BRegOperationRequest {
     pub fn remove_semantics(&self) -> Option<&str> {
         self.remove_semantics.as_deref()
     }
+
+    #[must_use]
+    pub const fn maximum_items(&self) -> Option<u64> {
+        self.maximum_items
+    }
+
+    #[must_use]
+    pub const fn maximum_body_bytes(&self) -> Option<u64> {
+        self.maximum_body_bytes
+    }
+
+    #[must_use]
+    pub const fn allow_create(&self) -> Option<bool> {
+        self.allow_create
+    }
+
+    #[must_use]
+    pub const fn allow_patch(&self) -> Option<bool> {
+        self.allow_patch
+    }
 }
 
 impl fmt::Debug for BRegOperationRequest {
@@ -562,6 +798,8 @@ pub struct BRegQueryDescriptor {
     pub max_in_values: u64,
     pub pagination: BRegQueryPagination,
     pub temporal: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_queries: Option<BRegSpatialQueryDescriptor>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -583,6 +821,24 @@ pub struct BRegQueryPagination {
     pub exclusive: bool,
 }
 
+/// Spatial query capabilities for one caller-visible collection operation.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BRegSpatialQueryDescriptor {
+    pub bbox: Option<BRegBboxQueryDescriptor>,
+}
+
+/// Exact bounded CRS84 bbox contract for one collection operation.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BRegBboxQueryDescriptor {
+    pub geometry_property: String,
+    pub maximum_longitude_span_degrees: Number,
+    pub maximum_latitude_span_degrees: Number,
+    pub coordinate_reference_system: String,
+    pub semantics: String,
+}
+
 /// One authoritative operation from caller-filtered runtime metadata.
 #[derive(Clone, PartialEq)]
 pub struct BRegMetadataOperation {
@@ -602,6 +858,8 @@ pub struct BRegMetadataOperation {
     entity_label: String,
     title_fields: Vec<String>,
     query: Option<BRegQueryDescriptor>,
+    selectors: Vec<BRegLookupSelectorDescriptor>,
+    read_path: Option<BRegReadPathDescriptor>,
 }
 
 impl BRegMetadataOperation {
@@ -616,6 +874,16 @@ impl BRegMetadataOperation {
     #[must_use]
     pub fn query(&self) -> Option<&BRegQueryDescriptor> {
         self.query.as_ref()
+    }
+
+    #[must_use]
+    pub fn selectors(&self) -> &[BRegLookupSelectorDescriptor] {
+        &self.selectors
+    }
+
+    #[must_use]
+    pub const fn read_path(&self) -> Option<&BRegReadPathDescriptor> {
+        self.read_path.as_ref()
     }
 
     #[must_use]
@@ -710,6 +978,203 @@ struct BRegMetadataEntity {
     change_request: Option<BRegChangeRequestCapability>,
 }
 
+/// One typed input advertised by a caller-visible immediate action.
+#[derive(Clone, PartialEq)]
+pub struct BRegImmediateActionInputDescriptor {
+    id: String,
+    api_name: String,
+    field_type: Value,
+    required: bool,
+    nullable: Option<bool>,
+    classification: String,
+}
+
+impl BRegImmediateActionInputDescriptor {
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.id
+    }
+    #[must_use]
+    pub fn api_name(&self) -> &str {
+        &self.api_name
+    }
+    #[must_use]
+    pub fn field_type(&self) -> &Value {
+        &self.field_type
+    }
+    #[must_use]
+    pub const fn required(&self) -> bool {
+        self.required
+    }
+    #[must_use]
+    pub const fn nullable(&self) -> Option<bool> {
+        self.nullable
+    }
+    #[must_use]
+    pub fn classification(&self) -> &str {
+        &self.classification
+    }
+}
+
+impl fmt::Debug for BRegImmediateActionInputDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegImmediateActionInputDescriptor")
+            .field("required", &self.required)
+            .field("nullable", &self.nullable)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A typed immediate-action input that references one entity.
+#[derive(Clone, PartialEq)]
+pub struct BRegImmediateActionReferenceInputDescriptor {
+    input: String,
+    api_name: String,
+    target_entity: String,
+}
+
+impl BRegImmediateActionReferenceInputDescriptor {
+    #[must_use]
+    pub fn input_identifier(&self) -> &str {
+        &self.input
+    }
+    #[must_use]
+    pub fn api_name(&self) -> &str {
+        &self.api_name
+    }
+    #[must_use]
+    pub fn target_entity(&self) -> &str {
+        &self.target_entity
+    }
+}
+
+/// One caller-visible result effect from an immediate action.
+#[derive(Clone, PartialEq)]
+pub struct BRegImmediateActionResultEffectDescriptor {
+    effect: String,
+    entity: String,
+    operation: BRegOperationKind,
+}
+
+impl BRegImmediateActionResultEffectDescriptor {
+    #[must_use]
+    pub fn effect_identifier(&self) -> &str {
+        &self.effect
+    }
+    #[must_use]
+    pub fn entity_identifier(&self) -> &str {
+        &self.entity
+    }
+    #[must_use]
+    pub const fn operation(&self) -> &BRegOperationKind {
+        &self.operation
+    }
+}
+
+/// Resource ceilings advertised for an immediate action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BRegImmediateActionBounds {
+    maximum_targets: u64,
+    maximum_field_mutations: u64,
+    maximum_snapshot_bytes: u64,
+}
+
+impl BRegImmediateActionBounds {
+    #[must_use]
+    pub const fn maximum_targets(self) -> u64 {
+        self.maximum_targets
+    }
+    #[must_use]
+    pub const fn maximum_field_mutations(self) -> u64 {
+        self.maximum_field_mutations
+    }
+    #[must_use]
+    pub const fn maximum_snapshot_bytes(self) -> u64 {
+        self.maximum_snapshot_bytes
+    }
+}
+
+/// Complete descriptive metadata for one caller-visible immediate action.
+#[derive(Clone, PartialEq)]
+pub struct BRegImmediateActionDescriptor {
+    id: String,
+    route: String,
+    condition_route: Option<String>,
+    contract_fingerprint: String,
+    input_mode: Option<String>,
+    maximum_input_string_bytes: Option<u64>,
+    inputs: Vec<BRegImmediateActionInputDescriptor>,
+    reference_inputs: Vec<BRegImmediateActionReferenceInputDescriptor>,
+    required_condition_keys: Vec<String>,
+    result_effects: Vec<BRegImmediateActionResultEffectDescriptor>,
+    access_profile: String,
+    invoke_path: String,
+    target_conditions_path: Option<String>,
+    bounds: BRegImmediateActionBounds,
+}
+
+impl BRegImmediateActionDescriptor {
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.id
+    }
+    #[must_use]
+    pub fn contract_fingerprint(&self) -> &str {
+        &self.contract_fingerprint
+    }
+    #[must_use]
+    pub fn input_mode(&self) -> Option<&str> {
+        self.input_mode.as_deref()
+    }
+    #[must_use]
+    pub const fn maximum_input_string_bytes(&self) -> Option<u64> {
+        self.maximum_input_string_bytes
+    }
+    #[must_use]
+    pub fn inputs(&self) -> &[BRegImmediateActionInputDescriptor] {
+        &self.inputs
+    }
+    #[must_use]
+    pub fn reference_inputs(&self) -> &[BRegImmediateActionReferenceInputDescriptor] {
+        &self.reference_inputs
+    }
+    #[must_use]
+    pub fn required_condition_keys(&self) -> &[String] {
+        &self.required_condition_keys
+    }
+    #[must_use]
+    pub fn result_effects(&self) -> &[BRegImmediateActionResultEffectDescriptor] {
+        &self.result_effects
+    }
+    #[must_use]
+    pub fn access_profile(&self) -> &str {
+        &self.access_profile
+    }
+    #[must_use]
+    pub fn invoke_path(&self) -> &str {
+        &self.invoke_path
+    }
+    #[must_use]
+    pub fn target_conditions_path(&self) -> Option<&str> {
+        self.target_conditions_path.as_deref()
+    }
+    #[must_use]
+    pub const fn bounds(&self) -> BRegImmediateActionBounds {
+        self.bounds
+    }
+}
+
+impl fmt::Debug for BRegImmediateActionDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegImmediateActionDescriptor")
+            .field("input_count", &self.inputs.len())
+            .field("result_effect_count", &self.result_effects.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Validated Base Registry Engine runtime metadata v1 for one caller projection.
 #[derive(Clone, PartialEq)]
 pub struct BRegMetadata {
@@ -719,6 +1184,7 @@ pub struct BRegMetadata {
     entities: Vec<BRegMetadataEntity>,
     operations: Vec<BRegMetadataOperation>,
     actions: Option<Value>,
+    immediate_actions: Vec<BRegImmediateActionDescriptor>,
     source_binding: Option<String>,
 }
 
@@ -782,6 +1248,233 @@ impl BRegMetadata {
     #[must_use]
     pub fn actions(&self) -> Option<&Value> {
         self.actions.as_ref()
+    }
+
+    /// Returns complete typed caller-filtered immediate-action descriptors.
+    #[must_use]
+    pub fn immediate_actions(&self) -> &[BRegImmediateActionDescriptor] {
+        &self.immediate_actions
+    }
+
+    /// Promote one complete caller-visible immediate-action contract.
+    pub fn select_immediate_action(
+        &self,
+        action_identifier: &str,
+        expected_profile: &str,
+    ) -> Result<BRegImmediateActionBinding, BRegMetadataSelectionError> {
+        let source_binding = self
+            .source_binding
+            .as_ref()
+            .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::UnboundSource))?;
+        let action = self
+            .immediate_actions
+            .iter()
+            .find(|action| action.id == action_identifier)
+            .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?;
+        if action.access_profile != expected_profile {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::ProfileMismatch,
+            ));
+        }
+        let semantics_are_exact = match action.input_mode.as_deref() {
+            Some("fixed") => {
+                action.maximum_input_string_bytes.is_none()
+                    && action
+                        .inputs
+                        .iter()
+                        .all(|input| input.nullable == Some(false))
+            }
+            Some("handler") => {
+                action.maximum_input_string_bytes == Some(16_384)
+                    && action
+                        .inputs
+                        .iter()
+                        .all(|input| input.nullable == Some(!input.required))
+            }
+            _ => false,
+        };
+        if !semantics_are_exact || !immediate_action_contract_is_exact(action) {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::ContractMismatch,
+            ));
+        }
+        Ok(BRegImmediateActionBinding::from_descriptor(
+            self.revision.clone(),
+            source_binding.clone(),
+            action,
+        ))
+    }
+
+    /// Promote one exact direct Tombstone contract.
+    pub fn select_tombstone(
+        &self,
+        entity_identifier: &str,
+        expected_profile: &str,
+    ) -> Result<BRegTombstoneBinding, BRegMetadataSelectionError> {
+        let (entity, operation, source_binding) = self.select_mutation_operation(
+            entity_identifier,
+            expected_profile,
+            BRegOperationKind::Tombstone,
+        )?;
+        let collection_path = format!("/v1/records/{}", entity.route);
+        let request = &operation.request;
+        if operation.id != format!("records.{}.tombstone", entity.id)
+            || operation.method != "DELETE"
+            || operation.path != format!("{collection_path}/{{record_id}}")
+            || request.field_names.as_deref() != Some("api")
+            || !request.query_parameters.is_empty()
+            || request.body.as_deref() != Some("none")
+            || request.content_type.is_some()
+            || request.schema.is_some()
+            || request.idempotency_key_required != Some(true)
+            || request.if_match_required != Some(true)
+            || request.mutation_semantics.as_deref() != Some("direct")
+            || request.maximum_items.is_some()
+            || request.maximum_body_bytes.is_some()
+            || request.allow_create.is_some()
+            || request.allow_patch.is_some()
+            || request.patch_path_prefix.is_some()
+            || !request.patch_operations.is_empty()
+            || request.remove_semantics.is_some()
+            || !operation.create_writable_fields.is_empty()
+            || !operation.patch_writable_fields.is_empty()
+        {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::ContractMismatch,
+            ));
+        }
+        Ok(BRegTombstoneBinding {
+            common: BRegMutationBinding::new(
+                self,
+                entity,
+                operation,
+                collection_path,
+                None,
+                source_binding,
+            ),
+        })
+    }
+
+    /// Promote one exact caller-visible atomic Batch contract.
+    pub fn select_batch(
+        &self,
+        entity_identifier: &str,
+        expected_profile: &str,
+    ) -> Result<BRegBatchBinding, BRegMetadataSelectionError> {
+        let (entity, operation, source_binding) = self.select_mutation_operation(
+            entity_identifier,
+            expected_profile,
+            BRegOperationKind::Batch,
+        )?;
+        let collection_path = format!("/v1/records/{}", entity.route);
+        let request = &operation.request;
+        let (Some(maximum_items), Some(maximum_bytes), Some(schema)) = (
+            request.maximum_items,
+            request.maximum_body_bytes,
+            request.schema.clone(),
+        ) else {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::ContractMismatch,
+            ));
+        };
+        let (Some(allow_create), Some(allow_patch)) = (request.allow_create, request.allow_patch)
+        else {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::ContractMismatch,
+            ));
+        };
+        if operation.id != format!("records.{}.batch", entity.id)
+            || operation.method != "POST"
+            || operation.path != format!("{collection_path}:batch")
+            || request.field_names.as_deref() != Some("api")
+            || !request.query_parameters.is_empty()
+            || request.body.as_deref() != Some("batch")
+            || request.content_type.as_deref() != Some("application/json")
+            || request.idempotency_key_required != Some(true)
+            || request.if_match_required.is_some()
+            || request.mutation_semantics.as_deref() != Some("direct")
+            || request.patch_path_prefix.is_some()
+            || !request.patch_operations.is_empty()
+            || request.remove_semantics.is_some()
+            || maximum_items > u64::from(u16::MAX)
+            || (!allow_create && !allow_patch)
+            || !batch_schema_operations_are_exact(&schema, maximum_items, allow_create, allow_patch)
+        {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::ContractMismatch,
+            ));
+        }
+        Ok(BRegBatchBinding {
+            common: BRegMutationBinding::new(
+                self,
+                entity,
+                operation,
+                collection_path,
+                Some(schema),
+                source_binding,
+            ),
+            maximum_items,
+            maximum_bytes,
+            allow_create,
+            allow_patch,
+            readable_api_names: api_names_for(operation, &operation.readable_fields),
+            create_writable_api_names: api_names_for(operation, &operation.create_writable_fields),
+            required_create_api_names: operation
+                .fields
+                .iter()
+                .filter(|field| {
+                    field.required && operation.create_writable_fields.contains(&field.id)
+                })
+                .map(|field| field.api_name.clone())
+                .collect(),
+            patch_writable_api_names: api_names_for(operation, &operation.patch_writable_fields),
+            removable_api_names: operation
+                .fields
+                .iter()
+                .filter(|field| {
+                    field.removable && operation.patch_writable_fields.contains(&field.id)
+                })
+                .map(|field| field.api_name.clone())
+                .collect(),
+        })
+    }
+
+    fn select_mutation_operation(
+        &self,
+        entity_identifier: &str,
+        expected_profile: &str,
+        expected_kind: BRegOperationKind,
+    ) -> Result<(&BRegMetadataEntity, &BRegMetadataOperation, String), BRegMetadataSelectionError>
+    {
+        let source_binding = self
+            .source_binding
+            .as_ref()
+            .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::UnboundSource))?;
+        let entity = self
+            .entities
+            .iter()
+            .find(|entity| entity.id == entity_identifier)
+            .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?;
+        let mut operations = self.operations.iter().filter(|operation| {
+            operation.source_entity == entity.id && operation.kind == expected_kind
+        });
+        let operation = operations
+            .find(|operation| operation.access_profile == expected_profile)
+            .ok_or_else(|| {
+                if self.operations.iter().any(|operation| {
+                    operation.source_entity == entity.id && operation.kind == expected_kind
+                }) {
+                    selection_error(BRegMetadataSelectionErrorKind::ProfileMismatch)
+                } else {
+                    selection_error(BRegMetadataSelectionErrorKind::NotFound)
+                }
+            })?;
+        if operation.response_entity != entity.id || !operation.required_capabilities.is_empty() {
+            return Err(selection_error(
+                BRegMetadataSelectionErrorKind::ContractMismatch,
+            ));
+        }
+        Ok((entity, operation, source_binding.clone()))
     }
 
     /// Attach the canonical client source after transport has fetched this
@@ -857,6 +1550,10 @@ impl BRegMetadata {
                     && request.patch_path_prefix.is_none()
                     && request.patch_operations.is_empty()
                     && request.remove_semantics.is_none()
+                    && request.maximum_items.is_none()
+                    && request.maximum_body_bytes.is_none()
+                    && request.allow_create.is_none()
+                    && request.allow_patch.is_none()
                     && !operation.create_writable_fields.is_empty()
                     && operation.patch_writable_fields.is_empty() =>
             {
@@ -892,6 +1589,10 @@ impl BRegMetadata {
                     && request.patch_path_prefix.as_deref() == Some("/data/")
                     && request.patch_operations == ["add", "replace", "remove", "test"]
                     && request.remove_semantics.as_deref() == Some("set_null")
+                    && request.maximum_items.is_none()
+                    && request.maximum_body_bytes.is_none()
+                    && request.allow_create.is_none()
+                    && request.allow_patch.is_none()
                     && operation.create_writable_fields.is_empty()
                     && !operation.patch_writable_fields.is_empty() =>
             {
@@ -1074,6 +1775,268 @@ impl BRegMetadata {
     }
 }
 
+fn immediate_action_contract_is_exact(action: &BRegImmediateActionDescriptor) -> bool {
+    if action.invoke_path != format!("/v1/actions/{}", action.id)
+        || action.bounds.maximum_targets > MAX_SUPPORTED_ACTION_TARGETS
+        || action.bounds.maximum_field_mutations > MAX_SUPPORTED_ACTION_FIELD_MUTATIONS
+        || action.bounds.maximum_snapshot_bytes > MAX_SUPPORTED_ACTION_SNAPSHOT_BYTES
+        || action.result_effects.len() > action.bounds.maximum_targets as usize
+        || action.result_effects.iter().any(|effect| {
+            !matches!(
+                effect.operation,
+                BRegOperationKind::Create | BRegOperationKind::Patch
+            )
+        })
+        || action
+            .inputs
+            .iter()
+            .any(|input| !action_field_type_is_exact(&input.field_type))
+    {
+        return false;
+    }
+    match &action.target_conditions_path {
+        Some(path) if path != &format!("{}/target-conditions", action.invoke_path) => return false,
+        None if !action.required_condition_keys.is_empty() => return false,
+        _ => {}
+    }
+    for reference in &action.reference_inputs {
+        let Some(input) = action
+            .inputs
+            .iter()
+            .find(|input| input.id == reference.input && input.api_name == reference.api_name)
+        else {
+            return false;
+        };
+        if input.field_type.get("type").and_then(Value::as_str) != Some("reference")
+            || input.field_type.get("target").and_then(Value::as_str)
+                != Some(reference.target_entity.as_str())
+        {
+            return false;
+        }
+    }
+    action.required_condition_keys.iter().all(|key| {
+        let Some(reference) = action
+            .reference_inputs
+            .iter()
+            .find(|reference| reference.api_name == *key)
+        else {
+            return false;
+        };
+        action.inputs.iter().any(|input| {
+            input.id == reference.input
+                && input.api_name == reference.api_name
+                && input.required
+                && input.nullable == Some(false)
+        })
+    })
+}
+
+fn action_field_type_is_exact(value: &Value) -> bool {
+    action_field_type(value.clone()).is_ok()
+}
+
+fn action_field_type(value: Value) -> Result<(), BRegMetadataError> {
+    let mut field_type = object(value)?;
+    let kind = string(required(&mut field_type, "type")?)?;
+    match kind.as_str() {
+        "boolean" | "int64" | "date" | "timestamp" | "uuid" => {}
+        "string" => {
+            let minimum = required(&mut field_type, "minLength")?
+                .as_u64()
+                .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
+            let maximum = positive_integer(required(&mut field_type, "maxLength")?)?;
+            if maximum > 1_000_000 || minimum > maximum {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+        }
+        "text" => {
+            if positive_integer(required(&mut field_type, "maxLength")?)? > 10_000_000 {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+        }
+        "decimal" => {
+            let precision = positive_integer(required(&mut field_type, "precision")?)?;
+            let scale = required(&mut field_type, "scale")?
+                .as_u64()
+                .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
+            let minimum = optional_string(&mut field_type, "minimum")?;
+            let maximum = optional_string(&mut field_type, "maximum")?;
+            if precision > 38 || scale > precision {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+            let minimum = minimum
+                .as_deref()
+                .map(|value| action_decimal_scaled_value(value, precision, scale))
+                .transpose()?;
+            let maximum = maximum
+                .as_deref()
+                .map(|value| action_decimal_scaled_value(value, precision, scale))
+                .transpose()?;
+            if minimum
+                .zip(maximum)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+        }
+        "vocabulary-code" => {
+            identifier(required(&mut field_type, "vocabulary")?)?;
+            let values = identifier_array(required(&mut field_type, "values")?)?;
+            if values.is_empty() || ensure_unique(values.iter().map(String::as_str)).is_err() {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+        }
+        "reference" => {
+            identifier(required(&mut field_type, "target")?)?;
+            let on_delete = string(required(&mut field_type, "onDelete")?)?;
+            if on_delete != "restrict" {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+        }
+        "crs84-point" => {
+            let precision = required(&mut field_type, "precision")?
+                .as_u64()
+                .filter(|precision| *precision <= 9)
+                .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
+            if let Some(bbox) = field_type.remove("bbox") {
+                validate_action_bbox(bbox, precision)?;
+            }
+        }
+        "structured" => {
+            let max_bytes = positive_integer(required(&mut field_type, "maxBytes")?)?;
+            if max_bytes > 1_048_576
+                || !valid_action_structured_schema(required(&mut field_type, "schema")?)
+            {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
+        }
+        _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
+    }
+    finish(field_type)
+}
+
+fn valid_action_structured_schema(schema: Value) -> bool {
+    schema.as_object().is_some_and(|object| {
+        (action_schema_declares_object(object)
+            && object.get("additionalProperties") == Some(&Value::Bool(false)))
+            || (object.get("type") == Some(&Value::String("array".to_owned()))
+                && object.get("items").is_some_and(Value::is_object))
+    }) && registry_platform_canonical_json::canonicalize_json(&schema)
+        .is_ok_and(|bytes| bytes.len() <= 64 * 1024)
+        && action_schema_refs_are_local(&schema)
+        && action_object_schemas_are_closed(&schema)
+        && JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .compile(&schema)
+            .is_ok()
+}
+
+fn action_schema_declares_object(object: &Map<String, Value>) -> bool {
+    object.get("type").is_some_and(|kind| {
+        kind == "object"
+            || kind
+                .as_array()
+                .is_some_and(|types| types.iter().any(|kind| kind == "object"))
+    })
+}
+
+fn action_schema_refs_are_local(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().all(|(key, value)| {
+            if key == "$ref" {
+                value
+                    .as_str()
+                    .is_some_and(|reference| reference == "#" || reference.starts_with("#/"))
+            } else {
+                action_schema_refs_are_local(value)
+            }
+        }),
+        Value::Array(values) => values.iter().all(action_schema_refs_are_local),
+        _ => true,
+    }
+}
+
+fn action_object_schemas_are_closed(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            let describes_object = object.get("properties").is_some()
+                || object.get("patternProperties").is_some()
+                || action_schema_declares_object(object);
+            (!describes_object || object.get("additionalProperties") == Some(&Value::Bool(false)))
+                && object.values().all(action_object_schemas_are_closed)
+        }
+        Value::Array(values) => values.iter().all(action_object_schemas_are_closed),
+        _ => true,
+    }
+}
+
+fn action_decimal_scaled_value(
+    value: &str,
+    precision: u64,
+    scale: u64,
+) -> Result<i128, BRegMetadataError> {
+    let unsigned = value.strip_prefix('-').unwrap_or(value);
+    let (integer, fraction) = if scale == 0 {
+        (unsigned, "")
+    } else {
+        unsigned
+            .split_once('.')
+            .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?
+    };
+    if integer.is_empty()
+        || integer.bytes().any(|byte| !byte.is_ascii_digit())
+        || fraction.len() != scale as usize
+        || fraction.bytes().any(|byte| !byte.is_ascii_digit())
+        || integer.len() > 1 && integer.starts_with('0')
+        || integer != "0" && integer.len() > (precision - scale) as usize
+    {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    let digits = format!("{integer}{fraction}");
+    let magnitude = digits
+        .parse::<i128>()
+        .map_err(|_| metadata_error(BRegMetadataErrorKind::Shape))?;
+    Ok(if value.starts_with('-') {
+        -magnitude
+    } else {
+        magnitude
+    })
+}
+
+fn validate_action_bbox(value: Value, precision: u64) -> Result<(), BRegMetadataError> {
+    let mut bbox = object(value)?;
+    let west = action_coordinate(required(&mut bbox, "west")?, precision, -180.0, 180.0)?;
+    let south = action_coordinate(required(&mut bbox, "south")?, precision, -90.0, 90.0)?;
+    let east = action_coordinate(required(&mut bbox, "east")?, precision, -180.0, 180.0)?;
+    let north = action_coordinate(required(&mut bbox, "north")?, precision, -90.0, 90.0)?;
+    if west > east || south > north {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    finish(bbox)
+}
+
+fn action_coordinate(
+    value: Value,
+    precision: u64,
+    minimum: f64,
+    maximum: f64,
+) -> Result<f64, BRegMetadataError> {
+    let value = string(value)?;
+    let fraction_digits = value
+        .split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len());
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|number| {
+            number.is_finite()
+                && *number >= minimum
+                && *number <= maximum
+                && fraction_digits <= precision as usize
+        })
+        .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))
+}
+
 fn attachment_capability_present(field: &BRegMetadataField) -> bool {
     field
         .schema
@@ -1081,6 +2044,46 @@ fn attachment_capability_present(field: &BRegMetadataField) -> bool {
         .and_then(Value::as_str)
         == Some("attachment")
         && field.schema.get("x-registry-attachment").is_some()
+}
+
+fn batch_schema_operations_are_exact(
+    schema: &Value,
+    maximum_items: u64,
+    allow_create: bool,
+    allow_patch: bool,
+) -> bool {
+    let Some(items) = schema
+        .get("properties")
+        .and_then(|properties| properties.get("items"))
+    else {
+        return false;
+    };
+    if items.get("minItems").and_then(Value::as_u64) != Some(1)
+        || items.get("maxItems").and_then(Value::as_u64) != Some(maximum_items)
+    {
+        return false;
+    }
+    let Some(variants) = items
+        .get("items")
+        .and_then(|item| item.get("oneOf"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    let operations = variants
+        .iter()
+        .filter_map(|variant| {
+            variant
+                .get("properties")?
+                .get("operation")?
+                .get("const")?
+                .as_str()
+        })
+        .collect::<BTreeSet<_>>();
+    operations.len() == variants.len()
+        && operations.contains("create") == allow_create
+        && operations.contains("patch") == allow_patch
+        && operations.len() == usize::from(allow_create) + usize::from(allow_patch)
 }
 
 impl fmt::Debug for BRegMetadata {
@@ -1135,6 +2138,325 @@ impl fmt::Display for BRegMetadataSelectionError {
 }
 
 impl std::error::Error for BRegMetadataSelectionError {}
+
+/// Exact input contract retained by an immediate-action binding.
+#[derive(Clone, PartialEq)]
+pub struct BRegImmediateActionInputBinding {
+    api_name: String,
+    required: bool,
+    nullable: bool,
+    field_type: Value,
+}
+
+impl BRegImmediateActionInputBinding {
+    #[must_use]
+    pub fn api_name(&self) -> &str {
+        &self.api_name
+    }
+    #[must_use]
+    pub const fn required(&self) -> bool {
+        self.required
+    }
+    #[must_use]
+    pub const fn nullable(&self) -> bool {
+        self.nullable
+    }
+    #[must_use]
+    pub fn field_type(&self) -> &Value {
+        &self.field_type
+    }
+}
+
+/// Opaque executable binding for one exact caller-visible immediate action.
+#[derive(Clone, PartialEq)]
+pub struct BRegImmediateActionBinding {
+    action_identifier: String,
+    registry_revision: String,
+    access_profile: String,
+    invoke_path: String,
+    target_conditions_path: Option<String>,
+    contract_fingerprint: String,
+    required_condition_keys: BTreeSet<String>,
+    result_effects: BTreeMap<String, String>,
+    inputs: Vec<BRegImmediateActionInputBinding>,
+    reference_inputs: Vec<BRegImmediateActionReferenceInputDescriptor>,
+    bounds: BRegImmediateActionBounds,
+    handler: bool,
+    maximum_input_string_bytes: Option<u64>,
+    source_binding: String,
+}
+
+impl BRegImmediateActionBinding {
+    fn from_descriptor(
+        registry_revision: String,
+        source_binding: String,
+        action: &BRegImmediateActionDescriptor,
+    ) -> Self {
+        Self {
+            action_identifier: action.id.clone(),
+            registry_revision,
+            access_profile: action.access_profile.clone(),
+            invoke_path: action.invoke_path.clone(),
+            target_conditions_path: action.target_conditions_path.clone(),
+            contract_fingerprint: action.contract_fingerprint.clone(),
+            required_condition_keys: action.required_condition_keys.iter().cloned().collect(),
+            result_effects: action
+                .result_effects
+                .iter()
+                .map(|effect| (effect.effect.clone(), effect.entity.clone()))
+                .collect(),
+            inputs: action
+                .inputs
+                .iter()
+                .map(|input| BRegImmediateActionInputBinding {
+                    api_name: input.api_name.clone(),
+                    required: input.required,
+                    nullable: input
+                        .nullable
+                        .expect("selection checked nullable semantics"),
+                    field_type: input.field_type.clone(),
+                })
+                .collect(),
+            reference_inputs: action.reference_inputs.clone(),
+            bounds: action.bounds,
+            handler: action.input_mode.as_deref() == Some("handler"),
+            maximum_input_string_bytes: action.maximum_input_string_bytes,
+            source_binding,
+        }
+    }
+
+    #[must_use]
+    pub fn action_identifier(&self) -> &str {
+        &self.action_identifier
+    }
+    #[must_use]
+    pub fn registry_revision(&self) -> &str {
+        &self.registry_revision
+    }
+    #[must_use]
+    pub fn access_profile(&self) -> &str {
+        &self.access_profile
+    }
+    #[must_use]
+    pub fn invoke_path(&self) -> &str {
+        &self.invoke_path
+    }
+    #[must_use]
+    pub fn target_conditions_path(&self) -> Option<&str> {
+        self.target_conditions_path.as_deref()
+    }
+    #[must_use]
+    pub fn contract_fingerprint(&self) -> &str {
+        &self.contract_fingerprint
+    }
+    #[must_use]
+    pub const fn bounds(&self) -> BRegImmediateActionBounds {
+        self.bounds
+    }
+    #[must_use]
+    pub const fn is_handler(&self) -> bool {
+        self.handler
+    }
+    #[must_use]
+    pub const fn maximum_input_string_bytes(&self) -> Option<u64> {
+        self.maximum_input_string_bytes
+    }
+    #[must_use]
+    pub(crate) fn required_condition_keys(&self) -> &BTreeSet<String> {
+        &self.required_condition_keys
+    }
+    #[must_use]
+    pub(crate) fn result_effects(&self) -> &BTreeMap<String, String> {
+        &self.result_effects
+    }
+    #[must_use]
+    pub(crate) fn inputs(&self) -> &[BRegImmediateActionInputBinding] {
+        &self.inputs
+    }
+    #[must_use]
+    pub(crate) fn reference_inputs(&self) -> &[BRegImmediateActionReferenceInputDescriptor] {
+        &self.reference_inputs
+    }
+    #[must_use]
+    pub(crate) fn matches_source(&self, source: &str) -> bool {
+        self.source_binding == source
+    }
+    #[must_use]
+    pub(crate) fn source_binding(&self) -> &str {
+        &self.source_binding
+    }
+}
+
+impl fmt::Debug for BRegImmediateActionBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegImmediateActionBinding(<bound>)")
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct BRegMutationBinding {
+    registry_identifier: String,
+    dataset_identifier: String,
+    registry_revision: String,
+    operation_identifier: String,
+    access_profile: String,
+    entity_identifier: String,
+    collection_path: String,
+    request_schema: Option<Value>,
+    source_binding: String,
+}
+
+impl BRegMutationBinding {
+    fn new(
+        metadata: &BRegMetadata,
+        entity: &BRegMetadataEntity,
+        operation: &BRegMetadataOperation,
+        collection_path: String,
+        request_schema: Option<Value>,
+        source_binding: String,
+    ) -> Self {
+        Self {
+            registry_identifier: metadata.id.clone(),
+            dataset_identifier: entity.dataset_identifier.clone(),
+            registry_revision: metadata.revision.clone(),
+            operation_identifier: operation.id.clone(),
+            access_profile: operation.access_profile.clone(),
+            entity_identifier: entity.id.clone(),
+            collection_path,
+            request_schema,
+            source_binding,
+        }
+    }
+}
+
+/// Opaque executable binding for one direct Tombstone operation.
+#[derive(Clone, PartialEq)]
+pub struct BRegTombstoneBinding {
+    common: BRegMutationBinding,
+}
+
+/// Opaque executable binding for one atomic Batch operation.
+#[derive(Clone, PartialEq)]
+pub struct BRegBatchBinding {
+    common: BRegMutationBinding,
+    maximum_items: u64,
+    maximum_bytes: u64,
+    allow_create: bool,
+    allow_patch: bool,
+    readable_api_names: BTreeSet<String>,
+    create_writable_api_names: BTreeSet<String>,
+    required_create_api_names: BTreeSet<String>,
+    patch_writable_api_names: BTreeSet<String>,
+    removable_api_names: BTreeSet<String>,
+}
+
+macro_rules! mutation_binding_accessors {
+    ($binding:ty) => {
+        impl $binding {
+            #[must_use]
+            pub fn registry_identifier(&self) -> &str {
+                &self.common.registry_identifier
+            }
+            #[must_use]
+            pub fn dataset_identifier(&self) -> &str {
+                &self.common.dataset_identifier
+            }
+            #[must_use]
+            pub fn registry_revision(&self) -> &str {
+                &self.common.registry_revision
+            }
+            #[must_use]
+            pub fn operation_identifier(&self) -> &str {
+                &self.common.operation_identifier
+            }
+            #[must_use]
+            pub fn access_profile(&self) -> &str {
+                &self.common.access_profile
+            }
+            #[must_use]
+            pub fn entity_identifier(&self) -> &str {
+                &self.common.entity_identifier
+            }
+            #[must_use]
+            pub fn request_schema(&self) -> Option<&Value> {
+                self.common.request_schema.as_ref()
+            }
+            #[must_use]
+            pub(crate) fn matches_source(&self, source: &str) -> bool {
+                self.common.source_binding == source
+            }
+            #[must_use]
+            pub(crate) fn source_binding(&self) -> &str {
+                &self.common.source_binding
+            }
+        }
+    };
+}
+
+mutation_binding_accessors!(BRegTombstoneBinding);
+mutation_binding_accessors!(BRegBatchBinding);
+
+impl BRegTombstoneBinding {
+    #[must_use]
+    pub fn path_for_record(&self, record_identifier: Uuid) -> String {
+        format!("{}/{}", self.common.collection_path, record_identifier)
+    }
+}
+
+impl BRegBatchBinding {
+    #[must_use]
+    pub fn path(&self) -> String {
+        format!("{}:batch", self.common.collection_path)
+    }
+    #[must_use]
+    pub const fn maximum_items(&self) -> u64 {
+        self.maximum_items
+    }
+    #[must_use]
+    pub const fn maximum_bytes(&self) -> u64 {
+        self.maximum_bytes
+    }
+    #[must_use]
+    pub const fn allows_create(&self) -> bool {
+        self.allow_create
+    }
+    #[must_use]
+    pub const fn allows_patch(&self) -> bool {
+        self.allow_patch
+    }
+    #[must_use]
+    pub(crate) fn readable_api_names(&self) -> &BTreeSet<String> {
+        &self.readable_api_names
+    }
+    #[must_use]
+    pub(crate) fn create_writable_api_names(&self) -> &BTreeSet<String> {
+        &self.create_writable_api_names
+    }
+    #[must_use]
+    pub(crate) fn required_create_api_names(&self) -> &BTreeSet<String> {
+        &self.required_create_api_names
+    }
+    #[must_use]
+    pub(crate) fn patch_writable_api_names(&self) -> &BTreeSet<String> {
+        &self.patch_writable_api_names
+    }
+    #[must_use]
+    pub(crate) fn removable_api_names(&self) -> &BTreeSet<String> {
+        &self.removable_api_names
+    }
+}
+
+impl fmt::Debug for BRegTombstoneBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegTombstoneBinding(<bound>)")
+    }
+}
+
+impl fmt::Debug for BRegBatchBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegBatchBinding(<bound>)")
+    }
+}
 
 #[derive(Clone, PartialEq)]
 struct BRegDirectWriteBinding {
@@ -1309,6 +2631,10 @@ fn lifecycle_request_is_exact(
         && request.patch_path_prefix.is_none()
         && request.patch_operations.is_empty()
         && request.remove_semantics.is_none()
+        && request.maximum_items.is_none()
+        && request.maximum_body_bytes.is_none()
+        && request.allow_create.is_none()
+        && request.allow_patch.is_none()
         && request.schema.as_ref() == Some(&expected_lifecycle_schema(kind))
 }
 
@@ -1418,9 +2744,11 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
         .map(parse_operation)
         .collect::<Result<Vec<_>, _>>()?;
     let actions = root.remove("actions");
-    if let Some(value) = &actions {
-        validate_inert_actions(value)?;
-    }
+    let immediate_actions = actions
+        .as_ref()
+        .map(|value| parse_immediate_actions(value.clone()))
+        .transpose()?
+        .unwrap_or_default();
     finish(root)?;
 
     ensure_unique(entities.iter().map(|entity| entity.id.as_str()))?;
@@ -1435,6 +2763,7 @@ fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
         entities,
         operations,
         actions,
+        immediate_actions,
         source_binding: None,
     })
 }
@@ -1718,7 +3047,7 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
     {
         return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
     }
-    validate_selectors(required(&mut operation, "selectors")?)?;
+    let selectors = parse_selectors(required(&mut operation, "selectors")?)?;
     let slots = fields
         .iter()
         .filter(|field| {
@@ -1734,9 +3063,10 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
     validate_query(query_value.clone(), &slots)?;
     let query = serde_json::from_value(query_value)
         .map_err(|_| metadata_error(BRegMetadataErrorKind::Shape))?;
-    if let Some(read_path) = operation.remove("readPath") {
-        validate_read_path(read_path)?;
-    }
+    let read_path = operation
+        .remove("readPath")
+        .map(parse_read_path)
+        .transpose()?;
     finish(operation)?;
     Ok(BRegMetadataOperation {
         id,
@@ -1755,6 +3085,8 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         entity_label,
         title_fields,
         query,
+        selectors,
+        read_path,
     })
 }
 
@@ -1779,18 +3111,19 @@ fn parse_field(value: Value) -> Result<BRegMetadataField, BRegMetadataError> {
         return Err(metadata_error(BRegMetadataErrorKind::Shape));
     }
     let label = bounded_text(required(&mut field, "label")?)?;
-    let (reference_target_entity, references) = field
+    let storage_validation = field
+        .remove("storageValidation")
+        .map(parse_storage_validation)
+        .transpose()?;
+    let reference = field
         .remove("reference")
         .map(parse_references)
+        .transpose()?;
+    let code_labels = field
+        .remove("codeLabels")
+        .map(parse_code_labels)
         .transpose()?
         .unwrap_or_default();
-    if let Some(code_labels) = field.remove("codeLabels") {
-        let labels = object(code_labels)?;
-        for (code, label) in labels {
-            bounded_text(Value::String(code))?;
-            bounded_text(label)?;
-        }
-    }
     finish(field)?;
     Ok(BRegMetadataField {
         id,
@@ -1801,16 +3134,36 @@ fn parse_field(value: Value) -> Result<BRegMetadataField, BRegMetadataError> {
         nullable,
         read_only,
         removable,
-        reference_target_entity,
-        references,
+        storage_validation,
+        code_labels,
+        reference,
     })
 }
 
-fn parse_references(
+fn parse_storage_validation(
     value: Value,
-) -> Result<(Option<String>, Vec<BRegMetadataReference>), BRegMetadataError> {
+) -> Result<BRegStorageValidationDescriptor, BRegMetadataError> {
+    let mut validation = object(value)?;
+    let kind = identifier(required(&mut validation, "kind")?)?;
+    let pattern = bounded_text(required(&mut validation, "pattern")?)?;
+    finish(validation)?;
+    Ok(BRegStorageValidationDescriptor { kind, pattern })
+}
+
+fn parse_code_labels(value: Value) -> Result<BTreeMap<String, String>, BRegMetadataError> {
+    object(value)?
+        .into_iter()
+        .map(|(code, label)| {
+            let code = bounded_short_text(Value::String(code))?;
+            let label = bounded_text(label)?;
+            Ok((code, label))
+        })
+        .collect()
+}
+
+fn parse_references(value: Value) -> Result<BRegReferenceDescriptor, BRegMetadataError> {
     let mut reference = object(value)?;
-    boolean(required(&mut reference, "manualEntry")?)?;
+    let manual_entry = boolean(required(&mut reference, "manualEntry")?)?;
     let target_entity = reference
         .remove("targetEntity")
         .map(identifier)
@@ -1827,7 +3180,7 @@ fn parse_references(
             let label_fields = identifier_array(required(&mut operation, "labelFields")?)?;
             ensure_unique(label_fields.iter().map(String::as_str))?;
             finish(operation)?;
-            Ok(BRegMetadataReference {
+            Ok(BRegReferenceOperationDescriptor {
                 operation_id,
                 access_profile,
                 label_fields,
@@ -1840,7 +3193,11 @@ fn parse_references(
             .map(|reference| reference.operation_id.as_str()),
     )?;
     finish(reference)?;
-    Ok((target_entity, references))
+    Ok(BRegReferenceDescriptor {
+        manual_entry,
+        target_entity,
+        operations: references,
+    })
 }
 
 fn parse_request(value: Value) -> Result<BRegOperationRequest, BRegMetadataError> {
@@ -1858,6 +3215,10 @@ fn parse_request(value: Value) -> Result<BRegOperationRequest, BRegMetadataError
         patch_operations: optional_identifier_array(&mut request, "patchOperations")?
             .unwrap_or_default(),
         remove_semantics: optional_string(&mut request, "removeSemantics")?,
+        maximum_items: optional_positive_integer(&mut request, "maximumItems")?,
+        maximum_body_bytes: optional_positive_integer(&mut request, "maximumBodyBytes")?,
+        allow_create: optional_bool(&mut request, "allowCreate")?,
+        allow_patch: optional_bool(&mut request, "allowPatch")?,
     };
     finish(request)?;
     Ok(parsed)
@@ -1873,37 +3234,50 @@ fn validate_envelope_identifier(value: Value) -> Result<(), BRegMetadataError> {
     finish(identifier_value)
 }
 
-fn validate_read_path(value: Value) -> Result<(), BRegMetadataError> {
+fn parse_read_path(value: Value) -> Result<BRegReadPathDescriptor, BRegMetadataError> {
     let mut read_path = object(value)?;
-    identifier(required(&mut read_path, "id")?)?;
-    bounded_text(required(&mut read_path, "label")?)?;
-    finish(read_path)
+    let id = identifier(required(&mut read_path, "id")?)?;
+    let label = bounded_text(required(&mut read_path, "label")?)?;
+    finish(read_path)?;
+    Ok(BRegReadPathDescriptor { id, label })
 }
 
-fn validate_selectors(value: Value) -> Result<(), BRegMetadataError> {
+fn parse_selectors(value: Value) -> Result<Vec<BRegLookupSelectorDescriptor>, BRegMetadataError> {
     let selectors = array(value)?;
     let mut selector_ids = BTreeSet::new();
+    let mut parsed = Vec::with_capacity(selectors.len());
     for selector in selectors {
         let mut selector = object(selector)?;
         let id = identifier(required(&mut selector, "id")?)?;
-        if !selector_ids.insert(id) {
+        if !selector_ids.insert(id.clone()) {
             return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
         }
-        bounded_text(required(&mut selector, "label")?)?;
-        identifier(required(&mut selector, "valueOrigin")?)?;
+        let label = bounded_text(required(&mut selector, "label")?)?;
+        let value_origin = identifier(required(&mut selector, "valueOrigin")?)?;
+        if !matches!(value_origin.as_str(), "request" | "verified_claim") {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        }
         let mut api_names = BTreeSet::new();
         let mut field_ids = BTreeSet::new();
+        let mut fields = Vec::new();
         for field in array(required(&mut selector, "fields")?)? {
             let mut field = object(field)?;
-            if !field_ids.insert(identifier(required(&mut field, "id")?)?)
-                || !api_names.insert(api_name(required(&mut field, "apiName")?)?)
-            {
+            let field_id = identifier(required(&mut field, "id")?)?;
+            let field_api_name = api_name(required(&mut field, "apiName")?)?;
+            if !field_ids.insert(field_id.clone()) || !api_names.insert(field_api_name.clone()) {
                 return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
             }
-            bounded_text(required(&mut field, "label")?)?;
-            required(&mut field, "schema")?;
-            boolean(required(&mut field, "required")?)?;
+            let field_label = bounded_text(required(&mut field, "label")?)?;
+            let schema = required(&mut field, "schema")?;
+            let required_value = boolean(required(&mut field, "required")?)?;
             finish(field)?;
+            fields.push(BRegLookupSelectorFieldDescriptor {
+                id: field_id,
+                api_name: field_api_name,
+                label: field_label,
+                schema,
+                required: required_value,
+            });
         }
         let request_fields = api_name_array(required(&mut selector, "requestFields")?)?;
         ensure_unique(request_fields.iter().map(String::as_str))?;
@@ -1914,8 +3288,20 @@ fn validate_selectors(value: Value) -> Result<(), BRegMetadataError> {
             return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
         }
         finish(selector)?;
+        if (value_origin == "request" && request_fields.len() != fields.len())
+            || (value_origin == "verified_claim" && !request_fields.is_empty())
+        {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        }
+        parsed.push(BRegLookupSelectorDescriptor {
+            id,
+            label,
+            value_origin,
+            fields,
+            request_fields,
+        });
     }
-    Ok(())
+    Ok(parsed)
 }
 
 fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<(), BRegMetadataError> {
@@ -1942,7 +3328,25 @@ fn validate_query(value: Value, slots: &BTreeSet<&str>) -> Result<(), BRegMetada
     positive_integer(required(&mut query, "maxInValues")?)?;
     validate_pagination(required(&mut query, "pagination")?)?;
     validate_temporal(required(&mut query, "temporal")?)?;
+    if let Some(spatial) = query.remove("spatialQueries") {
+        validate_spatial_queries(spatial)?;
+    }
     finish(query)
+}
+
+fn validate_spatial_queries(value: Value) -> Result<(), BRegMetadataError> {
+    let mut spatial = object(value)?;
+    let mut bbox = object(required(&mut spatial, "bbox")?)?;
+    api_name(required(&mut bbox, "geometryProperty")?)?;
+    positive_number_with_maximum(required(&mut bbox, "maximumLongitudeSpanDegrees")?, 360.0)?;
+    positive_number_with_maximum(required(&mut bbox, "maximumLatitudeSpanDegrees")?, 180.0)?;
+    if string(required(&mut bbox, "coordinateReferenceSystem")?)? != "CRS84"
+        || string(required(&mut bbox, "semantics")?)? != "inclusive_2d_non_crossing"
+    {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    finish(bbox)?;
+    finish(spatial)
 }
 
 fn query_field_identifier(value: Value) -> Result<String, BRegMetadataError> {
@@ -2053,24 +3457,221 @@ fn validate_change_control(value: &Value) -> Result<(), BRegMetadataError> {
     finish(change_control)
 }
 
-fn validate_inert_actions(value: &Value) -> Result<(), BRegMetadataError> {
-    let actions = value
-        .as_array()
-        .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
+fn parse_immediate_actions(
+    value: Value,
+) -> Result<Vec<BRegImmediateActionDescriptor>, BRegMetadataError> {
+    let actions = array(value)?;
     let mut identifiers = BTreeSet::new();
+    let mut parsed = Vec::with_capacity(actions.len());
     for action in actions {
-        let action = action
+        let action_object = action
             .as_object()
             .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
-        let identifier_value = action
-            .get("id")
-            .cloned()
-            .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
-        if !identifiers.insert(identifier(identifier_value)?) {
+        let action_id = identifier(
+            action_object
+                .get("id")
+                .cloned()
+                .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?,
+        )?;
+        if !identifiers.insert(action_id) {
             return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
         }
+        if ![
+            "route",
+            "conditionRoute",
+            "contractFingerprint",
+            "inputs",
+            "referenceInputs",
+            "requiredConditionKeys",
+            "resultEffects",
+            "access",
+            "routes",
+            "bounds",
+        ]
+        .iter()
+        .all(|member| action_object.contains_key(*member))
+        {
+            continue;
+        }
+        let mut action = object(action)?;
+        let id = identifier(required(&mut action, "id")?)?;
+        let route = path(required(&mut action, "route")?)?;
+        let condition_route = nullable_path(required(&mut action, "conditionRoute")?)?;
+        let contract_fingerprint = string(required(&mut action, "contractFingerprint")?)?;
+        if !valid_revision(&contract_fingerprint) {
+            return Err(metadata_error(BRegMetadataErrorKind::Revision));
+        }
+        let input_mode = action.remove("inputMode").map(identifier).transpose()?;
+        if input_mode
+            .as_deref()
+            .is_some_and(|mode| !matches!(mode, "fixed" | "handler"))
+        {
+            return Err(metadata_error(BRegMetadataErrorKind::Shape));
+        }
+        let maximum_input_string_bytes = match action.remove("maximumInputStringBytes") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(positive_integer(value)?),
+        };
+        let inputs = array(required(&mut action, "inputs")?)?
+            .into_iter()
+            .map(parse_immediate_action_input)
+            .collect::<Result<Vec<_>, _>>()?;
+        ensure_unique(inputs.iter().map(|input| input.id.as_str()))?;
+        ensure_unique(inputs.iter().map(|input| input.api_name.as_str()))?;
+        let reference_inputs = array(required(&mut action, "referenceInputs")?)?
+            .into_iter()
+            .map(parse_immediate_action_reference_input)
+            .collect::<Result<Vec<_>, _>>()?;
+        ensure_unique(reference_inputs.iter().map(|input| input.input.as_str()))?;
+        for reference in &reference_inputs {
+            if !inputs
+                .iter()
+                .any(|input| input.id == reference.input && input.api_name == reference.api_name)
+            {
+                return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+            }
+        }
+        let required_condition_keys =
+            api_name_array(required(&mut action, "requiredConditionKeys")?)?;
+        ensure_unique(required_condition_keys.iter().map(String::as_str))?;
+        if required_condition_keys
+            .iter()
+            .any(|key| !inputs.iter().any(|input| input.api_name == *key))
+        {
+            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+        }
+        let result_effects = array(required(&mut action, "resultEffects")?)?
+            .into_iter()
+            .map(parse_immediate_action_result_effect)
+            .collect::<Result<Vec<_>, _>>()?;
+        ensure_unique(result_effects.iter().map(|effect| effect.effect.as_str()))?;
+
+        let mut access = object(required(&mut action, "access")?)?;
+        let access_profile = identifier(required(&mut access, "selectedProfile")?)?;
+        finish(access)?;
+        let mut routes = object(required(&mut action, "routes")?)?;
+        let invoke_path = parse_immediate_action_route(
+            required(&mut routes, "invoke")?,
+            &format!("actions.{id}.invoke"),
+            true,
+            &format!("action-{id}-invoke-input"),
+            &format!("action-{id}-invoke-response"),
+        )?;
+        if invoke_path != route {
+            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+        }
+        let target_conditions_path = match required(&mut routes, "targetConditions")? {
+            Value::Null => None,
+            value => Some(parse_immediate_action_route(
+                value,
+                &format!("actions.{id}.target_conditions"),
+                false,
+                &format!("action-{id}-target-conditions-input"),
+                &format!("action-{id}-target-conditions-response"),
+            )?),
+        };
+        if target_conditions_path != condition_route {
+            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+        }
+        finish(routes)?;
+        let mut bounds_value = object(required(&mut action, "bounds")?)?;
+        let bounds = BRegImmediateActionBounds {
+            maximum_targets: positive_integer(required(&mut bounds_value, "maximumTargets")?)?,
+            maximum_field_mutations: positive_integer(required(
+                &mut bounds_value,
+                "maximumFieldMutations",
+            )?)?,
+            maximum_snapshot_bytes: positive_integer(required(
+                &mut bounds_value,
+                "maximumSnapshotBytes",
+            )?)?,
+        };
+        finish(bounds_value)?;
+        finish(action)?;
+        parsed.push(BRegImmediateActionDescriptor {
+            id,
+            route,
+            condition_route,
+            contract_fingerprint,
+            input_mode,
+            maximum_input_string_bytes,
+            inputs,
+            reference_inputs,
+            required_condition_keys,
+            result_effects,
+            access_profile,
+            invoke_path,
+            target_conditions_path,
+            bounds,
+        });
     }
-    Ok(())
+    Ok(parsed)
+}
+
+fn parse_immediate_action_input(
+    value: Value,
+) -> Result<BRegImmediateActionInputDescriptor, BRegMetadataError> {
+    let mut input = object(value)?;
+    let parsed = BRegImmediateActionInputDescriptor {
+        id: identifier(required(&mut input, "id")?)?,
+        api_name: api_name(required(&mut input, "apiName")?)?,
+        field_type: required(&mut input, "fieldType")?,
+        required: boolean(required(&mut input, "required")?)?,
+        nullable: optional_bool(&mut input, "nullable")?,
+        classification: identifier(required(&mut input, "classification")?)?,
+    };
+    finish(input)?;
+    Ok(parsed)
+}
+
+fn parse_immediate_action_reference_input(
+    value: Value,
+) -> Result<BRegImmediateActionReferenceInputDescriptor, BRegMetadataError> {
+    let mut input = object(value)?;
+    let parsed = BRegImmediateActionReferenceInputDescriptor {
+        input: identifier(required(&mut input, "input")?)?,
+        api_name: api_name(required(&mut input, "apiName")?)?,
+        target_entity: identifier(required(&mut input, "targetEntity")?)?,
+    };
+    finish(input)?;
+    Ok(parsed)
+}
+
+fn parse_immediate_action_result_effect(
+    value: Value,
+) -> Result<BRegImmediateActionResultEffectDescriptor, BRegMetadataError> {
+    let mut effect = object(value)?;
+    let parsed = BRegImmediateActionResultEffectDescriptor {
+        effect: identifier(required(&mut effect, "effect")?)?,
+        entity: identifier(required(&mut effect, "entity")?)?,
+        operation: BRegOperationKind::parse(identifier(required(&mut effect, "operation")?)?),
+    };
+    finish(effect)?;
+    Ok(parsed)
+}
+
+fn parse_immediate_action_route(
+    value: Value,
+    expected_operation_id: &str,
+    requires_idempotency: bool,
+    expected_input_schema: &str,
+    expected_response_schema: &str,
+) -> Result<String, BRegMetadataError> {
+    let mut route = object(value)?;
+    if string(required(&mut route, "method")?)? != "POST"
+        || identifier(required(&mut route, "operationId")?)? != expected_operation_id
+        || boolean(required(&mut route, "requiresIdempotencyKey")?)? != requires_idempotency
+    {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    let path = path(required(&mut route, "path")?)?;
+    if bounded_text(required(&mut route, "inputSchema")?)? != expected_input_schema
+        || bounded_text(required(&mut route, "responseSchema")?)? != expected_response_schema
+    {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    finish(route)?;
+    Ok(path)
 }
 
 /// Every metadata limit crosses a JavaScript number boundary in the bindings,
@@ -2084,6 +3685,26 @@ fn positive_integer(value: Value) -> Result<u64, BRegMetadataError> {
         .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))
 }
 
+fn optional_positive_integer(
+    object: &mut Map<String, Value>,
+    member: &str,
+) -> Result<Option<u64>, BRegMetadataError> {
+    object.remove(member).map(positive_integer).transpose()
+}
+
+fn positive_number_with_maximum(value: Value, maximum: f64) -> Result<Number, BRegMetadataError> {
+    let number = value
+        .as_number()
+        .filter(|number| {
+            number
+                .as_f64()
+                .is_some_and(|value| value.is_finite() && value > 0.0 && value <= maximum)
+        })
+        .cloned()
+        .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
+    Ok(number)
+}
+
 fn validate_metadata_references(
     entities: &[BRegMetadataEntity],
     operations: &[BRegMetadataOperation],
@@ -2095,7 +3716,12 @@ fn validate_metadata_references(
         {
             return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
         }
-        for reference in operation.fields.iter().flat_map(|field| &field.references) {
+        for reference in operation
+            .fields
+            .iter()
+            .filter_map(|field| field.reference.as_ref())
+            .flat_map(|reference| &reference.operations)
+        {
             let Some(candidate) = operations.iter().find(|candidate| {
                 candidate.id == reference.operation_id
                     && candidate.access_profile == reference.access_profile
@@ -2114,7 +3740,7 @@ fn validate_metadata_references(
         for target in operation
             .fields
             .iter()
-            .filter_map(|field| field.reference_target_entity.as_ref())
+            .filter_map(|field| field.reference.as_ref()?.target_entity.as_ref())
         {
             if !entities.iter().any(|entity| entity.id == *target) {
                 return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
@@ -2469,6 +4095,13 @@ fn path(value: Value) -> Result<String, BRegMetadataError> {
         return Err(metadata_error(BRegMetadataErrorKind::Shape));
     }
     Ok(value)
+}
+
+fn nullable_path(value: Value) -> Result<Option<String>, BRegMetadataError> {
+    match value {
+        Value::Null => Ok(None),
+        value => path(value).map(Some),
+    }
 }
 
 fn valid_revision(value: &str) -> bool {

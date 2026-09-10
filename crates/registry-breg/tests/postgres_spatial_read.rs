@@ -6,6 +6,10 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -40,6 +44,193 @@ const PACKAGE_ID: &str = "spatial-read-registry";
 const INSTANCE_ID: &str = "spatial-read-instance";
 const DATABASE_ID: &str = "spatial-read-database";
 const PRINCIPAL_CANARY: &str = "principal-value-must-not-enter-spatial-read-audit";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires built native_geojson example in BREG_TEST_RUST_GEOJSON_EXAMPLE"]
+async fn rust_geojson_example_reads_real_postgis() {
+    let executable = std::env::var("BREG_TEST_RUST_GEOJSON_EXAMPLE")
+        .expect("set the compiled native_geojson example path");
+    let harness = SpatialHarness::create(compiled_spatial_registry()).await;
+    seed_spatial_rows(&harness).await;
+    let http =
+        client_http::ClientHttp::start(harness.router(None, cursor_codec()), claims(["zone-a"]))
+            .await;
+    let output = std::process::Command::new(executable)
+        .env("BREG_BASE_URL", &http.base_url)
+        .env("BREG_ENTITY_ROUTE", "service-sites")
+        .env("BREG_ACCESS_PROFILE", "map-reader")
+        .env("BREG_BBOX", "100,13,101,14")
+        .env_remove("BREG_TOKEN_FILE")
+        .output()
+        .expect("the documented Rust example launches");
+    assert!(
+        output.status.success(),
+        "the documented Rust example succeeds"
+    );
+    let pages: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(!pages.is_empty());
+    assert!(pages.iter().all(|page| page["type"] == "FeatureCollection"));
+    assert!(pages
+        .iter()
+        .any(|page| !page["features"].as_array().unwrap().is_empty()));
+    drop(http);
+    harness.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sdk_bbox_geojson_and_continuations_use_real_postgis() {
+    use registry_breg_client::{
+        BRegBoundingBox, BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegListRequest,
+        BRegProblemCode, BRegRecordOptions,
+    };
+    let harness = SpatialHarness::create(compiled_spatial_registry()).await;
+    seed_spatial_rows(&harness).await;
+    let http =
+        client_http::ClientHttp::start(harness.router(None, cursor_codec()), claims(["zone-a"]))
+            .await;
+    let client = &http.client;
+
+    let metadata = client
+        .registry_contract(Some("map-reader"))
+        .await
+        .expect("real spatial metadata decodes");
+    let spatial = metadata
+        .value
+        .operations()
+        .iter()
+        .filter(|operation| operation.path() == "/v1/records/service-sites")
+        .find_map(|operation| operation.query()?.spatial_queries.as_ref()?.bbox.as_ref())
+        .expect("caller-filtered metadata retains the bbox contract");
+    assert_eq!(spatial.geometry_property, "location");
+    assert_eq!(spatial.coordinate_reference_system, "CRS84");
+    let bbox = BRegBoundingBox::new("100", "13", "101", "14").unwrap();
+    let native = client
+        .list_records(
+            "service-sites",
+            &BRegListRequest::default()
+                .options(
+                    BRegRecordOptions::default()
+                        .select(["code", "location"])
+                        .unwrap(),
+                )
+                .bbox(bbox.clone())
+                .filter("code eq 'zero-area'")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(native.value.value.items.len(), 1);
+    assert_eq!(native.value.value.items[0].record_identifier, ZERO_AREA);
+
+    let request = BRegGeoJsonListRequest::default()
+        .options(
+            BRegGeoJsonOptions::default()
+                .select(["code", "location"])
+                .unwrap(),
+        )
+        .bbox(bbox)
+        .top(2)
+        .unwrap();
+    let mut page = client
+        .list_geojson_records("service-sites", &request)
+        .await
+        .unwrap();
+    let mut ids = BTreeSet::new();
+    loop {
+        assert!(page.metadata.etag().is_none());
+        assert_eq!(
+            page.value.value.number_returned as usize,
+            page.value.value.features.len()
+        );
+        for feature in &page.value.value.features {
+            assert!(
+                ids.insert(feature.id.clone()),
+                "SDK continuation does not repeat a row"
+            );
+            assert!(feature.geometry.is_some());
+            assert!(!feature.properties.contains_key("location"));
+        }
+        let Some(next) = &page.value.continuation else {
+            break;
+        };
+        page = client.continue_geojson_list(next).await.unwrap();
+    }
+    assert!(ids.contains(EDGE_WEST));
+    assert!(ids.contains(EDGE_NORTH_EAST));
+    assert!(!ids.contains(JUST_OUTSIDE));
+    assert!(!ids.contains(NULL_GEOMETRY));
+    assert!(!ids.contains(OTHER_ROW_BOUNDARY));
+
+    let null = client
+        .get_geojson_record(
+            "service-sites",
+            NULL_GEOMETRY,
+            &BRegGeoJsonOptions::default()
+                .select(["code", "location"])
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(null.value.geometry.is_none());
+    assert!(null.metadata.etag().is_none());
+    let omitted = client
+        .get_geojson_record(
+            "service-sites",
+            ZERO_AREA,
+            &BRegGeoJsonOptions::default().select(["code"]).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(omitted.value.geometry.is_none());
+
+    let zero_area = BRegGeoJsonListRequest::default()
+        .bbox(BRegBoundingBox::new("100.25", "13.25", "100.25", "13.25").unwrap());
+    let zero_area = client
+        .list_geojson_records("service-sites", &zero_area)
+        .await
+        .unwrap();
+    assert_eq!(zero_area.value.value.features.len(), 1);
+    assert_eq!(zero_area.value.value.features[0].id, ZERO_AREA);
+
+    let denied = BRegGeoJsonListRequest::default()
+        .options(
+            BRegGeoJsonOptions::default()
+                .access_profile("no-bbox")
+                .unwrap(),
+        )
+        .bbox(BRegBoundingBox::new("100", "13", "101", "14").unwrap());
+    let refused = client
+        .list_geojson_records("service-sites", &denied)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        refused.problem_code(),
+        Some(BRegProblemCode::QueryInvalid | BRegProblemCode::ResourceNotFound)
+    ));
+    let too_wide = BRegGeoJsonListRequest::default()
+        .bbox(BRegBoundingBox::new("100", "13", "102", "14").unwrap());
+    let refused = client
+        .list_geojson_records("service-sites", &too_wide)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.problem_code(), Some(BRegProblemCode::QueryInvalid));
+
+    // Decimal semantics must survive the SDK rather than round to binary64.
+    let exact = BRegGeoJsonListRequest::default().bbox(
+        BRegBoundingBox::new("0.30000000000000000001", "0", "0.30000000000000000001", "0").unwrap(),
+    );
+    let exact = client
+        .list_geojson_records("service-sites", &exact)
+        .await
+        .unwrap();
+    assert!(exact.value.value.features.is_empty());
+    drop(http);
+    harness.cleanup().await;
+}
 const SECRET_CANARY: &str = "SECRET-SPATIAL-CANARY-MUST-NOT-LEAVE";
 const EDGE_WEST: &str = "00000000-0000-4000-8000-000000000001";
 const INTERIOR: &str = "00000000-0000-4000-8000-000000000002";

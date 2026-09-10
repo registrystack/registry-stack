@@ -773,6 +773,10 @@ nothing. A promoted `BRegLifecycleAction` exposes read-only `operation`, `stage`
 
 ### BReg read operations
 
+The [BReg capability matrix](../breg-client-capabilities/) also covers native bbox and GeoJSON,
+temporal and snapshot collections, retained revisions, proposal history, relationship traversal,
+immediate actions, atomic batches, tombstone, and persisted recovery across all three languages.
+
 | Operation | Rust and Python | Node | Rust returns |
 | --- | --- | --- | --- |
 | Liveness and readiness probes | `health()`, `ready()` | `health()`, `ready()` | `BRegComplete<BRegProbeStatus>` |
@@ -794,9 +798,9 @@ access profile. Its validated projection contains no `$select`, `$filter`, `$ord
 
 In Python, `get_record`, `list_records`, and `lookup_record` take their options as keyword arguments:
 `select`, `access_profile`, and `format` (`json` or `json-ld`), plus `top`, `filter`, `orderby`, and
-`count` for a list. `lookup_record(entity_route, selector, values=None, ...)` names the selector and
+`count` and `bbox` for a direct list. `lookup_record(entity_route, selector, values=None, ...)` names the selector and
 its values directly. Node takes the same options as an object with `select`, `accessProfile`,
-`format`, `top`, `filter`, `orderby`, and `count`.
+`format`, `top`, `filter`, `orderby`, `count`, and `bbox` for a direct list.
 
 A Python outcome is a dict and a Node outcome is an object. Both carry `kind` (`complete`), `value`,
 the trace identifier (`trace_id` in Python, `traceId` in Node), and `etag` and `location` when the

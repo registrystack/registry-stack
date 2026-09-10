@@ -20,6 +20,16 @@ path = "tests/postgres_kernel.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_client_capabilities"
+path = "tests/postgres_client_capabilities.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_client_relationships"
+path = "tests/postgres_client_relationships.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_tls"
 path = "tests/postgres_tls.rs"
 required-features = ["postgres-tls-test"]

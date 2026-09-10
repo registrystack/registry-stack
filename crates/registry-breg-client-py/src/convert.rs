@@ -105,10 +105,15 @@ fn python_to_json_at_depth(
         return Ok(Value::Bool(flag.is_true()));
     }
     if let Ok(integer) = value.cast::<PyInt>() {
-        let integer = integer
-            .extract::<i64>()
-            .map_err(|_| ConversionError::new("an integer value must fit in 64 bits"))?;
-        return Ok(Value::from(integer));
+        if let Ok(value) = integer.extract::<i64>() {
+            return Ok(Value::from(value));
+        }
+        if let Ok(value) = integer.extract::<u64>() {
+            return Ok(Value::from(value));
+        }
+        return Err(ConversionError::new(
+            "an integer value must fit in signed or unsigned 64 bits",
+        ));
     }
     if let Ok(float) = value.cast::<PyFloat>() {
         let float = float

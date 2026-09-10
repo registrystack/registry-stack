@@ -90,6 +90,8 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_read",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_read_dependencies",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_record_profile_conformance",
+    "cargo test --locked -p registry-breg --features postgres-test --test postgres_client_capabilities",
+    "cargo test --locked -p registry-breg --features postgres-test --test postgres_client_relationships",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_spatial_storage",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_spatial_read",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_revision_http",

@@ -1,0 +1,196 @@
+---
+title: Base Registry Engine client capabilities
+description: Native spatial, temporal, relationship, action, batch, tombstone, and recovery contracts in the unified Registry Stack clients.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-10"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+---
+
+import BRegClientCapabilities from '../../../components/BRegClientCapabilities.astro';
+
+The Base Registry Engine (BReg) namespace exposes native registry operations through Rust,
+`@registrystack/client` in Node, and `registry-stack-client` in Python.
+Rust owns validation and protocol behavior; the bindings expose the same selected capabilities.
+The table is generated from the maintained client capability inventory, checked against compiled
+server contracts and language exports.
+
+<BRegClientCapabilities />
+
+Python takes read options as keyword arguments; Node takes an options object.
+Rust uses an operation-specific request type.
+The [client API reference](../client-api/#base-registry-engine) defines client construction,
+outcomes, errors, attachments, and lifecycle promotion.
+
+{/* Evidence: products/breg/contracts/client-capabilities.json,
+    products/breg/scripts/check_client_capabilities.py,
+    crates/registry-breg-client/src/client.rs,
+    crates/registry-breg-client-node/client.d.ts,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi */}
+
+## Metadata and upgrade compatibility
+
+Parsed metadata retains operation selectors, relationship paths, reference-operation details,
+vocabulary labels, immediate actions, and change-request capabilities.
+Spatial query descriptors identify the geometry property, CRS84 coordinates, and allowed spans.
+Batch and tombstone descriptors carry their executable request contracts.
+Labels, reference descriptions, and paths convey no additional authority.
+The server filters every descriptor using the current caller and selected profile.
+
+Select an immediate action by action identifier and profile, or a batch or tombstone by entity
+identifier and profile.
+Selection binds the operation to the source, package revision, profile, route, and request contract.
+A missing optional descriptor on an older server can still be read; an absent executable contract
+cannot produce a binding and returns an unsupported-capability selection error.
+
+Upgrade the client and server together.
+Older strict metadata decoders can reject the added descriptors even when your application does
+not invoke those operations.
+These additions require no database migration and do not change grants or retention.
+
+{/* Evidence: crates/registry-breg-client/src/metadata.rs,
+    crates/registry-breg-client/tests/metadata_contract.rs,
+    crates/registry-breg/src/api/metadata.rs */}
+
+## Native spatial queries
+
+Direct native lists accept `bbox` alongside the scalar filters permitted by the profile.
+A box is four decimal strings in west, south, east, north order.
+Rust constructs `BRegBoundingBox::new(west, south, east, north)`; Node and Python pass a four-element
+array or sequence.
+Coordinates use CRS84 longitude and latitude ranges, inclusive edges, and non-crossing bounds.
+Zero-area boxes are valid.
+The client rejects non-finite coordinates, reversed bounds, invalid ranges, and boxes exceeding
+the 256-byte wire bound.
+The server enforces the selected profile's geometry/query grants and maximum spans.
+
+For a configured `establishments` route and `map-reader` profile, a native JSON list uses:
+
+```python
+page = client.list_records(
+    "establishments", access_profile="map-reader",
+    bbox=["100", "13", "101", "14"], top=20,
+)
+```
+
+```js
+const page = await client.listRecords('establishments', {
+  accessProfile: 'map-reader', bbox: ['100', '13', '101', '14'], top: 20,
+});
+```
+
+Use the separate GeoJSON get/list methods when you need a Feature or FeatureCollection.
+GeoJSON keeps Point or null geometry, selected properties, and revision metadata separate from
+the shared Registry Record decoder.
+Omitting the geometry property with `select` yields null geometry.
+A GeoJSON get supplies no mutation ETag; fetch a native record before a mutation that needs one.
+Use the matching GeoJSON continuation method for subsequent pages.
+The six `/v1/gis` adapter routes serve QGIS directly and have no SDK wrappers.
+
+{/* Evidence: crates/registry-breg-client/src/geojson.rs,
+    crates/registry-breg-client/src/query.rs,
+    crates/registry-breg/tests/postgres_spatial_read.rs,
+    crates/registry-breg/src/api/gis.rs */}
+
+## Temporal, revision, and relationship reads
+
+Current and as-of collection methods use separate routes and request types.
+An as-of request requires `asOf` in Node or `as_of` in Python.
+A snapshot request accepts the server's `snapshot` reference and `validAt` timestamp forms
+(`valid_at` in Python).
+Capture the returned snapshot reference to repeat a read at that committed state.
+Snapshot continuations retain that identity across intervening writes.
+Current authority and retained-history coverage still govern every read.
+
+Individual revision retrieval and revision lists return bounded inert JSON bytes.
+Read `body` as a Buffer in Node or bytes in Python and use a lossless JSON parser when needed.
+Revision lists return at most the newest 100 retained revisions and have no continuation.
+Proposal history is different: read the record's `request.history.nextAfterProposalVersion`, then
+pass that value as `requestHistoryAfterProposalVersion` to the next record get
+(`request_history_after_proposal_version` in Python).
+Stop when that history cursor is null.
+
+A relationship read takes the entity route, source-record UUID, and configured path route as three
+separate arguments.
+Discover the path through parsed metadata.
+The server applies path-specific authority and target projections, which can differ from direct
+target-list access.
+Only that path's permitted scalar query options apply; bbox and temporal combinations are refused.
+Pass a complete continuation unchanged to the matching operation's continuation method.
+Continuations bind route, profile, representation, and collection identity and accept no replacement
+first-page query options.
+
+{/* Evidence: crates/registry-breg-client/src/read.rs,
+    crates/registry-breg-client/src/client.rs,
+    crates/registry-breg-client/tests/read_parity.rs,
+    crates/registry-breg/tests/postgres_client_capabilities.rs */}
+
+## Immediate actions and atomic mutations
+
+An immediate action can operate without generic record-get authority.
+Select its binding from metadata, retrieve target conditions explicitly, then invoke using the
+same binding, validated inputs, conditions, and your idempotency key.
+Invocation never refreshes conditions or retries automatically.
+Required, optional, and nullable inputs remain distinct.
+The action contract supplies field types and bounds; receipts expose only effects permitted by the
+selected profile.
+A declared business refusal exposes its bounded refusal code through the ordinary client error.
+
+Batch requests contain same-entity create or patch items allowed by their selected
+contract, with per-item preconditions where required.
+Rust uses `BRegBatchBuilder`; Node and Python provide the equivalent structured request.
+An optional batch-level correction context carries a bounded reason and source references.
+The client validates fields, preconditions, and aggregate item/body limits before sending one atomic
+request.
+A stale item or constraint failure rolls back every item.
+Interval constraints are evaluated on the final batch state.
+The batch receipt has a `snapshot` and `results`, rather than a Registry Record envelope.
+
+Tombstone requires its selected binding, a record ETag, and your idempotency key.
+Its native revision envelope identifies the resulting revision.
+The record disappears from live lists while permitted retained history remains readable.
+Record ETags and lifecycle ETags are distinct.
+
+{/* Evidence: crates/registry-breg-client/src/actions.rs,
+    crates/registry-breg-client/src/batch.rs,
+    crates/registry-breg-client/src/extended_mutation.rs,
+    crates/registry-breg/tests/postgres_client_capabilities.rs,
+    crates/registry-breg/tests/postgres_immediate_actions.rs,
+    crates/registry-breg/tests/postgres_action_handlers.rs */}
+
+## Recovery after a process restart
+
+Prepare create or lifecycle evidence before the initial send, then persist its byte export in
+application-owned sensitive storage.
+The evidence contains the original request, conditions, profile/package binding, and caller-chosen
+idempotency key, with token-free and redacted string/debug representations.
+It is sensitive even though it carries no bearer token.
+
+After restart, import the bytes, fetch fresh caller-filtered metadata under the original principal,
+and select the matching create binding or lifecycle authority.
+Recovery validates that binding and saved request before you explicitly replay the original attempt.
+An already-applied lifecycle action can be recovered even after it disappears from the current record.
+Do not replace its original conditions or idempotency key after an unknown outcome.
+
+Node uses `BRegPreparedCreate.fromBytes` or `BRegPreparedLifecycle.fromBytes` and `toBytes`.
+Python uses `from_bytes` and `to_bytes`; Rust uses `from_slice` and `as_bytes`.
+Node and Python return opaque recovered attempts for the explicit recovered-execution methods.
+The application owns principal binding, integrity, access control, and lifetime of saved evidence.
+Importing evidence does not authenticate its owner or deserialize executable authority.
+Persisted recovery for other mutation families is outside this contract.
+
+{/* Evidence: crates/registry-breg-client/src/recovery.rs,
+    crates/registry-breg-client-node/client.d.ts,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi */}
+
+## Next
+
+- [Query a registry from Python and Node](../../tutorials/query-breg-client/) for client installation and a complete read/write journey.
+- [Client API reference](../client-api/#base-registry-engine) for outcome and error shapes.
+- [Control access per profile](../../configure/breg-access/) for operation grants and projections.
+- [Retention and erasure](../../operate/breg-retention/) for history and saved-response lifetime.

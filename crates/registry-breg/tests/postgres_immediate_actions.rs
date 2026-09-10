@@ -6,6 +6,10 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
+
 #[path = "support/immediate_action_review_regressions.rs"]
 mod review_regressions;
 
@@ -41,6 +45,148 @@ const DATABASE_ID: &str = "immediate-action-database";
 const HOUSEHOLD_ID: &str = "00000000-0000-4000-8000-000000000101";
 const OTHER_HOUSEHOLD_ID: &str = "00000000-0000-4000-8000-000000000202";
 const ACCESS_PROFILE_CANARY: &str = "action-access-profile-canary";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sdk_action_only_conditions_invocation_and_exact_replay_use_real_postgres() {
+    use registry_breg_client::{
+        BRegActionInvocationRequest, BRegActionTargetConditionsRequest, BRegIdempotencyKey,
+        BRegProblemCode, BRegRecordOptions,
+    };
+    let fixture = client_http::ClientFixture::start(compiled_registry(), action_claims()).await;
+    seed_household(
+        &fixture.database,
+        &fixture.registry,
+        &fixture.identity,
+        HOUSEHOLD_ID,
+        "SDK-H-001",
+        "zone-a",
+    )
+    .await;
+    seed_household(
+        &fixture.database,
+        &fixture.registry,
+        &fixture.identity,
+        OTHER_HOUSEHOLD_ID,
+        "SDK-H-002",
+        "zone-b",
+    )
+    .await;
+    let client = &fixture.http.client;
+    let contract = client
+        .registry_contract(Some("contact-registrar"))
+        .await
+        .unwrap();
+    let binding = contract
+        .value
+        .select_immediate_action("register-household-contact", "contact-registrar")
+        .unwrap();
+    let condition_request = BRegActionTargetConditionsRequest::new(
+        &binding,
+        json!({"householdId":HOUSEHOLD_ID})
+            .as_object()
+            .unwrap()
+            .clone(),
+    )
+    .unwrap();
+    let conditions = client
+        .action_target_conditions(&binding, &condition_request)
+        .await
+        .unwrap();
+    let generic_read = client
+        .get_record(
+            "households",
+            HOUSEHOLD_ID,
+            &BRegRecordOptions::default()
+                .access_profile("contact-registrar")
+                .unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        generic_read.problem_code(),
+        Some(BRegProblemCode::ResourceNotFound)
+    );
+    let inputs = json!({"householdId":HOUSEHOLD_ID,"personCode":"SDK-P-001","legalName":"SDK fixture","jurisdiction":"zone-a"});
+    let invocation = BRegActionInvocationRequest::new(
+        &binding,
+        inputs.as_object().unwrap().clone(),
+        Some(&conditions.value),
+    )
+    .unwrap();
+    let key = BRegIdempotencyKey::parse("sdk-immediate-action").unwrap();
+    let first = client
+        .invoke_action(&binding, &invocation, &key)
+        .await
+        .unwrap();
+    assert_eq!(
+        first.value.action_identifier(),
+        "register-household-contact"
+    );
+    assert!(first.value.results().contains_key("person"));
+    assert!(first.value.results().contains_key("membership"));
+    let replay = client
+        .invoke_action(&binding, &invocation, &key)
+        .await
+        .unwrap();
+    assert_eq!(replay.value, first.value);
+
+    let mut different = inputs.as_object().unwrap().clone();
+    different.insert("personCode".into(), json!("SDK-P-002"));
+    let changed =
+        BRegActionInvocationRequest::new(&binding, different, Some(&conditions.value)).unwrap();
+    let conflict = client
+        .invoke_action(&binding, &changed, &key)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        conflict.problem_code(),
+        Some(BRegProblemCode::IdempotencyConflict)
+    );
+    bump_household_revision_same_boundary(&fixture.database, &fixture.registry, HOUSEHOLD_ID).await;
+    let stale = client
+        .invoke_action(
+            &binding,
+            &changed,
+            &BRegIdempotencyKey::parse("sdk-action-stale").unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        stale.problem_code(),
+        Some(BRegProblemCode::PreconditionFailed)
+    );
+
+    let hidden = BRegActionTargetConditionsRequest::new(
+        &binding,
+        json!({"householdId":OTHER_HOUSEHOLD_ID})
+            .as_object()
+            .unwrap()
+            .clone(),
+    )
+    .unwrap();
+    let absent = BRegActionTargetConditionsRequest::new(
+        &binding,
+        json!({"householdId":"00000000-0000-4000-8000-000000000999"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    )
+    .unwrap();
+    let hidden = client
+        .action_target_conditions(&binding, &hidden)
+        .await
+        .unwrap_err();
+    let absent = client
+        .action_target_conditions(&binding, &absent)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        hidden.problem_code(),
+        Some(BRegProblemCode::ResourceNotFound)
+    );
+    assert_eq!(hidden.problem_code(), absent.problem_code());
+    fixture.finish().await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn immediate_action_acquires_conditions_applies_atomically_and_replays_by_normalized_body() {

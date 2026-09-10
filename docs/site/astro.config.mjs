@@ -476,6 +476,7 @@ export default defineConfig({
               items: [
                 { label: 'Query with Python and Node', slug: 'tutorials/query-breg-client' },
                 { label: 'Client API reference', slug: 'reference/client-api' },
+                { label: 'Client capabilities', slug: 'reference/breg-client-capabilities' },
                 { label: 'Authenticate with eSignet', slug: 'explanation/esignet-authentication-over-breg' },
                 { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
               ],

@@ -204,6 +204,7 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
     assert_eq!(metadata["revision"], harness.registry.revision());
     let create = operation(&metadata, "records.asset-item.create");
     let patch = operation(&metadata, "records.asset-item.patch");
+    let batch = operation(&metadata, "records.asset-item.batch");
     assert_eq!(
         create["createWritableFields"],
         json!(["asset-class", "asset-code", "label"])
@@ -218,6 +219,21 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
     assert_eq!(
         patch["request"]["patchOperations"],
         json!(["add", "replace", "remove", "test"])
+    );
+    assert_eq!(batch["path"], "/v1/records/assets:batch");
+    assert_eq!(
+        batch["createWritableFields"],
+        create["createWritableFields"]
+    );
+    assert_eq!(batch["patchWritableFields"], patch["patchWritableFields"]);
+    assert_eq!(batch["request"]["body"], "batch");
+    assert_eq!(batch["request"]["maximumItems"], 4);
+    assert_eq!(batch["request"]["maximumBodyBytes"], 16384);
+    assert_eq!(batch["request"]["allowCreate"], true);
+    assert_eq!(batch["request"]["allowPatch"], true);
+    assert_eq!(
+        batch["request"]["schema"]["properties"]["items"]["maxItems"],
+        batch["request"]["maximumItems"]
     );
     assert!(metadata["operations"]
         .as_array()

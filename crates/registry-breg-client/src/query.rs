@@ -22,6 +22,7 @@ const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_ROUTE_IDENTIFIER_BYTES: usize = 64;
 const MAX_SKIPTOKEN_BYTES: usize = 4096;
 const MAX_TOP: u32 = 100;
+const MAX_BBOX_PARAMETER_BYTES: usize = 256;
 
 const INVALID_ACCESS_PROFILE: &str =
     "the Base Registry Engine access profile identifier is invalid";
@@ -33,6 +34,9 @@ const INVALID_COLLECTION_BINDING: &str =
     "the Base Registry Engine continuation collection binding is invalid";
 const INVALID_SELECTOR: &str = "the Base Registry Engine lookup selector is invalid";
 const INVALID_SKIPTOKEN: &str = "the Base Registry Engine continuation token is invalid";
+const INVALID_BBOX: &str = "the Base Registry Engine bounding box is invalid";
+const INVALID_REQUEST_HISTORY_CURSOR: &str =
+    "the Base Registry Engine request history proposal version must be positive";
 
 /// A value-free reason that a Base Registry Engine request cannot be constructed.
 ///
@@ -44,7 +48,7 @@ pub struct BRegRequestError {
 }
 
 impl BRegRequestError {
-    const fn new(reason: &'static str) -> Self {
+    pub(crate) const fn new(reason: &'static str) -> Self {
         Self { reason }
     }
 
@@ -94,6 +98,7 @@ pub struct BRegRecordOptions {
     select: Vec<String>,
     access_profile: Option<String>,
     format: BRegRecordFormat,
+    request_history_after_proposal_version: Option<u32>,
 }
 
 impl BRegRecordOptions {
@@ -123,6 +128,21 @@ impl BRegRecordOptions {
         self
     }
 
+    /// Continue the retained proposal history returned with a change-request GET.
+    ///
+    /// This option is valid only for [`crate::BaseRegistryClient::get_record`].
+    /// Collection and lookup methods refuse it before acquiring a token.
+    pub fn request_history_after_proposal_version(
+        mut self,
+        value: u32,
+    ) -> Result<Self, BRegRequestError> {
+        if value == 0 {
+            return Err(BRegRequestError::new(INVALID_REQUEST_HISTORY_CURSOR));
+        }
+        self.request_history_after_proposal_version = Some(value);
+        Ok(self)
+    }
+
     #[must_use]
     pub(crate) const fn format_value(&self) -> BRegRecordFormat {
         self.format
@@ -141,6 +161,25 @@ impl BRegRecordOptions {
             pairs.push(("$select".into(), self.select.join(",")));
         }
     }
+
+    pub(crate) fn append_get_query(&self, pairs: &mut Vec<(String, String)>) {
+        self.append_query(pairs);
+        if let Some(value) = self.request_history_after_proposal_version {
+            pairs.push((
+                "requestHistoryAfterProposalVersion".into(),
+                value.to_string(),
+            ));
+        }
+    }
+
+    pub(crate) fn ensure_collection_compatible(&self) -> Result<(), BRegRequestError> {
+        if self.request_history_after_proposal_version.is_some() {
+            return Err(BRegRequestError::new(
+                "a Base Registry Engine request history cursor is valid only for a record GET",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Debug for BRegRecordOptions {
@@ -150,7 +189,76 @@ impl fmt::Debug for BRegRecordOptions {
             .field("selected_field_count", &self.select.len())
             .field("access_profile_present", &self.access_profile.is_some())
             .field("format", &self.format)
+            .field(
+                "request_history_cursor_present",
+                &self.request_history_after_proposal_version.is_some(),
+            )
             .finish()
+    }
+}
+
+/// One validated CRS84 bounding box, retaining exact canonical decimal text.
+///
+/// Coordinates are ordered west, south, east, north. Zero-width and zero-height
+/// boxes are permitted; antimeridian-crossing and inverted boxes are refused.
+#[derive(Clone, Eq, PartialEq, Serialize)]
+pub struct BRegBoundingBox {
+    coordinates: Box<[String; 4]>,
+}
+
+impl BRegBoundingBox {
+    /// Construct a bounded CRS84 box without converting through binary floats.
+    pub fn new(
+        west: impl AsRef<str>,
+        south: impl AsRef<str>,
+        east: impl AsRef<str>,
+        north: impl AsRef<str>,
+    ) -> Result<Self, BRegRequestError> {
+        let west = canonical_bounded_decimal(west.as_ref(), "-180", "180")?;
+        let south = canonical_bounded_decimal(south.as_ref(), "-90", "90")?;
+        let east = canonical_bounded_decimal(east.as_ref(), "-180", "180")?;
+        let north = canonical_bounded_decimal(north.as_ref(), "-90", "90")?;
+        if west.len() + south.len() + east.len() + north.len() + 3 > MAX_BBOX_PARAMETER_BYTES
+            || compare_decimal_text(&west, &east)? == std::cmp::Ordering::Greater
+            || compare_decimal_text(&south, &north)? == std::cmp::Ordering::Greater
+        {
+            return Err(BRegRequestError::new(INVALID_BBOX));
+        }
+        Ok(Self {
+            coordinates: Box::new([west, south, east, north]),
+        })
+    }
+
+    /// Return the exact canonical wire value.
+    #[must_use]
+    pub fn as_str(&self) -> String {
+        self.coordinates.join(",")
+    }
+
+    #[must_use]
+    pub fn west(&self) -> &str {
+        &self.coordinates[0]
+    }
+
+    #[must_use]
+    pub fn south(&self) -> &str {
+        &self.coordinates[1]
+    }
+
+    #[must_use]
+    pub fn east(&self) -> &str {
+        &self.coordinates[2]
+    }
+
+    #[must_use]
+    pub fn north(&self) -> &str {
+        &self.coordinates[3]
+    }
+}
+
+impl fmt::Debug for BRegBoundingBox {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegBoundingBox(<redacted>)")
     }
 }
 
@@ -167,6 +275,7 @@ pub struct BRegListRequest {
     filter: Option<String>,
     orderby: Option<String>,
     count: Option<bool>,
+    bbox: Option<BRegBoundingBox>,
 }
 
 impl BRegListRequest {
@@ -211,7 +320,15 @@ impl BRegListRequest {
         self
     }
 
+    /// Restrict a direct current collection to one validated CRS84 box.
+    #[must_use]
+    pub fn bbox(mut self, value: BRegBoundingBox) -> Self {
+        self.bbox = Some(value);
+        self
+    }
+
     pub(crate) fn query_pairs(&self) -> Result<Vec<(String, String)>, BRegRequestError> {
+        self.options.ensure_collection_compatible()?;
         let mut pairs = Vec::new();
         self.options.append_query(&mut pairs);
         if let Some(value) = &self.filter {
@@ -225,6 +342,9 @@ impl BRegListRequest {
         }
         if let Some(value) = self.count {
             pairs.push(("$count".into(), value.to_string()));
+        }
+        if let Some(value) = &self.bbox {
+            pairs.push(("bbox".into(), value.as_str()));
         }
         ensure_query_bound(&pairs)?;
         Ok(pairs)
@@ -245,6 +365,7 @@ impl fmt::Debug for BRegListRequest {
             .field("filter_present", &self.filter.is_some())
             .field("orderby_present", &self.orderby.is_some())
             .field("count", &self.count)
+            .field("bbox_present", &self.bbox.is_some())
             .finish()
     }
 }
@@ -315,6 +436,7 @@ impl BRegLookupRequest {
     }
 
     pub(crate) fn query_pairs(&self) -> Result<Vec<(String, String)>, BRegRequestError> {
+        self.options.ensure_collection_compatible()?;
         let mut pairs = Vec::new();
         self.options.append_query(&mut pairs);
         ensure_query_bound(&pairs)?;
@@ -652,7 +774,220 @@ fn validate_skiptoken(value: &str) -> Result<(), BRegRequestError> {
     Ok(())
 }
 
-fn ensure_query_bound(pairs: &[(String, String)]) -> Result<(), BRegRequestError> {
+fn canonical_bounded_decimal(
+    value: &str,
+    minimum: &str,
+    maximum: &str,
+) -> Result<String, BRegRequestError> {
+    if value.is_empty() || value.len() > MAX_BBOX_PARAMETER_BYTES {
+        return Err(BRegRequestError::new(INVALID_BBOX));
+    }
+    let parsed = ParsedDecimal::parse(value)?;
+    if compare_decimal(&parsed, &ParsedDecimal::parse(minimum)?)? == std::cmp::Ordering::Less
+        || compare_decimal(&parsed, &ParsedDecimal::parse(maximum)?)? == std::cmp::Ordering::Greater
+    {
+        return Err(BRegRequestError::new(INVALID_BBOX));
+    }
+    let canonical = parsed.canonical();
+    if canonical.len() > MAX_BBOX_PARAMETER_BYTES {
+        return Err(BRegRequestError::new(INVALID_BBOX));
+    }
+    Ok(canonical)
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct ParsedDecimal {
+    negative: bool,
+    digits: Vec<u8>,
+    scale: usize,
+}
+
+impl ParsedDecimal {
+    fn parse(value: &str) -> Result<Self, BRegRequestError> {
+        if !is_decimal_number(value) {
+            return Err(BRegRequestError::new(INVALID_BBOX));
+        }
+        let (number, exponent) = split_decimal_exponent(value)?;
+        let (negative, number) = number
+            .strip_prefix('-')
+            .map_or((false, number), |rest| (true, rest));
+        let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+        let mut digits = whole
+            .bytes()
+            .chain(fraction.bytes())
+            .map(|byte| byte - b'0')
+            .collect::<Vec<_>>();
+        let mut scale = i32::try_from(fraction.len())
+            .map_err(|_| BRegRequestError::new(INVALID_BBOX))?
+            - exponent.unwrap_or(0);
+        if scale < 0 {
+            digits.extend(std::iter::repeat_n(0, (-scale) as usize));
+            scale = 0;
+        }
+        if scale > 1000 {
+            return Err(BRegRequestError::new(INVALID_BBOX));
+        }
+        trim_leading_decimal_zeroes(&mut digits);
+        let mut parsed = Self {
+            negative,
+            digits,
+            scale: scale as usize,
+        };
+        while parsed.scale > 0 && parsed.digits.last() == Some(&0) {
+            parsed.digits.pop();
+            parsed.scale -= 1;
+        }
+        if parsed.digits.is_empty() || parsed.digits == [0] {
+            parsed.digits.clear();
+            parsed.digits.push(0);
+            parsed.negative = false;
+            parsed.scale = 0;
+        }
+        Ok(parsed)
+    }
+
+    fn canonical(&self) -> String {
+        let digits = self
+            .digits
+            .iter()
+            .map(|digit| char::from(b'0' + *digit))
+            .collect::<String>();
+        let magnitude = if self.scale == 0 {
+            digits
+        } else if self.digits.len() > self.scale {
+            let split = self.digits.len() - self.scale;
+            format!("{}.{}", &digits[..split], &digits[split..])
+        } else {
+            format!("0.{}{}", "0".repeat(self.scale - self.digits.len()), digits)
+        };
+        if self.negative {
+            format!("-{magnitude}")
+        } else {
+            magnitude
+        }
+    }
+
+    fn scaled_digits(&self, scale: usize) -> Result<Vec<u8>, BRegRequestError> {
+        if self.scale > scale || scale - self.scale > 1000 {
+            return Err(BRegRequestError::new(INVALID_BBOX));
+        }
+        let mut digits = self.digits.clone();
+        digits.extend(std::iter::repeat_n(0, scale - self.scale));
+        trim_leading_decimal_zeroes(&mut digits);
+        Ok(digits)
+    }
+}
+
+fn compare_decimal_text(left: &str, right: &str) -> Result<std::cmp::Ordering, BRegRequestError> {
+    compare_decimal(&ParsedDecimal::parse(left)?, &ParsedDecimal::parse(right)?)
+}
+
+fn compare_decimal(
+    left: &ParsedDecimal,
+    right: &ParsedDecimal,
+) -> Result<std::cmp::Ordering, BRegRequestError> {
+    match (left.negative, right.negative) {
+        (true, false) => return Ok(std::cmp::Ordering::Less),
+        (false, true) => return Ok(std::cmp::Ordering::Greater),
+        _ => {}
+    }
+    let scale = left.scale.max(right.scale);
+    let ordering =
+        compare_decimal_digits(&left.scaled_digits(scale)?, &right.scaled_digits(scale)?);
+    Ok(if left.negative && right.negative {
+        ordering.reverse()
+    } else {
+        ordering
+    })
+}
+
+fn split_decimal_exponent(value: &str) -> Result<(&str, Option<i32>), BRegRequestError> {
+    let mut separator = None;
+    for (index, byte) in value.bytes().enumerate() {
+        if matches!(byte, b'e' | b'E') && separator.replace(index).is_some() {
+            return Err(BRegRequestError::new(INVALID_BBOX));
+        }
+    }
+    let Some(index) = separator else {
+        return Ok((value, None));
+    };
+    let (number, exponent) = value.split_at(index);
+    let exponent = exponent[1..]
+        .parse::<i32>()
+        .map_err(|_| BRegRequestError::new(INVALID_BBOX))?;
+    if exponent.unsigned_abs() > 1000 {
+        return Err(BRegRequestError::new(INVALID_BBOX));
+    }
+    Ok((number, Some(exponent)))
+}
+
+fn compare_decimal_digits(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
+    let mut left = left.to_vec();
+    let mut right = right.to_vec();
+    trim_leading_decimal_zeroes(&mut left);
+    trim_leading_decimal_zeroes(&mut right);
+    left.len().cmp(&right.len()).then_with(|| left.cmp(&right))
+}
+
+fn trim_leading_decimal_zeroes(digits: &mut Vec<u8>) {
+    match digits.iter().position(|digit| *digit != 0) {
+        Some(index) if index > 0 => {
+            digits.drain(..index);
+        }
+        Some(_) => {}
+        None => {
+            digits.clear();
+            digits.push(0);
+        }
+    }
+}
+
+fn is_decimal_number(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut index = usize::from(bytes[0] == b'-');
+    if index == bytes.len() {
+        return false;
+    }
+    match bytes[index] {
+        b'0' => index += 1,
+        b'1'..=b'9' => {
+            index += 1;
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index += 1;
+            }
+        }
+        _ => return false,
+    }
+    if index < bytes.len() && bytes[index] == b'.' {
+        index += 1;
+        let start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        if index == start {
+            return false;
+        }
+    }
+    if index < bytes.len() && matches!(bytes[index], b'e' | b'E') {
+        index += 1;
+        if index < bytes.len() && matches!(bytes[index], b'+' | b'-') {
+            index += 1;
+        }
+        let start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        if index == start {
+            return false;
+        }
+    }
+    index == bytes.len()
+}
+
+pub(crate) fn ensure_query_bound(pairs: &[(String, String)]) -> Result<(), BRegRequestError> {
     if breg_encoded_query(pairs).len() > MAX_QUERY_PAYLOAD_BYTES {
         return Err(BRegRequestError::new(
             "the Base Registry Engine query exceeds 16384 encoded bytes",
@@ -796,6 +1131,65 @@ mod tests {
         assert!(BRegListRequest::default().filter("field\nvalue").is_err());
         assert!(BRegListRequest::default().orderby("").is_err());
         assert!(BRegListRequest::default().orderby("field\rdesc").is_err());
+    }
+
+    #[test]
+    fn bbox_preserves_exact_decimals_and_rejects_invalid_boundaries() {
+        let bbox = BRegBoundingBox::new(
+            "-0",
+            "1e1",
+            "0.30000000000000000000000000000000000001",
+            "2.05e1",
+        )
+        .expect("exact bbox");
+        assert_eq!(bbox.west(), "0");
+        assert_eq!(bbox.south(), "10");
+        assert_eq!(bbox.east(), "0.30000000000000000000000000000000000001");
+        assert_eq!(bbox.north(), "20.5");
+        let query = BRegListRequest::default().bbox(bbox).query_pairs().unwrap();
+        assert_eq!(
+            breg_encoded_query(&query),
+            "bbox=0%2C10%2C0.30000000000000000000000000000000000001%2C20.5"
+        );
+
+        for coordinates in [
+            ["1", "0", "0", "1"],
+            ["0", "1", "1", "0"],
+            ["-181", "0", "0", "1"],
+            ["0", "0", "181", "1"],
+            ["NaN", "0", "1", "1"],
+            ["0", "0", "1e1001", "1"],
+        ] {
+            assert!(BRegBoundingBox::new(
+                coordinates[0],
+                coordinates[1],
+                coordinates[2],
+                coordinates[3]
+            )
+            .is_err());
+        }
+        assert!(BRegBoundingBox::new("1".repeat(257), "0", "1", "1").is_err());
+        assert!(BRegBoundingBox::new("0", "0", "0", "0").is_ok());
+    }
+
+    #[test]
+    fn proposal_history_cursor_is_get_only_and_positive() {
+        assert!(BRegRecordOptions::default()
+            .request_history_after_proposal_version(0)
+            .is_err());
+        let options = BRegRecordOptions::default()
+            .request_history_after_proposal_version(u32::MAX)
+            .unwrap();
+        let mut pairs = Vec::new();
+        options.append_get_query(&mut pairs);
+        assert_eq!(
+            breg_encoded_query(&pairs),
+            "requestHistoryAfterProposalVersion=4294967295"
+        );
+        assert!(BRegListRequest::default()
+            .options(options)
+            .query_pairs()
+            .is_err());
     }
 
     #[test]

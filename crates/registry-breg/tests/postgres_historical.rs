@@ -2,6 +2,9 @@
 
 #![cfg(feature = "postgres-test")]
 
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
@@ -26,6 +29,7 @@ use registry_breg::postgres::{
     ExpectedRegistryIdentity, PostgresRecordReadService, PostgresSnapshotReadService,
     RegistryLockKey, RegistryStateTestIdentity,
 };
+use registry_breg_client::{BRegRecordOptions, BRegSnapshotListRequest};
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{json, Value};
@@ -369,65 +373,60 @@ async fn snapshot_row_authority_uses_selected_historical_row_values() {
         database.cursors.clone(),
         None,
     );
+    let zone_a = client_http::ClientHttp::start(app.clone(), history_claims(["zone-a"])).await;
+    let zone_b = client_http::ClientHttp::start(app, history_claims(["zone-b"])).await;
+    let request = |reference: &str| {
+        BRegSnapshotListRequest::default()
+            .options(
+                BRegRecordOptions::default()
+                    .select(["householdCode"])
+                    .unwrap(),
+            )
+            .snapshot(snapshot_ref(reference))
+            .unwrap()
+            .filter("householdCode eq 'AUTHORITY'")
+            .unwrap()
+    };
 
-    let old_zone_a = send(
-        &app,
-        &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode&$filter=householdCode%20eq%20'AUTHORITY'",
-            snapshot_ref(OLD_REFERENCE_UUID)
-        ),
-        Some(history_claims(["zone-a"])),
-    )
-    .await;
-    assert_eq!(old_zone_a.status(), StatusCode::OK);
-    let old_zone_a = body_json(old_zone_a).await;
-    assert_eq!(item_ids(&old_zone_a), vec![AUTHORITY_CHANGED]);
-    assert_eq!(old_zone_a["items"][0]["revisionIdentifier"], "1");
+    let old_zone_a = zone_a
+        .client
+        .list_snapshot_records("memberships", &request(OLD_REFERENCE_UUID))
+        .await
+        .unwrap();
+    assert_eq!(old_zone_a.value.value.items.len(), 1);
+    assert_eq!(
+        old_zone_a.value.value.items[0].record_identifier,
+        AUTHORITY_CHANGED
+    );
+    assert_eq!(old_zone_a.value.value.items[0].revision_identifier, "1");
 
-    let old_zone_b = send(
-        &app,
-        &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode&$filter=householdCode%20eq%20'AUTHORITY'",
-            snapshot_ref(OLD_REFERENCE_UUID)
-        ),
-        Some(history_claims(["zone-b"])),
-    )
-    .await;
-    assert_eq!(old_zone_b.status(), StatusCode::OK);
-    assert!(body_json(old_zone_b).await["items"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    let old_zone_b = zone_b
+        .client
+        .list_snapshot_records("memberships", &request(OLD_REFERENCE_UUID))
+        .await
+        .unwrap();
+    assert!(old_zone_b.value.value.items.is_empty());
 
-    let latest_zone_a = send(
-        &app,
-        &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode&$filter=householdCode%20eq%20'AUTHORITY'",
-            snapshot_ref(LATEST_REFERENCE_UUID)
-        ),
-        Some(history_claims(["zone-a"])),
-    )
-    .await;
-    assert_eq!(latest_zone_a.status(), StatusCode::OK);
-    assert!(body_json(latest_zone_a).await["items"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    let latest_zone_a = zone_a
+        .client
+        .list_snapshot_records("memberships", &request(LATEST_REFERENCE_UUID))
+        .await
+        .unwrap();
+    assert!(latest_zone_a.value.value.items.is_empty());
 
-    let latest_zone_b = send(
-        &app,
-        &format!(
-            "/v1/records/memberships:snapshot?snapshot={}&$select=householdCode&$filter=householdCode%20eq%20'AUTHORITY'",
-            snapshot_ref(LATEST_REFERENCE_UUID)
-        ),
-        Some(history_claims(["zone-b"])),
-    )
-    .await;
-    assert_eq!(latest_zone_b.status(), StatusCode::OK);
-    let latest_zone_b = body_json(latest_zone_b).await;
-    assert_eq!(item_ids(&latest_zone_b), vec![AUTHORITY_CHANGED]);
-    assert_eq!(latest_zone_b["items"][0]["revisionIdentifier"], "2");
+    let latest_zone_b = zone_b
+        .client
+        .list_snapshot_records("memberships", &request(LATEST_REFERENCE_UUID))
+        .await
+        .unwrap();
+    assert_eq!(latest_zone_b.value.value.items.len(), 1);
+    assert_eq!(
+        latest_zone_b.value.value.items[0].record_identifier,
+        AUTHORITY_CHANGED
+    );
+    assert_eq!(latest_zone_b.value.value.items[0].revision_identifier, "2");
 
+    drop((zone_a, zone_b));
     database.cleanup().await;
 }
 

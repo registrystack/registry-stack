@@ -1,4 +1,5 @@
 """Exercise optional reviewer text through the public Python binding."""
+import copy
 import json
 import threading
 import unittest
@@ -9,7 +10,11 @@ from bootstrap import ensure_built
 
 ensure_built()
 
-from registry_breg_client import BaseRegistryClient, BaseRegistryClientError  # noqa: E402
+from registry_breg_client import (  # noqa: E402
+    BRegPreparedLifecycle,
+    BaseRegistryClient,
+    BaseRegistryClientError,
+)
 
 FIXTURE = json.loads((Path(__file__).resolve().parents[3] / "registry-breg-client/tests/fixtures/review-reasons.json").read_text())
 
@@ -17,15 +22,32 @@ FIXTURE = json.loads((Path(__file__).resolve().parents[3] / "registry-breg-clien
 class ReviewReasonTests(unittest.TestCase):
     def test_reason_validation_and_explicit_wire_retry(self):
         requests = []
+        disappeared_actions = set()
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                self.respond(FIXTURE["metadata"] if self.path.startswith("/v1/registry") else FIXTURE["records"]["reject_request"])
+                if self.path.startswith("/v1/registry"):
+                    self.respond(FIXTURE["metadata"])
+                    return
+                record = next(
+                    (
+                        candidate
+                        for candidate in FIXTURE["records"].values()
+                        if candidate["data"]["recordIdentifier"] in self.path
+                    ),
+                    FIXTURE["records"]["reject_request"],
+                )
+                record = copy.deepcopy(record)
+                actions = record["data"]["request"]["actions"]
+                if actions and actions[0]["href"] in disappeared_actions:
+                    record["data"]["request"]["actions"] = []
+                self.respond(record)
 
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["content-length"]))
                 requests.append((body, self.headers["idempotency-key"], self.headers["if-match"]))
                 operation = next(name for name, record in FIXTURE["records"].items() if record["data"]["request"]["actions"][0]["href"] == self.path)
+                disappeared_actions.add(self.path)
                 self.respond(FIXTURE["receipts"][operation])
 
             def respond(self, value):
@@ -80,6 +102,33 @@ class ReviewReasonTests(unittest.TestCase):
                 client.execute_lifecycle_action(decision, f"decision-{operation}")
                 self.assertEqual(json.loads(requests[-1][0])["reason"], reason)
                 self.assertEqual(requests[-1], requests[-2])
+
+                prepared = client.prepare_lifecycle_action(
+                    authority,
+                    record,
+                    decision,
+                    f"recover-{operation}",
+                )
+                evidence = prepared.to_bytes()
+                self.assertIsInstance(evidence, bytes)
+                self.assertNotIn(reason, repr(prepared))
+                self.assertNotIn(f"recover-{operation}", repr(prepared))
+                restored = BRegPreparedLifecycle.from_bytes(evidence)
+                current = client.get_record(
+                    "items", record["data"]["recordIdentifier"], access_profile="writer"
+                )
+                self.assertEqual(current["value"]["data"]["request"]["actions"], [])
+                fresh_authority = client.registry_contract("writer").select_lifecycle(
+                    "item", "writer"
+                )
+                recovered = client.recover_lifecycle_action(fresh_authority, restored)
+                self.assertNotIn(reason, repr(recovered))
+                self.assertNotIn(f"recover-{operation}", repr(recovered))
+                before_recovery_send = len(requests)
+                client.execute_recovered_lifecycle_action(recovered)
+                self.assertEqual(len(requests), before_recovery_send + 1)
+                self.assertEqual(json.loads(requests[-1][0])["reason"], reason)
+                self.assertEqual(requests[-1][1], f"recover-{operation}")
         finally:
             server.shutdown()
             thread.join()
