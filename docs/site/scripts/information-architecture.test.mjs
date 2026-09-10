@@ -412,6 +412,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'operate/breg-data',
     'tutorials/query-breg-client',
     'reference/client-api',
+    'reference/breg-client-capabilities',
     'explanation/esignet-authentication-over-breg',
     'explanation/openfn-adaptors',
     'reference/breg-configuration',
