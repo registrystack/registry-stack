@@ -138,14 +138,84 @@ function wrapAsync(name, jsonIndexes = [], requiredIndexes = []) {
 
 for (const [method, jsonIndexes, requiredIndexes] of [
   ['health'], ['ready'], ['openapi'], ['registryMetadata'], ['registryContract'], ['entitySchema'],
+  ['recordRevisions'], ['getRecordRevision', [3]],
   ['getRecord', [2]], ['listRecords', [1]], ['continueList', [0], [0]],
+  ['getGeoJsonRecord', [2]], ['listGeoJsonRecords', [1]], ['continueGeoJsonList', [0], [0]],
+  ['listCurrentRecords', [1]], ['continueCurrentList', [0], [0]],
+  ['listRecordsAsOf', [1], [1]], ['continueAsOfList', [0], [0]],
+  ['listSnapshotRecords', [1]], ['continueSnapshotList', [0], [0]],
+  ['listRelationshipRecords', [3]], ['continueRelationshipList', [0], [0]],
   ['lookupRecord', [2, 3]], ['createRecord', [1], [1]],
-  ['patchRecord', [3], [3]], ['executeLifecycleAction'],
+  ['actionTargetConditions', [1], [1]], ['invokeAction', [1], [1]],
+  ['executeRecoveredCreate'],
+  ['patchRecord', [3], [3]], ['batchRecords', [1], [1]], ['tombstoneRecord'],
+  ['executeLifecycleAction'],
+  ['executeRecoveredLifecycleAction'],
   ['uploadAttachment'], ['downloadAttachment'], ['deleteAttachment'],
   ['getRecordJson', [2]], ['listRecordsJson', [1]], ['continueListJson', [0], [0]],
+  ['getGeoJsonRecordJson', [2]], ['listGeoJsonRecordsJson', [1]],
+  ['continueGeoJsonListJson', [0], [0]],
+  ['listCurrentRecordsJson', [1]], ['continueCurrentListJson', [0], [0]],
+  ['listRecordsAsOfJson', [1], [1]], ['continueAsOfListJson', [0], [0]],
+  ['listSnapshotRecordsJson', [1]], ['continueSnapshotListJson', [0], [0]],
+  ['listRelationshipRecordsJson', [3]], ['continueRelationshipListJson', [0], [0]],
   ['lookupRecordJson', [3]], ['createRecordJson'], ['patchRecordJson'], ['executeLifecycleActionJson'],
+  ['actionTargetConditionsJson'], ['invokeActionJson'], ['batchRecordsJson'], ['tombstoneRecordJson'],
+  ['executeRecoveredCreateJson'], ['executeRecoveredLifecycleActionJson'],
   ['uploadAttachmentJson'], ['deleteAttachmentJson'],
 ]) wrapAsync(method, jsonIndexes, requiredIndexes);
+
+for (const [method, jsonIndexes, requiredIndexes] of [
+  ['prepareCreate', [1], [1]], ['prepareCreateJson'], ['recoverCreate'],
+  ['prepareLifecycleAction', [1], [1]], ['prepareLifecycleActionJson'],
+  ['recoverLifecycleAction'],
+]) {
+  const original = native.BaseRegistryClient.prototype[method];
+  native.BaseRegistryClient.prototype[method] = function (...args) {
+    try {
+      return original.apply(this, sanitizeArguments(
+        args, new Set(jsonIndexes), new Set(requiredIndexes),
+      ));
+    } catch (error) {
+      throw normalize(error, 'invalid_request');
+    }
+  };
+}
+
+function preparedClass(Class, label) {
+  Object.defineProperty(Class.prototype, Symbol.for('nodejs.util.inspect.custom'), {
+    value() { return `${label}(<redacted>)`; },
+  });
+  Object.defineProperty(Class.prototype, 'toString', {
+    value() { return `${label}(<redacted>)`; },
+  });
+  const Facade = function () {
+    throw new TypeError(`${label} has no public constructor`);
+  };
+  Object.defineProperties(Facade, {
+    name: { value: label },
+    fromBytes: {
+      value(bytes) {
+        try {
+          if (!Buffer.isBuffer(bytes)) throw inputError('invalid_request');
+          return Class.fromBytes(bytes);
+        } catch (error) {
+          throw normalize(error, 'invalid_request');
+        }
+      },
+    },
+    [Symbol.hasInstance]: {
+      value(value) { return value instanceof Class; },
+    },
+  });
+  Facade.prototype = Class.prototype;
+  return Facade;
+}
+
+const BRegPreparedCreate = preparedClass(native.BRegPreparedCreate, 'BRegPreparedCreate');
+const BRegPreparedLifecycle = preparedClass(
+  native.BRegPreparedLifecycle, 'BRegPreparedLifecycle',
+);
 
 const withReason = native.BRegLifecycleAction.prototype.withReason;
 native.BRegLifecycleAction.prototype.withReason = function (reason) {
@@ -193,7 +263,10 @@ for (const name of ['prepareUpload', 'acceptsContentType']) {
   };
 }
 
-for (const name of ['selectCreate', 'selectPatch', 'selectLifecycle', 'selectAttachments']) {
+for (const name of [
+  'selectCreate', 'selectPatch', 'selectLifecycle', 'selectAttachments',
+  'selectImmediateAction', 'selectTombstone', 'selectBatch', 'changeRequestCapability',
+]) {
   const original = native.BRegMetadata.prototype[name];
   native.BRegMetadata.prototype[name] = function (...args) {
     try {
@@ -224,4 +297,12 @@ module.exports = {
   BRegLifecycleAction: native.BRegLifecycleAction,
   BRegAttachmentSlot: native.BRegAttachmentSlot,
   BRegAttachmentUpload: native.BRegAttachmentUpload,
+  BRegImmediateActionBinding: native.BRegImmediateActionBinding,
+  BRegActionTargetConditions: native.BRegActionTargetConditions,
+  BRegTombstoneBinding: native.BRegTombstoneBinding,
+  BRegBatchBinding: native.BRegBatchBinding,
+  BRegPreparedCreate,
+  BRegPreparedLifecycle,
+  BRegRecoveredCreate: native.BRegRecoveredCreate,
+  BRegRecoveredLifecycle: native.BRegRecoveredLifecycle,
 };

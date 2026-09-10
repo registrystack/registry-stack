@@ -47,6 +47,9 @@ mod postgres {
         }
     }
 }
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
 #[path = "../src/history_commit.rs"]
 #[allow(dead_code)]
 mod history_commit;
@@ -60,7 +63,7 @@ mod postgres_harness;
 #[allow(dead_code)]
 mod stored_bytes;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -88,6 +91,7 @@ use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, ExpectedManagedCatalog,
     ExpectedRegistryIdentity, RegistryLockKey,
 };
+use registry_breg_client::{BRegProblemCode, BRegRecordOptions, BRegSnapshotListRequest};
 
 const ENTITY: &str = "membership";
 const OLD_PACKAGE: &str = "pkg-erasure-old";
@@ -336,8 +340,49 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
         "a consumed erased key answers with a terminal conflict"
     );
     transaction.commit().await.expect("resolution commits");
-
     assert_erasure_audit_is_minimized(&database, &audit_profile).await;
+
+    let http = snapshot_client_http(
+        &database,
+        Arc::new(registry),
+        expected.clone(),
+        audit_profile.clone(),
+    )
+    .await;
+    let request = |reference: SnapshotReference| {
+        BRegSnapshotListRequest::default()
+            .options(
+                BRegRecordOptions::default()
+                    .access_profile("writer")
+                    .unwrap()
+                    .select(["household"])
+                    .unwrap(),
+            )
+            .snapshot(reference.to_string())
+            .unwrap()
+    };
+    for erased_or_cut_off in [first_commit.reference, second_commit.reference] {
+        let refusal = http
+            .client
+            .list_snapshot_records("memberships", &request(erased_or_cut_off))
+            .await
+            .expect_err("an erased or conservatively cut-off bookmark is unavailable");
+        assert_eq!(refusal.status(), Some(503));
+        assert_eq!(
+            refusal.problem_code(),
+            Some(BRegProblemCode::SourceUnavailable)
+        );
+    }
+    let baseline = http
+        .client
+        .list_snapshot_records(
+            "memberships",
+            &request(SnapshotReference::for_uuid(baseline_uuid)),
+        )
+        .await
+        .expect("the earlier complete baseline remains available to the SDK");
+    assert!(baseline.value.value.items.is_empty());
+    drop(http);
 
     migration_task.abort();
     database.cleanup().await;
@@ -1110,6 +1155,73 @@ async fn assert_erasure_audit_is_minimized(database: &TestDatabase, profile: &Au
     assert!(!audit_text.contains(REASON_CANARY));
     assert!(!audit_text.contains(OPERATOR_CANARY));
     assert!(!audit_text.contains("case-document:erasure-proof"));
+}
+
+async fn snapshot_client_http(
+    database: &TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: ExpectedRegistryIdentity,
+    audit: AuditProfile,
+) -> client_http::ClientHttp {
+    use registry_breg::api::{HttpService, ReadRuntimeIdentity};
+    use registry_breg::cursor::CursorCodec;
+    use registry_breg::postgres::{PostgresRecordReadService, PostgresSnapshotReadService};
+    use zeroize::Zeroizing;
+
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("runtime pool builds after history erasure");
+    let lock_key = RegistryLockKey::derive(registry.registry_id()).unwrap();
+    let cursors = Arc::new(
+        CursorCodec::new(Zeroizing::new(vec![0x5b; 32]), Duration::from_secs(300)).unwrap(),
+    );
+    let records = PostgresRecordReadService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit.clone(),
+        cursors.clone(),
+    );
+    let snapshots = PostgresSnapshotReadService::new(
+        pool,
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit,
+        cursors.clone(),
+    );
+    let service = HttpService::new(
+        registry,
+        ReadRuntimeIdentity {
+            package_revision: identity.package_revision,
+            schema_fingerprint: identity.schema_fingerprint,
+        },
+        Arc::new(records),
+        Arc::new(SnapshotReady),
+        cursors,
+    )
+    .with_snapshots(Arc::new(snapshots));
+    let claims = registry_breg::api::VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        "history-erasure-sdk-reader",
+        BTreeSet::new(),
+        Some("operations".to_owned()),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    client_http::ClientHttp::start(registry_breg::api::router(Arc::new(service)), claims).await
+}
+
+struct SnapshotReady;
+
+impl registry_breg::api::ReadinessProbe for SnapshotReady {
+    fn is_ready(&self) -> registry_breg::api::ServiceFuture<'_, bool> {
+        Box::pin(async { true })
+    }
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {

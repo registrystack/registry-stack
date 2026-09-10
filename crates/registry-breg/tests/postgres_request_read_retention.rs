@@ -2,6 +2,9 @@
 
 #![cfg(feature = "postgres-test")]
 
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
@@ -28,6 +31,7 @@ use registry_breg::postgres::{
 use registry_breg::request_retention::{
     RequestDetailErasureScope, RequestRetentionOperatorService,
 };
+use registry_breg_client::{BRegRecordOptions, BRegRequestMetadata};
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
 use tower::Service as _;
@@ -109,24 +113,34 @@ async fn heavy_retained_history_pages_decode_without_skipping_proposals_or_decis
         )
         .await
         .expect("current draft follows historical versions");
+    let http = client_http::ClientHttp::start(app.clone(), operator.clone()).await;
     let mut after = None;
     let mut versions = Vec::new();
     let mut page_count = 0;
     loop {
-        let mut uri = format!(
-            "/v1/records/correction-requests/{}?accessProfile=operator",
-            request.id
-        );
-        if let Some(after) = after {
-            uri.push_str(&format!("&requestHistoryAfterProposalVersion={after}"));
-        }
-        let response = get_record(&app, &uri, operator.clone()).await;
-        assert_eq!(response.status, StatusCode::OK);
-        let metadata = &response.body["data"]["request"];
-        registry_breg_client::BRegRequestMetadata::from_value(metadata.clone(), false)
+        let options = BRegRecordOptions::default()
+            .access_profile("operator")
+            .unwrap();
+        let options = match after {
+            Some(after) => options
+                .request_history_after_proposal_version(after)
+                .unwrap(),
+            None => options,
+        };
+        let response = http
+            .client
+            .get_record("correction-requests", &request.id, &options)
+            .await
             .expect("the maintained client accepts every complete history page");
+        let request_metadata = BRegRequestMetadata::from_record(&response.value.data)
+            .expect("the maintained client validates request metadata")
+            .expect("the record is a governed request");
+        let metadata = response.value.data.extensions.get("request").unwrap();
         assert!(serde_json::to_vec(metadata).unwrap().len() <= 2_097_152);
-        let proposals = metadata["history"]["proposals"]
+        let history = request_metadata
+            .retained_history()
+            .expect("the heavy request has retained history");
+        let proposals = history["proposals"]
             .as_array()
             .expect("nonempty history page");
         assert!(!proposals.is_empty());
@@ -140,15 +154,18 @@ async fn heavy_retained_history_pages_decode_without_skipping_proposals_or_decis
             assert_eq!(decisions[1023]["reasonPresent"], true);
         }
         page_count += 1;
-        after = metadata["history"]["nextAfterProposalVersion"].as_i64();
+        after = history["nextAfterProposalVersion"]
+            .as_u64()
+            .map(|value| u32::try_from(value).expect("proposal cursor fits the client contract"));
         if after.is_none() {
             break;
         }
-        assert_eq!(after, versions.last().copied());
+        assert_eq!(after.map(i64::from), versions.last().copied());
         assert!(page_count < 50, "cursor must make forward progress");
     }
     assert!(page_count > 1, "byte budget splits heavy history");
     assert_eq!(versions, (1..=50).collect::<Vec<_>>());
+    drop(http);
     task.abort();
     database.cleanup().await;
 }

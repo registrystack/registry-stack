@@ -8,12 +8,41 @@ export declare class BaseRegistryClient {
   registryMetadata(accessProfile?: string | undefined | null): Promise<RawOutcome>
   registryContract(accessProfile?: string | undefined | null): Promise<BRegMetadata>
   entitySchema(entityIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
+  /** Retrieve one bounded first page of record revisions as inert JSON. */
+  recordRevisions(entityRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
+  /** Retrieve one exact retained revision as validated inert record JSON. */
+  getRecordRevision(entityRoute: string, recordIdentifier: string, revision: number, options?: any | undefined | null): Promise<RawOutcome>
   getRecord(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
   listRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueList(value: any): Promise<PageOutcome>
+  getGeoJsonRecord(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
+  listGeoJsonRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  continueGeoJsonList(value: any): Promise<PageOutcome>
+  listCurrentRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  continueCurrentList(value: any): Promise<PageOutcome>
+  listRecordsAsOf(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  continueAsOfList(value: any): Promise<PageOutcome>
+  listSnapshotRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  continueSnapshotList(value: any): Promise<PageOutcome>
+  listRelationshipRecords(entityRoute: string, recordIdentifier: string, pathRoute: string, options?: any | undefined | null): Promise<PageOutcome>
+  continueRelationshipList(value: any): Promise<PageOutcome>
   lookupRecord(entityRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null): Promise<CompleteOutcome>
+  /** Fetch opaque target conditions for one metadata-selected action. */
+  actionTargetConditions(binding: BRegImmediateActionBinding, inputs: any): Promise<BRegActionTargetConditions>
+  /** Invoke one metadata-selected immediate action without automatic retry. */
+  invokeAction(binding: BRegImmediateActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<CompleteOutcome>
   createRecord(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
+  /** Prepare inert Create evidence before any token acquisition or I/O. */
+  prepareCreate(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedCreate
+  /** Revalidate saved Create evidence against freshly selected authority. */
+  recoverCreate(binding: BRegCreateBinding, prepared: BRegPreparedCreate): BRegRecoveredCreate
+  /** Explicitly send a recovered Create request with fresh authority. */
+  executeRecoveredCreate(binding: BRegCreateBinding, recovered: BRegRecoveredCreate): Promise<CompleteOutcome>
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
+  /** Execute one metadata-selected atomic batch without automatic retry. */
+  batchRecords(binding: BRegBatchBinding, request: any, idempotencyKey: string): Promise<CompleteOutcome>
+  /** Tombstone one record against its current strong ETag. */
+  tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   /**
    * Replace one governed attachment slot with exact bytes. The prepared
    * upload already satisfies the slot's served size and content-type policy.
@@ -25,17 +54,58 @@ export declare class BaseRegistryClient {
   deleteAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   lifecycleActions(authority: BRegLifecycleAuthority, record: any, formatValue?: string | undefined | null): Array<BRegLifecycleAction>
   executeLifecycleAction(action: BRegLifecycleAction, idempotencyKey: string): Promise<CompleteOutcome>
+  /** Prepare inert lifecycle evidence before any token acquisition or I/O. */
+  prepareLifecycleAction(authority: BRegLifecycleAuthority, record: any, action: BRegLifecycleAction, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedLifecycle
+  /** Revalidate saved lifecycle evidence against freshly selected authority. */
+  recoverLifecycleAction(authority: BRegLifecycleAuthority, prepared: BRegPreparedLifecycle): BRegRecoveredLifecycle
+  /** Explicitly send a recovered lifecycle action. */
+  executeRecoveredLifecycleAction(recovered: BRegRecoveredLifecycle): Promise<CompleteOutcome>
   getRecordJson(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
   listRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueListJson(value: any): Promise<JsonOutcome>
+  getGeoJsonRecordJson(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
+  listGeoJsonRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  continueGeoJsonListJson(value: any): Promise<JsonOutcome>
+  listCurrentRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  continueCurrentListJson(value: any): Promise<JsonOutcome>
+  listRecordsAsOfJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  continueAsOfListJson(value: any): Promise<JsonOutcome>
+  listSnapshotRecordsJson(entityRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  continueSnapshotListJson(value: any): Promise<JsonOutcome>
+  listRelationshipRecordsJson(entityRoute: string, recordIdentifier: string, pathRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
+  continueRelationshipListJson(value: any): Promise<JsonOutcome>
   lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null): Promise<JsonOutcome>
+  /** Fetch opaque target conditions from exact action-input JSON. */
+  actionTargetConditionsJson(binding: BRegImmediateActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
+  /** Invoke an action from exact JSON and preserve exact receipt values. */
+  invokeActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<JsonOutcome>
   createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
+  /** Prepare inert Create evidence from exact JSON text. */
+  prepareCreateJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedCreate
+  /** Explicitly send a recovered Create request and preserve exact values. */
+  executeRecoveredCreateJson(binding: BRegCreateBinding, recovered: BRegRecoveredCreate): Promise<JsonOutcome>
   patchRecordJson(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operationsJson: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
+  /** Execute one metadata-selected atomic batch from exact JSON. */
+  batchRecordsJson(binding: BRegBatchBinding, requestJson: string, idempotencyKey: string): Promise<JsonOutcome>
+  /** Tombstone one record and preserve exact response values. */
+  tombstoneRecordJson(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
   uploadAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, upload: BRegAttachmentUpload, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
   deleteAttachmentJson(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
   lifecycleActionsJson(authority: BRegLifecycleAuthority, recordJson: string, formatValue?: string | undefined | null): Array<BRegLifecycleAction>
+  /** Prepare inert lifecycle evidence from an exact Registry Record response. */
+  prepareLifecycleActionJson(authority: BRegLifecycleAuthority, recordJson: string, action: BRegLifecycleAction, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedLifecycle
   executeLifecycleActionJson(action: BRegLifecycleAction, idempotencyKey: string): Promise<JsonOutcome>
+  /** Explicitly send a recovered lifecycle action and preserve exact values. */
+  executeRecoveredLifecycleActionJson(recovered: BRegRecoveredLifecycle): Promise<JsonOutcome>
 }
+
+/** Opaque server-validated target conditions for one immediate action. */
+export declare class BRegActionTargetConditions {
+  get preconditionKeys(): Array<string>
+  get valueJson(): string
+  get traceId(): string
+}
+export type ActionTargetConditions = BRegActionTargetConditions
 
 /** Opaque governed attachment slot selected from metadata fetched by this client source. */
 export declare class BRegAttachmentSlot {
@@ -66,10 +136,20 @@ export declare class BRegAttachmentUpload {
 }
 export type AttachmentUpload = BRegAttachmentUpload
 
+export declare class BRegBatchBinding {
+
+}
+export type BatchBinding = BRegBatchBinding
+
 export declare class BRegCreateBinding {
 
 }
 export type CreateBinding = BRegCreateBinding
+
+export declare class BRegImmediateActionBinding {
+
+}
+export type ImmediateActionBinding = BRegImmediateActionBinding
 
 export declare class BRegLifecycleAction {
   withReason(reason: string): BRegLifecycleAction
@@ -91,6 +171,12 @@ export type LifecycleAuthority = BRegLifecycleAuthority
 export declare class BRegMetadata {
   /** Caller-filtered inert descriptors. Selectors below remain the only authority constructors. */
   get operations(): any
+  /** Complete typed caller-filtered immediate-action descriptors. */
+  get immediateActions(): any
+  /** Original caller-filtered action metadata as exact JSON text. */
+  get actionsJson(): string | null
+  /** Descriptive change-request capability for one entity, when advertised. */
+  changeRequestCapability(entityIdentifier: string): any | null
   get registryIdentifier(): string
   get registryVersion(): string
   get registryRevision(): string
@@ -100,6 +186,9 @@ export declare class BRegMetadata {
   selectPatch(operationIdentifier: string, expectedProfile: string): BRegPatchBinding
   selectLifecycle(entityIdentifier: string, expectedProfile: string): BRegLifecycleAuthority
   selectAttachments(entityIdentifier: string, expectedProfile: string): Array<BRegAttachmentSlot>
+  selectImmediateAction(actionIdentifier: string, expectedProfile: string): BRegImmediateActionBinding
+  selectTombstone(entityIdentifier: string, expectedProfile: string): BRegTombstoneBinding
+  selectBatch(entityIdentifier: string, expectedProfile: string): BRegBatchBinding
 }
 export type Metadata = BRegMetadata
 
@@ -107,6 +196,53 @@ export declare class BRegPatchBinding {
 
 }
 export type PatchBinding = BRegPatchBinding
+
+/**
+ * Inert original Create request evidence. The bytes carry values and an
+ * idempotency key, but no token or executable metadata authority.
+ */
+export declare class BRegPreparedCreate {
+  /** Restore bounded inert evidence previously returned by `toBytes`. */
+  static fromBytes(bytes: Buffer): BRegPreparedCreate
+  /** Copy the exact evidence bytes for owner-protected persistence. */
+  toBytes(): Buffer
+}
+export type PreparedCreate = BRegPreparedCreate
+
+/**
+ * Inert original lifecycle request evidence. The bytes carry record values
+ * and an idempotency key, but no token or executable metadata authority.
+ */
+export declare class BRegPreparedLifecycle {
+  /** Restore bounded inert evidence previously returned by `toBytes`. */
+  static fromBytes(bytes: Buffer): BRegPreparedLifecycle
+  /** Copy the exact evidence bytes for owner-protected persistence. */
+  toBytes(): Buffer
+}
+export type PreparedLifecycle = BRegPreparedLifecycle
+
+/**
+ * A recovered Create request, key, and representation. This remains inert
+ * until `executeRecoveredCreate` is explicitly called with fresh authority.
+ */
+export declare class BRegRecoveredCreate {
+
+}
+export type RecoveredCreate = BRegRecoveredCreate
+
+/**
+ * A recovered lifecycle action and key. This remains inert until
+ * `executeRecoveredLifecycleAction` is explicitly called.
+ */
+export declare class BRegRecoveredLifecycle {
+
+}
+export type RecoveredLifecycle = BRegRecoveredLifecycle
+
+export declare class BRegTombstoneBinding {
+
+}
+export type TombstoneBinding = BRegTombstoneBinding
 
 export interface CompleteOutcome {
   kind: string
@@ -124,6 +260,8 @@ export interface JsonOutcome {
   traceId: string
   etag?: string
   location?: string
+  snapshot?: string
+  validAt?: string
 }
 
 export interface PageOutcome {
@@ -132,6 +270,8 @@ export interface PageOutcome {
   continuation?: any
   traceId: string
   etag?: string
+  snapshot?: string
+  validAt?: string
 }
 
 export interface RawOutcome {

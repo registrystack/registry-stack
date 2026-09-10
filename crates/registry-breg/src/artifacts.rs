@@ -1300,7 +1300,9 @@ pub(crate) fn public_action_metadata_entry(
         "route": action.route,
         "conditionRoute": action.condition_route,
         "contractFingerprint": action.contract_fingerprint,
-        "inputs": action.inputs.iter().map(action_input_metadata).collect::<Vec<_>>(),
+        "inputMode": if action.handler.is_some() { "handler" } else { "fixed" },
+        "maximumInputStringBytes": action.handler.as_ref().map(|_| crate::rhai_planner::MAXIMUM_STRING_BYTES),
+        "inputs": action.inputs.iter().map(|input| action_input_metadata(input, action.handler.is_some())).collect::<Vec<_>>(),
         "referenceInputs": action.inputs.iter().filter_map(reference_input_metadata).collect::<Vec<_>>(),
         "requiredConditionKeys": condition_inputs
             .iter()
@@ -1341,12 +1343,13 @@ pub(crate) fn public_action_metadata_entry(
     })
 }
 
-fn action_input_metadata(input: &CompiledActionInput) -> Value {
+fn action_input_metadata(input: &CompiledActionInput, handler: bool) -> Value {
     json!({
         "id": input.id,
         "apiName": input.api_name,
         "fieldType": input.field_type,
         "required": input.required,
+        "nullable": handler && !input.required,
         "classification": input.classification,
     })
 }
@@ -2687,6 +2690,36 @@ fn batch_request_body(
     allow_create: bool,
     allow_patch: bool,
 ) -> Value {
+    json_request_body(batch_input_schema(
+        json!({"$ref": format!("#/components/schemas/{schema_ref}")}),
+        maximum_items,
+        allow_create,
+        allow_patch,
+    ))
+}
+
+#[cfg_attr(not(feature = "runtime"), allow(dead_code))]
+pub(crate) fn openapi_batch_input_schema(
+    entity: &CompiledEntity,
+    writable_fields: Option<&BTreeSet<String>>,
+    maximum_items: u16,
+    allow_create: bool,
+    allow_patch: bool,
+) -> Value {
+    batch_input_schema(
+        openapi_entity_input_schema(entity, writable_fields),
+        maximum_items,
+        allow_create,
+        allow_patch,
+    )
+}
+
+fn batch_input_schema(
+    create_data_schema: Value,
+    maximum_items: u16,
+    allow_create: bool,
+    allow_patch: bool,
+) -> Value {
     let mut item_schemas = Vec::new();
     if allow_create {
         item_schemas.push(json!({
@@ -2695,7 +2728,7 @@ fn batch_request_body(
             "required": ["operation", "data"],
             "properties": {
                 "operation": {"const": "create"},
-                "data": {"$ref": format!("#/components/schemas/{schema_ref}")},
+                "data": create_data_schema,
             }
         }));
     }
@@ -2713,23 +2746,16 @@ fn batch_request_body(
         }));
     }
     json!({
-        "required": true,
-        "content": {
-            "application/json": {
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["items"],
-                    "properties": {
-                        "changeContext": change_context_request_schema(),
-                        "items": {
-                            "type": "array",
-                            "minItems": 1,
-                            "maxItems": maximum_items,
-                            "items": {"oneOf": item_schemas}
-                        }
-                    }
-                }
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+            "changeContext": change_context_request_schema(),
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": maximum_items,
+                "items": {"oneOf": item_schemas}
             }
         }
     })
@@ -2743,11 +2769,11 @@ fn change_context_request_schema() -> Value {
         "properties": {
             "kind": {"type": "string", "enum": ["change", "correction"]},
             "reasonCode": bounded_nonempty_text_schema(64),
-            "reasonText": bounded_text_schema(4 * 1024),
+            "reasonText": bounded_nonempty_text_schema(4 * 1024),
             "sourceReferences": {
                 "type": "array",
                 "maxItems": 16,
-                "items": bounded_text_schema(256)
+                "items": bounded_nonempty_text_schema(256)
             }
         },
         "allOf": [{
@@ -3563,10 +3589,11 @@ fn geojson_response_schema(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
     Some(json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "features", "registry"],
+        "required": ["type", "features", "numberReturned", "registry"],
         "properties": {
             "type": {"const": "FeatureCollection"},
             "features": {"type": "array", "items": feature},
+            "numberReturned": {"type": "integer", "minimum": 0},
             "registry": {
                 "type": "object",
                 "additionalProperties": false,
@@ -4761,6 +4788,15 @@ mod spatial_tests {
         assert_eq!(
             feature["properties"]["registry"]["required"],
             json!(["revision"])
+        );
+        let collection = &map["responses"]["200"]["content"]["application/geo+json"]["schema"];
+        assert!(collection["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("numberReturned")));
+        assert_eq!(
+            collection["properties"]["numberReturned"],
+            json!({"type": "integer", "minimum": 0})
         );
         let select = map["parameters"]
             .as_array()

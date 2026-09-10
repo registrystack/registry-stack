@@ -1282,6 +1282,153 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
     );
 }
 
+#[tokio::test]
+async fn action_request_paths_are_closed_bounded_and_discarded() {
+    let request_invalid = problem_response(BRegProblemCode::RequestInvalid);
+    let request_document: Value = serde_json::from_slice(&request_invalid.body).unwrap();
+    let response_for = |base: &MockResponse, mut value: Value, path: Value| {
+        value["fieldPath"] = path;
+        MockResponse {
+            body: serde_json::to_vec(&value).unwrap(),
+            ..base.clone()
+        }
+    };
+
+    let accepted_request_paths = [
+        "",
+        "/input",
+        "/input/legalName",
+        "/preconditions",
+        "/preconditions/legalName",
+        "/preconditions/legalName/ifMatch",
+    ];
+    let mut accepted = accepted_request_paths
+        .iter()
+        .map(|path| response_for(&request_invalid, request_document.clone(), json!(path)))
+        .collect::<Vec<_>>();
+    accepted.push(response_for(
+        &request_invalid,
+        request_document.clone(),
+        json!(format!("/input/a{}", "b".repeat(63))),
+    ));
+
+    let action_refused = problem_response(BRegProblemCode::ActionRefused);
+    let action_document: Value = serde_json::from_slice(&action_refused.body).unwrap();
+    accepted.push(response_for(
+        &action_refused,
+        action_document.clone(),
+        json!("/input/legalName"),
+    ));
+
+    let mut refused = [
+        Value::Null,
+        json!(12),
+        json!({}),
+        json!("input/legalName"),
+        json!("/input/"),
+        json!("/input/LegalName"),
+        json!("/input/0name"),
+        json!("/input/legal-name"),
+        json!("/input/legal.name"),
+        json!("/input/legalName/extra"),
+        json!("/input/legal~1name"),
+        json!("/input/legal%2fname"),
+        json!("/input/legal\ncanary"),
+        json!("/input/é"),
+        json!(format!("/input/a{}", "b".repeat(64))),
+        json!("/preconditions/"),
+        json!("/preconditions/LegalName"),
+        json!("/preconditions/legal-name"),
+        json!("/preconditions/legalName/ifmatch"),
+        json!("/preconditions/legalName/ifMatch/extra"),
+        json!("/preconditions/legal~1name/ifMatch"),
+        json!("/preconditions/legal%2fname/ifMatch"),
+        json!("/other/legalName"),
+    ]
+    .into_iter()
+    .map(|path| response_for(&request_invalid, request_document.clone(), path))
+    .collect::<Vec<_>>();
+
+    for path in [
+        "",
+        "/input",
+        "/preconditions",
+        "/preconditions/legalName",
+        "/preconditions/legalName/ifMatch",
+    ] {
+        refused.push(response_for(
+            &action_refused,
+            action_document.clone(),
+            json!(path),
+        ));
+    }
+    let mut duplicate = request_invalid.clone();
+    duplicate.body = format!(
+        "{{\"fieldPath\":\"/input/duplicateCanary\",{}",
+        response_for(
+            &request_invalid,
+            request_document.clone(),
+            json!("/input/legalName"),
+        )
+        .body
+        .strip_prefix(b"{")
+        .map(|bytes| String::from_utf8(bytes.to_vec()).unwrap())
+        .unwrap()
+    )
+    .into_bytes();
+    refused.push(duplicate);
+
+    let accepted_count = accepted.len();
+    let total = accepted_count + refused.len();
+    let fixture = test_client(
+        std::iter::once(metadata_response())
+            .chain(accepted)
+            .chain(refused)
+            .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    for index in 0..total {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("action-path-problem"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("problem or malformed problem is returned");
+        if index < accepted_count {
+            assert!(matches!(
+                error.problem_code(),
+                Some(BRegProblemCode::RequestInvalid | BRegProblemCode::ActionRefused)
+            ));
+            assert_eq!(error.trace_id().unwrap().as_str(), TRACE_ID);
+        } else {
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Problem,
+                    ..
+                }
+            ));
+        }
+        let rendered = format!("{error:?}: {error}");
+        assert!(!rendered.contains("legalName"));
+        assert!(!rendered.contains("duplicateCanary"));
+        assert!(!rendered.contains("/input"));
+        assert!(!rendered.contains("/preconditions"));
+    }
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1 + total);
+}
+
 fn problem_response(code: BRegProblemCode) -> MockResponse {
     let mut body = json!({
         "type": format!(
@@ -1997,7 +2144,6 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
     for code in [
         BRegProblemCode::MutationConflict,
         BRegProblemCode::ActionHandlerFailed,
-        BRegProblemCode::RequestInvalid,
     ] {
         for (member, value) in [
             ("refusalCode", json!(REFUSAL_CODE)),
@@ -2010,6 +2156,11 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
             refused.push(misplaced);
         }
     }
+    let mut request_invalid = problem_response(BRegProblemCode::RequestInvalid);
+    let mut request_invalid_body: Value = serde_json::from_slice(&request_invalid.body).unwrap();
+    request_invalid_body["refusalCode"] = json!(REFUSAL_CODE);
+    request_invalid.body = serde_json::to_vec(&request_invalid_body).unwrap();
+    refused.push(request_invalid);
     let mut duplicate = base.clone();
     duplicate.body = format!(
         "{{\"refusalCode\":\"duplicate-canary\",{}",

@@ -2,6 +2,9 @@
 
 #![cfg(feature = "postgres-test")]
 
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
@@ -33,10 +36,11 @@ use registry_breg::postgres::{
 };
 use registry_breg::startup::with_request_timeout_for_test;
 use registry_breg_client::{
-    BRegIdempotencyKey, BRegLifecycleAction, BRegLifecycleActionReceipt, BRegLifecycleAuthority,
-    BRegLifecycleOperation, BRegProblemCode, BRegRecordOptions, BRegRequestMetadata,
-    BRegRequestState, BaseRegistryClient, BaseRegistryClientConfig, RegistryRecordSingleResponse,
-    StaticToken,
+    BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegLifecycleAction,
+    BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecycleOperation,
+    BRegPreparedLifecycle, BRegProblemCode, BRegRecordFormat, BRegRecordOptions,
+    BRegRequestMetadata, BRegRequestState, BaseRegistryClient, BaseRegistryClientConfig,
+    RegistryRecordSingleResponse, StaticToken,
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
@@ -3770,6 +3774,114 @@ async fn real_postgres_http_change_request_registration_applies_reserved_creates
         ],
     );
     assert_eq!(application_result_count(&database).await, 3);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sdk_prepared_lifecycle_recovery_replays_after_the_original_action_disappears() {
+    let database = TestDatabase::create(8).await;
+    let registry = Arc::new(registration_registry());
+    let identity =
+        install_registry(&database, &registry, "registration-change-request", false).await;
+    let app = change_request_router(
+        &database,
+        registry,
+        identity,
+        "registration-change-request",
+        None,
+    );
+    let operator = claims("operator", "registration-operator", None);
+    let household = create_record(
+        &app,
+        "/v1/records/households?accessProfile=steward",
+        claims("steward", "registration-steward", None),
+        "sdk-recovery-household",
+        json!({"tenant": TENANT, "label": "recovery household"}),
+    )
+    .await;
+    let http = client_http::ClientHttp::start(app, operator).await;
+    let client = &http.client;
+    let contract = client.registry_contract(Some("operator")).await.unwrap();
+    let BRegDirectWrite::Create(create_binding) = contract
+        .value
+        .select_direct_write("records.registration-request.create", "operator")
+        .unwrap()
+    else {
+        panic!("Create binding")
+    };
+    let authority = contract
+        .value
+        .select_lifecycle("registration-request", "operator")
+        .unwrap();
+    let request = BRegCreateRequest::new(
+        json!({"tenant":TENANT,"household":household.id,"name":"Prepared recovery"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    )
+    .unwrap();
+    let created = client
+        .create_record(
+            &create_binding,
+            &request,
+            &BRegIdempotencyKey::parse("sdk-lifecycle-create").unwrap(),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let record_id = created.value.data.record_identifier.clone();
+    let options = BRegRecordOptions::default()
+        .access_profile("operator")
+        .unwrap();
+    let draft = client
+        .get_record("registration-requests", &record_id, &options)
+        .await
+        .unwrap();
+    let submit = client
+        .lifecycle_actions(&authority, &draft.value)
+        .unwrap()
+        .into_iter()
+        .find(|action| action.operation() == BRegLifecycleOperation::SubmitRequest)
+        .expect("draft advertises SubmitRequest");
+    let original_key = BRegIdempotencyKey::parse("sdk-lifecycle-submit").unwrap();
+    let prepared = client
+        .prepare_lifecycle_action(&authority, &draft.value, &submit, &original_key)
+        .unwrap();
+    let saved = BRegPreparedLifecycle::from_slice(prepared.as_bytes()).unwrap();
+    let committed = client
+        .execute_lifecycle_action(&submit, &original_key)
+        .await
+        .unwrap();
+
+    let current = client
+        .get_record("registration-requests", &record_id, &options)
+        .await
+        .unwrap();
+    assert!(client
+        .lifecycle_actions(&authority, &current.value)
+        .unwrap()
+        .iter()
+        .all(|action| action.operation() != BRegLifecycleOperation::SubmitRequest));
+
+    let fresh_contract = client.registry_contract(Some("operator")).await.unwrap();
+    let fresh_authority = fresh_contract
+        .value
+        .select_lifecycle("registration-request", "operator")
+        .unwrap();
+    let (recovered, recovered_key) = client
+        .recover_lifecycle_action(&fresh_authority, &saved)
+        .unwrap();
+    assert_eq!(recovered.operation(), BRegLifecycleOperation::SubmitRequest);
+    assert_eq!(recovered.href(), submit.href());
+    assert_eq!(recovered.if_match(), submit.if_match());
+    assert_eq!(recovered_key.as_str(), original_key.as_str());
+    let replayed = client
+        .execute_lifecycle_action(&recovered, &recovered_key)
+        .await
+        .unwrap();
+    assert_eq!(replayed.value, committed.value);
+
+    drop(http);
     database.cleanup().await;
 }
 

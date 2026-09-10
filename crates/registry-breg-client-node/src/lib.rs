@@ -8,18 +8,28 @@ use std::{sync::Arc, time::Duration};
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
 use napi_derive::napi;
 use registry_breg_client::{
-    BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
-    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus, BRegComplete,
-    BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
-    BRegDirectWrite, BRegEtag, BRegLifecycleAction as CoreLifecycleAction,
+    BRegActionInvocationRequest, BRegActionTargetConditions as CoreActionTargetConditions,
+    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
+    BRegAsOfListRequest, BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue,
+    BRegAttachmentState, BRegAttachmentUpload as CoreAttachmentUpload,
+    BRegAttachmentVerificationStatus, BRegBatchBinding, BRegBatchBuilder, BRegBatchRequest,
+    BRegBoundingBox, BRegChangeContext, BRegComplete, BRegContinuation, BRegContinuationProjection,
+    BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
+    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
+    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
+    BRegGeoJsonOptions, BRegImmediateActionBinding, BRegLifecycleAction as CoreLifecycleAction,
     BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
     BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
-    BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest, BRegProblemCode,
-    BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
-    BRegRequestApplicationDisposition, BRegRequestProposal, BRegRequestReview,
-    BRegRequestReviewMode, BRegRequestState, BaseRegistryClient as CoreClient,
-    BaseRegistryClientConfig, BaseRegistryClientError, PrivateKeyJwt, PrivateKeyJwtConfig,
-    RegistryRecordRepresentation, RegistryRecordResponse, StaticToken, TokenError, TokenProvider,
+    BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest,
+    BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
+    BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
+    BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
+    BRegRelationshipListRequest, BRegRequestApplicationDisposition, BRegRequestProposal,
+    BRegRequestReview, BRegRequestReviewMode, BRegRequestState, BRegSnapshotContinuation,
+    BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
+    BaseRegistryClient as CoreClient, BaseRegistryClientConfig, BaseRegistryClientError,
+    PrivateKeyJwt, PrivateKeyJwtConfig, RegistryRecordRepresentation, RegistryRecordResponse,
+    StaticToken, TokenError, TokenProvider,
 };
 use registry_platform_crypto::PrivateJwk;
 use serde::Serialize;
@@ -46,6 +56,8 @@ pub struct JsonOutcome {
     pub trace_id: String,
     pub etag: Option<String>,
     pub location: Option<String>,
+    pub snapshot: Option<String>,
+    pub valid_at: Option<String>,
 }
 
 fn exact_input(value: &str) -> Result<Value> {
@@ -70,6 +82,8 @@ fn complete_json_value<T: Serialize>(
         trace_id,
         etag,
         location,
+        snapshot: None,
+        valid_at: None,
     })
 }
 
@@ -91,6 +105,8 @@ pub struct PageOutcome {
     pub continuation: Option<Value>,
     pub trace_id: String,
     pub etag: Option<String>,
+    pub snapshot: Option<String>,
+    pub valid_at: Option<String>,
 }
 
 #[napi(object)]
@@ -100,6 +116,54 @@ pub struct RawOutcome {
     pub media_type: String,
     pub trace_id: String,
     pub etag: Option<String>,
+}
+
+/// Inert original Create request evidence. The bytes carry values and an
+/// idempotency key, but no token or executable metadata authority.
+#[napi(js_name = "BRegPreparedCreate")]
+pub struct PreparedCreate {
+    inner: CorePreparedCreate,
+}
+
+#[napi]
+impl PreparedCreate {
+    /// Restore bounded inert evidence previously returned by `toBytes`.
+    #[napi(factory)]
+    pub fn from_bytes(bytes: Buffer) -> Result<Self> {
+        CorePreparedCreate::from_slice(bytes.as_ref())
+            .map(|inner| Self { inner })
+            .map_err(client_error)
+    }
+
+    /// Copy the exact evidence bytes for owner-protected persistence.
+    #[napi]
+    pub fn to_bytes(&self) -> Buffer {
+        self.inner.as_bytes().to_vec().into()
+    }
+}
+
+/// Inert original lifecycle request evidence. The bytes carry record values
+/// and an idempotency key, but no token or executable metadata authority.
+#[napi(js_name = "BRegPreparedLifecycle")]
+pub struct PreparedLifecycle {
+    inner: CorePreparedLifecycle,
+}
+
+#[napi]
+impl PreparedLifecycle {
+    /// Restore bounded inert evidence previously returned by `toBytes`.
+    #[napi(factory)]
+    pub fn from_bytes(bytes: Buffer) -> Result<Self> {
+        CorePreparedLifecycle::from_slice(bytes.as_ref())
+            .map(|inner| Self { inner })
+            .map_err(client_error)
+    }
+
+    /// Copy the exact evidence bytes for owner-protected persistence.
+    #[napi]
+    pub fn to_bytes(&self) -> Buffer {
+        self.inner.as_bytes().to_vec().into()
+    }
 }
 
 fn mapped_error(value: Value) -> NapiError {
@@ -578,7 +642,12 @@ fn record_options(object: Option<&Map<String, Value>>) -> Result<BRegRecordOptio
     };
     only_fields(
         object,
-        &["select", "accessProfile", "format"],
+        &[
+            "select",
+            "accessProfile",
+            "format",
+            "requestHistoryAfterProposalVersion",
+        ],
         "invalid_request",
         "record options contain an unsupported field",
     )?;
@@ -617,6 +686,21 @@ fn record_options(object: Option<&Map<String, Value>>) -> Result<BRegRecordOptio
             .access_profile(value)
             .map_err(|error| binding_error("invalid_request", error.to_string()))?;
     }
+    match object.get("requestHistoryAfterProposalVersion") {
+        None | Some(Value::Null) => {}
+        Some(value) => {
+            let value = safe_integer(
+                value,
+                1,
+                i64::from(u32::MAX),
+                "invalid_request",
+                "requestHistoryAfterProposalVersion must be 1 through 4294967295",
+            )?;
+            options = options
+                .request_history_after_proposal_version(value as u32)
+                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        }
+    }
     Ok(options)
 }
 
@@ -643,6 +727,7 @@ fn list_request(value: Option<Value>) -> Result<BRegListRequest> {
             "filter",
             "orderby",
             "count",
+            "bbox",
         ],
         "invalid_request",
         "list options contain an unsupported field",
@@ -696,6 +781,263 @@ fn list_request(value: Option<Value>) -> Result<BRegListRequest> {
                 .ok_or_else(|| binding_error("invalid_request", "count must be a boolean"))?;
             request = request.count(value);
         }
+    }
+    if let Some(value) = object.get("bbox").filter(|value| !value.is_null()) {
+        request = request.bbox(bounding_box(value)?);
+    }
+    Ok(request)
+}
+
+struct CollectionInputs {
+    options: BRegRecordOptions,
+    top: Option<u32>,
+    filter: Option<String>,
+    orderby: Option<String>,
+    count: Option<bool>,
+}
+
+fn collection_inputs(
+    value: Option<Value>,
+    extra_fields: &[&str],
+) -> Result<(Map<String, Value>, CollectionInputs)> {
+    let object = options_object(value, "list options must be an object")?.unwrap_or_default();
+    let mut allowed = vec![
+        "select",
+        "accessProfile",
+        "format",
+        "top",
+        "filter",
+        "orderby",
+        "count",
+    ];
+    allowed.extend_from_slice(extra_fields);
+    only_fields(
+        &object,
+        &allowed,
+        "invalid_request",
+        "list options contain an unsupported field",
+    )?;
+    let base = object
+        .iter()
+        .filter(|(field, _)| matches!(field.as_str(), "select" | "accessProfile" | "format"))
+        .map(|(field, value)| (field.clone(), value.clone()))
+        .collect();
+    let top = object
+        .get("top")
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            safe_integer(
+                value,
+                1,
+                100,
+                "invalid_request",
+                "top must be 1 through 100",
+            )
+            .map(|value| value as u32)
+        })
+        .transpose()?;
+    let filter = optional_string(
+        &object,
+        "filter",
+        "invalid_request",
+        "filter must be a string",
+    )?;
+    let orderby = optional_string(
+        &object,
+        "orderby",
+        "invalid_request",
+        "orderby must be a string",
+    )?;
+    let count = match object.get("count") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_bool()
+                .ok_or_else(|| binding_error("invalid_request", "count must be a boolean"))?,
+        ),
+    };
+    Ok((
+        object,
+        CollectionInputs {
+            options: record_options(Some(&base))?,
+            top,
+            filter,
+            orderby,
+            count,
+        },
+    ))
+}
+
+macro_rules! apply_collection_inputs {
+    ($request:ident, $inputs:ident) => {
+        $request = $request.options($inputs.options);
+        if let Some(value) = $inputs.top {
+            $request = $request
+                .top(value)
+                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        }
+        if let Some(value) = $inputs.filter {
+            $request = $request
+                .filter(value)
+                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        }
+        if let Some(value) = $inputs.orderby {
+            $request = $request
+                .orderby(value)
+                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        }
+        if let Some(value) = $inputs.count {
+            $request = $request.count(value);
+        }
+    };
+}
+
+fn current_list_request(value: Option<Value>) -> Result<BRegCurrentListRequest> {
+    let (_, inputs) = collection_inputs(value, &[])?;
+    let mut request = BRegCurrentListRequest::default();
+    apply_collection_inputs!(request, inputs);
+    Ok(request)
+}
+
+fn as_of_list_request(value: Option<Value>) -> Result<BRegAsOfListRequest> {
+    let (object, inputs) = collection_inputs(value, &["asOf"])?;
+    let as_of = required_string(
+        &object,
+        "asOf",
+        "invalid_request",
+        "asOf must be a canonical UTC RFC 3339 string",
+    )?;
+    let mut request = BRegAsOfListRequest::new(as_of)
+        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    apply_collection_inputs!(request, inputs);
+    Ok(request)
+}
+
+fn snapshot_list_request(value: Option<Value>) -> Result<BRegSnapshotListRequest> {
+    let (object, inputs) = collection_inputs(value, &["snapshot", "validAt"])?;
+    let mut request = BRegSnapshotListRequest::default();
+    apply_collection_inputs!(request, inputs);
+    if let Some(value) = optional_string(
+        &object,
+        "snapshot",
+        "invalid_request",
+        "snapshot must be a string",
+    )? {
+        request = request
+            .snapshot(value)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    }
+    if let Some(value) = optional_string(
+        &object,
+        "validAt",
+        "invalid_request",
+        "validAt must be a string",
+    )? {
+        request = request
+            .valid_at(value)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    }
+    Ok(request)
+}
+
+fn relationship_list_request(value: Option<Value>) -> Result<BRegRelationshipListRequest> {
+    let (_, inputs) = collection_inputs(value, &[])?;
+    let mut request = BRegRelationshipListRequest::default();
+    apply_collection_inputs!(request, inputs);
+    Ok(request)
+}
+
+fn bounding_box(value: &Value) -> Result<BRegBoundingBox> {
+    let coordinates = value
+        .as_array()
+        .filter(|values| values.len() == 4)
+        .ok_or_else(|| {
+            binding_error("invalid_request", "bbox must contain four decimal strings")
+        })?;
+    let coordinates = coordinates
+        .iter()
+        .map(|value| value.as_str())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| binding_error("invalid_request", "bbox must contain decimal strings"))?;
+    BRegBoundingBox::new(
+        coordinates[0],
+        coordinates[1],
+        coordinates[2],
+        coordinates[3],
+    )
+    .map_err(|error| binding_error("invalid_request", error.to_string()))
+}
+
+fn geojson_options(object: &Map<String, Value>) -> Result<BRegGeoJsonOptions> {
+    let mut options = BRegGeoJsonOptions::default();
+    match object.get("select") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(values)) => {
+            let fields = values
+                .iter()
+                .map(|value| value.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| {
+                    binding_error("invalid_request", "select must be an array of strings")
+                })?;
+            options = options
+                .select(fields)
+                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        }
+        Some(_) => {
+            return Err(binding_error(
+                "invalid_request",
+                "select must be an array of strings",
+            ))
+        }
+    }
+    if let Some(value) = optional_string(
+        object,
+        "accessProfile",
+        "invalid_request",
+        "accessProfile must be a string",
+    )? {
+        options = options
+            .access_profile(value)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    }
+    Ok(options)
+}
+
+fn geojson_list_request(value: Option<Value>) -> Result<BRegGeoJsonListRequest> {
+    let (object, inputs) = collection_inputs(value, &["bbox"])?;
+    if object.contains_key("format") {
+        return Err(binding_error(
+            "invalid_request",
+            "GeoJSON options do not accept a format",
+        ));
+    }
+    let base = object
+        .iter()
+        .filter(|(field, _)| matches!(field.as_str(), "select" | "accessProfile"))
+        .map(|(field, value)| (field.clone(), value.clone()))
+        .collect();
+    let mut request = BRegGeoJsonListRequest::default().options(geojson_options(&base)?);
+    if let Some(value) = inputs.top {
+        request = request
+            .top(value)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    }
+    if let Some(value) = inputs.filter {
+        request = request
+            .filter(value)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    }
+    if let Some(value) = inputs.orderby {
+        request = request
+            .orderby(value)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    }
+    if let Some(value) = inputs.count {
+        request = request.count(value);
+    }
+    if let Some(value) = object.get("bbox").filter(|value| !value.is_null()) {
+        request = request.bbox(bounding_box(value)?);
     }
     Ok(request)
 }
@@ -767,7 +1109,49 @@ fn page_value<T: Serialize>(value: BRegComplete<BRegPage<T>>) -> Result<PageOutc
             .map_err(|_| binding_error("protocol", "client continuation is not representable"))?,
         trace_id,
         etag,
+        snapshot: None,
+        valid_at: None,
     })
+}
+
+fn specialized_page_value<T: Serialize, C: Serialize>(
+    value: T,
+    continuation: Option<C>,
+    metadata: registry_breg_client::BRegResponseMetadata,
+    snapshot: Option<String>,
+    valid_at: Option<String>,
+) -> Result<PageOutcome> {
+    let (trace_id, etag, _) = metadata_parts(&metadata);
+    Ok(PageOutcome {
+        kind: "complete".into(),
+        value: serde_json::to_value(value)
+            .map_err(|_| binding_error("protocol", "client result is not representable"))?,
+        continuation: continuation
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|_| binding_error("protocol", "client continuation is not representable"))?,
+        trace_id,
+        etag,
+        snapshot,
+        valid_at,
+    })
+}
+
+fn specialized_page_json<T: Serialize, C: Serialize>(
+    value: T,
+    continuation: Option<C>,
+    metadata: registry_breg_client::BRegResponseMetadata,
+    snapshot: Option<String>,
+    valid_at: Option<String>,
+) -> Result<JsonOutcome> {
+    let mut result = complete_json_value(value, metadata)?;
+    result.continuation = continuation
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|_| binding_error("protocol", "client continuation is not representable"))?;
+    result.snapshot = snapshot;
+    result.valid_at = valid_at;
+    Ok(result)
 }
 
 fn raw_value(value: BRegComplete<BRegRawDocument>) -> RawOutcome {
@@ -834,6 +1218,171 @@ fn patch_request(value: Value) -> Result<BRegPatchRequest> {
             _ => return Err(binding_error("invalid_request", "patch op is unsupported")),
         };
         builder = result.map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    }
+    builder
+        .build()
+        .map_err(|error| binding_error("invalid_request", error.to_string()))
+}
+
+fn input_object(value: Value, message: &'static str) -> Result<Map<String, Value>> {
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| binding_error("invalid_request", message))
+}
+
+fn change_context(value: Value) -> Result<BRegChangeContext> {
+    let object = input_object(value, "changeContext must be an object")?;
+    only_fields(
+        &object,
+        &["kind", "reasonCode", "reasonText", "sourceReferences"],
+        "invalid_request",
+        "changeContext contains an unsupported field",
+    )?;
+    let kind = required_string(
+        &object,
+        "kind",
+        "invalid_request",
+        "changeContext.kind must be a string",
+    )?;
+    let mut context = match kind.as_str() {
+        "change" if !object.contains_key("reasonCode") => BRegChangeContext::change(),
+        "correction" => BRegChangeContext::correction(required_string(
+            &object,
+            "reasonCode",
+            "invalid_request",
+            "a correction requires reasonCode",
+        )?)
+        .map_err(|error| binding_error("invalid_request", error.to_string()))?,
+        _ => {
+            return Err(binding_error(
+                "invalid_request",
+                "changeContext.kind or reasonCode is invalid",
+            ))
+        }
+    };
+    if let Some(value) = optional_string(
+        &object,
+        "reasonText",
+        "invalid_request",
+        "changeContext.reasonText must be a string",
+    )? {
+        context = context
+            .reason_text(value)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+    }
+    match object.get("sourceReferences") {
+        None => {}
+        Some(Value::Array(values)) => {
+            for value in values {
+                let value = value.as_str().ok_or_else(|| {
+                    binding_error(
+                        "invalid_request",
+                        "changeContext.sourceReferences must contain strings",
+                    )
+                })?;
+                context = context
+                    .source_reference(value)
+                    .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            }
+        }
+        Some(_) => {
+            return Err(binding_error(
+                "invalid_request",
+                "changeContext.sourceReferences must be an array",
+            ))
+        }
+    }
+    Ok(context)
+}
+
+fn batch_request(binding: &BRegBatchBinding, value: Value) -> Result<BRegBatchRequest> {
+    let object = input_object(value, "batch request must be an object")?;
+    only_fields(
+        &object,
+        &["items", "changeContext"],
+        "invalid_request",
+        "batch request contains an unsupported field",
+    )?;
+    let items = object
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| binding_error("invalid_request", "batch items must be an array"))?;
+    let mut builder = BRegBatchBuilder::new(binding);
+    for item in items {
+        let item = item.as_object().ok_or_else(|| {
+            binding_error("invalid_request", "every batch item must be an object")
+        })?;
+        let operation = required_string(
+            item,
+            "operation",
+            "invalid_request",
+            "batch item operation must be a string",
+        )?;
+        builder = match operation.as_str() {
+            "create" => {
+                only_fields(
+                    item,
+                    &["operation", "data"],
+                    "invalid_request",
+                    "Create batch item contains an unsupported field",
+                )?;
+                let data = item
+                    .get("data")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .ok_or_else(|| {
+                        binding_error("invalid_request", "Create batch data must be an object")
+                    })?;
+                let request = BRegCreateRequest::new(data)
+                    .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                builder
+                    .create(&request)
+                    .map_err(|error| binding_error("invalid_request", error.to_string()))?
+            }
+            "patch" => {
+                only_fields(
+                    item,
+                    &["operation", "recordIdentifier", "etag", "operations"],
+                    "invalid_request",
+                    "Patch batch item contains an unsupported field",
+                )?;
+                let record_identifier = uuid::Uuid::parse_str(&required_string(
+                    item,
+                    "recordIdentifier",
+                    "invalid_request",
+                    "Patch batch recordIdentifier must be a UUID",
+                )?)
+                .map_err(|_| {
+                    binding_error(
+                        "invalid_request",
+                        "Patch batch recordIdentifier must be a UUID",
+                    )
+                })?;
+                let etag = BRegEtag::parse(&required_string(
+                    item,
+                    "etag",
+                    "invalid_request",
+                    "Patch batch etag must be a string",
+                )?)
+                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                let request = patch_request(item.get("operations").cloned().ok_or_else(|| {
+                    binding_error("invalid_request", "Patch batch operations are required")
+                })?)?;
+                builder
+                    .patch(record_identifier, &etag, &request)
+                    .map_err(|error| binding_error("invalid_request", error.to_string()))?
+            }
+            _ => {
+                return Err(binding_error(
+                    "invalid_request",
+                    "batch item operation is unsupported",
+                ))
+            }
+        };
+    }
+    if let Some(value) = object.get("changeContext") {
+        builder = builder.change_context(change_context(value.clone())?);
     }
     builder
         .build()
@@ -954,6 +1503,89 @@ fn attachment_error(error: registry_breg_client::BRegAttachmentError) -> NapiErr
     binding_error("invalid_request", error.reason())
 }
 
+fn change_request_capability_value(
+    value: &registry_breg_client::BRegChangeRequestCapability,
+) -> Value {
+    let planner = value.planner();
+    let limits = planner.limits();
+    json!({
+        "planner": {
+            "kind": match planner.kind() {
+                registry_breg_client::BRegChangeRequestPlannerKind::Declarative => "declarative",
+                registry_breg_client::BRegChangeRequestPlannerKind::Rhai => "rhai",
+            },
+            "abi": planner.abi(),
+            "limits": limits.map(|limits| json!({
+                "maximumTargets": limits.maximum_targets(),
+                "maximumFieldMutations": limits.maximum_field_mutations(),
+                "maximumSnapshotBytes": limits.maximum_snapshot_bytes(),
+                "maximumSourceBytes": limits.maximum_source_bytes(),
+                "maximumOperations": limits.maximum_operations(),
+                "maximumCallDepth": limits.maximum_call_depth(),
+                "maximumExpressionDepth": limits.maximum_expression_depth(),
+                "maximumStringBytes": limits.maximum_string_bytes(),
+                "maximumArrayItems": limits.maximum_array_items(),
+                "maximumMapEntries": limits.maximum_map_entries(),
+                "maximumModules": limits.maximum_modules(),
+            })),
+            "possibleWriteCount": planner.possible_write_count(),
+            "possibleWriteOperations": planner.possible_write_operations().iter()
+                .map(registry_breg_client::BRegOperationKind::as_str).collect::<Vec<_>>(),
+        },
+        "reviewMode": match value.review_mode() {
+            registry_breg_client::BRegChangeRequestReviewMode::None => "none",
+            registry_breg_client::BRegChangeRequestReviewMode::Staged => "staged",
+        },
+        "application": {
+            "mode": match value.application().mode() {
+                registry_breg_client::BRegChangeRequestApplicationMode::Manual => "manual",
+                registry_breg_client::BRegChangeRequestApplicationMode::Automatic => "automatic",
+                registry_breg_client::BRegChangeRequestApplicationMode::Planner => "planner",
+            },
+            "allowedDispositions": value.application().allowed_dispositions().iter().map(|value| match value {
+                registry_breg_client::BRegChangeRequestDisposition::Apply => "apply",
+                registry_breg_client::BRegChangeRequestDisposition::Queue => "queue",
+            }).collect::<Vec<_>>(),
+            "queueReasons": value.application().queue_reasons().iter().map(|reason| json!({
+                "code": reason.code(), "label": reason.label(),
+            })).collect::<Vec<_>>(),
+        },
+    })
+}
+
+fn immediate_action_descriptor_value(
+    value: &registry_breg_client::BRegImmediateActionDescriptor,
+) -> Value {
+    let bounds = value.bounds();
+    json!({
+        "id": value.identifier(),
+        "contractFingerprint": value.contract_fingerprint(),
+        "inputMode": value.input_mode(),
+        "maximumInputStringBytes": value.maximum_input_string_bytes(),
+        "inputs": value.inputs().iter().map(|input| json!({
+            "id": input.identifier(), "apiName": input.api_name(),
+            "fieldTypeJson": input.field_type().to_string(), "required": input.required(),
+            "nullable": input.nullable(), "classification": input.classification(),
+        })).collect::<Vec<_>>(),
+        "referenceInputs": value.reference_inputs().iter().map(|input| json!({
+            "input": input.input_identifier(), "apiName": input.api_name(),
+            "targetEntity": input.target_entity(),
+        })).collect::<Vec<_>>(),
+        "requiredConditionKeys": value.required_condition_keys(),
+        "resultEffects": value.result_effects().iter().map(|effect| json!({
+            "effect": effect.effect_identifier(), "entity": effect.entity_identifier(),
+            "operation": effect.operation().as_str(),
+        })).collect::<Vec<_>>(),
+        "accessProfile": value.access_profile(), "invokePath": value.invoke_path(),
+        "targetConditionsPath": value.target_conditions_path(),
+        "bounds": {
+            "maximumTargets": bounds.maximum_targets(),
+            "maximumFieldMutations": bounds.maximum_field_mutations(),
+            "maximumSnapshotBytes": bounds.maximum_snapshot_bytes(),
+        },
+    })
+}
+
 /// Opaque governed attachment slot selected from metadata fetched by this client source.
 #[napi(js_name = "BRegAttachmentSlot")]
 pub struct AttachmentSlot {
@@ -1067,6 +1699,47 @@ pub struct PatchBinding {
     inner: BRegPatchBinding,
 }
 
+#[napi(js_name = "BRegImmediateActionBinding")]
+pub struct ImmediateActionBinding {
+    inner: BRegImmediateActionBinding,
+}
+
+#[napi(js_name = "BRegTombstoneBinding")]
+pub struct TombstoneBinding {
+    inner: BRegTombstoneBinding,
+}
+
+#[napi(js_name = "BRegBatchBinding")]
+pub struct BatchBinding {
+    inner: BRegBatchBinding,
+}
+
+/// Opaque server-validated target conditions for one immediate action.
+#[napi(js_name = "BRegActionTargetConditions")]
+pub struct ActionTargetConditions {
+    inner: CoreActionTargetConditions,
+    trace_id: String,
+}
+
+#[napi]
+impl ActionTargetConditions {
+    #[napi(getter)]
+    pub fn precondition_keys(&self) -> Vec<String> {
+        self.inner.precondition_keys().map(str::to_owned).collect()
+    }
+
+    #[napi(getter)]
+    pub fn value_json(&self) -> Result<String> {
+        serde_json::to_string(&self.inner)
+            .map_err(|_| binding_error("protocol", "target conditions are not representable"))
+    }
+
+    #[napi(getter)]
+    pub fn trace_id(&self) -> String {
+        self.trace_id.clone()
+    }
+}
+
 #[napi(js_name = "BRegLifecycleAuthority")]
 pub struct LifecycleAuthority {
     inner: BRegLifecycleAuthority,
@@ -1075,6 +1748,23 @@ pub struct LifecycleAuthority {
 #[napi(js_name = "BRegLifecycleAction")]
 pub struct LifecycleAction {
     inner: CoreLifecycleAction,
+}
+
+/// A recovered Create request, key, and representation. This remains inert
+/// until `executeRecoveredCreate` is explicitly called with fresh authority.
+#[napi(js_name = "BRegRecoveredCreate")]
+pub struct RecoveredCreate {
+    request: BRegCreateRequest,
+    key: registry_breg_client::BRegIdempotencyKey,
+    format: BRegRecordFormat,
+}
+
+/// A recovered lifecycle action and key. This remains inert until
+/// `executeRecoveredLifecycleAction` is explicitly called.
+#[napi(js_name = "BRegRecoveredLifecycle")]
+pub struct RecoveredLifecycle {
+    action: CoreLifecycleAction,
+    key: registry_breg_client::BRegIdempotencyKey,
 }
 
 #[napi]
@@ -1149,20 +1839,73 @@ impl Metadata {
                 "requiredCapabilities": operation.required_capabilities(),
                 "readableFields": operation.readable_fields(), "createWritableFields": operation.create_writable_fields(),
                 "patchWritableFields": operation.patch_writable_fields(), "query": operation.query(),
+                "selectors": operation.selectors().iter().map(|selector| json!({
+                    "id": selector.identifier(), "label": selector.label(),
+                    "valueOrigin": selector.value_origin(), "requestFields": selector.request_fields(),
+                    "fields": selector.fields().iter().map(|field| json!({
+                        "id": field.identifier(), "apiName": field.api_name(), "label": field.label(),
+                        "schemaJson": field.schema().to_string(), "required": field.required(),
+                    })).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+                "readPath": operation.read_path().map(|path| json!({
+                    "id": path.identifier(), "label": path.label(),
+                })),
                 "fields": operation.fields().iter().map(|field| json!({
                     "id": field.identifier(), "apiName": field.api_name(), "label": field.label(),
                     "schemaJson": field.schema().to_string(), "required": field.required(),
                     "nullable": field.nullable(), "readOnly": field.read_only(), "removable": field.removable(),
                     "referenceTargetEntity": field.reference_target_entity(),
+                    "codeLabels": field.code_labels(),
+                    "storageValidation": field.storage_validation().map(|validation| json!({
+                        "kind": validation.kind(), "pattern": validation.pattern(),
+                    })),
+                    "reference": field.reference().map(|reference| json!({
+                        "manualEntry": reference.manual_entry(), "targetEntity": reference.target_entity(),
+                        "operations": reference.operations().iter().map(|operation| json!({
+                            "operationId": operation.operation_identifier(),
+                            "accessProfile": operation.access_profile(), "labelFields": operation.label_fields(),
+                        })).collect::<Vec<_>>(),
+                    })),
                 })).collect::<Vec<_>>(),
                 "request": { "fieldNames": request.field_names(), "queryParameters": request.query_parameters(),
                     "body": request.body(), "contentType": request.content_type(),
                     "schemaJson": request.schema().map(Value::to_string),
                     "idempotencyKeyRequired": request.idempotency_key_required(), "ifMatchRequired": request.if_match_required(),
                     "mutationSemantics": request.mutation_semantics(), "patchPathPrefix": request.patch_path_prefix(),
-                    "patchOperations": request.patch_operations(), "removeSemantics": request.remove_semantics() },
+                    "patchOperations": request.patch_operations(), "removeSemantics": request.remove_semantics(),
+                    "maximumItems": request.maximum_items(), "maximumBodyBytes": request.maximum_body_bytes() },
             })
         }).collect())
+    }
+
+    /// Complete typed caller-filtered immediate-action descriptors.
+    #[napi(getter)]
+    pub fn immediate_actions(&self) -> Value {
+        Value::Array(
+            self.inner
+                .immediate_actions()
+                .iter()
+                .map(immediate_action_descriptor_value)
+                .collect(),
+        )
+    }
+
+    /// Original caller-filtered action metadata as exact JSON text.
+    #[napi(getter)]
+    pub fn actions_json(&self) -> Result<Option<String>> {
+        self.inner
+            .actions()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| binding_error("protocol", "action metadata is not representable"))
+    }
+
+    /// Descriptive change-request capability for one entity, when advertised.
+    #[napi]
+    pub fn change_request_capability(&self, entity_identifier: String) -> Option<Value> {
+        self.inner
+            .change_request_capability(&entity_identifier)
+            .map(change_request_capability_value)
     }
 
     #[napi(getter)]
@@ -1256,6 +1999,42 @@ impl Metadata {
             })
             .map_err(selection_error)
     }
+
+    #[napi]
+    pub fn select_immediate_action(
+        &self,
+        action_identifier: String,
+        expected_profile: String,
+    ) -> Result<ImmediateActionBinding> {
+        self.inner
+            .select_immediate_action(&action_identifier, &expected_profile)
+            .map(|inner| ImmediateActionBinding { inner })
+            .map_err(selection_error)
+    }
+
+    #[napi]
+    pub fn select_tombstone(
+        &self,
+        entity_identifier: String,
+        expected_profile: String,
+    ) -> Result<TombstoneBinding> {
+        self.inner
+            .select_tombstone(&entity_identifier, &expected_profile)
+            .map(|inner| TombstoneBinding { inner })
+            .map_err(selection_error)
+    }
+
+    #[napi]
+    pub fn select_batch(
+        &self,
+        entity_identifier: String,
+        expected_profile: String,
+    ) -> Result<BatchBinding> {
+        self.inner
+            .select_batch(&entity_identifier, &expected_profile)
+            .map(|inner| BatchBinding { inner })
+            .map_err(selection_error)
+    }
 }
 
 #[napi]
@@ -1330,6 +2109,49 @@ impl BaseRegistryClient {
             .map_err(client_error)
     }
 
+    /// Retrieve one bounded first page of record revisions as inert JSON.
+    #[napi]
+    pub async fn record_revisions(
+        &self,
+        entity_route: String,
+        record_identifier: String,
+        access_profile: Option<String>,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .record_revisions(&entity_route, &record_identifier, access_profile.as_deref())
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    /// Retrieve one exact retained revision as validated inert record JSON.
+    #[napi]
+    pub async fn get_record_revision(
+        &self,
+        entity_route: String,
+        record_identifier: String,
+        revision: i64,
+        options: Option<Value>,
+    ) -> Result<RawOutcome> {
+        if !(1..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER).contains(&revision) {
+            return Err(binding_error(
+                "invalid_request",
+                "revision must be a positive safe integer",
+            ));
+        }
+        let options = options_object(options, "record options must be an object")?;
+        self.inner
+            .get_record_revision(
+                &entity_route,
+                &record_identifier,
+                revision as u64,
+                &record_options(options.as_ref())?,
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
     #[napi]
     pub async fn get_record(
         &self,
@@ -1376,6 +2198,194 @@ impl BaseRegistryClient {
             .and_then(page_value)
     }
 
+    #[napi(js_name = "getGeoJsonRecord")]
+    pub async fn get_geo_json_record(
+        &self,
+        entity_route: String,
+        record_identifier: String,
+        options: Option<Value>,
+    ) -> Result<CompleteOutcome> {
+        let options =
+            options_object(options, "GeoJSON options must be an object")?.unwrap_or_default();
+        only_fields(
+            &options,
+            &["select", "accessProfile"],
+            "invalid_request",
+            "GeoJSON options contain an unsupported field",
+        )?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .get_geojson_record(
+                &entity_route,
+                &record_identifier,
+                &geojson_options(&options)?,
+            )
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    #[napi(js_name = "listGeoJsonRecords")]
+    pub async fn list_geo_json_records(
+        &self,
+        entity_route: String,
+        options: Option<Value>,
+    ) -> Result<PageOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_geojson_records(&entity_route, &geojson_list_request(options)?)
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi(js_name = "continueGeoJsonList")]
+    pub async fn continue_geo_json_list(&self, value: Value) -> Result<PageOutcome> {
+        let projection: BRegGeoJsonContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| binding_error("invalid_request", "GeoJSON continuation is invalid"))?;
+        let continuation = BRegGeoJsonContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_geojson_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn list_current_records(
+        &self,
+        entity_route: String,
+        options: Option<Value>,
+    ) -> Result<PageOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_current_records(&entity_route, &current_list_request(options)?)
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn continue_current_list(&self, value: Value) -> Result<PageOutcome> {
+        let projection: BRegCurrentContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| binding_error("invalid_request", "current continuation is invalid"))?;
+        let continuation = BRegCurrentContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_current_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn list_records_as_of(
+        &self,
+        entity_route: String,
+        options: Option<Value>,
+    ) -> Result<PageOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_records_as_of(&entity_route, &as_of_list_request(options)?)
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn continue_as_of_list(&self, value: Value) -> Result<PageOutcome> {
+        let projection: BRegAsOfContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| binding_error("invalid_request", "as-of continuation is invalid"))?;
+        let continuation = BRegAsOfContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_as_of_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn list_snapshot_records(
+        &self,
+        entity_route: String,
+        options: Option<Value>,
+    ) -> Result<PageOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_snapshot_records(&entity_route, &snapshot_list_request(options)?)
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(
+            value.value,
+            value.continuation,
+            metadata,
+            Some(value.snapshot),
+            value.valid_at,
+        )
+    }
+
+    #[napi]
+    pub async fn continue_snapshot_list(&self, value: Value) -> Result<PageOutcome> {
+        let projection: BRegSnapshotContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| binding_error("invalid_request", "snapshot continuation is invalid"))?;
+        let continuation = BRegSnapshotContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_snapshot_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(
+            value.value,
+            value.continuation,
+            metadata,
+            Some(value.snapshot),
+            value.valid_at,
+        )
+    }
+
+    #[napi]
+    pub async fn list_relationship_records(
+        &self,
+        entity_route: String,
+        record_identifier: String,
+        path_route: String,
+        options: Option<Value>,
+    ) -> Result<PageOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_relationship_records(
+                &entity_route,
+                &record_identifier,
+                &path_route,
+                &relationship_list_request(options)?,
+            )
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn continue_relationship_list(&self, value: Value) -> Result<PageOutcome> {
+        let projection: BRegRelationshipContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| {
+                binding_error("invalid_request", "relationship continuation is invalid")
+            })?;
+        let continuation = BRegRelationshipContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_relationship_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_value(value.value, value.continuation, metadata, None, None)
+    }
+
     #[napi]
     pub async fn lookup_record(
         &self,
@@ -1388,6 +2398,54 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .lookup_record(&entity_route, &request)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Fetch opaque target conditions for one metadata-selected action.
+    #[napi]
+    pub async fn action_target_conditions(
+        &self,
+        binding: &ImmediateActionBinding,
+        inputs: Value,
+    ) -> Result<ActionTargetConditions> {
+        let request = BRegActionTargetConditionsRequest::new(
+            &binding.inner,
+            input_object(inputs, "action inputs must be an object")?,
+        )
+        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .action_target_conditions(&binding.inner, &request)
+            .await
+            .map_err(client_error)?;
+        Ok(ActionTargetConditions {
+            inner: value,
+            trace_id: metadata.trace_id().as_str().to_owned(),
+        })
+    }
+
+    /// Invoke one metadata-selected immediate action without automatic retry.
+    #[napi]
+    pub async fn invoke_action(
+        &self,
+        binding: &ImmediateActionBinding,
+        inputs: Value,
+        idempotency_key: String,
+        conditions: Option<&ActionTargetConditions>,
+    ) -> Result<CompleteOutcome> {
+        let request = BRegActionInvocationRequest::new(
+            &binding.inner,
+            input_object(inputs, "action inputs must be an object")?,
+            conditions.map(|value| &value.inner),
+        )
+        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .invoke_action(&binding.inner, &request, &key)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -1413,6 +2471,67 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .create_record(&operation, &request, &key, format(format_value)?)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Prepare inert Create evidence before any token acquisition or I/O.
+    #[napi]
+    pub fn prepare_create(
+        &self,
+        binding: &CreateBinding,
+        data: Value,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<PreparedCreate> {
+        let data = data
+            .as_object()
+            .cloned()
+            .ok_or_else(|| binding_error("invalid_request", "create data must be an object"))?;
+        let request = BRegCreateRequest::new(data)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        self.inner
+            .prepare_create(&binding.inner, &request, &key, format(format_value)?)
+            .map(|inner| PreparedCreate { inner })
+            .map_err(client_error)
+    }
+
+    /// Revalidate saved Create evidence against freshly selected authority.
+    #[napi]
+    pub fn recover_create(
+        &self,
+        binding: &CreateBinding,
+        prepared: &PreparedCreate,
+    ) -> Result<RecoveredCreate> {
+        let (request, key, format) = self
+            .inner
+            .recover_create(&binding.inner, &prepared.inner)
+            .map_err(client_error)?;
+        Ok(RecoveredCreate {
+            request,
+            key,
+            format,
+        })
+    }
+
+    /// Explicitly send a recovered Create request with fresh authority.
+    #[napi]
+    pub async fn execute_recovered_create(
+        &self,
+        binding: &CreateBinding,
+        recovered: &RecoveredCreate,
+    ) -> Result<CompleteOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .create_record(
+                &binding.inner,
+                &recovered.request,
+                &recovered.key,
+                recovered.format,
+            )
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -1447,6 +2566,59 @@ impl BaseRegistryClient {
                 record_identifier,
                 &etag,
                 &request,
+                &key,
+                format(format_value)?,
+            )
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Execute one metadata-selected atomic batch without automatic retry.
+    #[napi]
+    pub async fn batch_records(
+        &self,
+        binding: &BatchBinding,
+        request: Value,
+        idempotency_key: String,
+    ) -> Result<CompleteOutcome> {
+        let request = batch_request(&binding.inner, request)?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .batch_records(&binding.inner, &request, &key)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Tombstone one record against its current strong ETag.
+    #[napi]
+    pub async fn tombstone_record(
+        &self,
+        binding: &TombstoneBinding,
+        record_identifier: String,
+        etag: String,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<CompleteOutcome> {
+        let record_identifier = uuid::Uuid::parse_str(&record_identifier)
+            .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+        let etag = BRegEtag::parse(&etag).map_err(|_| {
+            binding_error(
+                "invalid_request",
+                "etag must be a strong Base Registry Engine entity tag",
+            )
+        })?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .tombstone_record(
+                &binding.inner,
+                record_identifier,
+                &etag,
                 &key,
                 format(format_value)?,
             )
@@ -1559,6 +2731,53 @@ impl BaseRegistryClient {
             .map_err(client_error)?;
         complete_value(receipt_value(&value), metadata)
     }
+
+    /// Prepare inert lifecycle evidence before any token acquisition or I/O.
+    #[napi]
+    pub fn prepare_lifecycle_action(
+        &self,
+        authority: &LifecycleAuthority,
+        record: Value,
+        action: &LifecycleAction,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<PreparedLifecycle> {
+        let record = parse_record(record, format(format_value)?)?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        self.inner
+            .prepare_lifecycle_action(&authority.inner, &record, &action.inner, &key)
+            .map(|inner| PreparedLifecycle { inner })
+            .map_err(client_error)
+    }
+
+    /// Revalidate saved lifecycle evidence against freshly selected authority.
+    #[napi]
+    pub fn recover_lifecycle_action(
+        &self,
+        authority: &LifecycleAuthority,
+        prepared: &PreparedLifecycle,
+    ) -> Result<RecoveredLifecycle> {
+        let (action, key) = self
+            .inner
+            .recover_lifecycle_action(&authority.inner, &prepared.inner)
+            .map_err(client_error)?;
+        Ok(RecoveredLifecycle { action, key })
+    }
+
+    /// Explicitly send a recovered lifecycle action.
+    #[napi]
+    pub async fn execute_recovered_lifecycle_action(
+        &self,
+        recovered: &RecoveredLifecycle,
+    ) -> Result<CompleteOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .execute_lifecycle_action(&recovered.action, &recovered.key)
+            .await
+            .map_err(client_error)?;
+        complete_value(receipt_value(&value), metadata)
+    }
     #[napi]
     pub async fn get_record_json(
         &self,
@@ -1605,6 +2824,194 @@ impl BaseRegistryClient {
             .and_then(page_json_value)
     }
 
+    #[napi(js_name = "getGeoJsonRecordJson")]
+    pub async fn get_geo_json_record_json(
+        &self,
+        entity_route: String,
+        record_identifier: String,
+        options: Option<Value>,
+    ) -> Result<JsonOutcome> {
+        let options =
+            options_object(options, "GeoJSON options must be an object")?.unwrap_or_default();
+        only_fields(
+            &options,
+            &["select", "accessProfile"],
+            "invalid_request",
+            "GeoJSON options contain an unsupported field",
+        )?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .get_geojson_record(
+                &entity_route,
+                &record_identifier,
+                &geojson_options(&options)?,
+            )
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    #[napi(js_name = "listGeoJsonRecordsJson")]
+    pub async fn list_geo_json_records_json(
+        &self,
+        entity_route: String,
+        options: Option<Value>,
+    ) -> Result<JsonOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_geojson_records(&entity_route, &geojson_list_request(options)?)
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi(js_name = "continueGeoJsonListJson")]
+    pub async fn continue_geo_json_list_json(&self, value: Value) -> Result<JsonOutcome> {
+        let projection: BRegGeoJsonContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| binding_error("invalid_request", "GeoJSON continuation is invalid"))?;
+        let continuation = BRegGeoJsonContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_geojson_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn list_current_records_json(
+        &self,
+        entity_route: String,
+        options: Option<Value>,
+    ) -> Result<JsonOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_current_records(&entity_route, &current_list_request(options)?)
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn continue_current_list_json(&self, value: Value) -> Result<JsonOutcome> {
+        let projection: BRegCurrentContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| binding_error("invalid_request", "current continuation is invalid"))?;
+        let continuation = BRegCurrentContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_current_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn list_records_as_of_json(
+        &self,
+        entity_route: String,
+        options: Option<Value>,
+    ) -> Result<JsonOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_records_as_of(&entity_route, &as_of_list_request(options)?)
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn continue_as_of_list_json(&self, value: Value) -> Result<JsonOutcome> {
+        let projection: BRegAsOfContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| binding_error("invalid_request", "as-of continuation is invalid"))?;
+        let continuation = BRegAsOfContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_as_of_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn list_snapshot_records_json(
+        &self,
+        entity_route: String,
+        options: Option<Value>,
+    ) -> Result<JsonOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_snapshot_records(&entity_route, &snapshot_list_request(options)?)
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(
+            value.value,
+            value.continuation,
+            metadata,
+            Some(value.snapshot),
+            value.valid_at,
+        )
+    }
+
+    #[napi]
+    pub async fn continue_snapshot_list_json(&self, value: Value) -> Result<JsonOutcome> {
+        let projection: BRegSnapshotContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| binding_error("invalid_request", "snapshot continuation is invalid"))?;
+        let continuation = BRegSnapshotContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_snapshot_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(
+            value.value,
+            value.continuation,
+            metadata,
+            Some(value.snapshot),
+            value.valid_at,
+        )
+    }
+
+    #[napi]
+    pub async fn list_relationship_records_json(
+        &self,
+        entity_route: String,
+        record_identifier: String,
+        path_route: String,
+        options: Option<Value>,
+    ) -> Result<JsonOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_relationship_records(
+                &entity_route,
+                &record_identifier,
+                &path_route,
+                &relationship_list_request(options)?,
+            )
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(value.value, value.continuation, metadata, None, None)
+    }
+
+    #[napi]
+    pub async fn continue_relationship_list_json(&self, value: Value) -> Result<JsonOutcome> {
+        let projection: BRegRelationshipContinuationProjection = serde_json::from_value(value)
+            .map_err(|_| {
+                binding_error("invalid_request", "relationship continuation is invalid")
+            })?;
+        let continuation = BRegRelationshipContinuation::try_from_projection(projection)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .continue_relationship_list(&continuation)
+            .await
+            .map_err(client_error)?;
+        specialized_page_json(value.value, value.continuation, metadata, None, None)
+    }
+
     #[napi]
     pub async fn lookup_record_json(
         &self,
@@ -1618,6 +3025,60 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .lookup_record(&entity_route, &request)
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    /// Fetch opaque target conditions from exact action-input JSON.
+    #[napi]
+    pub async fn action_target_conditions_json(
+        &self,
+        binding: &ImmediateActionBinding,
+        inputs_json: String,
+    ) -> Result<ActionTargetConditions> {
+        let request = BRegActionTargetConditionsRequest::new(
+            &binding.inner,
+            input_object(
+                exact_input(&inputs_json)?,
+                "action inputs must be an object",
+            )?,
+        )
+        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .action_target_conditions(&binding.inner, &request)
+            .await
+            .map_err(client_error)?;
+        Ok(ActionTargetConditions {
+            inner: value,
+            trace_id: metadata.trace_id().as_str().to_owned(),
+        })
+    }
+
+    /// Invoke an action from exact JSON and preserve exact receipt values.
+    #[napi]
+    pub async fn invoke_action_json(
+        &self,
+        binding: &ImmediateActionBinding,
+        inputs_json: String,
+        idempotency_key: String,
+        conditions: Option<&ActionTargetConditions>,
+    ) -> Result<JsonOutcome> {
+        let request = BRegActionInvocationRequest::new(
+            &binding.inner,
+            input_object(
+                exact_input(&inputs_json)?,
+                "action inputs must be an object",
+            )?,
+            conditions.map(|value| &value.inner),
+        )
+        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .invoke_action(&binding.inner, &request, &key)
             .await
             .map_err(client_error)?;
         complete_json_value(value, metadata)
@@ -1644,6 +3105,50 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .create_record(&operation, &request, &key, format(format_value)?)
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    /// Prepare inert Create evidence from exact JSON text.
+    #[napi]
+    pub fn prepare_create_json(
+        &self,
+        binding: &CreateBinding,
+        data_json: String,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<PreparedCreate> {
+        let data = exact_input(&data_json)?;
+        let data = data
+            .as_object()
+            .cloned()
+            .ok_or_else(|| binding_error("invalid_request", "create data must be an object"))?;
+        let request = BRegCreateRequest::new(data)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        self.inner
+            .prepare_create(&binding.inner, &request, &key, format(format_value)?)
+            .map(|inner| PreparedCreate { inner })
+            .map_err(client_error)
+    }
+
+    /// Explicitly send a recovered Create request and preserve exact values.
+    #[napi]
+    pub async fn execute_recovered_create_json(
+        &self,
+        binding: &CreateBinding,
+        recovered: &RecoveredCreate,
+    ) -> Result<JsonOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .create_record(
+                &binding.inner,
+                &recovered.request,
+                &recovered.key,
+                recovered.format,
+            )
             .await
             .map_err(client_error)?;
         complete_json_value(value, metadata)
@@ -1678,6 +3183,59 @@ impl BaseRegistryClient {
                 record_identifier,
                 &etag,
                 &request,
+                &key,
+                format(format_value)?,
+            )
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    /// Execute one metadata-selected atomic batch from exact JSON.
+    #[napi]
+    pub async fn batch_records_json(
+        &self,
+        binding: &BatchBinding,
+        request_json: String,
+        idempotency_key: String,
+    ) -> Result<JsonOutcome> {
+        let request = batch_request(&binding.inner, exact_input(&request_json)?)?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .batch_records(&binding.inner, &request, &key)
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    /// Tombstone one record and preserve exact response values.
+    #[napi]
+    pub async fn tombstone_record_json(
+        &self,
+        binding: &TombstoneBinding,
+        record_identifier: String,
+        etag: String,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<JsonOutcome> {
+        let record_identifier = uuid::Uuid::parse_str(&record_identifier)
+            .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+        let etag = BRegEtag::parse(&etag).map_err(|_| {
+            binding_error(
+                "invalid_request",
+                "etag must be a strong Base Registry Engine entity tag",
+            )
+        })?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .tombstone_record(
+                &binding.inner,
+                record_identifier,
+                &etag,
                 &key,
                 format(format_value)?,
             )
@@ -1753,6 +3311,25 @@ impl BaseRegistryClient {
             })
     }
 
+    /// Prepare inert lifecycle evidence from an exact Registry Record response.
+    #[napi]
+    pub fn prepare_lifecycle_action_json(
+        &self,
+        authority: &LifecycleAuthority,
+        record_json: String,
+        action: &LifecycleAction,
+        idempotency_key: String,
+        format_value: Option<String>,
+    ) -> Result<PreparedLifecycle> {
+        let record = parse_record(exact_input(&record_json)?, format(format_value)?)?;
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        self.inner
+            .prepare_lifecycle_action(&authority.inner, &record, &action.inner, &key)
+            .map(|inner| PreparedLifecycle { inner })
+            .map_err(client_error)
+    }
+
     #[napi]
     pub async fn execute_lifecycle_action_json(
         &self,
@@ -1765,6 +3342,20 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .execute_lifecycle_action(&action, &key)
+            .await
+            .map_err(client_error)?;
+        complete_json_value(receipt_value(&value), metadata)
+    }
+
+    /// Explicitly send a recovered lifecycle action and preserve exact values.
+    #[napi]
+    pub async fn execute_recovered_lifecycle_action_json(
+        &self,
+        recovered: &RecoveredLifecycle,
+    ) -> Result<JsonOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .execute_lifecycle_action(&recovered.action, &recovered.key)
             .await
             .map_err(client_error)?;
         complete_json_value(receipt_value(&value), metadata)

@@ -1,0 +1,386 @@
+{
+  "version": 1,
+  "operations": [
+    "Create",
+    "Get",
+    "Lookup",
+    "List",
+    "Patch",
+    "Tombstone",
+    "Batch",
+    "Revisions",
+    "Snapshot",
+    "SubmitRequest",
+    "ApproveRequest",
+    "RejectRequest",
+    "RequestRevision",
+    "ReviseRequest",
+    "CancelRequest",
+    "ApplyRequest",
+    "Invoke"
+  ],
+  "queryKinds": [
+    "List",
+    "Current",
+    "AsOf",
+    "Snapshot"
+  ],
+  "queryOptions": [
+    "accessProfile",
+    "$select",
+    "$filter",
+    "$orderby",
+    "$top",
+    "$count",
+    "$skiptoken",
+    "bbox",
+    "asOf",
+    "snapshot",
+    "validAt",
+    "requestHistoryAfterProposalVersion",
+    "proposalVersion"
+  ],
+  "queryOptionBindings": {
+    "accessProfile": {
+      "rust": ["BRegRecordOptions.access_profile"],
+      "node": ["RecordProjectionOptions.accessProfile"],
+      "python": ["BaseRegistryClient.get_record.access_profile"]
+    },
+    "$select": {
+      "rust": ["BRegRecordOptions.select"],
+      "node": ["RecordProjectionOptions.select"],
+      "python": ["BaseRegistryClient.get_record.select"]
+    },
+    "$filter": {
+      "rust": ["BRegListRequest.filter"],
+      "node": ["ListOptions.filter"],
+      "python": ["BaseRegistryClient.list_records.filter"]
+    },
+    "$orderby": {
+      "rust": ["BRegListRequest.orderby"],
+      "node": ["ListOptions.orderby"],
+      "python": ["BaseRegistryClient.list_records.orderby"]
+    },
+    "$top": {
+      "rust": ["BRegListRequest.top"],
+      "node": ["ListOptions.top"],
+      "python": ["BaseRegistryClient.list_records.top"]
+    },
+    "$count": {
+      "rust": ["BRegListRequest.count"],
+      "node": ["ListOptions.count"],
+      "python": ["BaseRegistryClient.list_records.count"]
+    },
+    "$skiptoken": {
+      "rust": ["BRegContinuationProjection.skiptoken"],
+      "node": ["ListContinuation.skiptoken"],
+      "python": ["BaseRegistryClient.continue_list.continuation"]
+    },
+    "bbox": {
+      "rust": ["BRegListRequest.bbox", "BRegGeoJsonListRequest.bbox"],
+      "node": ["ListOptions.bbox", "GeoJsonListOptions.bbox"],
+      "python": ["BaseRegistryClient.list_records.bbox", "BaseRegistryClient.list_geojson_records.bbox"],
+      "forbidden": {
+        "rust": ["BRegCurrentListRequest.bbox", "BRegAsOfListRequest.bbox", "BRegSnapshotListRequest.bbox", "BRegRelationshipListRequest.bbox"],
+        "node": ["CollectionOptions.bbox", "AsOfListOptions.bbox", "SnapshotListOptions.bbox"],
+        "python": ["BaseRegistryClient.list_current_records.bbox", "BaseRegistryClient.list_records_as_of.bbox", "BaseRegistryClient.list_snapshot_records.bbox", "BaseRegistryClient.list_relationship_records.bbox"]
+      }
+    },
+    "asOf": {
+      "rust": ["BRegAsOfListRequest.new.as_of"],
+      "node": ["AsOfListOptions.asOf"],
+      "python": ["BaseRegistryClient.list_records_as_of.as_of"]
+    },
+    "snapshot": {
+      "rust": ["BRegSnapshotListRequest.snapshot.value"],
+      "node": ["SnapshotListOptions.snapshot"],
+      "python": ["BaseRegistryClient.list_snapshot_records.snapshot"]
+    },
+    "validAt": {
+      "rust": ["BRegSnapshotListRequest.valid_at.value"],
+      "node": ["SnapshotListOptions.validAt"],
+      "python": ["BaseRegistryClient.list_snapshot_records.valid_at"]
+    },
+    "requestHistoryAfterProposalVersion": {
+      "rust": ["BRegRecordOptions.request_history_after_proposal_version.value"],
+      "node": ["RecordOptions.requestHistoryAfterProposalVersion"],
+      "python": ["BaseRegistryClient.get_record.request_history_after_proposal_version"]
+    },
+    "proposalVersion": {
+      "rust": ["BaseRegistryClient.download_attachment.proposal_version"],
+      "node": ["BaseRegistryClient.downloadAttachment.proposalVersion"],
+      "python": ["BaseRegistryClient.download_attachment.proposal_version"]
+    }
+  },
+  "representations": [
+    "application/json",
+    "application/ld+json",
+    "application/geo+json",
+    "application/problem+json",
+    "application/octet-stream",
+    "*/*"
+  ],
+  "excludedRoutes": [
+    {
+      "prefix": "/v1/gis",
+      "reason": "QGIS adapter is an interoperable access path; native SDK GIS uses /v1/records."
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "metadata",
+      "rust": [
+        "registry_contract"
+      ],
+      "node": [
+        "registryContract"
+      ],
+      "python": [
+        "registry_contract"
+      ]
+    },
+    {
+      "id": "direct-reads",
+      "rust": [
+        "get_record",
+        "list_records",
+        "continue_list",
+        "lookup_record"
+      ],
+      "node": [
+        "getRecord",
+        "listRecords",
+        "continueList",
+        "lookupRecord"
+      ],
+      "python": [
+        "get_record",
+        "list_records",
+        "continue_list",
+        "lookup_record"
+      ]
+    },
+    {
+      "id": "native-gis",
+      "rust": [
+        "get_geojson_record",
+        "list_geojson_records",
+        "continue_geojson_list"
+      ],
+      "node": [
+        "getGeoJsonRecord",
+        "listGeoJsonRecords",
+        "continueGeoJsonList"
+      ],
+      "python": [
+        "get_geojson_record",
+        "list_geojson_records",
+        "continue_geojson_list"
+      ]
+    },
+    {
+      "id": "current",
+      "rust": [
+        "list_current_records",
+        "continue_current_list"
+      ],
+      "node": [
+        "listCurrentRecords",
+        "continueCurrentList"
+      ],
+      "python": [
+        "list_current_records",
+        "continue_current_list"
+      ]
+    },
+    {
+      "id": "as-of",
+      "rust": [
+        "list_records_as_of",
+        "continue_as_of_list"
+      ],
+      "node": [
+        "listRecordsAsOf",
+        "continueAsOfList"
+      ],
+      "python": [
+        "list_records_as_of",
+        "continue_as_of_list"
+      ]
+    },
+    {
+      "id": "snapshot",
+      "rust": [
+        "list_snapshot_records",
+        "continue_snapshot_list"
+      ],
+      "node": [
+        "listSnapshotRecords",
+        "continueSnapshotList"
+      ],
+      "python": [
+        "list_snapshot_records",
+        "continue_snapshot_list"
+      ]
+    },
+    {
+      "id": "revisions",
+      "rust": [
+        "record_revisions",
+        "get_record_revision"
+      ],
+      "node": [
+        "recordRevisions",
+        "getRecordRevision"
+      ],
+      "python": [
+        "record_revisions",
+        "get_record_revision"
+      ]
+    },
+    {
+      "id": "proposal-history",
+      "rust": [
+        "get_record"
+      ],
+      "node": [
+        "getRecord"
+      ],
+      "python": [
+        "get_record"
+      ]
+    },
+    {
+      "id": "relationships",
+      "rust": [
+        "list_relationship_records",
+        "continue_relationship_list"
+      ],
+      "node": [
+        "listRelationshipRecords",
+        "continueRelationshipList"
+      ],
+      "python": [
+        "list_relationship_records",
+        "continue_relationship_list"
+      ]
+    },
+    {
+      "id": "direct-writes",
+      "rust": [
+        "create_record",
+        "patch_record"
+      ],
+      "node": [
+        "createRecord",
+        "patchRecord"
+      ],
+      "python": [
+        "create_record",
+        "patch_record"
+      ]
+    },
+    {
+      "id": "batch",
+      "rust": [
+        "batch_records"
+      ],
+      "node": [
+        "batchRecords"
+      ],
+      "python": [
+        "batch_records"
+      ]
+    },
+    {
+      "id": "attachments",
+      "rust": [
+        "upload_attachment",
+        "download_attachment",
+        "delete_attachment"
+      ],
+      "node": [
+        "uploadAttachment",
+        "downloadAttachment",
+        "deleteAttachment"
+      ],
+      "python": [
+        "upload_attachment",
+        "download_attachment",
+        "delete_attachment"
+      ]
+    },
+    {
+      "id": "lifecycle",
+      "rust": [
+        "lifecycle_actions",
+        "execute_lifecycle_action"
+      ],
+      "node": [
+        "lifecycleActions",
+        "executeLifecycleAction"
+      ],
+      "python": [
+        "lifecycle_actions",
+        "execute_lifecycle_action"
+      ]
+    },
+    {
+      "id": "create-recovery",
+      "rust": [
+        "prepare_create",
+        "recover_create"
+      ],
+      "node": [
+        "prepareCreate",
+        "recoverCreate"
+      ],
+      "python": [
+        "prepare_create",
+        "recover_create"
+      ]
+    },
+    {
+      "id": "lifecycle-recovery",
+      "rust": [
+        "prepare_lifecycle_action",
+        "recover_lifecycle_action"
+      ],
+      "node": [
+        "prepareLifecycleAction",
+        "recoverLifecycleAction"
+      ],
+      "python": [
+        "prepare_lifecycle_action",
+        "recover_lifecycle_action"
+      ]
+    },
+    {
+      "id": "immediate-actions",
+      "rust": [
+        "action_target_conditions",
+        "invoke_action"
+      ],
+      "node": [
+        "actionTargetConditions",
+        "invokeAction"
+      ],
+      "python": [
+        "action_target_conditions",
+        "invoke_action"
+      ]
+    },
+    {
+      "id": "tombstone",
+      "rust": [
+        "tombstone_record"
+      ],
+      "node": [
+        "tombstoneRecord"
+      ],
+      "python": [
+        "tombstone_record"
+      ]
+    }
+  ]
+}
