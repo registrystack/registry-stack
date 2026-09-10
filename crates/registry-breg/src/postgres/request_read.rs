@@ -1602,8 +1602,10 @@ fn workflow_decisions_value(
                     decision.reason_present(),
                     decision.reason(),
                     Some(decision.actor().as_str()),
-                    disclose_reasons,
-                    disclose_actor_references,
+                    DecisionDisclosure {
+                        reasons: disclose_reasons,
+                        actor_references: disclose_actor_references,
+                    },
                 )
             })
             .collect(),
@@ -1626,8 +1628,10 @@ fn decisions_value(
                     decision.reason_present,
                     decision.reason.as_deref(),
                     Some(&decision.actor_reference),
-                    disclose_reasons,
-                    disclose_actor_references,
+                    DecisionDisclosure {
+                        reasons: disclose_reasons,
+                        actor_references: disclose_actor_references,
+                    },
                 )
             })
             .collect(),
@@ -1641,8 +1645,7 @@ fn decision_value(
     reason_present: bool,
     reason: Option<&str>,
     actor_reference: Option<&str>,
-    disclose_reasons: bool,
-    disclose_actor_references: bool,
+    disclosure: DecisionDisclosure,
 ) -> Value {
     let mut value = json!({
         "stageId": stage_id,
@@ -1650,17 +1653,23 @@ fn decision_value(
         "decidedAt": decided_at,
         "reasonPresent": reason_present,
     });
-    if disclose_reasons {
+    if disclosure.reasons {
         if let Some(reason) = reason {
             value["reason"] = json!(reason);
         }
     }
-    if disclose_actor_references {
+    if disclosure.actor_references {
         if let Some(actor_reference) = actor_reference {
             value["actorReference"] = json!(actor_reference);
         }
     }
     value
+}
+
+#[derive(Clone, Copy)]
+struct DecisionDisclosure {
+    reasons: bool,
+    actor_references: bool,
 }
 
 fn may_disclose_decision_reasons(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
