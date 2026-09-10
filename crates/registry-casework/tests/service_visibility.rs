@@ -19,7 +19,7 @@ use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, AuthoritativeObservation,
     BootstrapDirectoryRequest, CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole,
     DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy,
-    IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PageStatus,
+    InboxView, IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PageStatus,
     PrepareActionRequest, PreparedSourceAttempt, QueuePolicy, RecoveryEvidence, SourceAdapter,
     SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy,
     SubjectRef, TransitionHint, ATTEMPT_REFERENCE_HEADER, CASEWORK_API_VERSION, CASEWORK_KIND,
@@ -693,7 +693,94 @@ async fn service_visibility_boundaries() {
     recovery_problem_discloses_only_the_entitled_original_attempt().await;
     caller_owned_live_attempt_survives_a_fresh_session_without_cross_actor_disclosure().await;
     supervisor_release_and_holder_timing_obey_current_authority().await;
+    exact_subject_selector_is_complete_and_cursor_bound().await;
     http_authentication_and_directory_authority_are_enforced().await;
+}
+
+async fn exact_subject_selector_is_complete_and_cursor_bound() {
+    let selected_id = Uuid::from_u128(32);
+    let other_id = Uuid::from_u128(33);
+    let fixture = fixture(
+        [
+            (selected_id, CallerRead::Visible("selected")),
+            (other_id, CallerRead::Visible("other")),
+        ],
+        policy(10, 1_000),
+    )
+    .await;
+    add_item(&fixture.service, selected_id, None).await;
+    add_item(&fixture.service, other_id, None).await;
+
+    let unfiltered = fixture
+        .service
+        .inbox_for_view(
+            &fixture.staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            1,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("unfiltered first page");
+    let cursor = unfiltered.next_cursor.expect("unvisited item cursor");
+    let selected = subject(selected_id);
+    let page = fixture
+        .service
+        .inbox_for_view(
+            &fixture.staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            10,
+            None,
+            Some(&selected),
+            None,
+        )
+        .await
+        .expect("exact subject page");
+    assert_eq!(page.status, PageStatus::Complete);
+    assert_eq!(page.served_queues, [QUEUE]);
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].subject, selected);
+    assert!(page.next_cursor.is_none());
+
+    let missing = subject(Uuid::from_u128(34));
+    let page = fixture
+        .service
+        .inbox_for_view(
+            &fixture.staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            10,
+            None,
+            Some(&missing),
+            None,
+        )
+        .await
+        .expect("missing exact subject is an empty complete page");
+    assert!(page.items.is_empty());
+    assert_eq!(page.status, PageStatus::Complete);
+    assert_eq!(page.served_queues, [QUEUE]);
+    assert!(matches!(
+        fixture
+            .service
+            .inbox_for_view(
+                &fixture.staff,
+                "reader",
+                "token",
+                InboxView::MyTeams,
+                10,
+                None,
+                Some(&selected),
+                Some(&cursor),
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Invalid))
+    ));
 }
 
 async fn supervisor_release_and_holder_timing_obey_current_authority() {
@@ -1277,6 +1364,7 @@ async fn inbox_views_filter_before_candidate_pagination() {
             1,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1308,6 +1396,7 @@ async fn inbox_views_filter_before_candidate_pagination() {
             "token",
             registry_casework_core::InboxView::CompletedByMe,
             1,
+            None,
             None,
             None,
         )
@@ -1693,7 +1782,14 @@ async fn source_deadline_is_hard_and_retryable() {
     assert!(started.elapsed() < Duration::from_millis(500));
     assert_eq!(page.status, PageStatus::SourceUnavailable);
     assert!(page.items.is_empty());
-    assert!(page.next_cursor.is_some());
+    let cursor = page.next_cursor.expect("timeout remains retryable");
+    let retry = fixture
+        .service
+        .inbox(&fixture.staff, "reader", "token", 1, None, Some(&cursor))
+        .await
+        .expect("cursor before the first examined item remains valid");
+    assert_eq!(retry.status, PageStatus::SourceUnavailable);
+    assert!(retry.items.is_empty());
 }
 
 async fn source_outage_is_distinct_from_empty_inbox_and_holdings() {
@@ -2216,6 +2312,7 @@ async fn http_authentication_and_directory_authority_are_enforced() {
         let page = response_body(response).await;
         assert_eq!(page["items"], json!([]));
         assert_eq!(page["status"], "complete");
+        assert_eq!(page["servedQueues"], json!([]));
     }
 
     let holdings = authenticated_request(

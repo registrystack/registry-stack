@@ -5,10 +5,11 @@ use std::time::{Duration, Instant};
 
 use registry_casework_core::{
     ActiveSubjectsPage, ActorContext, AttemptState, AttemptStatus, CallerSubjectView,
-    CaseworkAction, CaseworkProject, DiscoveryCursor, Draft, EphemeralCredential, EventRequest,
-    ExecutePreparedRequest, HistoryEntry, HoldingSummary, InboxPolicy, InboxView, MutationResponse,
-    OccurrenceState, OperationName, Page, PageStatus, PrepareActionRequest, SourceAdapter,
-    SourceAdapterError, SourceBinding, SourceReceipt, SubjectRef, WorkItem,
+    CaseworkAction, CaseworkProject, ClockRuntimeState, DiscoveryCursor, Draft,
+    EphemeralCredential, EventRequest, ExecutePreparedRequest, HistoryEntry, HoldingSummary,
+    InboxPolicy, InboxView, MutationResponse, OccurrenceState, OperationName, Page, PageStatus,
+    PrepareActionRequest, SourceAdapter, SourceAdapterError, SourceBinding, SourceReceipt,
+    SubjectRef, WorkItem, WorkItemPage,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -22,6 +23,8 @@ struct SourceCursorContext<'a> {
     feed: &'static str,
     view: InboxView,
     queue: Option<&'a str>,
+    subject: Option<&'a SubjectRef>,
+    ordering: &'static str,
 }
 
 #[derive(Clone)]
@@ -684,7 +687,7 @@ impl CaseworkService {
         limit: usize,
         queue: Option<&str>,
         cursor: Option<&str>,
-    ) -> Result<Page<WorkItem>, ServiceError> {
+    ) -> Result<WorkItemPage, ServiceError> {
         self.inbox_for_context(
             actor,
             source_profile_id,
@@ -692,6 +695,7 @@ impl CaseworkService {
             InboxView::MyTeams,
             limit,
             queue,
+            None,
             cursor,
             "list",
         )
@@ -707,8 +711,9 @@ impl CaseworkService {
         view: InboxView,
         limit: usize,
         queue: Option<&str>,
+        subject: Option<&SubjectRef>,
         cursor: Option<&str>,
-    ) -> Result<Page<WorkItem>, ServiceError> {
+    ) -> Result<WorkItemPage, ServiceError> {
         self.inbox_for_context(
             actor,
             source_profile_id,
@@ -716,6 +721,7 @@ impl CaseworkService {
             view,
             limit,
             queue,
+            subject,
             cursor,
             "list",
         )
@@ -731,11 +737,12 @@ impl CaseworkService {
         view: InboxView,
         limit: usize,
         queue: Option<&str>,
+        subject: Option<&SubjectRef>,
         cursor: Option<&str>,
         feed: &'static str,
-    ) -> Result<Page<WorkItem>, ServiceError> {
+    ) -> Result<WorkItemPage, ServiceError> {
         let policy = &self.project.inbox;
-        let cursor_context = source_cursor_context(feed, view, queue)?;
+        let cursor_context = source_cursor_context(feed, view, queue, subject)?;
         let after = self
             .store
             .resolve_cursor(actor, source_profile_id, &cursor_context, cursor)
@@ -745,12 +752,19 @@ impl CaseworkService {
         let deadline = Duration::from_millis(policy.page_deadline_milliseconds);
         let candidates = self
             .store
-            .inbox_candidates_for_view(actor, view, policy.maximum_candidate_scan, after, queue)
+            .inbox_candidates_for_view(
+                actor,
+                view,
+                policy.maximum_candidate_scan,
+                after,
+                queue,
+                subject,
+            )
             .await?;
         let candidate_ids = candidates
             .items
             .iter()
-            .map(|item| item.item_id)
+            .map(|candidate| candidate.item.item_id)
             .collect::<Vec<_>>();
         let holder_timings = self
             .store
@@ -766,30 +780,33 @@ impl CaseworkService {
             .sources
             .iter()
             .filter(|source| {
-                source
-                    .requests
-                    .iter()
-                    .any(|request| queue.is_none_or(|queue| request.queue == queue))
+                subject.is_none_or(|subject| source.id == subject.source_id)
+                    && source.requests.iter().any(|request| {
+                        queue.is_none_or(|queue| request.queue == queue)
+                            && subject.is_none_or(|subject| request.entity == subject.kind)
+                    })
             })
             .collect::<Vec<_>>();
-        for source in &relevant_sources {
-            let adapter = self.adapter(&source.id)?;
-            let pending = self
-                .store
-                .source_has_pending(&source.id, adapter.binding_generation())
-                .await?;
-            match self
-                .store
-                .source_status(&source.id, adapter.binding_generation())
-                .await?
-            {
-                Some((true, false)) => {}
-                Some((_, true)) => unavailable = true,
-                _ => discovery_pending = true,
+        if subject.is_none() {
+            for source in &relevant_sources {
+                let adapter = self.adapter(&source.id)?;
+                let pending = self
+                    .store
+                    .source_has_pending(&source.id, adapter.binding_generation())
+                    .await?;
+                match self
+                    .store
+                    .source_status(&source.id, adapter.binding_generation())
+                    .await?
+                {
+                    Some((true, false)) => {}
+                    Some((_, true)) => unavailable = true,
+                    _ => discovery_pending = true,
+                }
+                discovery_pending |= pending;
             }
-            discovery_pending |= pending;
         }
-        if after.is_none() && candidates.items.is_empty() {
+        if subject.is_none() && after.is_none() && candidates.items.is_empty() {
             unavailable = false;
             discovery_pending = false;
             for source in relevant_sources {
@@ -849,7 +866,7 @@ impl CaseworkService {
         let mut last_examined = after;
         let mut items = Vec::new();
         let candidate_count = candidates.items.len();
-        for item in candidates.items {
+        for candidate in candidates.items {
             if items.len() == desired
                 || reads == policy.maximum_source_reads
                 || started.elapsed() >= deadline
@@ -857,6 +874,7 @@ impl CaseworkService {
                 break;
             }
             reads += 1;
+            let item = candidate.item;
             let adapter = self.adapter(&item.subject.source_id)?;
             let remaining = deadline.saturating_sub(started.elapsed());
             let read = tokio::time::timeout(
@@ -875,7 +893,11 @@ impl CaseworkService {
                 }
                 Ok(Ok(view)) => {
                     examined += 1;
-                    last_examined = Some((item.passive_due_at, item.item_id));
+                    last_examined = Some((
+                        candidate.effective_due_at,
+                        item.first_observed_at,
+                        item.item_id,
+                    ));
                     let item = match self
                         .assemble_caller_visible_item(
                             actor,
@@ -894,7 +916,11 @@ impl CaseworkService {
                 }
                 Ok(Err(SourceAdapterError::Concealed | SourceAdapterError::Denied)) => {
                     examined += 1;
-                    last_examined = Some((item.passive_due_at, item.item_id));
+                    last_examined = Some((
+                        candidate.effective_due_at,
+                        item.first_observed_at,
+                        item.item_id,
+                    ));
                 }
                 Ok(Err(SourceAdapterError::Unavailable)) => {
                     unavailable = true;
@@ -925,10 +951,20 @@ impl CaseworkService {
         } else {
             None
         };
-        Ok(Page {
+        let served_queues = match actor.role {
+            registry_casework_core::CaseworkRole::Staff
+            | registry_casework_core::CaseworkRole::Supervisor => {
+                self.store.served_queues(actor).await?
+            }
+            registry_casework_core::CaseworkRole::Administrator
+            | registry_casework_core::CaseworkRole::Requester => Vec::new(),
+        };
+        items.retain(|item| served_queues.binary_search(&item.queue_id).is_ok());
+        Ok(WorkItemPage {
             items,
             next_cursor,
             status,
+            served_queues,
         })
     }
 
@@ -948,6 +984,7 @@ impl CaseworkService {
                 InboxView::MyTeams,
                 1,
                 queue,
+                None,
                 cursor,
                 "next",
             )
@@ -1417,6 +1454,7 @@ impl CaseworkService {
                 InboxView::MyTeams,
                 100,
                 None,
+                None,
                 cursor,
                 "holdings",
             )
@@ -1427,10 +1465,11 @@ impl CaseworkService {
             BTreeMap::new();
         let now = chrono::Utc::now();
         for item in page.items {
+            let overdue = effective_due_at(&item).is_some_and(|due| due < now);
             if let Some(holder) = item.holder {
                 let counts = holdings.entry((holder, item.queue_id)).or_insert((0, 0));
                 counts.0 += 1;
-                counts.1 += u32::from(item.passive_due_at.is_some_and(|due| due < now));
+                counts.1 += u32::from(overdue);
             }
         }
         let items = holdings
@@ -1597,9 +1636,32 @@ fn source_cursor_context(
     feed: &'static str,
     view: InboxView,
     queue: Option<&str>,
+    subject: Option<&SubjectRef>,
 ) -> Result<String, ServiceError> {
-    serde_json::to_string(&SourceCursorContext { feed, view, queue })
-        .map_err(|_| ServiceError::Configuration)
+    serde_json::to_string(&SourceCursorContext {
+        feed,
+        view,
+        queue,
+        subject,
+        ordering: "effective-due-v1",
+    })
+    .map_err(|_| ServiceError::Configuration)
+}
+
+fn effective_due_at(item: &WorkItem) -> Option<chrono::DateTime<chrono::Utc>> {
+    if item.clock_occurrences.is_empty() {
+        return item.passive_due_at;
+    }
+    item.clock_occurrences
+        .iter()
+        .filter(|clock| {
+            matches!(
+                clock.state,
+                ClockRuntimeState::Running | ClockRuntimeState::VerificationPending
+            )
+        })
+        .filter_map(|clock| clock.due_at)
+        .min()
 }
 
 fn routing_policy_digest(
@@ -1762,15 +1824,89 @@ mod tests {
 
     #[test]
     fn cursor_context_preserves_colons_in_typed_queue_identity() {
-        let context = source_cursor_context("list", InboxView::Mine, Some("region:appeals"))
-            .expect("cursor context");
+        let subject = SubjectRef {
+            source_id: "source:west".to_owned(),
+            kind: "request:appeal".to_owned(),
+            id: "record:42".to_owned(),
+        };
+        let context = source_cursor_context(
+            "list",
+            InboxView::Mine,
+            Some("region:appeals"),
+            Some(&subject),
+        )
+        .expect("cursor context");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&context).expect("context JSON"),
             serde_json::json!({
                 "feed": "list",
                 "view": "mine",
-                "queue": "region:appeals"
+                "queue": "region:appeals",
+                "subject": {
+                    "sourceId": "source:west",
+                    "kind": "request:appeal",
+                    "id": "record:42"
+                },
+                "ordering": "effective-due-v1"
             })
         );
+    }
+
+    #[test]
+    fn effective_due_uses_passive_only_without_a_real_clock() {
+        let passive = chrono::Utc::now();
+        let mut item = WorkItem {
+            item_id: Uuid::new_v4(),
+            subject: SubjectRef {
+                source_id: "source".to_owned(),
+                kind: "request".to_owned(),
+                id: "one".to_owned(),
+            },
+            occurrence_kind: registry_casework_core::OccurrenceKind::Review,
+            stage: None,
+            binding_reference: "binding".to_owned(),
+            binding: SourceBinding {
+                source_revision: "1".to_owned(),
+                version: "1".to_owned(),
+                integrity: None,
+                generation: "1".to_owned(),
+            },
+            state: OccurrenceState::Open,
+            queue_id: "queue".to_owned(),
+            holder: None,
+            held_since: None,
+            assignment: None,
+            revision: 1,
+            first_observed_at: passive,
+            passive_due_at: Some(passive),
+            updated_at: passive,
+            hosted: None,
+            routing: None,
+            clock_occurrences: Vec::new(),
+            actions: Vec::new(),
+            routing_copy: None,
+            live_attempt: None,
+        };
+        assert_eq!(effective_due_at(&item), Some(passive));
+        item.clock_occurrences
+            .push(registry_casework_core::ClockOccurrenceView {
+                clock_occurrence_id: Uuid::new_v4(),
+                subject: item.subject.clone(),
+                clock_id: "clock".to_owned(),
+                state: ClockRuntimeState::Paused,
+                policy_digest: "sha256:policy".to_owned(),
+                calculation_generation: 1,
+                recompute_generation: 0,
+                anchor_at: Some(passive),
+                started_at: Some(passive),
+                due_at: Some(passive),
+                at_risk_at: None,
+                completed_at: None,
+                next_effect: None,
+                upcoming_effects: Vec::new(),
+            });
+        assert_eq!(effective_due_at(&item), None);
+        item.clock_occurrences[0].state = ClockRuntimeState::VerificationPending;
+        assert_eq!(effective_due_at(&item), Some(passive));
     }
 }

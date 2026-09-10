@@ -8,7 +8,7 @@ use registry_casework_core::{
     HostedPolicyDigest, HostedTerminalPage, HostedTerminalResult, HostedTerminalState,
     HostedValidationError, HostedValidationReason, HostedWorkItemContext, IssuerPrincipal,
     OccurrenceKind, OccurrenceState, OpaqueActorRef, Page, PageStatus, RequesterHostedItem,
-    SourceBinding, StaffingDiagnostic, SubjectRef, WorkItem,
+    SourceBinding, StaffingDiagnostic, SubjectRef, WorkItem, WorkItemPage,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -1333,14 +1333,24 @@ impl CaseworkService {
         limit: usize,
         cursor_context: &str,
         cursor: Option<&str>,
-    ) -> Result<Page<WorkItem>, ServiceError> {
+    ) -> Result<WorkItemPage, ServiceError> {
         if cursor_context != HOSTED_STAFF_INBOX_CURSOR_CONTEXT {
             return Err(ServiceError::Store(StoreError::CursorInvalid));
         }
-        self.store
+        let mut page = self
+            .store
             .hosted_staff_inbox(actor, limit, cursor)
             .await
-            .map_err(ServiceError::from)
+            .map_err(ServiceError::from)?;
+        let served_queues = self.store.served_queues(actor).await?;
+        page.items
+            .retain(|item| served_queues.binary_search(&item.queue_id).is_ok());
+        Ok(WorkItemPage {
+            items: page.items,
+            next_cursor: page.next_cursor,
+            status: page.status,
+            served_queues,
+        })
     }
 
     pub async fn hosted_work_item(
