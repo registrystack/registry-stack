@@ -272,11 +272,30 @@ jwksSource:
   documentRef: secret:file/<jwks-document>
 ```
 
+When the identity provider rotates its signing keys — or regenerates them after state loss —
+every token it issues fails verification against the pinned document, and callers all see the
+same value-free `authentication.refused`. The server log names the operational cause on the
+`registry_breg::auth` target: the refused token's signing key is not in the configured JWKS.
+Recover by re-pinning, and treat it as a deliberate trust change, because the new document
+becomes the anchor for bearer verification:
+
+1. Fetch the provider's current JWKS document from its published `jwks_uri` over TLS, the same
+   way the initial pinning did. Confirm the keys with the provider operator if the rotation was
+   not announced.
+2. Replace the file the `documentRef` names with those bytes, keeping the secret-file rules
+   below (owner, mode, no trailing newline).
+3. Restart `breg`; the static document is read only at startup.
+4. Verify with a fresh provider login that authentication succeeds again, and that tokens
+   signed by the removed keys are still refused.
+
 With `kind: discovery`, the runtime reads the issuer's discovery document and caches its JWKS
 under the optional `jwksCache` bounds.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs, RuntimeConfig;
     crates/registry-breg/tests/runtime_config.rs;
+    crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate;
+    crates/registry-breg/tests/http_auth.rs,
+    static_jwks_rotation_is_diagnosed_and_repinning_restores_authentication;
     crates/registry-platform-config/src/secrets.rs, SecretReference;
     products/breg/generated/runtime/runtime.schema.json. */}
 

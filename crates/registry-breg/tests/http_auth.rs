@@ -23,13 +23,14 @@ use registry_breg::auth::{
 };
 use registry_breg::cursor::CursorCodec;
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
+use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     access_token_typ_set, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
     TokenVerifierConfig,
 };
 use registry_platform_testing::{
-    fixtures, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
+    fixtures, jwks_from_private_jwk, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
@@ -778,6 +779,95 @@ async fn the_rfc9068_typ_pair_admits_both_spellings_as_one_token_type() {
 }
 
 #[tokio::test]
+async fn static_jwks_rotation_is_diagnosed_and_repinning_restores_authentication() {
+    let harness = Harness::new().await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs();
+    let mut claims = valid_claims();
+    claims["iss"] = json!(harness.idp.issuer());
+    claims["iat"] = json!(now);
+    claims["nbf"] = json!(now);
+    claims["exp"] = json!(now + 900);
+
+    let pinned_key_source = |jwk: &str| {
+        let document = jwks_from_private_jwk(&PrivateJwk::parse(jwk).expect("JWK parses"));
+        let jwk_set = serde_json::from_value::<jsonwebtoken::jwk::JwkSet>(document)
+            .expect("static JWKS document parses");
+        Arc::new(JwksFetcher::new_static(
+            jwk_set,
+            JwksFetcherConfig::defaults(),
+        ))
+    };
+    let authenticator = RegistryAuthenticator::new(
+        &harness.registry,
+        verifier_config(&harness.idp),
+        pinned_key_source(fixtures::ED25519_PRIVATE_JWK),
+        authority_claims(),
+    )
+    .expect("a static JWKS pin builds an authenticator");
+
+    let original = sign_ed25519_compact_jwt(
+        fixtures::ED25519_PRIVATE_JWK,
+        "JWT",
+        "registry-platform-testing-ed25519-1",
+        claims.clone(),
+    );
+    authenticator
+        .authenticate(&original)
+        .await
+        .expect("a token from the pinned key is accepted");
+
+    // Provider-side rotation: the IdP now signs with its second key.
+    harness.idp.rotate_key();
+    let rotated = sign_ed25519_compact_jwt(
+        fixtures::ED25519_ROTATED_PRIVATE_JWK,
+        "JWT",
+        "registry-platform-testing-ed25519-2",
+        claims,
+    );
+
+    let captured = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_max_level(tracing::Level::WARN)
+        .finish();
+    let capture = tracing::subscriber::set_default(subscriber);
+    let error = authenticator
+        .authenticate(&rotated)
+        .await
+        .expect_err("a token from the rotated key is refused");
+    drop(capture);
+    assert_eq!(error, AuthenticationError::VerificationRefused);
+    let logs =
+        String::from_utf8_lossy(&captured.0.lock().expect("captured log buffer")).into_owned();
+    assert!(
+        logs.contains("signing key is not in the configured JWKS"),
+        "the refusal names the rotated-key condition; captured: {logs}"
+    );
+
+    // Re-pin: replace the static document with the provider's current
+    // keys and rebuild, as a restart with the refreshed secret does.
+    let repinned = RegistryAuthenticator::new(
+        &harness.registry,
+        verifier_config(&harness.idp),
+        pinned_key_source(fixtures::ED25519_ROTATED_PRIVATE_JWK),
+        authority_claims(),
+    )
+    .expect("a re-pinned JWKS builds an authenticator");
+    repinned
+        .authenticate(&rotated)
+        .await
+        .expect("the re-pinned document accepts the rotated key");
+    let stale = repinned
+        .authenticate(&original)
+        .await
+        .expect_err("a token from the removed key stays refused");
+    assert_eq!(stale, AuthenticationError::VerificationRefused);
+}
+
+#[tokio::test]
 async fn malformed_or_duplicate_bearer_never_downgrades_to_anonymous() {
     let harness = Harness::new().await;
     for values in [
@@ -1225,6 +1315,31 @@ fn verifier_config(idp: &MockIdp) -> TokenVerifierConfig {
 
 fn authority_claims() -> AuthorityClaimConfig {
     AuthorityClaimConfig::new("registry_principal", Some("purpose".to_owned()))
+}
+
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("captured log buffer")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedLogs {
+    type Writer = Self;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        self.clone()
+    }
 }
 
 fn valid_claims() -> Value {
