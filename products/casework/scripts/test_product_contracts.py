@@ -88,7 +88,8 @@ class ProductContractTests(unittest.TestCase):
     def test_security_contracts_are_scoped_and_do_not_claim_execution(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         trace = TRACE.read_text(encoding="utf-8")
-        self.assertIn("scope: first-checkpoint", matrix)
+        self.assertIn("scope: first-full-mvp", matrix)
+        self.assertIn("scope: first-full-mvp", trace)
         self.assertIn("evidenceStatus: source-mapped-not-executed", matrix)
         self.assertIn("executionStatus: not-recorded", trace)
         self.assertNotIn("executionStatus: passed", matrix + trace)
@@ -106,12 +107,12 @@ class ProductContractTests(unittest.TestCase):
         deferred = {
             int(number)
             for number in re.findall(
-                r"^  - \{number: ([0-9]+), targetWave: post-checkpoint,", matrix, re.M
+                r"^  - \{number: ([0-9]+), targetWave: post-mvp,", matrix, re.M
             )
         }
         self.assertEqual(set(range(1, 19)), mapped | deferred)
         self.assertFalse(mapped & deferred)
-        self.assertEqual({2, 11, 12}, deferred)
+        self.assertEqual({12}, deferred)
 
     def test_every_mapped_test_exists_by_exact_name(self):
         mapped = references(MATRIX.read_text(encoding="utf-8")) | references(
