@@ -323,9 +323,10 @@ impl StarterHttp<'_> {
         extra_headers: &[(&str, &str)],
     ) -> (StatusCode, Value, HeaderMap) {
         let token = self.idp.mint_token(json!({"aud": AUDIENCE, "registry_principal": actor.principal, "registry_purpose": "starter-learning", "scope": actor.scope}));
+        let separator = if path.contains('?') { '&' } else { '?' };
         let mut request = Request::builder()
             .method(method)
-            .uri(format!("{path}?accessProfile={profile}"))
+            .uri(format!("{path}{separator}accessProfile={profile}"))
             .header("authorization", format!("Bearer {token}"))
             .header("accept", "application/json");
         if method != "GET"
@@ -539,6 +540,11 @@ async fn assert_http_policy(starter: &Starter, http: &StarterHttp<'_>) {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
+
+    if starter.primary_route == "professional-licenses" {
+        assert_professional_request_target_filter(http, &original_record, &change, &target, &draft)
+            .await;
+    }
 
     // Same principal, same reviewer scope and purpose, fresh actor-specific
     // response: this proves submitter exclusion, not a foreign ETag mismatch.
@@ -802,6 +808,49 @@ async fn assert_http_policy(starter: &Starter, http: &StarterHttp<'_>) {
         }
         ReferencePolicy::NoLocalReferences => {}
     }
+}
+
+async fn assert_professional_request_target_filter(
+    http: &StarterHttp<'_>,
+    original_record: &Value,
+    change: &Value,
+    target: &str,
+    matching_request: &str,
+) {
+    let mut other_record = original_record.clone();
+    other_record["localIdentifier"] = json!("HTTP-POLICY-FILTER-NONMATCHING");
+    let other_target = http.create("professional-licenses", other_record).await;
+    let mut other_change = change.clone();
+    other_change["record"] = json!(other_target);
+    other_change["supportingReference"] = json!("HTTP-POLICY-FILTER-NONMATCHING");
+    let other_request = http.create("scope-corrections", other_change).await;
+    let other_request_path = format!("/v1/records/scope-corrections/{other_request}");
+    invoke_action(http, &other_request_path, "editor", "submit_request").await;
+
+    let filter_path = format!("/v1/records/scope-corrections?$filter=record%20eq%20'{target}'");
+    let (status, body, _) = http
+        .persona("GET", &filter_path, "reviewer", None, &[])
+        .await;
+    assert_eq!(status, StatusCode::OK, "reviewer target filter: {body}");
+    let ids = body["items"]
+        .as_array()
+        .expect("reviewer target filter returns a record collection")
+        .iter()
+        .map(|item| {
+            item["recordIdentifier"]
+                .as_str()
+                .expect("filtered request has a record identifier")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        [matching_request],
+        "the exact target filter returns the matching request and excludes another target"
+    );
+
+    let (status, body, _) = http.persona("GET", &filter_path, "editor", None, &[]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "query.invalid");
 }
 
 async fn assert_agricultural_privacy_and_reference_types(http: &StarterHttp<'_>, farm: &str) {

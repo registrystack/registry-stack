@@ -4543,9 +4543,16 @@ fn parse_immediate_action_results(
 }
 
 fn assert_request_action_shape(value: &Value) -> Result<(), FixtureError> {
-    let object = exact_object(value, &["id", "revision", "snapshot", "request"])?;
+    let object = exact_object(
+        value,
+        &["id", "revision", "snapshot", "actorReference", "request"],
+    )?;
     let identifier = object
         .get("id")
+        .and_then(Value::as_str)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let actor_reference = object
+        .get("actorReference")
         .and_then(Value::as_str)
         .ok_or(FixtureError::ResponseShapeRefused)?;
     if object
@@ -4553,6 +4560,8 @@ fn assert_request_action_shape(value: &Value) -> Result<(), FixtureError> {
         .and_then(Value::as_u64)
         .is_none_or(|revision| revision == 0)
         || !uuid::Uuid::parse_str(identifier).is_ok_and(|parsed| parsed.to_string() == identifier)
+        || actor_reference.is_empty()
+        || actor_reference.len() > 512
     {
         return Err(FixtureError::ResponseShapeRefused);
     }
