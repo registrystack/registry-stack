@@ -46,6 +46,8 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_read \
     --test postgres_read_dependencies \
     --test postgres_record_profile_conformance \
+    --test postgres_client_capabilities \
+    --test postgres_client_relationships \
     --test postgres_spatial_storage \
     --test postgres_spatial_read \
     --test postgres_revision_http \

@@ -59,7 +59,58 @@ and the first page's registry, dataset, and entity identifiers. First-page query
 parameters cannot be combined with it, and every continued page must retain the
 same collection identity.
 
-## Registry Record profile
+## Native collection capabilities
+
+Native Point queries use `BRegBoundingBox` and `BRegListRequest::bbox` for JSON,
+or the separate `get_geojson_record`, `list_geojson_records`, and
+`continue_geojson_list` methods for GeoJSON. Boxes contain exact decimal strings
+in west, south, east, north order. Edges are inclusive; zero-area boxes are valid.
+The client validates coordinate and wire bounds, and the server enforces the
+profile's geometry/query grants and span limits. GeoJSON get responses have no
+mutation ETag. The `/v1/gis` QGIS adapter routes are outside SDK scope.
+
+The runnable `native_geojson` example prints each FeatureCollection as one JSON
+line. Run it against an existing spatial registry from the workspace root,
+replacing the route, profile, box, and owner-only token file with your deployment's
+values:
+
+```sh
+BREG_BASE_URL=https://registry.example.com \
+BREG_ENTITY_ROUTE=establishments BREG_ACCESS_PROFILE=map-reader \
+BREG_BBOX=100,13,101,14 BREG_TOKEN_FILE=/path/to/access-token \
+cargo run --locked -p registry-breg-client --example native_geojson
+```
+
+If the registry refuses the box, inspect the selected profile's parsed spatial
+descriptor and request an allowed span. Renew an expired token before retrying
+a read. The example advances pages explicitly and does not fetch linked resources.
+
+`BRegCurrentListRequest`, `BRegAsOfListRequest`, `BRegSnapshotListRequest`, and
+`BRegRelationshipListRequest` separate route-specific options. Snapshot responses
+expose a reusable snapshot reference; their continuations retain it across
+writes. Relationship methods take the entity route, source-record UUID, and path
+route independently. Temporal and relationship requests reject bbox combinations.
+
+Parsed metadata retains selectors, read paths, vocabulary labels, reference
+operations, actions, and change-request capabilities. Descriptions grant no
+authority. `select_immediate_action`, `select_batch`, and `select_tombstone`
+require complete executable contracts bound to the source, profile, and package.
+Optional descriptors may be absent on older servers; absent executable contracts
+produce an unsupported selection error. Upgrade clients and servers together
+because older strict metadata decoders can reject added descriptors.
+
+Immediate action target conditions are an explicit read before invocation;
+invocation never refreshes them. Batch builders send one atomic same-entity
+create/patch request, with per-item conditions and optional batch-level correction
+context. Batch responses have a dedicated snapshot/results type. Tombstone
+returns a native revision envelope and removes the record from live lists while
+permitted retained history remains readable.
+
+The maintained capability inventory is
+`products/breg/contracts/client-capabilities.json`; the BReg client-contract gate
+checks it against compiled OpenAPI and Rust, Node, and Python entry points.
+
+## Registry Record decoding
 
 BReg uses the neutral `registry-record` DTOs for ordinary JSON and JSON-LD
 Registry Record responses. The shared decoder rejects duplicate JSON members,
@@ -137,10 +188,12 @@ inputs, selected client/profile, governed package, and database generation.
 Reclamation invalidates attempts; a token refresh does not create a new attempt.
 Opaque authority handles are never deserialized from saved state.
 
-`record_revisions(route, id, profile)` retrieves one bounded first history page
-as inert JSON bytes over the native `/revisions` route. It does not decode history
-semantics or follow continuations. Applications must not label a first page as a
-complete history when the response advertises more pages.
+`record_revisions(route, id, profile)` retrieves at most the newest 100 retained
+revisions as inert JSON bytes over the native `/revisions` route. There is no
+revision-list continuation. `get_record_revision` retrieves one retained revision
+as inert JSON bytes. Proposal history has a separate pagination contract: read
+`request.history.nextAfterProposalVersion`, then pass it to record-get options
+as `request_history_after_proposal_version` until the returned cursor is null.
 
 
 `BRegMetadataOperation::query()` retains typed caller-filtered query capabilities,

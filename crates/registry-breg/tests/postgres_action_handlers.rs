@@ -6,6 +6,10 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
+#[path = "support/client_http.rs"]
+#[allow(dead_code)]
+mod client_http;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -39,6 +43,66 @@ use zeroize::Zeroizing;
 const ID: &str = "00000000-0000-4000-8000-000000000101";
 const PACKAGE: &str = "person-registration-rhai";
 static HANDLER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sdk_declared_handler_refusal_and_committed_replay_match_real_server() {
+    use registry_breg_client::{BRegActionInvocationRequest, BRegIdempotencyKey, BRegProblemCode};
+    let _guard = HANDLER_TEST_LOCK.lock().await;
+    let (database, registry, identity) = setup().await;
+    let http = client_http::ClientHttp::start(
+        app(&database, registry.clone(), identity, None),
+        claims("person-registrar"),
+    )
+    .await;
+    let metadata = http
+        .client
+        .registry_contract(Some("person-registrar"))
+        .await
+        .unwrap();
+    let action = metadata
+        .value
+        .select_immediate_action("register-person", "person-registrar")
+        .unwrap();
+    let mut blank = input("0123456789012")["input"].as_object().unwrap().clone();
+    blank.insert("givenName".into(), json!("   "));
+    blank.insert("familyName".into(), json!("  "));
+    let request = BRegActionInvocationRequest::new(&action, blank, None).unwrap();
+    let before = counts(&database, &registry).await;
+    let refused = http
+        .client
+        .invoke_action(
+            &action,
+            &request,
+            &BRegIdempotencyKey::parse("sdk-blank-name").unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused.problem_code(), Some(BRegProblemCode::ActionRefused));
+    assert_eq!(refused.refusal_code().unwrap().as_str(), "blank-name");
+    assert_eq!(counts(&database, &registry).await, before);
+    let request = BRegActionInvocationRequest::new(
+        &action,
+        input("0123456789012")["input"].as_object().unwrap().clone(),
+        None,
+    )
+    .unwrap();
+    let key = BRegIdempotencyKey::parse("sdk-handler-commit").unwrap();
+    let first = http
+        .client
+        .invoke_action(&action, &request, &key)
+        .await
+        .unwrap();
+    let committed_counts = counts(&database, &registry).await;
+    let replay = http
+        .client
+        .invoke_action(&action, &request, &key)
+        .await
+        .unwrap();
+    assert_eq!(first.value, replay.value);
+    assert_eq!(counts(&database, &registry).await, committed_counts);
+    drop(http);
+    database.cleanup().await;
+}
 
 async fn setup() -> (
     TestDatabase,

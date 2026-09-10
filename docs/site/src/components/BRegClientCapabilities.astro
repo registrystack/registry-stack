@@ -1,0 +1,18 @@
+---
+import inventory from '../../../../products/breg/contracts/client-capabilities.json';
+---
+
+<table>
+  <thead>
+    <tr><th>Capability</th><th>Rust and Python</th><th>Node</th></tr>
+  </thead>
+  <tbody>
+    {inventory.capabilities.map((capability) => (
+      <tr>
+        <td>{capability.id.replaceAll('-', ' ')}</td>
+        <td>{capability.rust.map((method) => <div><code>{method}</code></div>)}</td>
+        <td>{capability.node.map((method) => <div><code>{method}</code></div>)}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

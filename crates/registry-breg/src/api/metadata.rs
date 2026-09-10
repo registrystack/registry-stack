@@ -31,12 +31,18 @@ fn operation(
 ) -> Value {
     let profile = &surface.entity.access_profiles[surface.context.selected_profile()];
     let empty = BTreeSet::new();
-    let create = if surface.route.operation == Operation::Create {
+    let create = if surface.route.operation == Operation::Create
+        || (surface.route.operation == Operation::Batch
+            && profile.operations.contains(&Operation::Create))
+    {
         &profile.writable_fields
     } else {
         &empty
     };
-    let patch = if surface.route.operation == Operation::Patch {
+    let patch = if surface.route.operation == Operation::Patch
+        || (surface.route.operation == Operation::Batch
+            && profile.operations.contains(&Operation::Patch))
+    {
         &profile.writable_fields
     } else {
         &empty
@@ -310,7 +316,7 @@ fn query_metadata(surface: &AuthorizedSurface<'_>, query: &CompiledQueryOperatio
         .chain(entity.attachments.keys())
         .filter(|id| surface.readable_fields.contains(*id))
         .collect::<BTreeSet<_>>();
-    json!({
+    let mut value = json!({
         "kind": query.kind,
         "selectableFields": selectable_fields.into_iter().filter_map(|id| field_identity(entity, id)).collect::<Vec<_>>(),
         "filterableFields": query.filter_fields.iter().filter_map(|field| {
@@ -330,7 +336,23 @@ fn query_metadata(surface: &AuthorizedSurface<'_>, query: &CompiledQueryOperatio
         "maxInValues": MAX_IN_VALUES,
         "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
         "temporal": temporal_metadata(query),
-    })
+    });
+    if let Some(bbox) = query
+        .spatial
+        .as_ref()
+        .and_then(|spatial| spatial.bbox.as_ref())
+    {
+        value["spatialQueries"] = json!({"bbox": {
+            "geometryProperty": field_identity(entity, &bbox.geometry_field)
+                .and_then(|field| field.get("apiName").cloned())
+                .unwrap_or_else(|| json!(bbox.geometry_field)),
+            "maximumLongitudeSpanDegrees": bbox.maximum_longitude_span_degrees,
+            "maximumLatitudeSpanDegrees": bbox.maximum_latitude_span_degrees,
+            "coordinateReferenceSystem": "CRS84",
+            "semantics": "inclusive_2d_non_crossing",
+        }});
+    }
+    value
 }
 
 fn temporal_metadata(query: &CompiledQueryOperation) -> Value {
@@ -394,6 +416,14 @@ fn request(surface: &AuthorizedSurface<'_>, query: Option<&CompiledQueryOperatio
                 parameters.push("validAt");
             }
         }
+        if query
+            .spatial
+            .as_ref()
+            .and_then(|spatial| spatial.bbox.as_ref())
+            .is_some()
+        {
+            parameters.push("bbox");
+        }
     }
     parameters.sort_unstable();
     let mut value = json!({"fieldNames": "api", "queryParameters": parameters});
@@ -418,6 +448,35 @@ fn request(surface: &AuthorizedSurface<'_>, query: Option<&CompiledQueryOperatio
             value["mutationSemantics"] = json!("direct");
             value["schema"] = crate::artifacts::json_patch_array_schema();
         }
+        Operation::Tombstone => {
+            value["body"] = json!("none");
+            value["ifMatchRequired"] = json!(true);
+            value["idempotencyKeyRequired"] = json!(true);
+            value["mutationSemantics"] = json!("direct");
+        }
+        Operation::Batch => {
+            let profile = &surface.entity.access_profiles[surface.context.selected_profile()];
+            let batch = surface
+                .entity
+                .batch
+                .as_ref()
+                .expect("served batch routes have compiled bounds");
+            value["body"] = json!("batch");
+            value["contentType"] = json!("application/json");
+            value["idempotencyKeyRequired"] = json!(true);
+            value["mutationSemantics"] = json!("direct");
+            value["maximumItems"] = json!(batch.maximum_items);
+            value["maximumBodyBytes"] = json!(batch.maximum_bytes);
+            value["allowCreate"] = json!(profile.operations.contains(&Operation::Create));
+            value["allowPatch"] = json!(profile.operations.contains(&Operation::Patch));
+            value["schema"] = crate::artifacts::openapi_batch_input_schema(
+                surface.entity,
+                Some(&profile_batch_writable_fields(surface)),
+                batch.maximum_items,
+                profile.operations.contains(&Operation::Create),
+                profile.operations.contains(&Operation::Patch),
+            );
+        }
         Operation::Lookup => {
             value["body"] = json!("selector_values");
             value["contentType"] = json!("application/json");
@@ -440,6 +499,15 @@ fn request(surface: &AuthorizedSurface<'_>, query: Option<&CompiledQueryOperatio
         _ => {}
     }
     value
+}
+
+fn profile_batch_writable_fields(surface: &AuthorizedSurface<'_>) -> BTreeSet<String> {
+    surface.entity.access_profiles[surface.context.selected_profile()]
+        .writable_fields
+        .iter()
+        .filter(|id| !surface.entity.attachments.contains_key(*id))
+        .cloned()
+        .collect()
 }
 
 fn logical_field<'a>(entity: &'a CompiledEntity, id: &str) -> Option<&'a CompiledLogicalField> {

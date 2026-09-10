@@ -754,3 +754,240 @@ fn attachment_schema_capabilities_are_preserved_without_granting_json_writes() {
         BRegMetadataErrorKind::Shape
     );
 }
+
+#[test]
+fn complete_descriptive_metadata_is_retained_and_spatial_is_optional() {
+    let mut value = fixture();
+    {
+        let get = &mut value["operations"][2];
+        get["readPath"] = json!({"id": "related-companies", "label": "Related companies"});
+        get["selectors"] = json!([{
+            "id": "by-name", "label": "By name", "valueOrigin": "request",
+            "fields": [{"id": "legal-name", "apiName": "legalName", "label": "Legal name",
+                "schema": {"type": "string", "maxLength": 120}, "required": true}],
+            "requestFields": ["legalName"]
+        }]);
+        get["fields"][0]["storageValidation"] =
+            json!({"kind": "postgresql-are", "pattern": "^[A-Z]+$"});
+        get["fields"][0]["codeLabels"] = json!({"active": "Active"});
+        get["fields"][0]["reference"] = json!({
+            "manualEntry": true,
+            "targetEntity": "company",
+            "operations": [{"operationId": "records.company.get", "accessProfile": "company-writer",
+                "labelFields": ["legal-name"]}]
+        });
+        get["query"] = json!({
+        "kind": "list",
+        "selectableFields": [{"id": "legal-name", "apiName": "legalName"}],
+        "filterableFields": [], "sortableFields": [], "allowCount": false,
+        "defaultPageSize": 25, "maxPageSize": 100, "maxFilterClauses": 8,
+        "maxInValues": 16,
+        "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
+        "temporal": null,
+        "spatialQueries": {"bbox": {"geometryProperty": "legalName",
+            "maximumLongitudeSpanDegrees": 0.5, "maximumLatitudeSpanDegrees": 0.25,
+            "coordinateReferenceSystem": "CRS84", "semantics": "inclusive_2d_non_crossing"}}
+        });
+    }
+    let metadata = parse(&value);
+    let operation = metadata.operation("records.company.get").unwrap();
+    assert_eq!(
+        operation.read_path().unwrap().identifier(),
+        "related-companies"
+    );
+    assert_eq!(operation.selectors()[0].request_fields(), ["legalName"]);
+    let field = &operation.fields()[0];
+    assert_eq!(field.code_labels()["active"], "Active");
+    assert_eq!(field.storage_validation().unwrap().kind(), "postgresql-are");
+    assert!(field.reference().unwrap().manual_entry());
+    assert_eq!(
+        field.reference().unwrap().operations()[0].operation_identifier(),
+        "records.company.get"
+    );
+    let bbox = operation
+        .query()
+        .unwrap()
+        .spatial_queries
+        .as_ref()
+        .unwrap()
+        .bbox
+        .as_ref()
+        .unwrap();
+    assert_eq!(bbox.geometry_property, "legalName");
+    assert_eq!(bbox.coordinate_reference_system, "CRS84");
+
+    value["operations"][2]["query"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spatialQueries");
+    assert!(parse(&value)
+        .operation("records.company.get")
+        .unwrap()
+        .query()
+        .unwrap()
+        .spatial_queries
+        .is_none());
+}
+
+#[test]
+fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
+    let mut value = fixture();
+    let tombstone = operation(
+        "records.company.tombstone",
+        "DELETE",
+        "/v1/records/companies/{record_id}",
+        "tombstone",
+        json!([]),
+        json!({"fieldNames": "api", "queryParameters": [], "body": "none",
+            "ifMatchRequired": true, "idempotencyKeyRequired": true,
+            "mutationSemantics": "direct"}),
+        (json!([]), json!([])),
+    );
+    let batch_schema = json!({
+        "type": "object", "additionalProperties": false, "required": ["items"],
+        "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 20,
+            "items": {"oneOf": [{"type": "object", "properties": {
+                "operation": {"const": "create"}, "data": {"type": "object"}}}]}}}
+    });
+    let batch = operation(
+        "records.company.batch",
+        "POST",
+        "/v1/records/companies:batch",
+        "batch",
+        json!([]),
+        json!({"fieldNames": "api", "queryParameters": [], "body": "batch",
+            "contentType": "application/json", "idempotencyKeyRequired": true,
+            "mutationSemantics": "direct", "maximumItems": 20, "maximumBodyBytes": 4096,
+            "allowCreate": true, "allowPatch": false, "schema": batch_schema}),
+        (json!(["legal-name"]), json!([])),
+    );
+    value["operations"]
+        .as_array_mut()
+        .unwrap()
+        .extend([tombstone, batch]);
+    value["entities"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"operation": "tombstone", "accessProfile": "company-writer"}),
+            json!({"operation": "batch", "accessProfile": "company-writer"}),
+        ]);
+    value["actions"] = json!([{
+        "id": "register-company", "route": "/v1/actions/register-company",
+        "conditionRoute": null, "contractFingerprint": REVISION,
+        "inputMode": "fixed", "maximumInputStringBytes": null,
+        "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
+            "type": "string", "minLength": 0, "maxLength": 100},
+            "required": true, "nullable": false, "classification": "internal"}],
+        "referenceInputs": [], "requiredConditionKeys": [],
+        "resultEffects": [{"effect": "company", "entity": "company", "operation": "create"}],
+        "access": {"selectedProfile": "company-writer"},
+        "routes": {"invoke": {"method": "POST", "path": "/v1/actions/register-company",
+            "operationId": "actions.register-company.invoke", "requiresIdempotencyKey": true,
+            "inputSchema": "action-register-company-invoke-input", "responseSchema": "action-register-company-invoke-response"},
+            "targetConditions": null},
+        "bounds": {"maximumTargets": 4, "maximumFieldMutations": 8, "maximumSnapshotBytes": 1024}
+    }]);
+    let metadata = parse(&value);
+    let tombstone = metadata
+        .select_tombstone("company", "company-writer")
+        .unwrap();
+    assert_eq!(
+        tombstone.path_for_record(Uuid::nil()),
+        "/v1/records/companies/00000000-0000-0000-0000-000000000000"
+    );
+    assert!(tombstone.request_schema().is_none());
+    let batch = metadata.select_batch("company", "company-writer").unwrap();
+    assert_eq!(batch.path(), "/v1/records/companies:batch");
+    assert_eq!(batch.maximum_items(), 20);
+    assert!(batch.allows_create());
+    assert!(!batch.allows_patch());
+    let action = metadata
+        .select_immediate_action("register-company", "company-writer")
+        .unwrap();
+    assert_eq!(action.invoke_path(), "/v1/actions/register-company");
+    assert!(!action.is_handler());
+    assert!(!action.inputs()[0].nullable());
+
+    let mut unsupported_bounds = value.clone();
+    unsupported_bounds["actions"][0]["bounds"]["maximumTargets"] = json!(17);
+    assert_eq!(
+        parse(&unsupported_bounds)
+            .select_immediate_action("register-company", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::ContractMismatch
+    );
+
+    let mut structured = value.clone();
+    structured["actions"][0]["inputs"][0]["fieldType"] = json!({
+        "type": "structured", "maxBytes": 64,
+        "schema": {"type": "object", "additionalProperties": false,
+            "properties": {"value": {"type": "string"}}}
+    });
+    parse(&structured)
+        .select_immediate_action("register-company", "company-writer")
+        .expect("a bounded closed Draft 2020-12 structured schema promotes");
+
+    let oversized_properties = (0..3_000)
+        .map(|index| (format!("field{index}"), json!({"type": "string"})))
+        .collect::<serde_json::Map<_, _>>();
+    let malformed_structured_schemas = [
+        json!({"type": "object", "properties": {}}),
+        json!({"type": "array", "items": {"$ref": "https://example.test/schema"}}),
+        json!({
+            "type": "object", "additionalProperties": false,
+            "properties": oversized_properties
+        }),
+        json!({"type": "array", "items": {"type": "not-a-json-schema-type"}}),
+    ];
+    for schema in malformed_structured_schemas {
+        let mut malformed = value.clone();
+        malformed["actions"][0]["inputs"][0]["fieldType"] =
+            json!({"type": "structured", "maxBytes": 64, "schema": schema});
+        assert_eq!(
+            parse(&malformed)
+                .select_immediate_action("register-company", "company-writer")
+                .unwrap_err()
+                .kind(),
+            BRegMetadataSelectionErrorKind::ContractMismatch
+        );
+    }
+
+    let mut optional_condition = value.clone();
+    optional_condition["actions"][0]["conditionRoute"] =
+        json!("/v1/actions/register-company/target-conditions");
+    optional_condition["actions"][0]["routes"]["targetConditions"] = json!({
+        "method": "POST", "path": "/v1/actions/register-company/target-conditions",
+        "operationId": "actions.register-company.target_conditions",
+        "requiresIdempotencyKey": false,
+        "inputSchema": "action-register-company-target-conditions-input",
+        "responseSchema": "action-register-company-target-conditions-response"
+    });
+    optional_condition["actions"][0]["inputs"][0]["fieldType"] =
+        json!({"type": "reference", "target": "company", "onDelete": "restrict"});
+    optional_condition["actions"][0]["inputs"][0]["required"] = json!(false);
+    optional_condition["actions"][0]["referenceInputs"] = json!([{
+        "input": "legal-name", "apiName": "legalName", "targetEntity": "company"
+    }]);
+    optional_condition["actions"][0]["requiredConditionKeys"] = json!(["legalName"]);
+    assert_eq!(
+        parse(&optional_condition)
+            .select_immediate_action("register-company", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::ContractMismatch
+    );
+
+    value["actions"][0]["inputs"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("nullable");
+    assert_eq!(
+        parse(&value)
+            .select_immediate_action("register-company", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::ContractMismatch
+    );
+}

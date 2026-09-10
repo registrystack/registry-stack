@@ -13,6 +13,7 @@ use reqwest::header::{
     LOCATION, VARY,
 };
 use reqwest::{Method, Response, StatusCode};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::query::{breg_encoded_query, MAX_BREG_REQUEST_URI_BYTES};
@@ -125,7 +126,9 @@ impl BaseRegistryClient {
         validate_entity_route(entity_route)?;
         validate_record_uuid(record_identifier)?;
         let mut pairs = Vec::new();
-        options.append_query(&mut pairs);
+        options.append_get_query(&mut pairs);
+        crate::query::ensure_query_bound(&pairs)
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
         let format = options.format_value();
         let wire = self
             .get(
@@ -177,6 +180,419 @@ impl BaseRegistryClient {
             Some(continuation),
         )
         .await
+    }
+
+    /// Read one direct record as a native GeoJSON Feature.
+    pub async fn get_geojson_record(
+        &self,
+        entity_route: &str,
+        record_identifier: &str,
+        options: &BRegGeoJsonOptions,
+    ) -> Result<BRegComplete<BRegGeoJsonFeature>, BaseRegistryClientError> {
+        validate_entity_route(entity_route)?;
+        validate_record_uuid(record_identifier)?;
+        let pairs = options
+            .query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let wire = self
+            .get(
+                &["v1", "records", entity_route, record_identifier],
+                &pairs,
+                GEOJSON_MEDIA_TYPE,
+                Credential::Optional,
+                EntityTagExpectation::Forbidden,
+            )
+            .await?;
+        decode_geojson_feature(wire)
+    }
+
+    /// Retrieve the first page of one direct native GeoJSON collection.
+    pub async fn list_geojson_records(
+        &self,
+        entity_route: &str,
+        request: &BRegGeoJsonListRequest,
+    ) -> Result<BRegComplete<BRegGeoJsonPage>, BaseRegistryClientError> {
+        validate_entity_route(entity_route)?;
+        let pairs = request
+            .query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        self.geojson_page(entity_route, &pairs, request.access_profile(), None)
+            .await
+    }
+
+    /// Advance exactly one native GeoJSON page.
+    pub async fn continue_geojson_list(
+        &self,
+        continuation: &BRegGeoJsonContinuation,
+    ) -> Result<BRegComplete<BRegGeoJsonPage>, BaseRegistryClientError> {
+        let pairs = continuation
+            .query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        self.geojson_page(
+            continuation.route(),
+            &pairs,
+            continuation.access_profile(),
+            Some(continuation),
+        )
+        .await
+    }
+
+    /// Retrieve the first page of the effective-time `:current` collection.
+    pub async fn list_current_records(
+        &self,
+        entity_route: &str,
+        request: &BRegCurrentListRequest,
+    ) -> Result<BRegComplete<BRegCurrentPage>, BaseRegistryClientError> {
+        validate_entity_route(entity_route)?;
+        let pairs = request
+            .query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let route = format!("{entity_route}:current");
+        let complete = self
+            .record_collection(&route, &pairs, request.format())
+            .await?;
+        let continuation = complete
+            .value
+            .page_info
+            .next_cursor
+            .as_deref()
+            .map(|cursor| {
+                BRegCurrentContinuation::try_from_parts(
+                    entity_route,
+                    cursor,
+                    request.format(),
+                    request.access_profile().map(str::to_owned),
+                    &complete.value.meta,
+                )
+            })
+            .transpose()
+            .map_err(|_| body_error(&complete))?;
+        Ok(BRegComplete {
+            value: BRegCurrentPage {
+                value: complete.value,
+                continuation,
+            },
+            metadata: complete.metadata,
+        })
+    }
+
+    /// Advance exactly one effective-time `:current` page.
+    pub async fn continue_current_list(
+        &self,
+        continuation: &BRegCurrentContinuation,
+    ) -> Result<BRegComplete<BRegCurrentPage>, BaseRegistryClientError> {
+        let pairs = continuation
+            .query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let route = format!("{}:current", continuation.route());
+        let complete = self
+            .record_collection(&route, &pairs, continuation.format())
+            .await?;
+        if !continuation.matches_meta(&complete.value.meta) {
+            return Err(body_error(&complete));
+        }
+        let next = complete
+            .value
+            .page_info
+            .next_cursor
+            .as_deref()
+            .map(|cursor| {
+                BRegCurrentContinuation::try_from_parts(
+                    continuation.route(),
+                    cursor,
+                    continuation.format(),
+                    continuation.access_profile().map(str::to_owned),
+                    &complete.value.meta,
+                )
+            })
+            .transpose()
+            .map_err(|_| body_error(&complete))?;
+        Ok(BRegComplete {
+            value: BRegCurrentPage {
+                value: complete.value,
+                continuation: next,
+            },
+            metadata: complete.metadata,
+        })
+    }
+
+    /// Retrieve the first page of one effective-time `:as-of` collection.
+    pub async fn list_records_as_of(
+        &self,
+        entity_route: &str,
+        request: &BRegAsOfListRequest,
+    ) -> Result<BRegComplete<BRegAsOfPage>, BaseRegistryClientError> {
+        validate_entity_route(entity_route)?;
+        let pairs = request
+            .as_of_query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let route = format!("{entity_route}:as-of");
+        let complete = self
+            .record_collection(&route, &pairs, request.format())
+            .await?;
+        let continuation = complete
+            .value
+            .page_info
+            .next_cursor
+            .as_deref()
+            .map(|cursor| {
+                BRegAsOfContinuation::try_from_parts(
+                    entity_route,
+                    cursor,
+                    request.format(),
+                    request.access_profile().map(str::to_owned),
+                    &complete.value.meta,
+                    request.as_of(),
+                )
+            })
+            .transpose()
+            .map_err(|_| body_error(&complete))?;
+        Ok(BRegComplete {
+            value: BRegAsOfPage {
+                value: complete.value,
+                continuation,
+            },
+            metadata: complete.metadata,
+        })
+    }
+
+    /// Advance exactly one effective-time `:as-of` page.
+    pub async fn continue_as_of_list(
+        &self,
+        continuation: &BRegAsOfContinuation,
+    ) -> Result<BRegComplete<BRegAsOfPage>, BaseRegistryClientError> {
+        let pairs = continuation
+            .query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let route = format!("{}:as-of", continuation.route());
+        let complete = self
+            .record_collection(&route, &pairs, continuation.format())
+            .await?;
+        if !continuation.matches_meta(&complete.value.meta) {
+            return Err(body_error(&complete));
+        }
+        let next = complete
+            .value
+            .page_info
+            .next_cursor
+            .as_deref()
+            .map(|cursor| {
+                BRegAsOfContinuation::try_from_parts(
+                    continuation.route(),
+                    cursor,
+                    continuation.format(),
+                    continuation.access_profile().map(str::to_owned),
+                    &complete.value.meta,
+                    continuation.as_of(),
+                )
+            })
+            .transpose()
+            .map_err(|_| body_error(&complete))?;
+        Ok(BRegComplete {
+            value: BRegAsOfPage {
+                value: complete.value,
+                continuation: next,
+            },
+            metadata: complete.metadata,
+        })
+    }
+
+    /// Retrieve the first page of one retained `:snapshot` collection.
+    pub async fn list_snapshot_records(
+        &self,
+        entity_route: &str,
+        request: &BRegSnapshotListRequest,
+    ) -> Result<BRegComplete<BRegSnapshotPage>, BaseRegistryClientError> {
+        validate_entity_route(entity_route)?;
+        let pairs = request
+            .snapshot_query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let route = format!("{entity_route}:snapshot");
+        let complete = self
+            .record_collection(&route, &pairs, request.format())
+            .await?;
+        let (snapshot, valid_at) = snapshot_extensions(&complete)?;
+        if request
+            .requested_snapshot()
+            .is_some_and(|requested| requested != snapshot)
+            || request.valid_at_value() != valid_at.as_deref()
+        {
+            return Err(body_error(&complete));
+        }
+        let continuation = complete
+            .value
+            .page_info
+            .next_cursor
+            .as_deref()
+            .map(|cursor| {
+                BRegSnapshotContinuation::try_from_parts(
+                    entity_route,
+                    cursor,
+                    request.format(),
+                    request.access_profile().map(str::to_owned),
+                    &complete.value.meta,
+                    &snapshot,
+                    valid_at.as_deref(),
+                )
+            })
+            .transpose()
+            .map_err(|_| body_error(&complete))?;
+        Ok(BRegComplete {
+            value: BRegSnapshotPage {
+                value: complete.value,
+                snapshot,
+                valid_at,
+                continuation,
+            },
+            metadata: complete.metadata,
+        })
+    }
+
+    /// Advance exactly one retained snapshot page.
+    pub async fn continue_snapshot_list(
+        &self,
+        continuation: &BRegSnapshotContinuation,
+    ) -> Result<BRegComplete<BRegSnapshotPage>, BaseRegistryClientError> {
+        let pairs = continuation
+            .query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let route = format!("{}:snapshot", continuation.route());
+        let complete = self
+            .record_collection(&route, &pairs, continuation.format())
+            .await?;
+        if !continuation.matches_meta(&complete.value.meta) {
+            return Err(body_error(&complete));
+        }
+        let (snapshot, valid_at) = snapshot_extensions(&complete)?;
+        if snapshot != continuation.snapshot() || valid_at.as_deref() != continuation.valid_at() {
+            return Err(body_error(&complete));
+        }
+        let next = complete
+            .value
+            .page_info
+            .next_cursor
+            .as_deref()
+            .map(|cursor| {
+                BRegSnapshotContinuation::try_from_parts(
+                    continuation.route(),
+                    cursor,
+                    continuation.format(),
+                    continuation.access_profile().map(str::to_owned),
+                    &complete.value.meta,
+                    &snapshot,
+                    valid_at.as_deref(),
+                )
+            })
+            .transpose()
+            .map_err(|_| body_error(&complete))?;
+        Ok(BRegComplete {
+            value: BRegSnapshotPage {
+                value: complete.value,
+                snapshot,
+                valid_at,
+                continuation: next,
+            },
+            metadata: complete.metadata,
+        })
+    }
+
+    /// Retrieve the first page of one configured relationship collection.
+    pub async fn list_relationship_records(
+        &self,
+        entity_route: &str,
+        record_identifier: &str,
+        path_route: &str,
+        request: &BRegRelationshipListRequest,
+    ) -> Result<BRegComplete<BRegRelationshipPage>, BaseRegistryClientError> {
+        validate_entity_route(entity_route)?;
+        validate_record_uuid(record_identifier)?;
+        validate_entity_route(path_route)?;
+        let pairs = request
+            .query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let complete = self
+            .record_collection_segments(
+                &["v1", "records", entity_route, record_identifier, path_route],
+                &pairs,
+                request.format(),
+            )
+            .await?;
+        let continuation = complete
+            .value
+            .page_info
+            .next_cursor
+            .as_deref()
+            .map(|cursor| {
+                BRegRelationshipContinuation::try_from_parts(
+                    entity_route,
+                    record_identifier,
+                    path_route,
+                    cursor,
+                    request.format(),
+                    request.access_profile().map(str::to_owned),
+                    &complete.value.meta,
+                )
+            })
+            .transpose()
+            .map_err(|_| body_error(&complete))?;
+        Ok(BRegComplete {
+            value: BRegRelationshipPage {
+                value: complete.value,
+                continuation,
+            },
+            metadata: complete.metadata,
+        })
+    }
+
+    /// Advance exactly one configured relationship page.
+    pub async fn continue_relationship_list(
+        &self,
+        continuation: &BRegRelationshipContinuation,
+    ) -> Result<BRegComplete<BRegRelationshipPage>, BaseRegistryClientError> {
+        let pairs = continuation
+            .query_pairs()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let complete = self
+            .record_collection_segments(
+                &[
+                    "v1",
+                    "records",
+                    continuation.route(),
+                    continuation.root_record_identifier(),
+                    continuation.path_route(),
+                ],
+                &pairs,
+                continuation.format(),
+            )
+            .await?;
+        if !continuation.matches_meta(&complete.value.meta) {
+            return Err(body_error(&complete));
+        }
+        let next = complete
+            .value
+            .page_info
+            .next_cursor
+            .as_deref()
+            .map(|cursor| {
+                BRegRelationshipContinuation::try_from_parts(
+                    continuation.route(),
+                    continuation.root_record_identifier(),
+                    continuation.path_route(),
+                    cursor,
+                    continuation.format(),
+                    continuation.access_profile().map(str::to_owned),
+                    &complete.value.meta,
+                )
+            })
+            .transpose()
+            .map_err(|_| body_error(&complete))?;
+        Ok(BRegComplete {
+            value: BRegRelationshipPage {
+                value: complete.value,
+                continuation: next,
+            },
+            metadata: complete.metadata,
+        })
     }
 
     /// Resolve one compiled selector to exactly one Registry Record.
@@ -239,6 +655,60 @@ impl BaseRegistryClient {
         .await
     }
 
+    /// Retrieve one exact positive revision as a Registry Record single envelope.
+    pub async fn get_record_revision(
+        &self,
+        entity_route: &str,
+        record_identifier: &str,
+        revision: u64,
+        options: &BRegRecordOptions,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        validate_entity_route(entity_route)?;
+        validate_record_uuid(record_identifier)?;
+        if revision == 0 || revision > i64::MAX as u64 {
+            return Err(BaseRegistryClientError::invalid_request(
+                "the Base Registry Engine revision must be a positive signed 64-bit integer",
+            ));
+        }
+        options
+            .ensure_collection_compatible()
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let mut pairs = Vec::new();
+        options.append_query(&mut pairs);
+        crate::query::ensure_query_bound(&pairs)
+            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        let revision = revision.to_string();
+        let format = options.format_value();
+        let wire = self
+            .get(
+                &[
+                    "v1",
+                    "records",
+                    entity_route,
+                    record_identifier,
+                    "revisions",
+                    &revision,
+                ],
+                &pairs,
+                format.media_type(),
+                Credential::Optional,
+                EntityTagExpectation::Forbidden,
+            )
+            .await?;
+        let body = wire.body.clone();
+        let media_type = wire.media_type.clone();
+        let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
+        if complete.value.data.record_identifier != record_identifier
+            || complete.value.data.revision_identifier != revision
+        {
+            return Err(body_error(&complete));
+        }
+        Ok(BRegComplete {
+            value: BRegRawDocument::new(media_type, body),
+            metadata: complete.metadata,
+        })
+    }
+
     /// Execute one metadata-bound direct Create without automatic retry.
     pub async fn create_record(
         &self,
@@ -248,6 +718,11 @@ impl BaseRegistryClient {
         format: BRegRecordFormat,
     ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
         self.validate_create_binding(operation, request)?;
+        if !request.matches_recovery_execution(operation, idempotency_key, format) {
+            return Err(BaseRegistryClientError::invalid_request(
+                "the recovered Base Registry Engine Create request does not match its original execution",
+            ));
+        }
         let segments = fixed_operation_segments(operation.path())?;
         let pairs = access_profile_query(Some(operation.access_profile()))?;
         let url = self.url_with_query(&segments, &pairs)?;
@@ -490,9 +965,11 @@ impl BaseRegistryClient {
         operation: &BRegCreateBinding,
         request: &BRegCreateRequest,
     ) -> Result<(), BaseRegistryClientError> {
-        if !operation.matches_source(&self.source_binding()) {
+        if !operation.matches_source(&self.source_binding())
+            || !request.matches_recovery_binding(operation)
+        {
             return Err(BaseRegistryClientError::invalid_request(
-                "the Base Registry Engine Create operation belongs to another client source",
+                "the Base Registry Engine Create operation does not match its client or recovered request binding",
             ));
         }
         request
@@ -828,6 +1305,156 @@ impl BaseRegistryClient {
         })
     }
 
+    async fn record_collection(
+        &self,
+        route: &str,
+        pairs: &[(String, String)],
+        format: BRegRecordFormat,
+    ) -> Result<BRegComplete<RegistryRecordCollectionResponse>, BaseRegistryClientError> {
+        self.record_collection_segments(&["v1", "records", route], pairs, format)
+            .await
+    }
+
+    async fn record_collection_segments(
+        &self,
+        segments: &[&str],
+        pairs: &[(String, String)],
+        format: BRegRecordFormat,
+    ) -> Result<BRegComplete<RegistryRecordCollectionResponse>, BaseRegistryClientError> {
+        let wire = self
+            .get(
+                segments,
+                pairs,
+                format.media_type(),
+                Credential::Optional,
+                EntityTagExpectation::Forbidden,
+            )
+            .await?;
+        decode_breg_collection(wire, format, self.deployment_prefix())
+    }
+
+    async fn geojson_page(
+        &self,
+        entity_route: &str,
+        pairs: &[(String, String)],
+        access_profile: Option<&str>,
+        _expected: Option<&BRegGeoJsonContinuation>,
+    ) -> Result<BRegComplete<BRegGeoJsonPage>, BaseRegistryClientError> {
+        validate_entity_route(entity_route)?;
+        let wire = self
+            .get(
+                &["v1", "records", entity_route],
+                pairs,
+                GEOJSON_MEDIA_TYPE,
+                Credential::Optional,
+                EntityTagExpectation::Forbidden,
+            )
+            .await?;
+        let complete = decode_geojson_collection(wire)?;
+        let continuation = complete
+            .value
+            .registry
+            .page_info
+            .next_cursor
+            .as_deref()
+            .map(|cursor| {
+                BRegGeoJsonContinuation::try_from_parts(
+                    entity_route,
+                    cursor,
+                    access_profile.map(str::to_owned),
+                )
+            })
+            .transpose()
+            .map_err(|_| body_error(&complete))?;
+        Ok(BRegComplete {
+            value: BRegGeoJsonPage {
+                value: complete.value,
+                continuation,
+            },
+            metadata: complete.metadata,
+        })
+    }
+
+    /// Execute one metadata-bound JSON POST without retry or link following.
+    pub(crate) async fn execute_bound_json(
+        &self,
+        path: &str,
+        access_profile: &str,
+        body: Vec<u8>,
+        idempotency_key: Option<&BRegIdempotencyKey>,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let segments = bound_json_operation_segments(path)?;
+        let pairs = access_profile_query(Some(access_profile))?;
+        let url = self.url_with_query(&segments, &pairs)?;
+        let mut builder = self
+            .transport
+            .http
+            .request(Method::POST, url)
+            .header(ACCEPT, APPLICATION_JSON)
+            .header(CONTENT_TYPE, APPLICATION_JSON)
+            .body(body);
+        if let Some(key) = idempotency_key {
+            builder = builder.header("idempotency-key", key.as_str());
+        }
+        builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send(builder).await?;
+        let wire = self.bound_json_wire(response).await?;
+        crate::strict_json::from_slice(&wire.body)
+            .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+        Ok(BRegComplete {
+            value: BRegRawDocument::new(wire.media_type, wire.body),
+            metadata: wire.metadata,
+        })
+    }
+
+    /// Execute one metadata-bound tombstone and validate its returned record identity.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn execute_tombstone(
+        &self,
+        path: &str,
+        access_profile: &str,
+        registry_identifier: &str,
+        dataset_identifier: &str,
+        entity_identifier: &str,
+        record_identifier: Uuid,
+        etag: &BRegEtag,
+        idempotency_key: &BRegIdempotencyKey,
+        format: BRegRecordFormat,
+    ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
+        let segments = fixed_operation_segments(path)?;
+        let pairs = access_profile_query(Some(access_profile))?;
+        let url = self.url_with_query(&segments, &pairs)?;
+        let mut builder = self
+            .transport
+            .http
+            .request(Method::DELETE, url)
+            .header(ACCEPT, format.media_type())
+            .header("idempotency-key", idempotency_key.as_str())
+            .header(IF_MATCH, etag.as_str());
+        builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send(builder).await?;
+        let wire = self
+            .mutation_wire(
+                response,
+                StatusCode::OK,
+                format.media_type(),
+                LocationExpectation::Forbidden,
+            )
+            .await?;
+        let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
+        validate_mutation_record(
+            &complete,
+            StatusCode::OK,
+            registry_identifier,
+            dataset_identifier,
+            entity_identifier,
+        )?;
+        if complete.value.data.record_identifier != record_identifier.to_string() {
+            return Err(body_error(&complete));
+        }
+        Ok(complete)
+    }
+
     async fn get(
         &self,
         segments: &[&str],
@@ -880,6 +1507,22 @@ impl BaseRegistryClient {
         expected_media: &str,
         etag_expectation: EntityTagExpectation,
     ) -> Result<BRegWire, BaseRegistryClientError> {
+        self.wire_with_bound(
+            response,
+            expected_media,
+            etag_expectation,
+            self.config.max_response_bytes,
+        )
+        .await
+    }
+
+    async fn wire_with_bound(
+        &self,
+        response: Response,
+        expected_media: &str,
+        etag_expectation: EntityTagExpectation,
+        maximum_bytes: u64,
+    ) -> Result<BRegWire, BaseRegistryClientError> {
         let status = response.status();
         if status != StatusCode::OK {
             return Err(breg_problem(response, &self.transport).await);
@@ -902,15 +1545,77 @@ impl BaseRegistryClient {
             ));
         }
         let link = breg_response_link(status, &headers, &trace_id)?;
+        if breg_response_location(status, &headers, &trace_id)?.is_some() {
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::Location,
+                Some(trace_id),
+            ));
+        }
         let body = self
             .transport
-            .read(response, self.config.max_response_bytes)
+            .read(response, self.config.max_response_bytes.min(maximum_bytes))
             .await?;
         Ok(BRegWire {
             body,
             metadata: BRegResponseMetadata::new(trace_id, etag),
             media_type: expected_media.to_owned(),
             link,
+            status: status.as_u16(),
+        })
+    }
+
+    async fn bound_json_wire(
+        &self,
+        response: Response,
+    ) -> Result<BRegWire, BaseRegistryClientError> {
+        let status = response.status();
+        if status != StatusCode::OK {
+            if status.is_success() {
+                return Err(BaseRegistryClientError::protocol(
+                    status.as_u16(),
+                    BRegProtocolFailure::Status,
+                    breg_trace_id(status, response.headers()).ok(),
+                ));
+            }
+            return Err(breg_problem(response, &self.transport).await);
+        }
+        let headers = response.headers().clone();
+        let trace_id = breg_trace_id(status, &headers)?;
+        validate_mutation_cache_headers(status, &headers, &trace_id)?;
+        if !exact_media_type(&headers, APPLICATION_JSON) {
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::MediaType,
+                Some(trace_id),
+            ));
+        }
+        if breg_response_etag(status, &headers, &trace_id)?.is_some() {
+            return Err(etag_failure(status, trace_id));
+        }
+        if breg_response_link(status, &headers, &trace_id)?.is_some() {
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::ProfileLink,
+                Some(trace_id),
+            ));
+        }
+        if breg_response_location(status, &headers, &trace_id)?.is_some() {
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::Location,
+                Some(trace_id),
+            ));
+        }
+        let body = self
+            .transport
+            .read(response, self.config.max_response_bytes)
+            .await?;
+        Ok(BRegWire {
+            body,
+            metadata: BRegResponseMetadata::new(trace_id, None),
+            media_type: APPLICATION_JSON.to_owned(),
+            link: None,
             status: status.as_u16(),
         })
     }
@@ -1082,6 +1787,90 @@ fn decode_breg_json<T: serde::de::DeserializeOwned>(
         value,
         metadata: wire.metadata,
     })
+}
+
+fn decode_geojson_feature(
+    wire: BRegWire,
+) -> Result<BRegComplete<BRegGeoJsonFeature>, BaseRegistryClientError> {
+    let status = wire.status;
+    let trace_id = wire.metadata.trace_id().clone();
+    if wire.link.is_some() {
+        return Err(BaseRegistryClientError::protocol(
+            status,
+            BRegProtocolFailure::ProfileLink,
+            Some(trace_id),
+        ));
+    }
+    let value = crate::strict_json::from_slice(&wire.body)
+        .map_err(|_| body_failure(status, trace_id.clone()))?;
+    let value = crate::geojson::decode_feature(value)
+        .map_err(|_| body_failure(status, trace_id.clone()))?;
+    Ok(BRegComplete {
+        value,
+        metadata: wire.metadata,
+    })
+}
+
+fn decode_geojson_collection(
+    wire: BRegWire,
+) -> Result<BRegComplete<BRegGeoJsonFeatureCollection>, BaseRegistryClientError> {
+    let status = wire.status;
+    let trace_id = wire.metadata.trace_id().clone();
+    if wire.link.is_some() {
+        return Err(BaseRegistryClientError::protocol(
+            status,
+            BRegProtocolFailure::ProfileLink,
+            Some(trace_id),
+        ));
+    }
+    let value = crate::strict_json::from_slice(&wire.body)
+        .map_err(|_| body_failure(status, trace_id.clone()))?;
+    let value = crate::geojson::decode_collection(value)
+        .map_err(|_| body_failure(status, trace_id.clone()))?;
+    Ok(BRegComplete {
+        value,
+        metadata: wire.metadata,
+    })
+}
+
+fn snapshot_extensions(
+    complete: &BRegComplete<RegistryRecordCollectionResponse>,
+) -> Result<(String, Option<String>), BaseRegistryClientError> {
+    let snapshot = complete
+        .value
+        .extensions
+        .get("snapshot")
+        .and_then(Value::as_str)
+        .filter(|value| valid_snapshot_reference(value))
+        .map(str::to_owned)
+        .ok_or_else(|| body_error(complete))?;
+    let valid_at = match complete.value.extensions.get("validAt") {
+        None => None,
+        Some(Value::String(value)) => Some(
+            crate::read::normalize_snapshot_valid_at(value).map_err(|_| body_error(complete))?,
+        ),
+        Some(_) => return Err(body_error(complete)),
+    };
+    if complete
+        .value
+        .extensions
+        .iter()
+        .any(|(name, value)| match name.as_str() {
+            "snapshot" | "validAt" => false,
+            "count" => value.as_u64().is_none_or(|count| count > i64::MAX as u64),
+            _ => true,
+        })
+    {
+        return Err(body_error(complete));
+    }
+    Ok((snapshot, valid_at))
+}
+
+fn body_error<T>(complete: &BRegComplete<T>) -> BaseRegistryClientError {
+    body_failure(
+        StatusCode::OK.as_u16(),
+        complete.metadata.trace_id().clone(),
+    )
 }
 
 fn decode_breg_single(
@@ -1357,6 +2146,37 @@ fn fixed_operation_segments(path: &str) -> Result<Vec<&str>, BaseRegistryClientE
     Ok(segments)
 }
 
+fn bound_json_operation_segments(path: &str) -> Result<Vec<&str>, BaseRegistryClientError> {
+    if !path.ends_with(":batch") {
+        return fixed_operation_segments(path);
+    }
+    if path.len() > MAXIMUM_LOCATION_BYTES
+        || !path.starts_with("/v1/records/")
+        || path.contains(['%', '?', '#', '\\'])
+    {
+        return Err(BaseRegistryClientError::invalid_request(
+            "the selected Base Registry Engine operation path is invalid",
+        ));
+    }
+    let segments = path[1..].split('/').collect::<Vec<_>>();
+    let exact_batch = matches!(segments.as_slice(), ["v1", "records", route]
+        if route.strip_suffix(":batch").is_some_and(valid_operation_segment));
+    if !exact_batch {
+        return Err(BaseRegistryClientError::invalid_request(
+            "the selected Base Registry Engine operation path is invalid",
+        ));
+    }
+    Ok(segments)
+}
+
+fn valid_operation_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment.len() <= 128
+        && segment.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
 fn validate_mutation_record(
     complete: &BRegComplete<RegistryRecordSingleResponse>,
     status: StatusCode,
@@ -1510,15 +2330,12 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
     let Some(code) = code else {
         return problem_failure(status, trace_id);
     };
-    let located_code = match extensions.field_path {
-        Some(BRegProblemPath::EvidenceAlias) => Some(BRegProblemCode::ActionEvidenceFailed),
-        Some(BRegProblemPath::ActionInput) => Some(BRegProblemCode::ActionRefused),
-        None => None,
-    };
     if code.status() != status.as_u16()
         || document.trace_id != trace_id
         || (extensions.declared_field && code != BRegProblemCode::MutationConflict)
-        || located_code.is_some_and(|located| located != code)
+        || extensions
+            .field_path
+            .is_some_and(|path| !path.permits(code))
         || extensions.refusal_code.is_some() != (code == BRegProblemCode::ActionRefused)
     {
         return problem_failure(status, trace_id);
@@ -1531,12 +2348,25 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
     }
 }
 
-/// The closed forms a Base Registry Engine problem location takes: an Evidence
-/// dependency alias and an immediate-action input.
+/// The closed forms a Base Registry Engine problem location takes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BRegProblemPath {
     EvidenceAlias,
-    ActionInput,
+    ActionInputField,
+    ActionRequest,
+}
+
+impl BRegProblemPath {
+    fn permits(self, code: BRegProblemCode) -> bool {
+        match self {
+            Self::EvidenceAlias => code == BRegProblemCode::ActionEvidenceFailed,
+            Self::ActionInputField => matches!(
+                code,
+                BRegProblemCode::ActionRefused | BRegProblemCode::RequestInvalid
+            ),
+            Self::ActionRequest => code == BRegProblemCode::RequestInvalid,
+        }
+    }
 }
 
 /// The BReg-owned members of one problem document, checked before the platform
@@ -1595,7 +2425,10 @@ fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
     if valid_evidence_problem_path(path) {
         return Some(BRegProblemPath::EvidenceAlias);
     }
-    valid_action_input_problem_path(path).then_some(BRegProblemPath::ActionInput)
+    if valid_action_input_problem_path(path) {
+        return Some(BRegProblemPath::ActionInputField);
+    }
+    valid_action_request_problem_path(path).then_some(BRegProblemPath::ActionRequest)
 }
 
 fn valid_evidence_problem_path(path: &str) -> bool {
@@ -1618,6 +2451,30 @@ fn valid_action_input_problem_path(path: &str) -> bool {
     };
     let mut bytes = name.bytes();
     name.len() <= 64
+        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn valid_action_request_problem_path(path: &str) -> bool {
+    if matches!(path, "" | "/input" | "/preconditions") {
+        return true;
+    }
+    let Some(remainder) = path.strip_prefix("/preconditions/") else {
+        return false;
+    };
+    let mut segments = remainder.split('/');
+    let Some(name) = segments.next() else {
+        return false;
+    };
+    let suffix = segments.next();
+    segments.next().is_none()
+        && suffix.is_none_or(|value| value == "ifMatch")
+        && valid_api_problem_segment(name)
+}
+
+fn valid_api_problem_segment(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= 64
         && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
         && bytes.all(|byte| byte.is_ascii_alphanumeric())
 }

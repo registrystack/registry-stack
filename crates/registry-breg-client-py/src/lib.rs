@@ -3,26 +3,37 @@
 
 #![deny(unsafe_code)]
 
+use std::sync::Arc;
+
 use breg_client_sdk::{
+    BRegActionInvocationRequest, BRegActionTargetConditions, BRegActionTargetConditionsRequest,
+    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest,
     BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
-    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus, BRegComplete,
+    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus,
+    BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox, BRegChangeContext, BRegComplete,
     BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
-    BRegDirectWrite, BRegEtag, BRegLifecycleAction as CoreLifecycleAction,
-    BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
-    BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
-    BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest, BRegProblemCode,
-    BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
+    BRegCurrentContinuation, BRegCurrentContinuationProjection, BRegCurrentListRequest,
+    BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection,
+    BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegIdempotencyKey, BRegImmediateActionBinding,
+    BRegLifecycleAction as CoreLifecycleAction, BRegLifecycleActionReceipt, BRegLifecycleAuthority,
+    BRegLifecyclePromotionError, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
+    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
+    BRegPatchRequest, BRegPreparedCreate as CorePreparedCreate,
+    BRegPreparedLifecycle as CorePreparedLifecycle, BRegProblemCode, BRegProtocolFailure,
+    BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
+    BRegRelationshipContinuationProjection, BRegRelationshipListRequest,
     BRegRequestApplicationDisposition, BRegRequestProposal, BRegRequestReview,
-    BRegRequestReviewMode, BRegRequestState, BaseRegistryClient as RustClient,
-    BaseRegistryClientError as RustClientError, RegistryRecordRepresentation,
-    RegistryRecordResponse, TokenError,
+    BRegRequestReviewMode, BRegRequestState, BRegSnapshotContinuation,
+    BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
+    BaseRegistryClient as RustClient, BaseRegistryClientError as RustClientError,
+    RegistryRecordRepresentation, RegistryRecordResponse, TokenError,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
     prelude::*,
     types::{PyBytes, PyDict},
 };
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 
 mod convert;
@@ -224,6 +235,7 @@ fn list_request(
     filter: Option<String>,
     orderby: Option<String>,
     count: Option<bool>,
+    bbox: Option<(String, String, String, String)>,
 ) -> PyResult<BRegListRequest> {
     let mut request =
         BRegListRequest::default().options(record_options(py, select, access_profile, format)?);
@@ -245,7 +257,129 @@ fn list_request(
     if let Some(value) = count {
         request = request.count(value);
     }
+    if let Some((west, south, east, north)) = bbox {
+        request = request.bbox(
+            BRegBoundingBox::new(west, south, east, north)
+                .map_err(|error| invalid(py, error.to_string()))?,
+        );
+    }
     Ok(request)
+}
+
+struct ScalarListArguments {
+    top: Option<u32>,
+    select: Option<Vec<String>>,
+    access_profile: Option<String>,
+    format: String,
+    filter: Option<String>,
+    orderby: Option<String>,
+    count: Option<bool>,
+}
+
+macro_rules! configure_scalar_list {
+    ($py:expr, $request:expr, $arguments:expr) => {{
+        let arguments = $arguments;
+        let mut request = $request.options(record_options(
+            $py,
+            arguments.select,
+            arguments.access_profile,
+            &arguments.format,
+        )?);
+        if let Some(value) = arguments.top {
+            request = request
+                .top(value)
+                .map_err(|error| invalid($py, error.to_string()))?;
+        }
+        if let Some(value) = arguments.filter {
+            request = request
+                .filter(value)
+                .map_err(|error| invalid($py, error.to_string()))?;
+        }
+        if let Some(value) = arguments.orderby {
+            request = request
+                .orderby(value)
+                .map_err(|error| invalid($py, error.to_string()))?;
+        }
+        if let Some(value) = arguments.count {
+            request = request.count(value);
+        }
+        request
+    }};
+}
+
+fn geojson_list_request(
+    py: Python<'_>,
+    arguments: ScalarListArguments,
+    bbox: Option<(String, String, String, String)>,
+) -> PyResult<BRegGeoJsonListRequest> {
+    let mut options = BRegGeoJsonOptions::default();
+    if let Some(select) = arguments.select.clone() {
+        options = options
+            .select(select)
+            .map_err(|error| invalid(py, error.to_string()))?;
+    }
+    if let Some(access_profile) = arguments.access_profile.clone() {
+        options = options
+            .access_profile(access_profile)
+            .map_err(|error| invalid(py, error.to_string()))?;
+    }
+    let mut request = BRegGeoJsonListRequest::default().options(options);
+    if let Some(value) = arguments.top {
+        request = request
+            .top(value)
+            .map_err(|error| invalid(py, error.to_string()))?;
+    }
+    if let Some(value) = arguments.filter {
+        request = request
+            .filter(value)
+            .map_err(|error| invalid(py, error.to_string()))?;
+    }
+    if let Some(value) = arguments.orderby {
+        request = request
+            .orderby(value)
+            .map_err(|error| invalid(py, error.to_string()))?;
+    }
+    if let Some(value) = arguments.count {
+        request = request.count(value);
+    }
+    if let Some((west, south, east, north)) = bbox {
+        request = request.bbox(
+            BRegBoundingBox::new(west, south, east, north)
+                .map_err(|error| invalid(py, error.to_string()))?,
+        );
+    }
+    Ok(request)
+}
+
+fn projected_page_value<'py, T: Serialize, C: Serialize>(
+    py: Python<'py>,
+    value: &T,
+    continuation: Option<&C>,
+    metadata: &breg_client_sdk::BRegResponseMetadata,
+) -> PyResult<Bound<'py, PyAny>> {
+    let result = PyDict::new(py);
+    result.set_item("kind", "complete")?;
+    result.set_item("value", serialize_to_python(py, value)?)?;
+    result.set_item("trace_id", metadata.trace_id().as_str())?;
+    result.set_item("etag", metadata.etag().map(BRegEtag::as_str))?;
+    result.set_item(
+        "continuation",
+        match continuation {
+            Some(value) => serialize_to_python(py, value)?,
+            None => py.None().into_bound(py),
+        },
+    )?;
+    Ok(result.into_any())
+}
+
+fn projection_from_python<T: DeserializeOwned>(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    what: &str,
+) -> PyResult<T> {
+    let value =
+        python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", error))?;
+    serde_json::from_value(value).map_err(|_| invalid(py, format!("{what} is invalid")))
 }
 
 fn complete_value<'py, T: Serialize>(
@@ -298,6 +432,10 @@ fn page_value<'py, T: Serialize>(
 fn patch_request(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BRegPatchRequest> {
     let value =
         python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", error))?;
+    patch_request_from_value(py, value)
+}
+
+fn patch_request_from_value(py: Python<'_>, value: Value) -> PyResult<BRegPatchRequest> {
     let operations = value
         .as_array()
         .ok_or_else(|| invalid(py, "patch must be a sequence"))?;
@@ -348,6 +486,163 @@ fn patch_request(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BRegPatch
             _ => return Err(invalid(py, "patch op is unsupported")),
         };
         builder = result.map_err(|error| invalid(py, error.to_string()))?;
+    }
+    builder
+        .build()
+        .map_err(|error| invalid(py, error.to_string()))
+}
+
+fn json_object(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    what: &str,
+) -> PyResult<serde_json::Map<String, Value>> {
+    let value =
+        python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", error))?;
+    let Value::Object(value) = value else {
+        return Err(invalid(py, format!("{what} must be a mapping")));
+    };
+    Ok(value)
+}
+
+fn change_context_from_value(py: Python<'_>, value: Value) -> PyResult<BRegChangeContext> {
+    let Value::Object(mut value) = value else {
+        return Err(invalid(py, "change_context must be a mapping"));
+    };
+    if value.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "kind" | "reason_code" | "reason_text" | "source_references"
+        )
+    }) {
+        return Err(invalid(py, "change_context contains an unsupported field"));
+    }
+    let kind = value
+        .remove("kind")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| invalid(py, "change_context kind must be a string"))?;
+    let reason_code = value.remove("reason_code");
+    let mut context = match (kind.as_str(), reason_code) {
+        ("change", None) => BRegChangeContext::change(),
+        ("correction", Some(Value::String(reason))) => {
+            BRegChangeContext::correction(reason).map_err(|error| invalid(py, error.to_string()))?
+        }
+        ("change", Some(_)) => {
+            return Err(invalid(py, "an ordinary change must not have reason_code"));
+        }
+        ("correction", _) => {
+            return Err(invalid(py, "a correction requires reason_code"));
+        }
+        _ => return Err(invalid(py, "change_context kind is unsupported")),
+    };
+    if let Some(reason_text) = value.remove("reason_text") {
+        let Value::String(reason_text) = reason_text else {
+            return Err(invalid(py, "change_context reason_text must be a string"));
+        };
+        context = context
+            .reason_text(reason_text)
+            .map_err(|error| invalid(py, error.to_string()))?;
+    }
+    if let Some(source_references) = value.remove("source_references") {
+        let Value::Array(source_references) = source_references else {
+            return Err(invalid(
+                py,
+                "change_context source_references must be a sequence",
+            ));
+        };
+        for source_reference in source_references {
+            let Value::String(source_reference) = source_reference else {
+                return Err(invalid(
+                    py,
+                    "every change_context source reference must be a string",
+                ));
+            };
+            context = context
+                .source_reference(source_reference)
+                .map_err(|error| invalid(py, error.to_string()))?;
+        }
+    }
+    Ok(context)
+}
+
+fn batch_request(
+    py: Python<'_>,
+    binding: &BRegBatchBinding,
+    items: &Bound<'_, PyAny>,
+    change_context: Option<&Bound<'_, PyAny>>,
+) -> PyResult<breg_client_sdk::BRegBatchRequest> {
+    let items =
+        python_to_json(items).map_err(|error| conversion_error(py, "invalid_request", error))?;
+    let Value::Array(items) = items else {
+        return Err(invalid(py, "items must be a sequence"));
+    };
+    let mut builder = BRegBatchBuilder::new(binding);
+    for item in items {
+        let Value::Object(mut item) = item else {
+            return Err(invalid(py, "every batch item must be a mapping"));
+        };
+        let operation = item
+            .remove("operation")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .ok_or_else(|| invalid(py, "every batch item operation must be a string"))?;
+        match operation.as_str() {
+            "create" => {
+                if item.keys().any(|key| key != "data") {
+                    return Err(invalid(
+                        py,
+                        "create batch item contains an unsupported field",
+                    ));
+                }
+                let data = item
+                    .remove("data")
+                    .and_then(|value| value.as_object().cloned())
+                    .ok_or_else(|| invalid(py, "create batch item data must be a mapping"))?;
+                let request =
+                    BRegCreateRequest::new(data).map_err(|error| invalid(py, error.to_string()))?;
+                builder = builder
+                    .create(&request)
+                    .map_err(|error| invalid(py, error.to_string()))?;
+            }
+            "patch" => {
+                if item
+                    .keys()
+                    .any(|key| !matches!(key.as_str(), "record_identifier" | "etag" | "operations"))
+                {
+                    return Err(invalid(
+                        py,
+                        "patch batch item contains an unsupported field",
+                    ));
+                }
+                let record_identifier = item
+                    .remove("record_identifier")
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .and_then(|value| uuid::Uuid::parse_str(&value).ok())
+                    .ok_or_else(|| invalid(py, "batch record_identifier must be a UUID"))?;
+                let etag = item
+                    .remove("etag")
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .ok_or_else(|| invalid(py, "batch etag must be a string"))?;
+                let etag = BRegEtag::parse(&etag).map_err(|_| {
+                    invalid(
+                        py,
+                        "batch etag must be a strong Base Registry Engine entity tag",
+                    )
+                })?;
+                let operations = item
+                    .remove("operations")
+                    .ok_or_else(|| invalid(py, "patch batch item requires operations"))?;
+                let request = patch_request_from_value(py, operations)?;
+                builder = builder
+                    .patch(record_identifier, &etag, &request)
+                    .map_err(|error| invalid(py, error.to_string()))?;
+            }
+            _ => return Err(invalid(py, "batch item operation is unsupported")),
+        }
+    }
+    if let Some(change_context) = change_context {
+        let change_context = python_to_json(change_context)
+            .map_err(|error| conversion_error(py, "invalid_request", error))?;
+        builder = builder.change_context(change_context_from_value(py, change_context)?);
     }
     builder
         .build()
@@ -451,6 +746,194 @@ fn attachment_slot_value(value: &BRegAttachmentSlotValue) -> Value {
             "value": attachment_state_value(state),
         }),
     }
+}
+
+fn metadata_field_value(value: &breg_client_sdk::BRegMetadataField) -> Value {
+    let reference = value.reference().map(|reference| {
+        json!({
+            "manual_entry": reference.manual_entry(),
+            "target_entity": reference.target_entity(),
+            "operations": reference.operations().iter().map(|operation| json!({
+                "operation_id": operation.operation_identifier(),
+                "access_profile": operation.access_profile(),
+                "label_fields": operation.label_fields(),
+            })).collect::<Vec<_>>(),
+        })
+    });
+    json!({
+        "id": value.identifier(),
+        "api_name": value.api_name(),
+        "label": value.label(),
+        "schema": value.schema(),
+        "required": value.required(),
+        "nullable": value.nullable(),
+        "read_only": value.read_only(),
+        "removable": value.removable(),
+        "reference_target_entity": value.reference_target_entity(),
+        "reference": reference,
+        "code_labels": value.code_labels(),
+        "storage_validation": value.storage_validation().map(|validation| json!({
+            "kind": validation.kind(),
+            "pattern": validation.pattern(),
+        })),
+    })
+}
+
+fn lookup_selector_value(value: &breg_client_sdk::BRegLookupSelectorDescriptor) -> Value {
+    json!({
+        "id": value.identifier(),
+        "label": value.label(),
+        "value_origin": value.value_origin(),
+        "fields": value.fields().iter().map(|field| json!({
+            "id": field.identifier(),
+            "api_name": field.api_name(),
+            "label": field.label(),
+            "schema": field.schema(),
+            "required": field.required(),
+        })).collect::<Vec<_>>(),
+        "request_fields": value.request_fields(),
+    })
+}
+
+fn metadata_operation_value(value: &breg_client_sdk::BRegMetadataOperation) -> Value {
+    let request = value.request();
+    json!({
+        "id": value.identifier(),
+        "method": value.method(),
+        "path": value.path(),
+        "kind": value.kind().as_str(),
+        "source_entity": value.source_entity(),
+        "response_entity": value.response_entity(),
+        "access_profile": value.access_profile(),
+        "entity_label": value.entity_label(),
+        "title_fields": value.title_fields(),
+        "required_capabilities": value.required_capabilities(),
+        "readable_fields": value.readable_fields(),
+        "create_writable_fields": value.create_writable_fields(),
+        "patch_writable_fields": value.patch_writable_fields(),
+        "query": value.query(),
+        "selectors": value.selectors().iter().map(lookup_selector_value).collect::<Vec<_>>(),
+        "read_path": value.read_path().map(|path| json!({
+            "id": path.identifier(),
+            "label": path.label(),
+        })),
+        "fields": value.fields().iter().map(metadata_field_value).collect::<Vec<_>>(),
+        "request": {
+            "field_names": request.field_names(),
+            "query_parameters": request.query_parameters(),
+            "body": request.body(),
+            "content_type": request.content_type(),
+            "schema": request.schema(),
+            "idempotency_key_required": request.idempotency_key_required(),
+            "if_match_required": request.if_match_required(),
+            "mutation_semantics": request.mutation_semantics(),
+            "patch_path_prefix": request.patch_path_prefix(),
+            "patch_operations": request.patch_operations(),
+            "remove_semantics": request.remove_semantics(),
+            "maximum_items": request.maximum_items(),
+            "maximum_body_bytes": request.maximum_body_bytes(),
+            "allow_create": request.allow_create(),
+            "allow_patch": request.allow_patch(),
+        },
+    })
+}
+
+fn immediate_action_value(value: &breg_client_sdk::BRegImmediateActionDescriptor) -> Value {
+    let bounds = value.bounds();
+    json!({
+        "id": value.identifier(),
+        "contract_fingerprint": value.contract_fingerprint(),
+        "input_mode": value.input_mode(),
+        "maximum_input_string_bytes": value.maximum_input_string_bytes(),
+        "inputs": value.inputs().iter().map(|input| json!({
+            "id": input.identifier(),
+            "api_name": input.api_name(),
+            "field_type": input.field_type(),
+            "required": input.required(),
+            "nullable": input.nullable(),
+            "classification": input.classification(),
+        })).collect::<Vec<_>>(),
+        "reference_inputs": value.reference_inputs().iter().map(|input| json!({
+            "input": input.input_identifier(),
+            "api_name": input.api_name(),
+            "target_entity": input.target_entity(),
+        })).collect::<Vec<_>>(),
+        "required_condition_keys": value.required_condition_keys(),
+        "result_effects": value.result_effects().iter().map(|effect| json!({
+            "effect": effect.effect_identifier(),
+            "entity": effect.entity_identifier(),
+            "operation": effect.operation().as_str(),
+        })).collect::<Vec<_>>(),
+        "access_profile": value.access_profile(),
+        "invoke_path": value.invoke_path(),
+        "target_conditions_path": value.target_conditions_path(),
+        "bounds": {
+            "maximum_targets": bounds.maximum_targets(),
+            "maximum_field_mutations": bounds.maximum_field_mutations(),
+            "maximum_snapshot_bytes": bounds.maximum_snapshot_bytes(),
+        },
+    })
+}
+
+fn change_request_capability_value(value: &breg_client_sdk::BRegChangeRequestCapability) -> Value {
+    use breg_client_sdk::{
+        BRegChangeRequestApplicationMode as ApplicationMode,
+        BRegChangeRequestDisposition as Disposition, BRegChangeRequestPlannerKind as PlannerKind,
+        BRegChangeRequestReviewMode as ReviewMode,
+    };
+
+    let planner = value.planner();
+    let limits = planner.limits().map(|limits| {
+        json!({
+            "maximum_targets": limits.maximum_targets(),
+            "maximum_field_mutations": limits.maximum_field_mutations(),
+            "maximum_snapshot_bytes": limits.maximum_snapshot_bytes(),
+            "maximum_source_bytes": limits.maximum_source_bytes(),
+            "maximum_operations": limits.maximum_operations(),
+            "maximum_call_depth": limits.maximum_call_depth(),
+            "maximum_expression_depth": limits.maximum_expression_depth(),
+            "maximum_string_bytes": limits.maximum_string_bytes(),
+            "maximum_array_items": limits.maximum_array_items(),
+            "maximum_map_entries": limits.maximum_map_entries(),
+            "maximum_modules": limits.maximum_modules(),
+        })
+    });
+    let application = value.application();
+    json!({
+        "planner": {
+            "kind": match planner.kind() {
+                PlannerKind::Declarative => "declarative",
+                PlannerKind::Rhai => "rhai",
+            },
+            "abi": planner.abi(),
+            "limits": limits,
+            "possible_write_count": planner.possible_write_count(),
+            "possible_write_operations": planner
+                .possible_write_operations()
+                .iter()
+                .map(|value| value.as_str())
+                .collect::<Vec<_>>(),
+        },
+        "review_mode": match value.review_mode() {
+            ReviewMode::None => "none",
+            ReviewMode::Staged => "staged",
+        },
+        "application": {
+            "mode": match application.mode() {
+                ApplicationMode::Manual => "manual",
+                ApplicationMode::Automatic => "automatic",
+                ApplicationMode::Planner => "planner",
+            },
+            "allowed_dispositions": application.allowed_dispositions().iter().map(|value| match value {
+                Disposition::Apply => "apply",
+                Disposition::Queue => "queue",
+            }).collect::<Vec<_>>(),
+            "queue_reasons": application.queue_reasons().iter().map(|value| json!({
+                "code": value.code(),
+                "label": value.label(),
+            })).collect::<Vec<_>>(),
+        },
+    })
 }
 
 fn attachment_error(py: Python<'_>, error: breg_client_sdk::BRegAttachmentError) -> PyErr {
@@ -568,6 +1051,52 @@ struct PatchBinding {
 }
 
 #[pyclass(
+    name = "BRegImmediateActionBinding",
+    module = "registry_breg_client",
+    frozen
+)]
+struct ImmediateActionBinding {
+    inner: BRegImmediateActionBinding,
+}
+
+#[pyclass(name = "BRegTombstoneBinding", module = "registry_breg_client", frozen)]
+struct TombstoneBinding {
+    inner: BRegTombstoneBinding,
+}
+
+#[pyclass(name = "BRegBatchBinding", module = "registry_breg_client", frozen)]
+struct BatchBinding {
+    inner: BRegBatchBinding,
+}
+
+#[pyclass(
+    name = "BRegActionTargetConditions",
+    module = "registry_breg_client",
+    frozen
+)]
+struct ActionTargetConditions {
+    inner: BRegActionTargetConditions,
+    trace_id: String,
+}
+
+#[pymethods]
+impl ActionTargetConditions {
+    #[getter]
+    fn document<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        serialize_to_python(py, &self.inner)
+    }
+
+    #[getter]
+    fn trace_id(&self) -> String {
+        self.trace_id.clone()
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "BRegActionTargetConditions(<redacted>)"
+    }
+}
+
+#[pyclass(
     name = "BRegLifecycleAuthority",
     module = "registry_breg_client",
     frozen
@@ -579,6 +1108,87 @@ struct LifecycleAuthority {
 #[pyclass(name = "BRegLifecycleAction", module = "registry_breg_client", frozen)]
 struct LifecycleAction {
     inner: CoreLifecycleAction,
+}
+
+#[pyclass(name = "BRegPreparedCreate", module = "registry_breg_client", frozen)]
+struct PreparedCreate {
+    inner: CorePreparedCreate,
+}
+
+#[pyclass(
+    name = "BRegPreparedLifecycle",
+    module = "registry_breg_client",
+    frozen
+)]
+struct PreparedLifecycle {
+    inner: CorePreparedLifecycle,
+}
+
+#[pyclass(name = "BRegRecoveredCreate", module = "registry_breg_client", frozen)]
+struct RecoveredCreate {
+    request: Arc<BRegCreateRequest>,
+    key: BRegIdempotencyKey,
+    format: BRegRecordFormat,
+}
+
+#[pyclass(
+    name = "BRegRecoveredLifecycle",
+    module = "registry_breg_client",
+    frozen
+)]
+struct RecoveredLifecycle {
+    action: CoreLifecycleAction,
+    key: BRegIdempotencyKey,
+}
+
+#[pymethods]
+impl PreparedCreate {
+    #[staticmethod]
+    fn from_bytes(py: Python<'_>, bytes: Vec<u8>) -> PyResult<Self> {
+        CorePreparedCreate::from_slice(&bytes)
+            .map(|inner| Self { inner })
+            .map_err(|error| sdk_error(py, error))
+    }
+
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, self.inner.as_bytes())
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "BRegPreparedCreate(<redacted>)"
+    }
+}
+
+#[pymethods]
+impl PreparedLifecycle {
+    #[staticmethod]
+    fn from_bytes(py: Python<'_>, bytes: Vec<u8>) -> PyResult<Self> {
+        CorePreparedLifecycle::from_slice(&bytes)
+            .map(|inner| Self { inner })
+            .map_err(|error| sdk_error(py, error))
+    }
+
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, self.inner.as_bytes())
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "BRegPreparedLifecycle(<redacted>)"
+    }
+}
+
+#[pymethods]
+impl RecoveredCreate {
+    fn __repr__(&self) -> &'static str {
+        "BRegRecoveredCreate(<redacted>)"
+    }
+}
+
+#[pymethods]
+impl RecoveredLifecycle {
+    fn __repr__(&self) -> &'static str {
+        "BRegRecoveredLifecycle(<redacted>)"
+    }
 }
 
 #[pymethods]
@@ -630,6 +1240,53 @@ struct Metadata {
 #[pymethods]
 impl Metadata {
     #[getter]
+    fn operations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        json_to_python(
+            py,
+            &Value::Array(
+                self.inner
+                    .operations()
+                    .iter()
+                    .map(metadata_operation_value)
+                    .collect(),
+            ),
+        )
+    }
+
+    #[getter]
+    fn actions<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.inner
+            .actions()
+            .map(|value| json_to_python(py, value))
+            .transpose()
+    }
+
+    #[getter]
+    fn immediate_actions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        json_to_python(
+            py,
+            &Value::Array(
+                self.inner
+                    .immediate_actions()
+                    .iter()
+                    .map(immediate_action_value)
+                    .collect(),
+            ),
+        )
+    }
+
+    fn change_request_capability<'py>(
+        &self,
+        py: Python<'py>,
+        entity_identifier: &str,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.inner
+            .change_request_capability(entity_identifier)
+            .map(|value| json_to_python(py, &change_request_capability_value(value)))
+            .transpose()
+    }
+
+    #[getter]
     fn registry_identifier(&self) -> String {
         self.inner.registry_identifier().to_owned()
     }
@@ -680,6 +1337,42 @@ impl Metadata {
             BRegDirectWrite::Patch(inner) => Ok(PatchBinding { inner }),
             BRegDirectWrite::Create(_) => Err(invalid(py, "operation is not a patch")),
         }
+    }
+
+    fn select_immediate_action(
+        &self,
+        py: Python<'_>,
+        action_identifier: &str,
+        expected_profile: &str,
+    ) -> PyResult<ImmediateActionBinding> {
+        self.inner
+            .select_immediate_action(action_identifier, expected_profile)
+            .map(|inner| ImmediateActionBinding { inner })
+            .map_err(|error| selection_error(py, error))
+    }
+
+    fn select_tombstone(
+        &self,
+        py: Python<'_>,
+        entity_identifier: &str,
+        expected_profile: &str,
+    ) -> PyResult<TombstoneBinding> {
+        self.inner
+            .select_tombstone(entity_identifier, expected_profile)
+            .map(|inner| TombstoneBinding { inner })
+            .map_err(|error| selection_error(py, error))
+    }
+
+    fn select_batch(
+        &self,
+        py: Python<'_>,
+        entity_identifier: &str,
+        expected_profile: &str,
+    ) -> PyResult<BatchBinding> {
+        self.inner
+            .select_batch(entity_identifier, expected_profile)
+            .map(|inner| BatchBinding { inner })
+            .map_err(|error| selection_error(py, error))
     }
 
     fn select_lifecycle(
@@ -866,7 +1559,8 @@ impl BaseRegistryClient {
         raw_value(py, &value.value, &value.metadata)
     }
 
-    #[pyo3(signature = (entity_route, record_identifier, *, select=None, access_profile=None, format="json"))]
+    #[pyo3(signature = (entity_route, record_identifier, *, select=None, access_profile=None, format="json", request_history_after_proposal_version=None))]
+    #[allow(clippy::too_many_arguments)]
     fn get_record<'py>(
         &self,
         py: Python<'py>,
@@ -875,8 +1569,14 @@ impl BaseRegistryClient {
         select: Option<Vec<String>>,
         access_profile: Option<String>,
         format: &str,
+        request_history_after_proposal_version: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let options = record_options(py, select, access_profile, format)?;
+        let mut options = record_options(py, select, access_profile, format)?;
+        if let Some(value) = request_history_after_proposal_version {
+            options = options
+                .request_history_after_proposal_version(value)
+                .map_err(|error| invalid(py, error.to_string()))?;
+        }
         let value = py
             .detach(|| {
                 self.runtime.block_on(self.inner.get_record(
@@ -889,7 +1589,149 @@ impl BaseRegistryClient {
         complete_value(py, &value.value, &value.metadata)
     }
 
-    #[pyo3(signature = (entity_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
+    #[pyo3(signature = (entity_route, record_identifier, *, select=None, access_profile=None))]
+    fn get_geojson_record<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        record_identifier: &str,
+        select: Option<Vec<String>>,
+        access_profile: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let mut options = BRegGeoJsonOptions::default();
+        if let Some(select) = select {
+            options = options
+                .select(select)
+                .map_err(|error| invalid(py, error.to_string()))?;
+        }
+        if let Some(access_profile) = access_profile {
+            options = options
+                .access_profile(access_profile)
+                .map_err(|error| invalid(py, error.to_string()))?;
+        }
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.get_geojson_record(
+                    entity_route,
+                    record_identifier,
+                    &options,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (entity_route, *, top=None, select=None, access_profile=None, filter=None, orderby=None, count=None, bbox=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn list_geojson_records<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        top: Option<u32>,
+        select: Option<Vec<String>>,
+        access_profile: Option<String>,
+        filter: Option<String>,
+        orderby: Option<String>,
+        count: Option<bool>,
+        bbox: Option<(String, String, String, String)>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = geojson_list_request(
+            py,
+            ScalarListArguments {
+                top,
+                select,
+                access_profile,
+                format: "json".to_owned(),
+                filter,
+                orderby,
+                count,
+            },
+            bbox,
+        )?;
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.list_geojson_records(entity_route, &request))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )
+    }
+
+    fn continue_geojson_list<'py>(
+        &self,
+        py: Python<'py>,
+        continuation: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let projection: BRegGeoJsonContinuationProjection =
+            projection_from_python(py, continuation, "GeoJSON continuation")?;
+        let continuation = BRegGeoJsonContinuation::try_from_projection(projection)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.continue_geojson_list(&continuation))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )
+    }
+
+    #[pyo3(signature = (entity_route, record_identifier, access_profile=None))]
+    fn record_revisions<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        record_identifier: &str,
+        access_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.record_revisions(
+                    entity_route,
+                    record_identifier,
+                    access_profile,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (entity_route, record_identifier, revision, *, select=None, access_profile=None, format="json"))]
+    #[allow(clippy::too_many_arguments)]
+    fn get_record_revision<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        record_identifier: &str,
+        revision: u64,
+        select: Option<Vec<String>>,
+        access_profile: Option<String>,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let options = record_options(py, select, access_profile, format)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.get_record_revision(
+                    entity_route,
+                    record_identifier,
+                    revision,
+                    &options,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (entity_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None, bbox=None))]
     #[allow(clippy::too_many_arguments)]
     fn list_records<'py>(
         &self,
@@ -902,6 +1744,7 @@ impl BaseRegistryClient {
         filter: Option<String>,
         orderby: Option<String>,
         count: Option<bool>,
+        bbox: Option<(String, String, String, String)>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = list_request(
             py,
@@ -912,6 +1755,7 @@ impl BaseRegistryClient {
             filter,
             orderby,
             count,
+            bbox,
         )?;
         let value = py
             .detach(|| {
@@ -920,6 +1764,297 @@ impl BaseRegistryClient {
             })
             .map_err(|error| sdk_error(py, error))?;
         page_value(py, value)
+    }
+
+    #[pyo3(signature = (entity_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn list_current_records<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        top: Option<u32>,
+        select: Option<Vec<String>>,
+        access_profile: Option<String>,
+        format: &str,
+        filter: Option<String>,
+        orderby: Option<String>,
+        count: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = configure_scalar_list!(
+            py,
+            BRegCurrentListRequest::default(),
+            ScalarListArguments {
+                top,
+                select,
+                access_profile,
+                format: format.to_owned(),
+                filter,
+                orderby,
+                count,
+            }
+        );
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.list_current_records(entity_route, &request))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )
+    }
+
+    fn continue_current_list<'py>(
+        &self,
+        py: Python<'py>,
+        continuation: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let projection: BRegCurrentContinuationProjection =
+            projection_from_python(py, continuation, "current-list continuation")?;
+        let continuation = BRegCurrentContinuation::try_from_projection(projection)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.continue_current_list(&continuation))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )
+    }
+
+    #[pyo3(signature = (entity_route, as_of, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn list_records_as_of<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        as_of: &str,
+        top: Option<u32>,
+        select: Option<Vec<String>>,
+        access_profile: Option<String>,
+        format: &str,
+        filter: Option<String>,
+        orderby: Option<String>,
+        count: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request =
+            BRegAsOfListRequest::new(as_of).map_err(|error| invalid(py, error.to_string()))?;
+        let request = configure_scalar_list!(
+            py,
+            request,
+            ScalarListArguments {
+                top,
+                select,
+                access_profile,
+                format: format.to_owned(),
+                filter,
+                orderby,
+                count,
+            }
+        );
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.list_records_as_of(entity_route, &request))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )
+    }
+
+    fn continue_as_of_list<'py>(
+        &self,
+        py: Python<'py>,
+        continuation: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let projection: BRegAsOfContinuationProjection =
+            projection_from_python(py, continuation, "as-of continuation")?;
+        let continuation = BRegAsOfContinuation::try_from_projection(projection)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.continue_as_of_list(&continuation))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )
+    }
+
+    #[pyo3(signature = (entity_route, *, snapshot=None, valid_at=None, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn list_snapshot_records<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        snapshot: Option<String>,
+        valid_at: Option<String>,
+        top: Option<u32>,
+        select: Option<Vec<String>>,
+        access_profile: Option<String>,
+        format: &str,
+        filter: Option<String>,
+        orderby: Option<String>,
+        count: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let mut request = configure_scalar_list!(
+            py,
+            BRegSnapshotListRequest::default(),
+            ScalarListArguments {
+                top,
+                select,
+                access_profile,
+                format: format.to_owned(),
+                filter,
+                orderby,
+                count,
+            }
+        );
+        if let Some(snapshot) = snapshot {
+            request = request
+                .snapshot(snapshot)
+                .map_err(|error| invalid(py, error.to_string()))?;
+        }
+        if let Some(valid_at) = valid_at {
+            request = request
+                .valid_at(valid_at)
+                .map_err(|error| invalid(py, error.to_string()))?;
+        }
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.list_snapshot_records(entity_route, &request))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        let result = projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )?;
+        result
+            .cast::<PyDict>()?
+            .set_item("snapshot", &value.value.snapshot)?;
+        if let Some(valid_at) = &value.value.valid_at {
+            result.cast::<PyDict>()?.set_item("valid_at", valid_at)?;
+        }
+        Ok(result)
+    }
+
+    fn continue_snapshot_list<'py>(
+        &self,
+        py: Python<'py>,
+        continuation: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let projection: BRegSnapshotContinuationProjection =
+            projection_from_python(py, continuation, "snapshot continuation")?;
+        let continuation = BRegSnapshotContinuation::try_from_projection(projection)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.continue_snapshot_list(&continuation))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        let result = projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )?;
+        result
+            .cast::<PyDict>()?
+            .set_item("snapshot", &value.value.snapshot)?;
+        if let Some(valid_at) = &value.value.valid_at {
+            result.cast::<PyDict>()?.set_item("valid_at", valid_at)?;
+        }
+        Ok(result)
+    }
+
+    #[pyo3(signature = (entity_route, record_identifier, path_route, *, top=None, select=None, access_profile=None, format="json", filter=None, orderby=None, count=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn list_relationship_records<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        record_identifier: &str,
+        path_route: &str,
+        top: Option<u32>,
+        select: Option<Vec<String>>,
+        access_profile: Option<String>,
+        format: &str,
+        filter: Option<String>,
+        orderby: Option<String>,
+        count: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = configure_scalar_list!(
+            py,
+            BRegRelationshipListRequest::default(),
+            ScalarListArguments {
+                top,
+                select,
+                access_profile,
+                format: format.to_owned(),
+                filter,
+                orderby,
+                count,
+            }
+        );
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.list_relationship_records(
+                    entity_route,
+                    record_identifier,
+                    path_route,
+                    &request,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )
+    }
+
+    fn continue_relationship_list<'py>(
+        &self,
+        py: Python<'py>,
+        continuation: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let projection: BRegRelationshipContinuationProjection =
+            projection_from_python(py, continuation, "relationship continuation")?;
+        let continuation = BRegRelationshipContinuation::try_from_projection(projection)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.continue_relationship_list(&continuation))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        projected_page_value(
+            py,
+            &value.value.value,
+            value.value.continuation.as_ref(),
+            &value.metadata,
+        )
     }
 
     fn continue_list<'py>(
@@ -1007,6 +2142,70 @@ impl BaseRegistryClient {
         complete_value(py, &value.value, &value.metadata)
     }
 
+    #[pyo3(signature = (binding, data, idempotency_key, *, format="json"))]
+    fn prepare_create(
+        &self,
+        py: Python<'_>,
+        binding: PyRef<'_, CreateBinding>,
+        data: &Bound<'_, PyAny>,
+        idempotency_key: &str,
+        format: &str,
+    ) -> PyResult<PreparedCreate> {
+        let data =
+            python_to_json(data).map_err(|error| conversion_error(py, "invalid_request", error))?;
+        let Value::Object(data) = data else {
+            return Err(invalid(py, "data must be a mapping"));
+        };
+        let request =
+            BRegCreateRequest::new(data).map_err(|error| invalid(py, error.to_string()))?;
+        let key = BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let format = record_format(py, format)?;
+        self.inner
+            .prepare_create(&binding.inner, &request, &key, format)
+            .map(|inner| PreparedCreate { inner })
+            .map_err(|error| sdk_error(py, error))
+    }
+
+    fn recover_create(
+        &self,
+        py: Python<'_>,
+        binding: PyRef<'_, CreateBinding>,
+        prepared: PyRef<'_, PreparedCreate>,
+    ) -> PyResult<RecoveredCreate> {
+        self.inner
+            .recover_create(&binding.inner, &prepared.inner)
+            .map(|(request, key, format)| RecoveredCreate {
+                request: Arc::new(request),
+                key,
+                format,
+            })
+            .map_err(|error| sdk_error(py, error))
+    }
+
+    fn execute_recovered_create<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, CreateBinding>,
+        recovered: PyRef<'_, RecoveredCreate>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let binding = binding.inner.clone();
+        let request = Arc::clone(&recovered.request);
+        let key = recovered.key.clone();
+        let format = recovered.format;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.create_record(
+                    &binding,
+                    request.as_ref(),
+                    &key,
+                    format,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
     #[pyo3(signature = (binding, record_identifier, etag, operations, idempotency_key, *, format="json"))]
     #[allow(clippy::too_many_arguments)]
     fn patch_record<'py>(
@@ -1038,6 +2237,116 @@ impl BaseRegistryClient {
                     &key,
                     format,
                 ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (binding, inputs))]
+    fn action_target_conditions(
+        &self,
+        py: Python<'_>,
+        binding: PyRef<'_, ImmediateActionBinding>,
+        inputs: &Bound<'_, PyAny>,
+    ) -> PyResult<ActionTargetConditions> {
+        let inputs = json_object(py, inputs, "inputs")?;
+        let request = BRegActionTargetConditionsRequest::new(&binding.inner, inputs)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let binding = binding.inner.clone();
+        let request = Arc::new(request);
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .action_target_conditions(&binding, request.as_ref()),
+                )
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(ActionTargetConditions {
+            inner: value.value,
+            trace_id: value.metadata.trace_id().as_str().to_owned(),
+        })
+    }
+
+    #[pyo3(signature = (binding, inputs, idempotency_key, conditions=None))]
+    fn invoke_action<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, ImmediateActionBinding>,
+        inputs: &Bound<'_, PyAny>,
+        idempotency_key: &str,
+        conditions: Option<PyRef<'_, ActionTargetConditions>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inputs = json_object(py, inputs, "inputs")?;
+        let request = BRegActionInvocationRequest::new(
+            &binding.inner,
+            inputs,
+            conditions.as_ref().map(|value| &value.inner),
+        )
+        .map_err(|error| invalid(py, error.to_string()))?;
+        let key = BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let binding = binding.inner.clone();
+        let request = Arc::new(request);
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.invoke_action(&binding, request.as_ref(), &key))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (binding, record_identifier, etag, idempotency_key, *, format="json"))]
+    fn tombstone_record<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, TombstoneBinding>,
+        record_identifier: &str,
+        etag: &str,
+        idempotency_key: &str,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let record_identifier = uuid::Uuid::parse_str(record_identifier)
+            .map_err(|_| invalid(py, "record_identifier must be a UUID"))?;
+        let etag = BRegEtag::parse(etag)
+            .map_err(|_| invalid(py, "etag must be a strong Base Registry Engine entity tag"))?;
+        let key = BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let binding = binding.inner.clone();
+        let format = record_format(py, format)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.tombstone_record(
+                    &binding,
+                    record_identifier,
+                    &etag,
+                    &key,
+                    format,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    #[pyo3(signature = (binding, items, idempotency_key, *, change_context=None))]
+    fn batch_records<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, BatchBinding>,
+        items: &Bound<'_, PyAny>,
+        idempotency_key: &str,
+        change_context: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = batch_request(py, &binding.inner, items, change_context)?;
+        let key = BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        let binding = binding.inner.clone();
+        let request = Arc::new(request);
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.batch_records(&binding, request.as_ref(), &key))
             })
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &value.value, &value.metadata)
@@ -1158,6 +2467,53 @@ impl BaseRegistryClient {
             })
     }
 
+    #[pyo3(signature = (authority, record, action, idempotency_key, *, format="json"))]
+    fn prepare_lifecycle_action(
+        &self,
+        py: Python<'_>,
+        authority: PyRef<'_, LifecycleAuthority>,
+        record: &Bound<'_, PyAny>,
+        action: PyRef<'_, LifecycleAction>,
+        idempotency_key: &str,
+        format: &str,
+    ) -> PyResult<PreparedLifecycle> {
+        let record = record_value(py, record, record_format(py, format)?)?;
+        let key = BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        self.inner
+            .prepare_lifecycle_action(&authority.inner, &record, &action.inner, &key)
+            .map(|inner| PreparedLifecycle { inner })
+            .map_err(|error| sdk_error(py, error))
+    }
+
+    fn recover_lifecycle_action(
+        &self,
+        py: Python<'_>,
+        authority: PyRef<'_, LifecycleAuthority>,
+        prepared: PyRef<'_, PreparedLifecycle>,
+    ) -> PyResult<RecoveredLifecycle> {
+        self.inner
+            .recover_lifecycle_action(&authority.inner, &prepared.inner)
+            .map(|(action, key)| RecoveredLifecycle { action, key })
+            .map_err(|error| sdk_error(py, error))
+    }
+
+    fn execute_recovered_lifecycle_action<'py>(
+        &self,
+        py: Python<'py>,
+        recovered: PyRef<'_, RecoveredLifecycle>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let action = recovered.action.clone();
+        let key = recovered.key.clone();
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.execute_lifecycle_action(&action, &key))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &receipt_value(&value.value), &value.metadata)
+    }
+
     fn execute_lifecycle_action<'py>(
         &self,
         py: Python<'py>,
@@ -1183,8 +2539,16 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Metadata>()?;
     module.add_class::<CreateBinding>()?;
     module.add_class::<PatchBinding>()?;
+    module.add_class::<ImmediateActionBinding>()?;
+    module.add_class::<TombstoneBinding>()?;
+    module.add_class::<BatchBinding>()?;
+    module.add_class::<ActionTargetConditions>()?;
     module.add_class::<LifecycleAuthority>()?;
     module.add_class::<LifecycleAction>()?;
+    module.add_class::<PreparedCreate>()?;
+    module.add_class::<PreparedLifecycle>()?;
+    module.add_class::<RecoveredCreate>()?;
+    module.add_class::<RecoveredLifecycle>()?;
     module.add_class::<AttachmentSlot>()?;
     module.add_class::<AttachmentUpload>()?;
     module.add(

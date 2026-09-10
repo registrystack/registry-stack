@@ -40,6 +40,12 @@ field, request, and query descriptors. Labels are inert presentation text;
 Continue to use `selectCreate`, `selectPatch`, and `selectLifecycle` to obtain
 opaque authorities bound to the client source and selected profile.
 
+The same contract exposes lookup selectors, named read paths, code labels,
+reference operations, storage validation, spatial-query limits, visible
+change-request capability, and immediate-action descriptors. These values are
+descriptive. Mutation authority still comes only from `selectImmediateAction`,
+`selectBatch`, or `selectTombstone` on the fetched contract.
+
 Methods ending in `Json` keep domain values on the Rust side of the JavaScript
 number boundary. `getRecordJson`, `listRecordsJson`, `continueListJson`,
 `lookupRecordJson`, `createRecordJson`, `patchRecordJson`, and
@@ -64,7 +70,12 @@ Inputs are the same domain data object or field-based patch array accepted by
 the corresponding object method, encoded as JSON text. They are not arbitrary
 HTTP request bodies. The client refuses duplicates, invalid JSON, bounds
 violations, and numeric literals whose value would change during decoding.
-Mutation builders also enforce BReg's existing numeric model: for example,
+Structured JavaScript inputs reject every integer-valued `Number` outside
+`Number.isSafeInteger`, including nested Create, PATCH, action, and batch
+values, because JavaScript may already have rounded the caller's value. Use the
+corresponding `...Json` method with exact JSON text when a governed integer may
+be wider than JavaScript's safe range.
+Exact JSON mutation builders also enforce BReg's existing numeric model: for example,
 `9007199254740992` is supported while `9007199254740993` is refused before
 network I/O. Exponent or decimal spellings cannot bypass the exact-value check.
 Fixed-scale decimals remain JSON strings. Null and absent members remain distinct.
@@ -74,7 +85,52 @@ number spellings may be canonicalized; the promise concerns values and types.
 Actions retain their original opaque authority and exact retry semantics.
 A lost response is still uncertain, and the caller must explicitly choose
 whether to retry the same action with the same idempotency key. The client
-performs no automatic mutation retry or durable session recovery.
+performs no automatic mutation retry.
+
+## Specialized reads
+
+Ordinary list calls accept `bbox: [west, south, east, north]` as four exact
+decimal strings when the served query contract supports it. GeoJSON has a
+separate `getGeoJsonRecord` and `listGeoJsonRecords` surface, with typed
+features, GeoJSON media checks, and its own continuation type.
+
+`listCurrentRecords`, `listRecordsAsOf`, and `listSnapshotRecords` keep their
+temporal parameters and continuations distinct. Snapshot continuations bind
+the returned snapshot and optional `validAt` identity. Relationship lists
+bind the root record and relationship path. `getRecordRevision` returns one
+validated retained record as inert bytes, while `recordRevisions` returns the
+bounded revision collection. `requestHistoryAfterProposalVersion` is accepted
+only by `getRecord`. Every specialized object read has an exact `...Json`
+variant when record or GeoJSON values may cross JavaScript's integer boundary.
+
+## Immediate and atomic mutations
+
+For an immediate action, select its opaque binding, fetch target conditions
+when the contract requires them, and pass those same opaque conditions to
+`invokeAction`. Inputs are checked against the served field types before I/O.
+Conditions keep strong entity tags opaque and bound to the selected action and
+original target input. Invocation performs one request with the caller's
+idempotency key.
+
+`batchRecords` accepts an ordered array of create and patch items plus an
+optional change or correction context. It enforces the served item and body
+bounds, writable fields, per-patch ETags, bounded reason text, and source
+references before sending one atomic request. `tombstoneRecord` requires the
+selected entity binding, record UUID, current strong ETag, and caller-chosen
+idempotency key. Exact JSON variants preserve large integer values in inputs
+and receipts.
+
+For recovery across a process restart, call `prepareCreate` or
+`prepareLifecycleAction` before the first send and persist the returned
+capsule's `toBytes()` value in owner-protected storage. Use
+`BRegPreparedCreate.fromBytes` or `BRegPreparedLifecycle.fromBytes` after
+restart, fetch caller-filtered metadata again, and call `recoverCreate` or
+`recoverLifecycleAction` with freshly selected authority. Recovery is a pure
+revalidation step. The returned opaque operation remains inert until the
+application calls its corresponding `executeRecovered...` method. The saved
+bytes contain the original request values and idempotency key, but no token or
+metadata authority, and their diagnostic representation is redacted. The
+`...Json` variants preserve values outside the JavaScript safe-integer range.
 
 Use `action.withReason(text)` on a promoted `reject_request` or
 `request_revision` action to add optional reviewer text. It returns a copy and

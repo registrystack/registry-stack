@@ -123,11 +123,12 @@ are separate HTTP requests, not generic JSON field mutations.
 A descriptor is advisory: the runtime rechecks current record/version authority,
 owner, state, and concurrency preconditions on use.
 
-Rust clients expose these inert extensions through `BRegMetadataField::schema()`;
-Node and Python metadata expose the complete schema JSON. Consumers that do not
-understand attachments can display or omit their read-only metadata safely.
-Application code must implement the binary HTTP exchange explicitly and must
-not treat a SHA-256 value as a download capability.
+The Rust, Node, and Python clients select opaque attachment slots from this
+metadata and provide bounded binary upload, download, and removal methods.
+Rust also exposes the inert extension through `BRegMetadataField::schema()`;
+Node and Python expose the complete schema JSON. Consumers that do not use the
+attachment methods can display or omit read-only metadata safely. A SHA-256
+value is never a download capability.
 
 ## Request and lookup contract
 
@@ -139,6 +140,17 @@ validation. A caller must not combine `$skiptoken` with any other query option.
 Create uses `request.body: "data_envelope"`, `contentType: "application/json"`,
 `idempotencyKeyRequired: true`, `mutationSemantics: "direct"`, and a complete
 `request.schema` for `{data: {...}}`.
+
+Batch uses `body: "batch"`, `contentType: "application/json"`,
+`idempotencyKeyRequired: true`, and `mutationSemantics: "direct"`.
+`maximumItems`, `maximumBodyBytes`, `allowCreate`, and `allowPatch` describe the
+compiled operation/profile limits. Its generated `schema` describes the allowed
+item alternatives, per-item preconditions, and optional batch-level change
+context. Batch create/patch field sets remain profile-filtered, and the client
+sends one atomic same-entity request. Tombstone uses an empty body, requires
+`ifMatchRequired` and `idempotencyKeyRequired`, and returns the native revision
+envelope. Neither operation implies authority for an independently ungranted
+mutation.
 
 PATCH uses `body: "json_patch"`, `contentType: "application/json-patch+json"`,
 `patchPathPrefix: "/data/"`, `patchOperations: ["add", "replace", "remove",
@@ -196,8 +208,12 @@ Collection `query` describes the selected compiled query plan:
 | `maxFilterClauses`, `maxInValues` | Closed expression bounds |
 | `pagination` | `{parameter: "$skiptoken", responsePath: "pageInfo.nextCursor", exclusive: true}` |
 | `temporal` | null, `{mode: "current"}`, the required `asOf` parameter contract, or `{mode: "snapshot", snapshot: {...}, validAt: {...}}` with the optional opaque snapshot reference and typed validity parameter |
+| `spatialQueries` | Optional `bbox` descriptor with `geometryProperty`, `maximumLongitudeSpanDegrees`, `maximumLatitudeSpanDegrees`, `coordinateReferenceSystem: "CRS84"`, and `semantics: "inclusive_2d_non_crossing"` |
 
-The temporal requirement applies to the first page; continuation is cursor-only.
+The temporal requirement applies to the first page; continuation is cursor-only
+apart from the selected access profile. Native direct lists can combine bbox
+with permitted scalar options. Temporal and relationship routes do not accept
+bbox. GeoJSON is a separate representation and does not carry mutation ETags.
 The capability operator names describe the existing native query grammar, not
 query-string keys. Use `$filter`, `$orderby`, `$select`, `$top`, and `$count` as
 listed in `request.queryParameters`. A null `query` does not advertise a list or
@@ -233,10 +249,26 @@ preconditions and must never be substituted for one another.
 
 ## Immediate-action metadata
 
-The top-level `actions` member remains bounded descriptive metadata for the
-configured immediate-action surface. It is not an execution grant. In
-particular, the current target-condition and invoke protocol does not accept a
-server-checked metadata contract fingerprint, so a generic client cannot prove
-that an activation reviewed from one metadata revision is still the contract
-being invoked. Such a client should keep this member inert until the protocol
-provides that final binding instead of inferring a route from it.
+The top-level `actions` member describes the configured, caller-filtered
+immediate-action surface. Descriptions alone grant no authority. The clients
+select an opaque immediate-action binding only after validating its operation,
+profile, source/package identity, route, input contracts, bounds, target
+condition requirements, and permitted result effects.
+
+Input descriptors distinguish requiredness from nullability and retain the
+owning action's input mode and bounds. Target-condition retrieval and invocation
+are separate explicit methods. Invocation retains the original input,
+conditions, selected profile, and caller's idempotency key. The runtime rechecks
+the current package and authority, and receipts are constrained to effects
+permitted by that profile. Metadata selection does not freeze server activation
+or replace execution-time authorization.
+
+## Client compatibility
+
+Parsed Rust, Node, and Python metadata retains selectors, read paths, vocabulary
+labels, reference-operation details, immediate actions, and change-request
+capabilities. New optional descriptors remain optional when reading older
+servers, but a missing executable request contract returns an unsupported
+selection error. Older strict clients may reject added metadata members, so
+upgrade clients and servers together. These descriptors expose existing runtime
+capabilities without changing grants, history retention, or database schema.
