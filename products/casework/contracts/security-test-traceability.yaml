@@ -1,0 +1,17 @@
+contract: registry.casework.security-test-traceability/v1
+scope: first-checkpoint
+executionStatus: not-recorded
+entries:
+  - {id: CASEWORK-SEC-01, tests: [{file: crates/registry-casework/tests/human_identity_auth.rs, name: trusted_human_assertion_gates_every_casework_actor_profile}]}
+  - {id: CASEWORK-SEC-02, tests: [{file: crates/registry-casework/tests/service_visibility.rs, name: http_authentication_and_directory_authority_are_enforced}]}
+  - {id: CASEWORK-SEC-03, tests: [{file: crates/registry-casework-breg/tests/source_boundary.rs, name: caller_disclosure_never_reuses_reader_content_or_another_persons_reason}, {file: crates/registry-casework/tests/service_visibility.rs, name: source_outage_is_distinct_from_empty_inbox_and_holdings}]}
+  - {id: CASEWORK-SEC-04, tests: [{file: crates/registry-casework/tests/service_visibility.rs, name: service_visibility_boundaries}]}
+  - {id: CASEWORK-SEC-05, tests: [{file: crates/registry-casework/tests/postgres_transactions.rs, name: transactional_checkpoint_invariants_hold_in_postgresql}]}
+  - {id: CASEWORK-SEC-06, tests: [{file: crates/registry-casework-breg/tests/source_boundary.rs, name: stale_source_generation_is_refused_before_any_read_or_write}, {file: crates/registry-casework-breg/tests/source_boundary.rs, name: draft_does_not_open_review_and_approved_opens_separate_application}]}
+  - {id: CASEWORK-SEC-07, tests: [{file: crates/registry-casework/tests/service_visibility.rs, name: recovery_problem_discloses_only_the_entitled_original_attempt}, {file: crates/registry-casework-breg/tests/prepared_recovery.rs, name: recovery_refuses_a_different_actor_before_source_io}, {file: crates/registry-casework/tests/service_visibility.rs, name: terminal_attempt_replays_do_not_repeat_source_execution}]}
+  - {id: CASEWORK-SEC-08, tests: [{file: crates/registry-casework/tests/service_visibility.rs, name: source_event_diagnostics_are_bounded_and_payload_free}]}
+  - {id: CASEWORK-SEC-09, tests: [{file: crates/registry-casework-breg/tests/source_boundary.rs, name: draft_does_not_open_review_and_approved_opens_separate_application}]}
+  - {id: CASEWORK-SEC-10, tests: [{file: products/casework/scripts/test_dependency_direction.py, name: test_transitive_breg_dependency_from_generic_client_is_rejected}, {file: products/casework/scripts/test_dependency_direction.py, name: test_breg_dependency_on_casework_is_rejected}]}
+  - {id: CASEWORK-SEC-11, tests: [{file: crates/registry-casework-core/src/transition.rs, name: terminal_occurrences_cannot_be_reopened}, {file: crates/registry-casework-core/src/transition.rs, name: every_state_event_pair_matches_the_transition_table}]}
+  - {id: CASEWORK-SEC-12, tests: [{file: crates/registry-casework/tests/service_visibility.rs, name: caller_owned_live_attempt_survives_a_fresh_session_without_cross_actor_disclosure}]}
+  - {id: CASEWORK-SEC-13, tests: [{file: crates/registry-casework/src/http.rs, name: http_edge_returns_closed_problems_with_request_trace_and_security_headers}, {file: crates/registry-casework/src/http.rs, name: authentication_and_outage_problems_carry_recovery_headers}, {file: crates/registry-casework/src/problem.rs, name: operation_contract_covers_every_problem_and_framework_rejection}, {file: crates/registry-casework/src/config.rs, name: listener_requires_a_private_address_or_explicit_container_network}]}

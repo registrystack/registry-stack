@@ -395,6 +395,500 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/problems/registry-casework/authentication/refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Authentication refused",
+      "description": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "authentication.refused",
+        "httpStatuses": [
+          401
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/idempotency/key-reused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Idempotency key reused",
+      "description": "This idempotency key was used for a different request.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "idempotency.key-reused",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/operation/not-authorized",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Operation not authorized",
+      "description": "Your current Casework authority does not allow this operation.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "operation.not-authorized",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/precondition/failed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Precondition failed",
+      "description": "The item or directory changed since you loaded it. Reload and try again.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "precondition.failed",
+        "httpStatuses": [
+          412
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/precondition/required",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Precondition required",
+      "description": "This mutation requires the revision that you loaded.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "precondition.required",
+        "httpStatuses": [
+          428
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/profile/not-authorized",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Profile not authorized",
+      "description": "The selected Casework profile does not authorize this request.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "profile.not-authorized",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/profile/not-human",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Human session required",
+      "description": "This action is reserved for a human session.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "profile.not-human",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/request/body-too-large",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Request body too large",
+      "description": "The request body exceeds the one MiB limit.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "request.body-too-large",
+        "httpStatuses": [
+          413
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/request/invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Invalid request",
+      "description": "The Casework request is invalid.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "request.invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/request/method-not-allowed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Method not allowed",
+      "description": "This route does not accept that HTTP method.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "request.method-not-allowed",
+        "httpStatuses": [
+          405
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/request/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Route not found",
+      "description": "The requested Casework route does not exist.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "request.not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/request/unprocessable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Request could not be processed",
+      "description": "The request body does not match the Casework contract.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "request.unprocessable",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/request/unsupported-media-type",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Unsupported media type",
+      "description": "Send a JSON request body with Content-Type application/json.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "request.unsupported-media-type",
+        "httpStatuses": [
+          415
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/runtime/failure",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Casework runtime failure",
+      "description": "Casework could not complete the request.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "runtime.failure",
+        "httpStatuses": [
+          500
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/service/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Casework service unavailable",
+      "description": "Casework storage is unavailable. Try again after the service recovers.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "service.unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/source/bad-gateway",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Invalid source response",
+      "description": "The source returned a response that does not match its registered contract.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "source.bad-gateway",
+        "httpStatuses": [
+          502
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/source/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Source not found",
+      "description": "The requested source is not registered.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "source.not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/source/signature-invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Source signature invalid",
+      "description": "The event's signature did not verify.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "source.signature-invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/already-claimed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Work item already claimed",
+      "description": "Someone else claimed this item a moment ago.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "work-item.already-claimed",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/not-holder",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Work item held by another person",
+      "description": "You do not hold this item. Claim it first, or ask a supervisor.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "work-item.not-holder",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/not-offered",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Work item action not offered",
+      "description": "The registry did not offer this action to you. Refresh to check again.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "work-item.not-offered",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/not-visible",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Work item not visible",
+      "description": "The registry did not show you this request, so Casework cannot show you the item.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "work-item.not-visible",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/proposal-changed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Work item proposal changed",
+      "description": "The proposal changed since you read it. Your private draft is retained.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "work-item.proposal-changed",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/recovery-pending",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Work item recovery pending",
+      "description": "We could not confirm the result of your last action. Recover the original attempt; do not decide again.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "work-item.recovery-pending",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/source-unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Work item source unavailable",
+      "description": "The registry is not answering. We cannot confirm the current item or its actions. Your private draft is retained.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "work-item.source-unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/work-item/superseded",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Work item superseded",
+      "description": "A revised proposal replaced this item. Open the current one.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "3ba1b540d5b92a67e41fd760e8ae2c7221b34a48f57476969fd8bde0b2f47aa3"
+      },
+      "problem": {
+        "code": "work-item.superseded",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/problems/registry-discovery/invalid-request",
       "kind": "problem",
       "status": "active",
