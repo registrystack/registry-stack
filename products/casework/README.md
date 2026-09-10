@@ -1,9 +1,111 @@
-# Registry Casework checkpoint
+# Registry Casework
 
-Registry Casework gives a team one accountable inbox for a governed Base
-Registry Engine change request. The checkpoint deliberately supports one BReg
-source, one review stage with one required approval, one default queue, manual
-application, and a passive 48-hour target measured from first observation.
+Registry Casework gives a team one accountable inbox for source-owned work and
+for small human decisions requested by another service. It supports two
+standalone deployment profiles: a hosted decision needs no registry source,
+while the original checkpoint connects one governed Base Registry Engine
+change-request source. A project may configure either surface or both.
+
+## Standalone hosted decisions
+
+Create the source-free starter, then inspect its effective configuration:
+
+```sh
+caseworkctl init ./casework --template standalone-decision
+caseworkctl check ./casework
+caseworkctl test ./casework
+```
+
+The maintained authored form is
+[`examples/standalone-decision/casework.yaml`](examples/standalone-decision/casework.yaml).
+It declares one `decision` kind, one queue, its bounded JSON Schema display,
+allowed outcomes, and separate terminal and accountability retention periods.
+The runtime does not install this kind implicitly. Every accepted hosted item
+must name a kind declared by the active project.
+
+An operator must still configure PostgreSQL, token verification, the
+Administrator, Staff, Supervisor, and Requester profiles, and a team serving
+the kind's queue. The Administrator bootstraps that directory through the
+authenticated directory API. A standalone deployment does not start or depend
+on BReg. It supplies an API and maintained client, not a staff-facing UI or an
+external-reference resolver.
+
+A Requester is the service integration role. It creates an item with an
+`Idempotency-Key`, reads, adds and lists notes, or cancels only items created
+under the same issuer, subject, and Requester profile, and pages its own
+terminal feed. It cannot claim or decide. Staff, Supervisor, and Administrator
+remain human roles and must carry the configured human-identity assertion.
+Requester admission does not require that assertion; if it is present, it adds
+no human-role or decision authority.
+
+The create body contains only the configured kind, the requester's opaque
+correlation reference, and display data validated against the kind's bounded
+JSON Schema:
+
+```json
+{
+  "kind": "decision",
+  "requesterReference": "batch-0042",
+  "display": {
+    "summary": "Review the 12 entries in the prepared batch",
+    "reference": "batch-0042"
+  }
+}
+```
+
+It cannot select an actor, team, outcome vocabulary, callback, URL to fetch,
+or human/service classification. A typed hosted validation failure keeps the
+six-field problem body value-free and may add the paired
+`Registry-Casework-Validation-Path` and
+`Registry-Casework-Validation-Reason` response headers. The path is bounded to
+256 characters, the reason comes from a closed enum, and neither header echoes
+rejected values.
+
+A human Staff or Supervisor profile listed by the hosted kind uses the existing
+work-item list, read, claim, and release routes without a source-profile header,
+reads the retained hosted lifecycle history including requester notes, then
+posts a declared outcome to the hosted-decision route. Current team service is
+also required. Casework pins the kind version, policy digest, display, and
+outcome vocabulary when it accepts the item, so a later configuration change
+does not rewrite existing work.
+
+Requester terminal results are ordered by terminal time and stable event id.
+Each result is either a completed outcome with an opaque `actorRef`, or a
+cancellation with its reason. The ordinary requester response never contains
+the deciding person's issuer, subject, email, display name, internal note, or
+decision reason. Casework retains the raw issuer-qualified identity and staff
+reason in its protected accountability state. A Supervisor who currently
+leads a team serving the item's queue can resolve one completed terminal
+`eventId` through the separate accountability route. That read is audited and
+ends when the accountability record expires. Cancellations have no deciding
+actor accountability record.
+
+`terminalDays` bounds the requester-visible terminal feed from the terminal
+time. `accountabilityDays` independently bounds protected accountability state
+from the same time and must be at least as long. Cursors are bound to the
+requester's issuer, subject, selected profile, and feed context for 15 minutes.
+A malformed, unknown, or context-mismatched cursor returns `cursor.invalid`.
+If a matching cursor expires, the API returns `cursor.expired`; restart without
+a cursor and deduplicate by `eventId`. Clients must poll within the configured
+terminal period because an expired item is no longer available through the
+requester read, notes, staff history, or terminal feed. The runtime retention
+pass removes expired terminal events and item payload state, then removes the
+protected raw actor record at its later accountability expiry.
+
+Hosted idempotency follows the same outer accountability deadline. When the
+item payload expires, Casework erases the stored response and retains no
+request or display payload in the idempotency tombstone. It keeps only a
+request hash and hashed binding metadata. An exact retry during that remaining
+period returns `idempotency.expired` with HTTP 410 so the caller can reconcile
+the original operation; a changed request under the same key remains
+`idempotency.key-reused`. After the accountability deadline, Casework forgets
+the tombstone and the key may be reused.
+
+## BReg change-request checkpoint
+
+The original BReg starter supports one source, one review stage with one
+required approval, one default queue, manual application, and a passive
+48-hour target measured from first observation.
 
 Start with authored inputs and inspect every source-side change before writing
 it:
@@ -68,12 +170,14 @@ Casework accepts Administrator, Supervisor, and Staff credentials only when
 the trusted issuer asserts the configured human identity claim. The operator
 binding defaults to `humanIdentity: {claim: registry_actor_kind, value: human}`.
 Configure the issuer to add that exact assertion only to interactive human
-sessions. Client-credentials and other service tokens must omit the claim or
-assert another string such as `service`. A missing, different, or non-string
-claim is refused even when the token has valid Casework scopes and names a
-directory member. Casework does not infer a human actor from a subject, client
-identifier, or scope. This boundary relies on the configured trusted issuer to
-classify sessions correctly.
+sessions. Requester and other service tokens can omit the claim or assert
+another string such as `service`. Requester admission is exempt from the human
+assertion check, and any human assertion on that token adds no Staff,
+Supervisor, or Administrator authority. A missing, different, or non-string
+claim is refused for a human role even when the token has valid Casework scopes
+and names a directory member. Casework does not infer a human actor from a
+subject, client identifier, or scope. This boundary relies on the configured
+trusted issuer to classify sessions correctly.
 
 The generated source reader has only BReg `get` and `list`, reads only the
 target record reference, requests no reviewer reason fields, and carries no
@@ -97,9 +201,9 @@ python3 products/casework/scripts/generate_openapi.py
 python3 products/casework/scripts/generate_openapi.py --check
 ```
 
-The local checkpoint wrapper runs that OpenAPI drift check, the dependency
-guard, every product script test, and the offline authoring journey. Build
-`caseworkctl` first or set `CASEWORKCTL_BIN`:
+The local product wrapper runs that OpenAPI drift check, the dependency guard,
+every product script test, and both maintained offline authoring journeys.
+Build `caseworkctl` first or set `CASEWORKCTL_BIN`:
 
 ```sh
 products/casework/scripts/check-checkpoint.sh

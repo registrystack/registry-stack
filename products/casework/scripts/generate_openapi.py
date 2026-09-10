@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the deterministic Registry Casework checkpoint OpenAPI contract."""
+"""Generate the deterministic Registry Casework OpenAPI contract."""
 
 from __future__ import annotations
 
@@ -16,6 +16,12 @@ ROUTES = {
     "/health",
     "/ready",
     "/v1/casework",
+    "/v1/hosted-items",
+    "/v1/hosted-items/terminal",
+    "/v1/hosted-items/{item_id}",
+    "/v1/hosted-items/{item_id}/notes",
+    "/v1/hosted-items/{item_id}/cancel",
+    "/v1/hosted-accountability/{event_id}",
     "/v1/work-items",
     "/v1/work-items/next",
     "/v1/work-items/{item_id}",
@@ -23,6 +29,8 @@ ROUTES = {
     "/v1/work-items/{item_id}/release",
     "/v1/work-items/{item_id}/draft",
     "/v1/work-items/{item_id}/decisions",
+    "/v1/work-items/{item_id}/hosted-decisions",
+    "/v1/work-items/{item_id}/hosted-history",
     "/v1/work-items/{item_id}/attempts/recover",
     "/v1/work-items/{item_id}/attempts/{attempt_id}/recover",
     "/v1/work-items/{item_id}/history",
@@ -37,6 +45,8 @@ HEADERS = {
     "ATTEMPT_REFERENCE_HEADER": "registry-casework-attempt",
     "IDEMPOTENCY_KEY_HEADER": "idempotency-key",
     "IF_MATCH_HEADER": "if-match",
+    "VALIDATION_PATH_HEADER": "registry-casework-validation-path",
+    "VALIDATION_REASON_HEADER": "registry-casework-validation-reason",
 }
 DTO_MARKERS = {
     "ListWorkItemsQuery",
@@ -50,6 +60,10 @@ DTO_MARKERS = {
     "DirectoryResponse",
     "Description",
     "DraftResponse",
+    "HostedTerminalQuery",
+    "HostedPageQuery",
+    "HostedNotePage",
+    "HostedHistoryPage",
 }
 SCHEMA_STRUCTS = {
     "crates/registry-casework-core/src/model.rs": {
@@ -76,6 +90,7 @@ SCHEMA_STRUCTS = {
         "DirectoryResponse": "DirectoryResponse",
         "Description": "Description",
         "DraftResponse": "DraftResponse",
+        "HostedHistoryEntry": "HostedHistoryEntry",
     },
     "crates/registry-casework-core/src/config.rs": {
         "SourcePolicy": "SourcePolicy",
@@ -83,12 +98,32 @@ SCHEMA_STRUCTS = {
         "PassiveTargetPolicy": "PassiveTargetPolicy",
         "ElapsedDuration": "ElapsedDuration",
     },
+    "crates/registry-casework-core/src/hosted.rs": {
+        "HostedRetentionPolicy": "HostedRetentionPolicy",
+        "HostedOutcomePolicy": "HostedOutcomePolicy",
+        "HostedKindPolicy": "HostedKindPolicy",
+        "HostedWorkItemContext": "HostedWorkItemContext",
+        "HostedCreateRequest": "HostedCreateRequest",
+        "HostedNoteRequest": "HostedNoteRequest",
+        "HostedCancelRequest": "HostedCancelRequest",
+        "HostedDecisionRequest": "HostedDecisionRequest",
+        "RequesterHostedItem": "RequesterHostedItem",
+        "HostedNote": "HostedNote",
+        "HostedAccountabilityRecord": "HostedAccountabilityRecord",
+    },
 }
 OPERATION_IDS = {
     ("POST", "/events/sources/{source_id}"): "acceptSourceEvent",
     ("GET", "/health"): "health",
     ("GET", "/ready"): "readiness",
     ("GET", "/v1/casework"): "describeCasework",
+    ("POST", "/v1/hosted-items"): "createHostedItem",
+    ("GET", "/v1/hosted-items/terminal"): "listHostedTerminalResults",
+    ("GET", "/v1/hosted-items/{item_id}"): "getHostedItem",
+    ("GET", "/v1/hosted-items/{item_id}/notes"): "listHostedNotes",
+    ("POST", "/v1/hosted-items/{item_id}/notes"): "addHostedNote",
+    ("POST", "/v1/hosted-items/{item_id}/cancel"): "cancelHostedItem",
+    ("GET", "/v1/hosted-accountability/{event_id}"): "getHostedAccountability",
     ("GET", "/v1/directory"): "getDirectory",
     ("POST", "/v1/directory/bootstrap"): "bootstrapDirectory",
     ("GET", "/v1/holdings"): "getHoldings",
@@ -99,6 +134,8 @@ OPERATION_IDS = {
     ("POST", "/v1/work-items/{item_id}/attempts/{attempt_id}/recover"): "recoverAttempt",
     ("POST", "/v1/work-items/{item_id}/claim"): "claimWorkItem",
     ("POST", "/v1/work-items/{item_id}/decisions"): "decideWorkItem",
+    ("POST", "/v1/work-items/{item_id}/hosted-decisions"): "decideHostedWorkItem",
+    ("GET", "/v1/work-items/{item_id}/hosted-history"): "getHostedHistory",
     ("DELETE", "/v1/work-items/{item_id}/draft"): "deleteDraft",
     ("GET", "/v1/work-items/{item_id}/draft"): "getDraft",
     ("PUT", "/v1/work-items/{item_id}/draft"): "saveDraft",
@@ -145,11 +182,51 @@ def schemas(problem_entries: list[dict]) -> dict:
     )
     subject = obj({"sourceId": text, "kind": text, "id": text}, ["sourceId", "kind", "id"])
     action = obj({"operation": text, "href": text, "ifMatch": text}, ["operation", "href", "ifMatch"])
+    policy_digest = {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "minLength": 71,
+        "maxLength": 71,
+    }
+    actor_ref = {
+        "type": "string",
+        "pattern": "^actor_[A-Za-z0-9_-]+$",
+        "minLength": 7,
+        "maxLength": 128,
+    }
+    display = {
+        "type": "object",
+        "additionalProperties": True,
+        "x-maximum-canonical-bytes": 16_384,
+        "x-maximum-depth": 16,
+    }
+    hosted_outcome = obj(
+        {"id": text, "label": text, "reasonRequired": {"type": "boolean"}},
+        ["id", "label", "reasonRequired"],
+    )
+    hosted_context = obj(
+        {
+            "requesterReference": text,
+            "kind": text,
+            "version": text,
+            "display": display,
+            "kindPolicyDigest": policy_digest,
+            "outcomes": array(ref("HostedOutcomePolicy")),
+        },
+        [
+            "requesterReference",
+            "kind",
+            "version",
+            "display",
+            "kindPolicyDigest",
+            "outcomes",
+        ],
+    )
     work_item = obj(
         {
             "itemId": uuid,
             "subject": ref("SubjectRef"),
-            "occurrenceKind": {"type": "string", "enum": ["review", "application"]},
+            "occurrenceKind": {"type": "string", "enum": ["review", "application", "hosted"]},
             "stage": nullable(text),
             "binding": ref("SourceBinding"),
             "bindingReference": text,
@@ -160,6 +237,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             "firstObservedAt": instant,
             "passiveDueAt": nullable(instant),
             "updatedAt": instant,
+            "hosted": nullable(ref("HostedWorkItemContext")),
             "actions": array(ref("CaseworkAction")),
             "routingCopy": nullable(ref("CorrectionRoutingCopy")),
             "liveAttempt": ref("AttemptStatus"),
@@ -173,6 +251,224 @@ def schemas(problem_entries: list[dict]) -> dict:
         "SourceBinding": binding,
         "SubjectRef": subject,
         "CaseworkAction": action,
+        "HostedPolicyDigest": policy_digest,
+        "OpaqueActorRef": actor_ref,
+        "HostedRetentionPolicy": obj(
+            {
+                "terminalDays": {"type": "integer", "minimum": 1, "maximum": 3650},
+                "accountabilityDays": {"type": "integer", "minimum": 1, "maximum": 3650},
+            },
+            ["terminalDays", "accountabilityDays"],
+        ),
+        "HostedOutcomePolicy": hosted_outcome,
+        "HostedKindPolicy": obj(
+            {
+                "id": text,
+                "version": text,
+                "queue": text,
+                "decidingProfiles": array(text),
+                "retention": ref("HostedRetentionPolicy"),
+                "displaySchema": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "x-maximum-canonical-bytes": 65_536,
+                    "x-maximum-depth": 16,
+                },
+                "outcomes": array(ref("HostedOutcomePolicy")),
+            },
+            [
+                "id",
+                "version",
+                "queue",
+                "decidingProfiles",
+                "retention",
+                "displaySchema",
+                "outcomes",
+            ],
+        ),
+        "HostedWorkItemContext": hosted_context,
+        "HostedCreateRequest": obj(
+            {
+                "kind": text,
+                "requesterReference": {"type": "string", "minLength": 1, "maxLength": 128, "x-maximum-utf8-bytes": 128},
+                "display": display,
+            },
+            ["kind", "requesterReference", "display"],
+        ),
+        "HostedNoteRequest": obj(
+            {"note": {"type": "string", "minLength": 1, "maxLength": 2000, "x-maximum-utf8-bytes": 2000}},
+            ["note"],
+        ),
+        "HostedCancelRequest": obj(
+            {"reason": {"type": "string", "minLength": 1, "maxLength": 2000, "x-maximum-utf8-bytes": 2000}},
+            ["reason"],
+        ),
+        "HostedDecisionRequest": obj(
+            {
+                "outcome": text,
+                "reason": nullable(
+                    {"type": "string", "minLength": 1, "maxLength": 2000, "x-maximum-utf8-bytes": 2000}
+                ),
+            },
+            ["outcome"],
+        ),
+        "RequesterHostedItem": obj(
+            {
+                "itemId": uuid,
+                "requesterReference": text,
+                "kind": text,
+                "version": text,
+                "display": display,
+                "state": {
+                    "type": "string",
+                    "enum": ["open", "claimed", "completed", "cancelled"],
+                },
+                "revision": integer,
+                "kindPolicyDigest": policy_digest,
+                "createdAt": instant,
+                "updatedAt": instant,
+            },
+            [
+                "itemId",
+                "requesterReference",
+                "kind",
+                "version",
+                "display",
+                "state",
+                "revision",
+                "kindPolicyDigest",
+                "createdAt",
+                "updatedAt",
+            ],
+        ),
+        "HostedNote": obj(
+            {
+                "noteId": uuid,
+                "itemId": uuid,
+                "note": text,
+                "itemRevision": integer,
+                "recordedAt": instant,
+            },
+            ["noteId", "itemId", "note", "itemRevision", "recordedAt"],
+        ),
+        "HostedNotePage": obj(
+            {
+                "items": array(ref("HostedNote")),
+                "nextCursor": nullable(text),
+                "status": page_status,
+            },
+            ["items", "status"],
+        ),
+        "HostedHistoryEntry": obj(
+            {
+                "eventId": uuid,
+                "itemId": uuid,
+                "itemRevision": integer,
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "created",
+                        "claimed",
+                        "released",
+                        "note_added",
+                        "completed",
+                        "cancelled",
+                    ],
+                },
+                "occurredAt": instant,
+                "actorRef": nullable(actor_ref),
+                "note": nullable(text),
+                "outcome": nullable(text),
+                "reason": nullable(text),
+                "cancellationReason": nullable(text),
+            },
+            ["eventId", "itemId", "itemRevision", "kind", "occurredAt"],
+        ),
+        "HostedHistoryPage": obj(
+            {
+                "items": array(ref("HostedHistoryEntry")),
+                "nextCursor": nullable(text),
+                "status": page_status,
+            },
+            ["items", "status"],
+        ),
+        "HostedAccountabilityRecord": obj(
+            {
+                "itemId": uuid,
+                "eventId": uuid,
+                "actorRef": actor_ref,
+                "actor": ref("IssuerPrincipal"),
+                "profileId": text,
+                "outcome": text,
+                "reason": nullable(text),
+                "recordedAt": instant,
+                "retainedUntil": instant,
+            },
+            [
+                "itemId",
+                "eventId",
+                "actorRef",
+                "actor",
+                "profileId",
+                "outcome",
+                "recordedAt",
+                "retainedUntil",
+            ],
+        ),
+        "HostedTerminalCompleted": obj(
+            {
+                "itemId": uuid,
+                "eventId": uuid,
+                "requesterReference": text,
+                "state": {"const": "completed"},
+                "outcome": text,
+                "actorRef": actor_ref,
+                "kindPolicyDigest": policy_digest,
+                "terminalAt": instant,
+            },
+            [
+                "itemId",
+                "eventId",
+                "requesterReference",
+                "state",
+                "outcome",
+                "actorRef",
+                "kindPolicyDigest",
+                "terminalAt",
+            ],
+        ),
+        "HostedTerminalCancelled": obj(
+            {
+                "itemId": uuid,
+                "eventId": uuid,
+                "requesterReference": text,
+                "state": {"const": "cancelled"},
+                "cancellationReason": text,
+                "kindPolicyDigest": policy_digest,
+                "terminalAt": instant,
+            },
+            [
+                "itemId",
+                "eventId",
+                "requesterReference",
+                "state",
+                "cancellationReason",
+                "kindPolicyDigest",
+                "terminalAt",
+            ],
+        ),
+        "HostedTerminalResult": {
+            "oneOf": [ref("HostedTerminalCompleted"), ref("HostedTerminalCancelled")],
+            "discriminator": {"propertyName": "state"},
+        },
+        "HostedTerminalPage": obj(
+            {
+                "items": array(ref("HostedTerminalResult")),
+                "nextCursor": nullable(text),
+                "status": page_status,
+            },
+            ["items", "status"],
+        ),
         "CorrectionRoutingCopy": obj(
             {"sourceBinding": ref("SourceBinding"), "reason": nullable(text), "flaggedFields": array(text)},
             ["sourceBinding", "flaggedFields"],
@@ -217,8 +513,8 @@ def schemas(problem_entries: list[dict]) -> dict:
         "SourcePolicy": obj({"id": text, "adapter": text, "description": text, "requests": array(ref("SourceRequestPolicy"))}, ["id", "adapter", "description", "requests"]),
         "QueueRecord": obj({"id": text, "label": text}, ["id", "label"]),
         "Description": obj(
-            {"projectId": text, "policyVersion": text, "queues": array(ref("QueueRecord")), "sources": array(ref("SourcePolicy"))},
-            ["projectId", "policyVersion", "queues", "sources"],
+            {"projectId": text, "policyVersion": text, "queues": array(ref("QueueRecord")), "sources": array(ref("SourcePolicy")), "hostedKinds": array(ref("HostedKindPolicy"))},
+            ["projectId", "policyVersion", "queues", "sources", "hostedKinds"],
         ),
         "Problem": obj({"type": {"type": "string", "format": "uri"}, "title": text, "status": {"type": "integer"}, "detail": text, "code": {"type": "string", "enum": [entry["code"] for entry in problem_entries]}, "traceId": text}, ["type", "title", "status", "detail", "code", "traceId"]),
     }
@@ -287,7 +583,20 @@ IDEMPOTENCY = parameter(
     "Caller-selected ASCII graphic key bound to this exact mutation.",
     IDEMPOTENCY_SCHEMA,
 )
+HOSTED_IDEMPOTENCY = parameter(
+    "Idempotency-Key",
+    "header",
+    "Caller-selected ASCII graphic key bound to this principal, selected profile, operation, resource, and exact request. After the item payload expires, an exact retry until the accountability retention deadline returns idempotency.expired; a changed request remains idempotency.key-reused. After that deadline the record is forgotten and the key may be reused.",
+    IDEMPOTENCY_SCHEMA,
+)
+SHARED_HOSTED_IDEMPOTENCY = parameter(
+    "Idempotency-Key",
+    "header",
+    "Caller-selected ASCII graphic key bound to this exact mutation. For hosted work, an exact retry after payload expiry and before the accountability retention deadline returns idempotency.expired; a changed request remains idempotency.key-reused. After that deadline the record is forgotten and the key may be reused.",
+    IDEMPOTENCY_SCHEMA,
+)
 ITEM_ID = parameter("item_id", "path", "Casework item UUID.", {"type": "string", "format": "uuid"})
+EVENT_ID = parameter("event_id", "path", "Hosted terminal event UUID.", {"type": "string", "format": "uuid"})
 ATTEMPT_ID = parameter("attempt_id", "path", "Original durable attempt UUID.", {"type": "string", "format": "uuid"})
 SOURCE_ID = parameter("source_id", "path", "Configured source identifier.")
 EVENT_HEADERS = [
@@ -385,14 +694,61 @@ def problem_responses(codes: list[str], catalog: dict[str, dict]) -> dict:
     return result
 
 
-def operation(summary: str, schema_name: str | None = None, *, source: bool = False, mutation: bool = False, allow_zero_revision: bool = False, body: str | None = None, parameters: list[dict] | None = None, status: str = "200") -> dict:
+HOSTED_VALIDATION_OPERATIONS = {
+    ("post", "/v1/hosted-items"),
+    ("post", "/v1/hosted-items/{item_id}/notes"),
+    ("post", "/v1/hosted-items/{item_id}/cancel"),
+    ("post", "/v1/work-items/{item_id}/hosted-decisions"),
+}
+HOSTED_VALIDATION_REASONS = [
+    "kind_not_allowed",
+    "reference_invalid",
+    "object_required",
+    "maximum_bytes_exceeded",
+    "maximum_depth_exceeded",
+    "schema_mismatch",
+    "outcome_not_declared",
+    "reason_required",
+    "text_invalid",
+]
+
+
+def apply_hosted_validation_headers(paths: dict) -> None:
+    for method, path in HOSTED_VALIDATION_OPERATIONS:
+        response_400 = paths[path][method]["responses"].get("400")
+        if response_400 is None:
+            raise ValueError(
+                f"hosted validation route lacks request.invalid response: {(method, path)}"
+            )
+        response_400["headers"].update(
+            {
+                "Registry-Casework-Validation-Path": {
+                    "description": "Bounded JSON path for a typed hosted validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
+                    "schema": {"type": "string", "maxLength": 256},
+                    "x-present-for-problem-code": "request.invalid",
+                },
+                "Registry-Casework-Validation-Reason": {
+                    "description": "Stable, value-free reason for a typed hosted validation failure. Present together with Registry-Casework-Validation-Path.",
+                    "schema": {"type": "string", "enum": HOSTED_VALIDATION_REASONS},
+                    "x-present-for-problem-code": "request.invalid",
+                },
+            }
+        )
+
+
+def operation(summary: str, schema_name: str | None = None, *, source: bool = False, source_required: bool = True, mutation: bool = False, idempotency: bool = False, idempotency_contract: dict | None = None, allow_zero_revision: bool = False, body: str | None = None, parameters: list[dict] | None = None, status: str = "200", description: str | None = None) -> dict:
     params = [TRACEPARENT, CASEWORK_PROFILE]
     if source:
-        params.append(SOURCE_PROFILE)
+        params.append({**SOURCE_PROFILE, "required": source_required})
     if mutation:
         params.extend(
-            [IF_MATCH_ALLOW_ZERO if allow_zero_revision else IF_MATCH, IDEMPOTENCY]
+            [
+                IF_MATCH_ALLOW_ZERO if allow_zero_revision else IF_MATCH,
+                idempotency_contract or IDEMPOTENCY,
+            ]
         )
+    elif idempotency:
+        params.append(idempotency_contract or IDEMPOTENCY)
     params.extend(parameters or [])
     result = {
         "summary": summary,
@@ -400,6 +756,8 @@ def operation(summary: str, schema_name: str | None = None, *, source: bool = Fa
         "parameters": params,
         "responses": {status: response(schema_name)},
     }
+    if description:
+        result["description"] = description
     if body:
         result["requestBody"] = {"required": True, "content": {"application/json": {"schema": ref(body)}}}
     return result
@@ -411,23 +769,37 @@ def document(contract: dict) -> dict:
     paths = {
         "/health": {"get": {"summary": "Liveness", "security": [], "parameters": [TRACEPARENT], "responses": {"200": response(description="Process is live.")}}},
         "/ready": {"get": {"summary": "Database readiness", "security": [], "parameters": [TRACEPARENT], "responses": {"200": response(description="Ready.")}}},
-        "/v1/casework": {"get": operation("Describe the Casework project", "Description")},
-        "/v1/work-items": {"get": operation("List a caller-authorized inbox view", "WorkItemPage", source=True, parameters=[
+        "/v1/casework": {"get": operation("Describe the Casework project", "Description", description="Returns the configured queues, BReg sources, and hosted kinds visible to an authenticated profile. Description data grants no item or source authority.")},
+        "/v1/hosted-items": {"post": operation("Create a requester-owned hosted item", "RequesterHostedItem", idempotency=True, idempotency_contract=HOSTED_IDEMPOTENCY, body="HostedCreateRequest", status="201", description="Requester-only. The selected Requester profile and authenticated issuer-qualified service principal own the item and bound kind grant.")},
+        "/v1/hosted-items/terminal": {"get": operation("List this Requester's retained terminal results", "HostedTerminalPage", parameters=[
+            parameter("cursor", "query", "Opaque 15-minute cursor bound to the authenticated Requester issuer, subject, profile, and terminal feed. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by eventId.", required=False),
+            parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
+        ], description="Requester-only. Results are ordered by terminalAt and eventId and remain available only for the hosted kind's terminal retention period.")},
+        "/v1/hosted-items/{item_id}": {"get": operation("Read this Requester's hosted item", "RequesterHostedItem", parameters=[ITEM_ID])},
+        "/v1/hosted-items/{item_id}/notes": {
+            "get": operation("List this Requester's retained hosted notes", "HostedNotePage", parameters=[ITEM_ID, parameter("cursor", "query", "Opaque 15-minute cursor bound to the Requester principal, profile, item, and notes feed.", required=False), parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Requester-only. Notes are ordered by recordedAt and noteId and remain visible only while the hosted item payload is retained."),
+            "post": operation("Add a note to this Requester's hosted item", "RequesterHostedItem", mutation=True, idempotency_contract=HOSTED_IDEMPOTENCY, body="HostedNoteRequest", parameters=[ITEM_ID]),
+        },
+        "/v1/hosted-items/{item_id}/cancel": {"post": operation("Cancel this Requester's active hosted item", "HostedTerminalResult", mutation=True, idempotency_contract=HOSTED_IDEMPOTENCY, body="HostedCancelRequest", parameters=[ITEM_ID])},
+        "/v1/hosted-accountability/{event_id}": {"get": operation("Resolve one retained hosted decision actor", "HostedAccountabilityRecord", parameters=[EVENT_ID], description="Supervisor-only protected accountability read. Current team leadership is checked before returning the raw issuer-qualified actor, selected deciding profile, outcome, and staff reason. The read is audited and returns no cancellation record.")},
+        "/v1/work-items": {"get": operation("List a caller-authorized inbox view", "WorkItemPage", source=True, source_required=False, parameters=[
             parameter("view", "query", "Required view evaluated before pagination.", {"type": "string", "enum": ["mine", "my_teams", "team_holdings", "overdue", "completed_by_me"]}),
             parameter("queue", "query", "Optional queue identifier.", required=False),
             parameter("cursor", "query", "Opaque cursor bound to this authorized query.", required=False),
             parameter("limit", "query", "Bounded page size; values above 100 are served as 100.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
-        ])},
+        ], description="With Registry-Source-Profile, reads BReg-backed work under that separate authority. Without it, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order.")},
         "/v1/work-items/next": {"get": operation("Get the next caller-visible item", "WorkItem", source=True, parameters=[parameter("queue", "query", "Optional queue identifier.", required=False), parameter("cursor", "query", "Opaque cursor.", required=False)])},
-        "/v1/work-items/{item_id}": {"get": operation("Read one currently visible item", "WorkItem", source=True, parameters=[ITEM_ID])},
-        "/v1/work-items/{item_id}/claim": {"post": operation("Claim an item", "MutationResponse", source=True, mutation=True, parameters=[ITEM_ID])},
-        "/v1/work-items/{item_id}/release": {"post": operation("Release an item", "MutationResponse", source=True, mutation=True, parameters=[ITEM_ID])},
+        "/v1/work-items/{item_id}": {"get": operation("Read one currently visible item", "WorkItem", source=True, source_required=False, parameters=[ITEM_ID])},
+        "/v1/work-items/{item_id}/claim": {"post": operation("Claim an item", "MutationResponse", source=True, source_required=False, mutation=True, idempotency_contract=SHARED_HOSTED_IDEMPOTENCY, parameters=[ITEM_ID])},
+        "/v1/work-items/{item_id}/release": {"post": operation("Release an item", "MutationResponse", source=True, source_required=False, mutation=True, idempotency_contract=SHARED_HOSTED_IDEMPOTENCY, parameters=[ITEM_ID])},
         "/v1/work-items/{item_id}/draft": {
             "get": operation("Read the current actor's private draft", "DraftResponse", source=True, parameters=[ITEM_ID]),
             "put": operation("Save the current actor's private draft", "DraftResponse", source=True, mutation=True, body="SaveDraftRequest", parameters=[ITEM_ID]),
             "delete": operation("Delete the current actor's private draft", source=True, mutation=True, parameters=[ITEM_ID], status="204"),
         },
         "/v1/work-items/{item_id}/decisions": {"post": operation("Perform a freshly authorized source action", "MutationResponse", source=True, mutation=True, allow_zero_revision=True, body="DecideRequest", parameters=[ITEM_ID])},
+        "/v1/work-items/{item_id}/hosted-decisions": {"post": operation("Record a declared hosted outcome", "HostedTerminalResult", mutation=True, idempotency_contract=HOSTED_IDEMPOTENCY, body="HostedDecisionRequest", parameters=[ITEM_ID], description="A configured human Staff or Supervisor profile only. Current team service, current holder, selected deciding profile, item revision, and the item's pinned outcome policy are rechecked atomically.")},
+        "/v1/work-items/{item_id}/hosted-history": {"get": operation("List retained hosted lifecycle history", "HostedHistoryPage", parameters=[ITEM_ID, parameter("cursor", "query", "Opaque 15-minute cursor bound to the human principal, profile, item, and hosted history feed.", required=False), parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Human Staff or Supervisor only. Current deciding-profile and served-queue authority is checked. Results are ordered by occurredAt and eventId and may include requester notes, opaque actor references, outcomes, staff reasons, or cancellation reasons according to the event kind. They never expose requester or raw actor identity.")},
         "/v1/work-items/{item_id}/attempts/recover": {"post": operation("Recover the original attempt selected by idempotency key", "MutationResponse", source=True, body="RecoverAttemptRequest", parameters=[ITEM_ID, IDEMPOTENCY])},
         "/v1/work-items/{item_id}/attempts/{attempt_id}/recover": {"post": operation("Recover this exact original attempt", "MutationResponse", source=True, body="RecoverAttemptRequest", parameters=[ITEM_ID, ATTEMPT_ID])},
         "/v1/work-items/{item_id}/history": {"get": operation("Read bounded item history", "HistoryPage", source=True, parameters=[ITEM_ID])},
@@ -450,9 +822,10 @@ def document(contract: dict) -> dict:
         description="No currently visible item."
     )
     apply_operation_contract(paths, contract, catalog)
+    apply_hosted_validation_headers(paths)
     result = {
         "openapi": "3.1.0",
-        "info": {"title": "Registry Casework API", "version": "v1alpha1", "description": "First-checkpoint HTTP contract. Casework and source profiles are independent authority selections.", "license": {"name": "Apache-2.0", "identifier": "Apache-2.0"}},
+        "info": {"title": "Registry Casework API", "version": "v1alpha1", "description": "Implemented Casework HTTP contract for BReg-backed work and source-free hosted decisions. Casework and source profiles are independent authority selections.", "license": {"name": "Apache-2.0", "identifier": "Apache-2.0"}},
         "servers": [{"url": "https://casework.example.test", "description": "Operator-managed TLS endpoint in front of the private Casework runtime."}],
         "paths": paths,
         "components": {
@@ -463,7 +836,7 @@ def document(contract: dict) -> dict:
                 }
             },
             "securitySchemes": {
-                "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT", "description": "A fresh trusted-issuer human token. Service credentials are refused even when scoped."},
+                "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT", "description": "A fresh trusted-issuer token. Staff, Supervisor, and Administrator profiles require the configured human identity assertion. Requester is a service integration profile exempt from that assertion; selecting it never adds human-role or decision authority."},
                 "webhookSignature": {"type": "apiKey", "in": "header", "name": "X-Registry-Signature", "description": "HMAC-SHA256 signature over the exact bounded event request."},
             },
             "schemas": schemas(entries),
@@ -631,11 +1004,56 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
                     f"rust_only={sorted(rust_fields - schema_fields)}"
                 )
     page_fields = {"items", "nextCursor", "status"}
-    for schema_name in ("WorkItemPage", "HoldingsPage"):
+    for schema_name in (
+        "WorkItemPage",
+        "HoldingsPage",
+        "HostedTerminalPage",
+        "HostedNotePage",
+        "HostedHistoryPage",
+    ):
         if set(openapi_schemas[schema_name]["properties"]) != page_fields:
             raise ValueError(f"OpenAPI page shape drifted for {schema_name}")
     if set(openapi_schemas["HistoryPage"]["properties"]) != {"items", "status"}:
         raise ValueError("fixed-window HistoryPage must not advertise a cursor")
+    hosted_source = (
+        repository_root / "crates/registry-casework-core/src/hosted.rs"
+    ).read_text(encoding="utf-8")
+    if rust_struct_fields(hosted_source, "HostedTerminalResult") != {
+        "item_id",
+        "event_id",
+        "requester_reference",
+        "terminal",
+        "kind_policy_digest",
+        "terminal_at",
+    }:
+        raise ValueError("OpenAPI hosted terminal common fields drifted from Rust")
+    terminal_state = re.search(
+        r"pub enum HostedTerminalState\s*\{(?P<body>.*?)^\}",
+        hosted_source,
+        re.S | re.M,
+    )
+    if not terminal_state or not all(
+        marker in terminal_state.group("body")
+        for marker in (
+            "Completed {",
+            "outcome: String",
+            "actor_ref: OpaqueActorRef",
+            "Cancelled {",
+            "cancellation_reason: String",
+        )
+    ):
+        raise ValueError("OpenAPI hosted terminal variants drifted from Rust")
+    for marker in (
+        'value.len() == 71',
+        'value.starts_with("sha256:")',
+        'value.strip_prefix("actor_")',
+        "value.len() > 128",
+        "pub const MAXIMUM_HOSTED_DISPLAY_BYTES: usize = 16 * 1024;",
+        "pub const MAXIMUM_HOSTED_DISPLAY_DEPTH: usize = 16;",
+        "pub const MAXIMUM_HOSTED_RETENTION_DAYS: u32 = 3_650;",
+    ):
+        if marker not in hosted_source:
+            raise ValueError(f"OpenAPI hosted bound drifted from Rust: {marker}")
     operation_name = openapi_schemas["OperationName"]
     if operation_name != {
         "type": "string",
@@ -759,6 +1177,15 @@ def verify_source(repository_root: Path) -> None:
         raise ValueError("recovery-pending no longer binds the original attempt reference")
     if "ATTEMPT_REFERENCE_HEADER" not in http_source:
         raise ValueError("recovery-pending no longer emits the documented attempt header")
+    for marker in (
+        "VALIDATION_PATH_HEADER",
+        "VALIDATION_REASON_HEADER",
+        "Self::Validation",
+        "HostedValidationReason::KindNotAllowed",
+        "HostedValidationReason::TextInvalid",
+    ):
+        if marker not in http_source:
+            raise ValueError(f"hosted field validation response drifted: {marker}")
 
 
 def main() -> int:

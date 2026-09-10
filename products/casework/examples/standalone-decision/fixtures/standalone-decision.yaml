@@ -1,0 +1,11 @@
+apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+kind: CaseworkFixture
+name: standalone-decision-offline
+hosted:
+  kind: decision
+  display:
+    summary: Confirm the prepared synthetic batch
+    reference: synthetic-batch-0042
+expect:
+  queue: decisions
+  outcomes: [confirmed, rejected]

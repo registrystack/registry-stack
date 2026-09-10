@@ -26,4 +26,7 @@ trap cleanup EXIT HUP INT TERM
 "$caseworkctl_bin" init "$work/project" --template professional-review >/dev/null
 "$caseworkctl_bin" check "$work/project" >/dev/null
 "$caseworkctl_bin" test "$work/project" >/dev/null
+"$caseworkctl_bin" init "$work/standalone" --template standalone-decision >/dev/null
+"$caseworkctl_bin" check "$work/standalone" >/dev/null
+"$caseworkctl_bin" test "$work/standalone" >/dev/null
 echo "Casework product contracts and offline authoring journey passed."

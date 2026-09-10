@@ -1,0 +1,48 @@
+apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework:
+  id: standalone-decision
+  version: "1"
+accessProfiles:
+  - id: staff
+    principalClaim: sub
+    requiredScopes: [casework:staff]
+    role: staff
+  - id: supervisor
+    principalClaim: sub
+    requiredScopes: [casework:supervisor]
+    role: supervisor
+  - id: administrator
+    principalClaim: sub
+    requiredScopes: [casework:admin]
+    role: administrator
+  - id: requester
+    principalClaim: sub
+    requiredScopes: [casework:request]
+    role: requester
+    kinds: [decision]
+queues:
+  - id: decisions
+    label: Decisions awaiting review
+hostedKinds:
+  - id: decision
+    version: "1"
+    queue: decisions
+    decidingProfiles: [staff]
+    retention:
+      terminalDays: 90
+      accountabilityDays: 365
+    displaySchema:
+      type: object
+      additionalProperties: false
+      required: [summary, reference]
+      properties:
+        summary: {type: string, maxLength: 160}
+        reference: {type: string, maxLength: 120}
+    outcomes:
+      - id: confirmed
+        label: Confirm
+        reasonRequired: false
+      - id: rejected
+        label: Return for correction
+        reasonRequired: true

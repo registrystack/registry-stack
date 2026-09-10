@@ -7,6 +7,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 MATRIX = ROOT / "products/casework/contracts/security-invariant-matrix.yaml"
 TRACE = ROOT / "products/casework/contracts/security-test-traceability.yaml"
+STANDALONE_EXAMPLE = (
+    ROOT / "products/casework/examples/standalone-decision/casework.yaml"
+)
+STANDALONE_FIXTURE = (
+    ROOT
+    / "products/casework/examples/standalone-decision/fixtures/standalone-decision.yaml"
+)
+BREG_EXAMPLE = ROOT / "products/casework/examples/professional-review/casework.yaml"
 
 
 def references(text: str) -> set[tuple[str, str]]:
@@ -14,6 +22,20 @@ def references(text: str) -> set[tuple[str, str]]:
 
 
 class ProductContractTests(unittest.TestCase):
+    def test_standalone_example_is_source_free_and_breg_starter_remains(self):
+        standalone = STANDALONE_EXAMPLE.read_text(encoding="utf-8")
+        fixture = STANDALONE_FIXTURE.read_text(encoding="utf-8")
+        breg = BREG_EXAMPLE.read_text(encoding="utf-8")
+
+        self.assertNotRegex(standalone, r"(?m)^sources:")
+        self.assertRegex(standalone, r"(?m)^hostedKinds:")
+        self.assertRegex(standalone, r"(?m)^\s+role: requester$")
+        self.assertRegex(standalone, r"(?m)^\s+kinds: \[decision\]$")
+        self.assertRegex(fixture, r"(?m)^hosted:$")
+        self.assertRegex(fixture, r"(?m)^\s+outcomes: \[confirmed, rejected\]$")
+        self.assertRegex(breg, r"(?m)^sources:")
+        self.assertNotRegex(breg, r"(?m)^hostedKinds:")
+
     def test_security_contracts_are_scoped_and_do_not_claim_execution(self):
         matrix = MATRIX.read_text(encoding="utf-8")
         trace = TRACE.read_text(encoding="utf-8")

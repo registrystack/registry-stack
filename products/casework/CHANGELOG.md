@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add source-free hosted decisions with declared bounded display schemas and
+  outcomes, Requester-owned create/read/notes/cancel/terminal polling, human
+  decisions under a configured profile, pinned kind policy, opaque actor references,
+  audited Supervisor accountability resolution, separate terminal and
+  accountability retention, payload-free idempotency tombstones for
+  expired-response recovery, and the `standalone-decision` starter.
 - Add the first checkpoint runtime and `caseworkctl` authoring and local operator
   commands, with separate PostgreSQL storage for team membership, work items,
   private drafts, attempts, history and durable events.

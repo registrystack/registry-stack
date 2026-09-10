@@ -182,6 +182,12 @@
       "Description": {
         "additionalProperties": false,
         "properties": {
+          "hostedKinds": {
+            "items": {
+              "$ref": "#/components/schemas/HostedKindPolicy"
+            },
+            "type": "array"
+          },
           "policyVersion": {
             "type": "string"
           },
@@ -205,7 +211,8 @@
           "projectId",
           "policyVersion",
           "queues",
-          "sources"
+          "sources",
+          "hostedKinds"
         ],
         "type": "object"
       },
@@ -434,6 +441,607 @@
         ],
         "type": "object"
       },
+      "HostedAccountabilityRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/IssuerPrincipal"
+          },
+          "actorRef": {
+            "maxLength": 128,
+            "minLength": 7,
+            "pattern": "^actor_[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "eventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "itemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "profileId": {
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recordedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "retainedUntil": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "itemId",
+          "eventId",
+          "actorRef",
+          "actor",
+          "profileId",
+          "outcome",
+          "recordedAt",
+          "retainedUntil"
+        ],
+        "type": "object"
+      },
+      "HostedCancelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string",
+            "x-maximum-utf8-bytes": 2000
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "HostedCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "display": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 16384,
+            "x-maximum-depth": 16
+          },
+          "kind": {
+            "type": "string"
+          },
+          "requesterReference": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string",
+            "x-maximum-utf8-bytes": 128
+          }
+        },
+        "required": [
+          "kind",
+          "requesterReference",
+          "display"
+        ],
+        "type": "object"
+      },
+      "HostedDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string",
+                "x-maximum-utf8-bytes": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "HostedHistoryEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "actorRef": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 7,
+                "pattern": "^actor_[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancellationReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "eventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "itemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "itemRevision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "created",
+              "claimed",
+              "released",
+              "note_added",
+              "completed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "eventId",
+          "itemId",
+          "itemRevision",
+          "kind",
+          "occurredAt"
+        ],
+        "type": "object"
+      },
+      "HostedHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HostedHistoryEntry"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "budget_exhausted",
+              "source_unavailable"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HostedKindPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "decidingProfiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "displaySchema": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 65536,
+            "x-maximum-depth": 16
+          },
+          "id": {
+            "type": "string"
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/HostedOutcomePolicy"
+            },
+            "type": "array"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "retention": {
+            "$ref": "#/components/schemas/HostedRetentionPolicy"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "queue",
+          "decidingProfiles",
+          "retention",
+          "displaySchema",
+          "outcomes"
+        ],
+        "type": "object"
+      },
+      "HostedNote": {
+        "additionalProperties": false,
+        "properties": {
+          "itemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "itemRevision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "note": {
+            "type": "string"
+          },
+          "noteId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "recordedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "noteId",
+          "itemId",
+          "note",
+          "itemRevision",
+          "recordedAt"
+        ],
+        "type": "object"
+      },
+      "HostedNotePage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HostedNote"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "budget_exhausted",
+              "source_unavailable"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HostedNoteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string",
+            "x-maximum-utf8-bytes": 2000
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "type": "object"
+      },
+      "HostedOutcomePolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "reasonRequired": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "reasonRequired"
+        ],
+        "type": "object"
+      },
+      "HostedPolicyDigest": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "HostedRetentionPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "accountabilityDays": {
+            "maximum": 3650,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "terminalDays": {
+            "maximum": 3650,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "terminalDays",
+          "accountabilityDays"
+        ],
+        "type": "object"
+      },
+      "HostedTerminalCancelled": {
+        "additionalProperties": false,
+        "properties": {
+          "cancellationReason": {
+            "type": "string"
+          },
+          "eventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "itemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kindPolicyDigest": {
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "requesterReference": {
+            "type": "string"
+          },
+          "state": {
+            "const": "cancelled"
+          },
+          "terminalAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "itemId",
+          "eventId",
+          "requesterReference",
+          "state",
+          "cancellationReason",
+          "kindPolicyDigest",
+          "terminalAt"
+        ],
+        "type": "object"
+      },
+      "HostedTerminalCompleted": {
+        "additionalProperties": false,
+        "properties": {
+          "actorRef": {
+            "maxLength": 128,
+            "minLength": 7,
+            "pattern": "^actor_[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "eventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "itemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kindPolicyDigest": {
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "requesterReference": {
+            "type": "string"
+          },
+          "state": {
+            "const": "completed"
+          },
+          "terminalAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "itemId",
+          "eventId",
+          "requesterReference",
+          "state",
+          "outcome",
+          "actorRef",
+          "kindPolicyDigest",
+          "terminalAt"
+        ],
+        "type": "object"
+      },
+      "HostedTerminalPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HostedTerminalResult"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "budget_exhausted",
+              "source_unavailable"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HostedTerminalResult": {
+        "discriminator": {
+          "propertyName": "state"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/HostedTerminalCompleted"
+          },
+          {
+            "$ref": "#/components/schemas/HostedTerminalCancelled"
+          }
+        ]
+      },
+      "HostedWorkItemContext": {
+        "additionalProperties": false,
+        "properties": {
+          "display": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 16384,
+            "x-maximum-depth": 16
+          },
+          "kind": {
+            "type": "string"
+          },
+          "kindPolicyDigest": {
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/HostedOutcomePolicy"
+            },
+            "type": "array"
+          },
+          "requesterReference": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requesterReference",
+          "kind",
+          "version",
+          "display",
+          "kindPolicyDigest",
+          "outcomes"
+        ],
+        "type": "object"
+      },
       "IssuerPrincipal": {
         "additionalProperties": false,
         "properties": {
@@ -472,6 +1080,12 @@
         ],
         "type": "object"
       },
+      "OpaqueActorRef": {
+        "maxLength": 128,
+        "minLength": 7,
+        "pattern": "^actor_[A-Za-z0-9_-]+$",
+        "type": "string"
+      },
       "OperationName": {
         "maxLength": 64,
         "pattern": "^[a-z][a-z0-9_]{0,63}$",
@@ -499,6 +1113,9 @@
           "code": {
             "enum": [
               "authentication.refused",
+              "cursor.expired",
+              "cursor.invalid",
+              "idempotency.expired",
               "idempotency.key-reused",
               "operation.not-authorized",
               "precondition.failed",
@@ -575,6 +1192,87 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemCursorExpired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "cursor.expired"
+              },
+              "detail": {
+                "const": "This cursor has expired. Start again without a cursor and deduplicate entries by eventId."
+              },
+              "status": {
+                "const": 410
+              },
+              "title": {
+                "const": "Cursor expired"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/cursor/expired"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemCursorInvalid": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "cursor.invalid"
+              },
+              "detail": {
+                "const": "The cursor is invalid for this request."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Cursor invalid"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/cursor/invalid"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemIdempotencyExpired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "idempotency.expired"
+              },
+              "detail": {
+                "const": "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
+              },
+              "status": {
+                "const": 410
+              },
+              "title": {
+                "const": "Idempotency window expired"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/idempotency/expired"
               }
             },
             "type": "object"
@@ -1287,6 +1985,70 @@
         ],
         "type": "object"
       },
+      "RequesterHostedItem": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "display": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 16384,
+            "x-maximum-depth": 16
+          },
+          "itemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "kindPolicyDigest": {
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "requesterReference": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "claimed",
+              "completed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "itemId",
+          "requesterReference",
+          "kind",
+          "version",
+          "display",
+          "state",
+          "revision",
+          "kindPolicyDigest",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "SaveDraftRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1514,6 +2276,16 @@
               }
             ]
           },
+          "hosted": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HostedWorkItemContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "itemId": {
             "format": "uuid",
             "type": "string"
@@ -1524,7 +2296,8 @@
           "occurrenceKind": {
             "enum": [
               "review",
-              "application"
+              "application",
+              "hosted"
             ],
             "type": "string"
           },
@@ -1640,7 +2413,7 @@
     "securitySchemes": {
       "bearerAuth": {
         "bearerFormat": "JWT",
-        "description": "A fresh trusted-issuer human token. Service credentials are refused even when scoped.",
+        "description": "A fresh trusted-issuer token. Staff, Supervisor, and Administrator profiles require the configured human identity assertion. Requester is a service integration profile exempt from that assertion; selecting it never adds human-role or decision authority.",
         "scheme": "bearer",
         "type": "http"
       },
@@ -1653,7 +2426,7 @@
     }
   },
   "info": {
-    "description": "First-checkpoint HTTP contract. Casework and source profiles are independent authority selections.",
+    "description": "Implemented Casework HTTP contract for BReg-backed work and source-free hosted decisions. Casework and source profiles are independent authority selections.",
     "license": {
       "identifier": "Apache-2.0",
       "name": "Apache-2.0"
@@ -2109,6 +2882,7 @@
     },
     "/v1/casework": {
       "get": {
+        "description": "Returns the configured queues, BReg sources, and hosted kinds visible to an authenticated profile. Description data grants no item or source authority.",
         "operationId": "describeCasework",
         "parameters": [
           {
@@ -2934,8 +3708,1905 @@
         "summary": "Read current caller-visible bounded holdings"
       }
     },
+    "/v1/hosted-accountability/{event_id}": {
+      "get": {
+        "description": "Supervisor-only protected accountability read. Current team leadership is checked before returning the raw issuer-qualified actor, selected deciding profile, outcome, and staff reason. The read is audited and returns no cancellation record.",
+        "operationId": "getHostedAccountability",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Hosted terminal event UUID.",
+            "in": "path",
+            "name": "event_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedAccountabilityRecord"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Resolve one retained hosted decision actor"
+      }
+    },
+    "/v1/hosted-items": {
+      "post": {
+        "description": "Requester-only. The selected Requester profile and authenticated issuer-qualified service principal own the item and bound kind grant.",
+        "operationId": "createHostedItem",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this principal, selected profile, operation, resource, and exact request. After the item payload expires, an exact retry until the accountability retention deadline returns idempotency.expired; a changed request remains idempotency.key-reused. After that deadline the record is forgotten and the key may be reused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostedCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequesterHostedItem"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded JSON path for a typed hosted validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "request.invalid"
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Stable, value-free reason for a typed hosted validation failure. Present together with Registry-Casework-Validation-Path.",
+                "schema": {
+                  "enum": [
+                    "kind_not_allowed",
+                    "reference_invalid",
+                    "object_required",
+                    "maximum_bytes_exceeded",
+                    "maximum_depth_exceeded",
+                    "schema_mismatch",
+                    "outcome_not_declared",
+                    "reason_required",
+                    "text_invalid"
+                  ],
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "request.invalid"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Create a requester-owned hosted item"
+      }
+    },
+    "/v1/hosted-items/terminal": {
+      "get": {
+        "description": "Requester-only. Results are ordered by terminalAt and eventId and remain available only for the hosted kind's terminal retention period.",
+        "operationId": "listHostedTerminalResults",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to the authenticated Requester issuer, subject, profile, and terminal feed. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by eventId.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedTerminalPage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: cursor.invalid, request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List this Requester's retained terminal results"
+      }
+    },
+    "/v1/hosted-items/{item_id}": {
+      "get": {
+        "operationId": "getHostedItem",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Casework item UUID.",
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequesterHostedItem"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Read this Requester's hosted item"
+      }
+    },
+    "/v1/hosted-items/{item_id}/cancel": {
+      "post": {
+        "operationId": "cancelHostedItem",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Quoted positive signed 64-bit Casework item revision.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "maxLength": 21,
+              "pattern": "^\"[1-9][0-9]{0,18}\"$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this principal, selected profile, operation, resource, and exact request. After the item payload expires, an exact retry until the accountability retention deadline returns idempotency.expired; a changed request remains idempotency.key-reused. After that deadline the record is forgotten and the key may be reused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Casework item UUID.",
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostedCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedTerminalResult"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded JSON path for a typed hosted validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "request.invalid"
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Stable, value-free reason for a typed hosted validation failure. Present together with Registry-Casework-Validation-Path.",
+                "schema": {
+                  "enum": [
+                    "kind_not_allowed",
+                    "reference_invalid",
+                    "object_required",
+                    "maximum_bytes_exceeded",
+                    "maximum_depth_exceeded",
+                    "schema_mismatch",
+                    "outcome_not_declared",
+                    "reason_required",
+                    "text_invalid"
+                  ],
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "request.invalid"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemAlreadyClaimed"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotHolder"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotOffered"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused, work-item.already-claimed, work-item.not-holder, work-item.not-offered",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Cancel this Requester's active hosted item"
+      }
+    },
+    "/v1/hosted-items/{item_id}/notes": {
+      "get": {
+        "description": "Requester-only. Notes are ordered by recordedAt and noteId and remain visible only while the hosted item payload is retained.",
+        "operationId": "listHostedNotes",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Casework item UUID.",
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to the Requester principal, profile, item, and notes feed.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedNotePage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: cursor.invalid, request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List this Requester's retained hosted notes"
+      },
+      "post": {
+        "operationId": "addHostedNote",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Quoted positive signed 64-bit Casework item revision.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "maxLength": 21,
+              "pattern": "^\"[1-9][0-9]{0,18}\"$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this principal, selected profile, operation, resource, and exact request. After the item payload expires, an exact retry until the accountability retention deadline returns idempotency.expired; a changed request remains idempotency.key-reused. After that deadline the record is forgotten and the key may be reused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Casework item UUID.",
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostedNoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequesterHostedItem"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded JSON path for a typed hosted validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "request.invalid"
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Stable, value-free reason for a typed hosted validation failure. Present together with Registry-Casework-Validation-Path.",
+                "schema": {
+                  "enum": [
+                    "kind_not_allowed",
+                    "reference_invalid",
+                    "object_required",
+                    "maximum_bytes_exceeded",
+                    "maximum_depth_exceeded",
+                    "schema_mismatch",
+                    "outcome_not_declared",
+                    "reason_required",
+                    "text_invalid"
+                  ],
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "request.invalid"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemAlreadyClaimed"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotHolder"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotOffered"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused, work-item.already-claimed, work-item.not-holder, work-item.not-offered",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Add a note to this Requester's hosted item"
+      }
+    },
     "/v1/work-items": {
       "get": {
+        "description": "With Registry-Source-Profile, reads BReg-backed work under that separate authority. Without it, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order.",
         "operationId": "listWorkItems",
         "parameters": [
           {
@@ -2963,7 +5634,7 @@
             "description": "Explicit source profile used for the caller-scoped BReg read or action.",
             "in": "header",
             "name": "Registry-Source-Profile",
-            "required": true,
+            "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
@@ -3484,7 +6155,7 @@
             "description": "Explicit source profile used for the caller-scoped BReg read or action.",
             "in": "header",
             "name": "Registry-Source-Profile",
-            "required": true,
+            "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
@@ -4351,7 +7022,7 @@
             "description": "Explicit source profile used for the caller-scoped BReg read or action.",
             "in": "header",
             "name": "Registry-Source-Profile",
-            "required": true,
+            "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
@@ -4371,7 +7042,7 @@
             }
           },
           {
-            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation. For hosted work, an exact retry after payload expiry and before the accountability retention deadline returns idempotency.expired; a changed request remains idempotency.key-reused. After that deadline the record is forgotten and the key may be reused.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -4513,6 +7184,21 @@
               }
             },
             "description": "Problem response: idempotency.key-reused, work-item.already-claimed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -6106,6 +8792,620 @@
         "summary": "Read bounded item history"
       }
     },
+    "/v1/work-items/{item_id}/hosted-decisions": {
+      "post": {
+        "description": "A configured human Staff or Supervisor profile only. Current team service, current holder, selected deciding profile, item revision, and the item's pinned outcome policy are rechecked atomically.",
+        "operationId": "decideHostedWorkItem",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Quoted positive signed 64-bit Casework item revision.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "maxLength": 21,
+              "pattern": "^\"[1-9][0-9]{0,18}\"$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this principal, selected profile, operation, resource, and exact request. After the item payload expires, an exact retry until the accountability retention deadline returns idempotency.expired; a changed request remains idempotency.key-reused. After that deadline the record is forgotten and the key may be reused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Casework item UUID.",
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostedDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedTerminalResult"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded JSON path for a typed hosted validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "request.invalid"
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Stable, value-free reason for a typed hosted validation failure. Present together with Registry-Casework-Validation-Path.",
+                "schema": {
+                  "enum": [
+                    "kind_not_allowed",
+                    "reference_invalid",
+                    "object_required",
+                    "maximum_bytes_exceeded",
+                    "maximum_depth_exceeded",
+                    "schema_mismatch",
+                    "outcome_not_declared",
+                    "reason_required",
+                    "text_invalid"
+                  ],
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "request.invalid"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemAlreadyClaimed"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotHolder"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotOffered"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused, work-item.already-claimed, work-item.not-holder, work-item.not-offered",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Record a declared hosted outcome"
+      }
+    },
+    "/v1/work-items/{item_id}/hosted-history": {
+      "get": {
+        "description": "Human Staff or Supervisor only. Current deciding-profile and served-queue authority is checked. Results are ordered by occurredAt and eventId and may include requester notes, opaque actor references, outcomes, staff reasons, or cancellation reasons according to the event kind. They never expose requester or raw actor identity.",
+        "operationId": "getHostedHistory",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Casework item UUID.",
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to the human principal, profile, item, and hosted history feed.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedHistoryPage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: cursor.invalid, request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List retained hosted lifecycle history"
+      }
+    },
     "/v1/work-items/{item_id}/release": {
       "post": {
         "operationId": "releaseWorkItem",
@@ -6135,7 +9435,7 @@
             "description": "Explicit source profile used for the caller-scoped BReg read or action.",
             "in": "header",
             "name": "Registry-Source-Profile",
-            "required": true,
+            "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
@@ -6155,7 +9455,7 @@
             }
           },
           {
-            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation. For hosted work, an exact retry after payload expiry and before the accountability retention deadline returns idempotency.expired; a changed request remains idempotency.key-reused. After that deadline the record is forgotten and the key may be reused.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -6297,6 +9597,21 @@
               }
             },
             "description": "Problem response: idempotency.key-reused, work-item.not-holder",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"

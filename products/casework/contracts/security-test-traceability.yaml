@@ -2,7 +2,7 @@ contract: registry.casework.security-test-traceability/v1
 scope: first-checkpoint
 executionStatus: not-recorded
 entries:
-  - {id: CASEWORK-SEC-01, tests: [{file: crates/registry-casework/tests/human_identity_auth.rs, name: trusted_human_assertion_gates_every_casework_actor_profile}]}
+  - {id: CASEWORK-SEC-01, tests: [{file: crates/registry-casework/tests/human_identity_auth.rs, name: trusted_human_assertion_gates_human_profiles_and_requester_accepts_service_identity}]}
   - {id: CASEWORK-SEC-02, tests: [{file: crates/registry-casework/tests/service_visibility.rs, name: http_authentication_and_directory_authority_are_enforced}]}
   - {id: CASEWORK-SEC-03, tests: [{file: crates/registry-casework-breg/tests/source_boundary.rs, name: caller_disclosure_never_reuses_reader_content_or_another_persons_reason}, {file: crates/registry-casework/tests/service_visibility.rs, name: source_outage_is_distinct_from_empty_inbox_and_holdings}]}
   - {id: CASEWORK-SEC-04, tests: [{file: crates/registry-casework/tests/service_visibility.rs, name: service_visibility_boundaries}]}
