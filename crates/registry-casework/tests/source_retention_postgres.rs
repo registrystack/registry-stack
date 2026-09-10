@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -352,6 +352,58 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
         .await
         .expect("audit canary");
 
+    for offset in 0..105_i64 {
+        database
+            .execute(
+                "INSERT INTO casework_history(event_id,item_id,item_revision,kind,occurred_at,profile_id,detail) VALUES($1,$2,$3,'opened',now()+$4::bigint*interval '1 millisecond',$5,$6)",
+                &[&Uuid::new_v4(),&item.item_id,&(1000+offset),&offset,&staff.profile_id,&json!({"offset":offset,"canary":CANARY})],
+            )
+            .await
+            .expect("history fixture");
+    }
+    let expected_history: i64 = database
+        .query_one(
+            "SELECT count(*) FROM casework_history WHERE item_id=$1",
+            &[&item.item_id],
+        )
+        .await
+        .expect("history count")
+        .get(0);
+    let mut cursor = None;
+    let mut history_ids = BTreeSet::new();
+    loop {
+        let page = store
+            .history_page(&staff, "reader", item.item_id, 40, cursor.as_deref())
+            .await
+            .expect("source history page");
+        history_ids.extend(page.items.into_iter().map(|entry| entry.event_id));
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        history_ids.len(),
+        usize::try_from(expected_history).expect("bounded history count")
+    );
+    let first_page = store
+        .history_page(&staff, "reader", item.item_id, 1, None)
+        .await
+        .expect("first bound page");
+    let bound_cursor = first_page.next_cursor.expect("history cursor");
+    assert!(matches!(
+        store
+            .history_page(
+                &staff,
+                "different-reader",
+                item.item_id,
+                1,
+                Some(&bound_cursor)
+            )
+            .await,
+        Err(StoreError::CursorInvalid)
+    ));
+
     let selector = SourceRetentionSelector {
         source_id: SOURCE_ID.to_owned(),
         request_kind: REQUEST_KIND.to_owned(),
@@ -428,7 +480,7 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
     assert_eq!(payload_snapshot["previewRows"], 0);
     let retained_links = database
         .query_one(
-            "SELECT (SELECT count(*) FROM casework_cursors WHERE last_item_id=$1),(SELECT count(*) FROM casework_assignment_cursors WHERE last_item_id=$1),(SELECT count(*) FROM casework_idempotency WHERE operation='clock.recompute.apply' AND resource=$2 AND response IS NOT NULL)",
+            "SELECT (SELECT count(*) FROM casework_cursors WHERE last_item_id=$1),(SELECT count(*) FROM casework_assignment_cursors WHERE last_item_id=$1),(SELECT count(*) FROM casework_idempotency WHERE operation='clock.recompute.apply' AND resource=$2 AND response IS NOT NULL),(SELECT count(*) FROM casework_history_cursors WHERE item_id=$1)",
             &[&item.item_id, &preview_id.to_string()],
         )
         .await
@@ -436,6 +488,7 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
     assert_eq!(retained_links.get::<_, i64>(0), 0);
     assert_eq!(retained_links.get::<_, i64>(1), 0);
     assert_eq!(retained_links.get::<_, i64>(2), 0);
+    assert_eq!(retained_links.get::<_, i64>(3), 0);
     let audit_text: String = database
         .query_one(
             "SELECT COALESCE(string_agg(audit_record::text,''),'') FROM casework_audit_outbox",
@@ -446,6 +499,14 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
         .get(0);
     assert!(!audit_text.contains(CANARY));
     assert!(audit_text.contains("casework.source_retention_erased"));
+    database.execute("INSERT INTO casework_history_cursors(cursor_id,issuer,subject,casework_profile_id,source_profile_id,item_id,last_occurred_at,last_event_id,expires_at) VALUES($1,$2,$3,$4,'reader',$5,now(),$6,now()-interval '1 minute')", &[&Uuid::new_v4(),&staff.principal.issuer,&staff.principal.subject,&staff.profile_id,&item.item_id,&Uuid::new_v4()]).await.expect("expired history cursor");
+    assert_eq!(
+        service
+            .erase_expired_source_history_cursors()
+            .await
+            .expect("bounded history cursor cleanup"),
+        1
+    );
 
     let restarted = PostgresStore::connect_runtime(&config, &secrets).expect("restarted store");
     assert!(matches!(

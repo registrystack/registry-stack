@@ -60,6 +60,8 @@ enum CallerRead {
 
 struct MockSource {
     reads: HashMap<String, CallerRead>,
+    caller_read_calls: Arc<AtomicUsize>,
+    caller_unavailable_after: Option<usize>,
     prepare_calls: Arc<AtomicUsize>,
     terminal_read: Option<String>,
     discovery_unavailable: Arc<AtomicBool>,
@@ -80,6 +82,8 @@ impl MockSource {
                 .into_iter()
                 .map(|(id, read)| (id.to_string(), read))
                 .collect(),
+            caller_read_calls: Arc::new(AtomicUsize::new(0)),
+            caller_unavailable_after: None,
             prepare_calls: Arc::new(AtomicUsize::new(0)),
             terminal_read: None,
             discovery_unavailable: Arc::new(AtomicBool::new(false)),
@@ -104,6 +108,13 @@ impl MockSource {
         let prepare_calls = Arc::clone(&source.prepare_calls);
         let execute_calls = Arc::clone(&source.execute_calls);
         (source, prepare_calls, execute_calls)
+    }
+
+    fn with_post_write_read_failure(id: Uuid) -> (Self, Arc<AtomicUsize>) {
+        let (mut source, _, execute_calls) =
+            Self::with_successful_action(id, CallerRead::Visible("authorized"));
+        source.caller_unavailable_after = Some(1);
+        (source, execute_calls)
     }
 
     fn with_recovery_definitive_refusal(id: Uuid, read: CallerRead) -> (Self, Arc<AtomicUsize>) {
@@ -298,6 +309,13 @@ impl SourceAdapter for MockSource {
         _source_profile_id: &str,
         credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
+        let read_index = self.caller_read_calls.fetch_add(1, Ordering::SeqCst);
+        if self
+            .caller_unavailable_after
+            .is_some_and(|threshold| read_index >= threshold)
+        {
+            return Err(SourceAdapterError::Unavailable);
+        }
         let credential = credential.expose();
         if credential == "concealed-token" {
             return Err(SourceAdapterError::Concealed);
@@ -659,11 +677,68 @@ async fn service_visibility_boundaries() {
     periodic_reconciliation_refreshes_same_revision_actionability().await;
     request_correction_copy_is_persisted_then_filtered_for_the_caller().await;
     terminal_attempt_replays_do_not_repeat_source_execution().await;
+    post_write_source_failure_retains_the_attempt_reference().await;
     definitive_refusal_during_recovery_releases_the_attempt_fence().await;
     inbox_views_filter_before_candidate_pagination().await;
     recovery_problem_discloses_only_the_entitled_original_attempt().await;
     caller_owned_live_attempt_survives_a_fresh_session_without_cross_actor_disclosure().await;
     http_authentication_and_directory_authority_are_enforced().await;
+}
+
+async fn post_write_source_failure_retains_the_attempt_reference() {
+    let subject_id = Uuid::from_u128(29);
+    let (source, execute_calls) = MockSource::with_post_write_read_failure(subject_id);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    add_item(&fixture.service, subject_id, None).await;
+    let item = fixture
+        .service
+        .store()
+        .inbox_candidates(&fixture.staff, 1, None, None)
+        .await
+        .unwrap()
+        .items
+        .pop()
+        .unwrap();
+    let claimed = fixture
+        .service
+        .store()
+        .claim(
+            &fixture.staff,
+            item.item_id,
+            item.revision,
+            "claim-post-write",
+        )
+        .await
+        .unwrap();
+    let error = fixture
+        .service
+        .decide_mutation(
+            &fixture.staff,
+            claimed.item_id,
+            claimed.revision,
+            "reader",
+            OperationName::parse("approve").expect("approve operation"),
+            None,
+            &[],
+            &claimed.binding,
+            "post-write-failure",
+            "token",
+        )
+        .await
+        .expect_err("post-write caller read fails");
+    let attempt_id = match error {
+        ServiceError::PostWriteSourceUnavailable(attempt_id) => attempt_id,
+        other => panic!("unexpected post-write error: {other:?}"),
+    };
+    let (_, stored) = fixture
+        .service
+        .store()
+        .terminal_attempt_by_key(&fixture.staff, claimed.item_id, "post-write-failure")
+        .await
+        .unwrap()
+        .expect("durable terminal attempt");
+    assert_eq!(attempt_id, stored.attempt_id);
+    assert_eq!(execute_calls.load(Ordering::SeqCst), 1);
 }
 
 async fn definitive_refusal_during_recovery_releases_the_attempt_fence() {
@@ -965,7 +1040,7 @@ async fn inbox_views_filter_before_candidate_pagination() {
             "token",
             registry_casework_core::InboxView::Mine,
             1,
-            "list:Mine:",
+            None,
             None,
         )
         .await
@@ -998,7 +1073,7 @@ async fn inbox_views_filter_before_candidate_pagination() {
             "token",
             registry_casework_core::InboxView::CompletedByMe,
             1,
-            "list:CompletedByMe:",
+            None,
             None,
         )
         .await
@@ -1241,7 +1316,7 @@ async fn zero_local_candidates_distinguish_empty_source_from_outage() {
     let empty = fixture([], policy(10, 1_000)).await;
     let page = empty
         .service
-        .inbox(&empty.staff, "reader", "token", 10, "inbox", None)
+        .inbox(&empty.staff, "reader", "token", 10, None, None)
         .await
         .unwrap();
     assert!(page.items.is_empty());
@@ -1251,7 +1326,7 @@ async fn zero_local_candidates_distinguish_empty_source_from_outage() {
         fixture_with_source(MockSource::with_unavailable_discovery(), policy(10, 1_000)).await;
     let page = outage
         .service
-        .inbox(&outage.staff, "reader", "token", 10, "inbox", None)
+        .inbox(&outage.staff, "reader", "token", 10, None, None)
         .await
         .unwrap();
     assert!(page.items.is_empty());
@@ -1263,7 +1338,7 @@ async fn warm_empty_source_status_does_not_mask_a_later_outage() {
     let fixture = fixture_with_source(source, policy(10, 1_000)).await;
     let warm = fixture
         .service
-        .inbox(&fixture.staff, "reader", "token", 10, "inbox", None)
+        .inbox(&fixture.staff, "reader", "token", 10, None, None)
         .await
         .unwrap();
     assert!(warm.items.is_empty());
@@ -1276,7 +1351,7 @@ async fn warm_empty_source_status_does_not_mask_a_later_outage() {
     unavailable.store(true, Ordering::SeqCst);
     let degraded = fixture
         .service
-        .inbox(&fixture.staff, "reader", "token", 10, "inbox", None)
+        .inbox(&fixture.staff, "reader", "token", 10, None, None)
         .await
         .unwrap();
     assert!(degraded.items.is_empty());
@@ -1294,7 +1369,7 @@ async fn incomplete_multipage_discovery_stays_incomplete_across_requests() {
 
     let first_probe = fixture
         .service
-        .inbox(&fixture.staff, "reader", "token", 1, "inbox", None)
+        .inbox(&fixture.staff, "reader", "token", 1, None, None)
         .await
         .unwrap();
     assert!(first_probe.items.is_empty());
@@ -1304,7 +1379,7 @@ async fn incomplete_multipage_discovery_stays_incomplete_across_requests() {
 
     let concealed_first = fixture
         .service
-        .inbox(&fixture.staff, "reader", "token", 1, "inbox", None)
+        .inbox(&fixture.staff, "reader", "token", 1, None, None)
         .await
         .unwrap();
     assert!(concealed_first.items.is_empty());
@@ -1317,7 +1392,7 @@ async fn incomplete_multipage_discovery_stays_incomplete_across_requests() {
     );
     let complete = fixture
         .service
-        .inbox(&fixture.staff, "reader", "token", 1, "inbox", None)
+        .inbox(&fixture.staff, "reader", "token", 1, None, None)
         .await
         .unwrap();
     assert_eq!(complete.items.len(), 1);
@@ -1341,7 +1416,7 @@ async fn sparse_disclosure_and_cursor_preserve_unvisited_candidates() {
 
     let first = fixture
         .service
-        .inbox(&fixture.staff, "reader", "token", 1, "inbox", None)
+        .inbox(&fixture.staff, "reader", "token", 1, None, None)
         .await
         .unwrap();
     assert!(first.items.is_empty());
@@ -1355,7 +1430,7 @@ async fn sparse_disclosure_and_cursor_preserve_unvisited_candidates() {
 
     let second = fixture
         .service
-        .inbox(&fixture.staff, "reader", "token", 1, "inbox", Some(cursor))
+        .inbox(&fixture.staff, "reader", "token", 1, None, Some(cursor))
         .await
         .unwrap();
     assert_eq!(second.items.len(), 1);
@@ -1377,7 +1452,7 @@ async fn source_deadline_is_hard_and_retryable() {
     let started = Instant::now();
     let page = fixture
         .service
-        .inbox(&fixture.staff, "reader", "token", 1, "inbox", None)
+        .inbox(&fixture.staff, "reader", "token", 1, None, None)
         .await
         .unwrap();
     assert!(started.elapsed() < Duration::from_millis(500));
@@ -1391,7 +1466,7 @@ async fn source_outage_is_distinct_from_empty_inbox_and_holdings() {
     let empty = fixture([], policy(10, 1_000)).await;
     let inbox = empty
         .service
-        .inbox(&empty.staff, "reader", "token", 10, "inbox", None)
+        .inbox(&empty.staff, "reader", "token", 10, None, None)
         .await
         .unwrap();
     assert!(inbox.items.is_empty());
@@ -1408,7 +1483,7 @@ async fn source_outage_is_distinct_from_empty_inbox_and_holdings() {
     add_item(&outage.service, unavailable, Some(1)).await;
     let inbox = outage
         .service
-        .inbox(&outage.staff, "reader", "token", 10, "inbox", None)
+        .inbox(&outage.staff, "reader", "token", 10, None, None)
         .await
         .unwrap();
     assert!(inbox.items.is_empty());
@@ -1433,13 +1508,13 @@ async fn current_directory_controls_queue_visibility() {
 
     let member = fixture
         .service
-        .inbox(&fixture.staff, "reader", "token", 10, "inbox", None)
+        .inbox(&fixture.staff, "reader", "token", 10, None, None)
         .await
         .unwrap();
     assert_eq!(member.items.len(), 1);
     let outsider = fixture
         .service
-        .inbox(&fixture.outsider, "reader", "token", 10, "inbox", None)
+        .inbox(&fixture.outsider, "reader", "token", 10, None, None)
         .await
         .unwrap();
     assert!(outsider.items.is_empty());
@@ -2039,10 +2114,18 @@ async fn http_authentication_and_directory_authority_are_enforced() {
             (IDEMPOTENCY_KEY_HEADER, "staff-claim"),
         ],
     );
-    assert_eq!(
-        app.clone().oneshot(claim).await.unwrap().status(),
-        StatusCode::OK
-    );
+    let response = app.clone().oneshot(claim).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let claimed_body = response_body(response).await;
+    let actions = claimed_body["item"]["actions"]
+        .as_array()
+        .expect("source claim returns assembled actions");
+    assert!(actions
+        .iter()
+        .any(|action| { action["operation"] == "release" && action["ifMatch"] == "\"2\"" }));
+    assert!(actions
+        .iter()
+        .any(|action| action["operation"] == "approve"));
     let already_claimed = authenticated_request(
         "POST",
         &format!("{item_path}/claim"),

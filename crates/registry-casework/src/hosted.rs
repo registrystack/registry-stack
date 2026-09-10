@@ -379,6 +379,8 @@ impl StoredHostedItem {
                 kind_policy_digest: snapshot.identity.digest,
                 outcomes: snapshot.outcomes,
             }),
+            routing: None,
+            clock_occurrences: Vec::new(),
             actions,
             routing_copy: None,
             live_attempt: None,

@@ -127,6 +127,14 @@ pub struct WorkItem {
     /// and accountable actor identity are retained outside this projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosted: Option<crate::HostedWorkItemContext>,
+    /// The routing decision recorded when this item was first observed. This
+    /// contains policy-authored explanation only, never source predicate data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<WorkItemRouting>,
+    /// Caller-safe clock summaries populated after current source visibility
+    /// has been confirmed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clock_occurrences: Vec<crate::ClockOccurrenceView>,
     #[serde(default)]
     pub actions: Vec<CaseworkAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,6 +143,17 @@ pub struct WorkItem {
     /// Services must leave this absent for every other actor and profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_attempt: Option<AttemptStatus>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemRouting {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub because: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_digest: Option<String>,
 }
 
 /// Staff-visible routing context for a personal assignment.

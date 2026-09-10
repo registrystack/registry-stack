@@ -2,11 +2,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use clap::{Arg, Command};
 use registry_casework_core::{CaseworkProject, SourceAdapter};
-use registry_platform_audit::{AuditProfile, JsonlFileSink};
+use registry_platform_audit::{AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_config::{SecretProvider, SecretResolver};
+use serde_json::Value;
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::{
     router, CaseworkAuthenticator, CaseworkService, HttpState, PostgresStore, RuntimeConfig,
@@ -125,6 +128,9 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 if let Err(error) = worker_service.erase_expired_assignment_cursors().await {
                     tracing::warn!(error = %error, "Casework assignment cursor retention pass did not complete");
                 }
+                if let Err(error) = worker_service.erase_expired_source_history_cursors().await {
+                    tracing::warn!(error = %error, "Casework source history cursor retention pass did not complete");
+                }
                 if let Err(error) = worker_service.reconcile_ineligible_assignments(100).await {
                     tracing::warn!(error = %error, "Casework assignment eligibility pass did not complete");
                 }
@@ -147,26 +153,22 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             }
         });
     }
-    let audit_store = store.clone();
+    let audit_publisher = RuntimeAuditPublisher {
+        store,
+        chain: audit_chain,
+        sink: audit_sink,
+    };
+    let audit_health = service.audit_publisher_health();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
+        let mut failed_stage = None;
         loop {
             interval.tick().await;
-            let Ok(records) = audit_store.pending_audit(100).await else {
-                continue;
-            };
-            for (event_id, record) in records {
-                if audit_chain
-                    .append(audit_sink.as_ref(), record)
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-                if audit_store.mark_audit_published(event_id).await.is_err() {
-                    break;
-                }
-            }
+            update_audit_health(
+                &audit_health,
+                &mut failed_stage,
+                publish_audit_pass(&audit_publisher).await,
+            );
         }
     });
 
@@ -189,6 +191,192 @@ pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, Runtime
         &config.secret_providers.file.root,
     )
     .map_err(|_| RuntimeError::SecretConfiguration)
+}
+
+struct RuntimeAuditPublisher {
+    store: PostgresStore,
+    chain: Arc<ChainState>,
+    sink: Arc<JsonlFileSink>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuditPublicationFailure {
+    PendingRead,
+    SinkAppend,
+    PublishedMark,
+}
+
+impl AuditPublicationFailure {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::PendingRead => "pending-read",
+            Self::SinkAppend => "sink-append",
+            Self::PublishedMark => "published-mark",
+        }
+    }
+}
+
+#[async_trait]
+trait AuditPublicationBackend: Send + Sync {
+    async fn pending(&self, maximum: i64) -> Result<Vec<(Uuid, Value)>, ()>;
+    async fn append(&self, record: Value) -> Result<(), ()>;
+    async fn mark_published(&self, event_id: Uuid) -> Result<(), ()>;
+}
+
+#[async_trait]
+impl AuditPublicationBackend for RuntimeAuditPublisher {
+    async fn pending(&self, maximum: i64) -> Result<Vec<(Uuid, Value)>, ()> {
+        self.store.pending_audit(maximum).await.map_err(|_| ())
+    }
+
+    async fn append(&self, record: Value) -> Result<(), ()> {
+        self.chain
+            .append(self.sink.as_ref(), record)
+            .await
+            .map(|_| ())
+            .map_err(|_| ())
+    }
+
+    async fn mark_published(&self, event_id: Uuid) -> Result<(), ()> {
+        self.store
+            .mark_audit_published(event_id)
+            .await
+            .map_err(|_| ())
+    }
+}
+
+async fn publish_audit_pass(
+    publisher: &impl AuditPublicationBackend,
+) -> Result<(), AuditPublicationFailure> {
+    let records = publisher
+        .pending(100)
+        .await
+        .map_err(|()| AuditPublicationFailure::PendingRead)?;
+    for (event_id, record) in records {
+        publisher
+            .append(record)
+            .await
+            .map_err(|()| AuditPublicationFailure::SinkAppend)?;
+        publisher
+            .mark_published(event_id)
+            .await
+            .map_err(|()| AuditPublicationFailure::PublishedMark)?;
+    }
+    Ok(())
+}
+
+fn update_audit_health(
+    health: &crate::service::AuditPublisherHealth,
+    failed_stage: &mut Option<AuditPublicationFailure>,
+    result: Result<(), AuditPublicationFailure>,
+) {
+    match result {
+        Ok(()) => {
+            health.mark_recovered();
+            if failed_stage.take().is_some() {
+                tracing::info!("Casework audit publication recovered");
+            }
+        }
+        Err(failure) => {
+            health.mark_failed();
+            if *failed_stage != Some(failure) {
+                tracing::warn!(
+                    stage = failure.as_str(),
+                    "Casework audit publication pass did not complete"
+                );
+                *failed_stage = Some(failure);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::Mutex;
+
+    use super::*;
+    use crate::service::AuditPublisherHealth;
+
+    struct FakeAuditPublisher {
+        state: Mutex<FakeAuditPublisherState>,
+    }
+
+    struct FakeAuditPublisherState {
+        failure: Option<AuditPublicationFailure>,
+        pending: Option<(Uuid, Value)>,
+    }
+
+    impl FakeAuditPublisher {
+        fn failing_at(failure: AuditPublicationFailure) -> Self {
+            Self {
+                state: Mutex::new(FakeAuditPublisherState {
+                    failure: Some(failure),
+                    pending: Some((Uuid::new_v4(), serde_json::json!({"synthetic": true}))),
+                }),
+            }
+        }
+
+        async fn recover(&self) {
+            self.state.lock().await.failure = None;
+        }
+    }
+
+    #[async_trait]
+    impl AuditPublicationBackend for FakeAuditPublisher {
+        async fn pending(&self, _maximum: i64) -> Result<Vec<(Uuid, Value)>, ()> {
+            let state = self.state.lock().await;
+            if state.failure == Some(AuditPublicationFailure::PendingRead) {
+                return Err(());
+            }
+            Ok(state.pending.clone().into_iter().collect())
+        }
+
+        async fn append(&self, _record: Value) -> Result<(), ()> {
+            let state = self.state.lock().await;
+            if state.failure == Some(AuditPublicationFailure::SinkAppend) {
+                return Err(());
+            }
+            Ok(())
+        }
+
+        async fn mark_published(&self, event_id: Uuid) -> Result<(), ()> {
+            let mut state = self.state.lock().await;
+            if state.failure == Some(AuditPublicationFailure::PublishedMark) {
+                return Err(());
+            }
+            if state.pending.as_ref().map(|record| record.0) != Some(event_id) {
+                return Err(());
+            }
+            state.pending = None;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_publication_failure_degrades_health_until_a_pass_recovers() {
+        for failure in [
+            AuditPublicationFailure::PendingRead,
+            AuditPublicationFailure::SinkAppend,
+            AuditPublicationFailure::PublishedMark,
+        ] {
+            let publisher = FakeAuditPublisher::failing_at(failure);
+            let health = AuditPublisherHealth::default();
+            let mut failed_stage = None;
+
+            let failed = publish_audit_pass(&publisher).await;
+            assert_eq!(failed, Err(failure));
+            update_audit_health(&health, &mut failed_stage, failed);
+            assert!(!health.is_ready());
+            assert_eq!(failed_stage, Some(failure));
+
+            publisher.recover().await;
+            let recovered = publish_audit_pass(&publisher).await;
+            recovered.expect("recovered publication pass");
+            update_audit_health(&health, &mut failed_stage, recovered);
+            assert!(health.is_ready());
+            assert_eq!(failed_stage, None);
+        }
+    }
 }
 
 #[derive(Debug, Error)]

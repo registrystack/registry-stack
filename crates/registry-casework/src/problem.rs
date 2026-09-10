@@ -405,6 +405,19 @@ const ITEM_READ: &[ProblemCode] = &[
     ProblemCode::WorkItemSourceUnavailable,
     ProblemCode::RuntimeFailure,
 ];
+const SOURCE_ITEM_PAGE: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::CursorExpired,
+    ProblemCode::CursorInvalid,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::WorkItemSourceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
 const CLAIM: &[ProblemCode] = &[
     ProblemCode::AuthenticationRefused,
     ProblemCode::ProfileNotAuthorized,
@@ -1055,9 +1068,9 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         path: "/v1/work-items/{item_id}/history",
         success_statuses: &[200],
         extracts_path: true,
-        extracts_query: false,
+        extracts_query: true,
         accepts_json: false,
-        problems: ITEM_READ,
+        problems: SOURCE_ITEM_PAGE,
     },
     OperationContract {
         method: "GET",

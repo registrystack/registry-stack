@@ -106,6 +106,12 @@ impl PostgresStore {
                     &[&item_ids],
                 )
                 .await?;
+            transaction
+                .execute(
+                    "DELETE FROM casework_history_cursors WHERE item_id=ANY($1)",
+                    &[&item_ids],
+                )
+                .await?;
         }
         let item_resources: Vec<String> = item_ids.iter().map(Uuid::to_string).collect();
         transaction

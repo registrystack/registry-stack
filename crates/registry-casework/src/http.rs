@@ -21,11 +21,11 @@ use registry_casework_core::{
     HostedAccountabilityRecord, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
     HostedHistoryPage, HostedNotePage, HostedNoteRequest, HostedPageQuery, HostedTerminalPage,
     HostedTerminalQuery, HostedTerminalResult, HostedValidationError, HostedValidationReason,
-    ListWorkItemsQuery, MutationResponse, NextWorkItemQuery, Page, PageStatus, QueueRecord,
-    RecoverAttemptRequest, RequesterHostedItem, SaveDraftRequest, ATTEMPT_REFERENCE_HEADER,
-    CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER,
-    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER,
-    VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
+    ListWorkItemsQuery, MutationResponse, NextWorkItemQuery, QueueRecord, RecoverAttemptRequest,
+    RequesterHostedItem, SaveDraftRequest, ATTEMPT_REFERENCE_HEADER, CASEWORK_PROFILE_HEADER,
+    IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
+    MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER,
+    VALIDATION_REASON_HEADER,
 };
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
@@ -199,7 +199,7 @@ async fn health() -> StatusCode {
 }
 
 async fn ready(State(state): State<HttpState>) -> Result<StatusCode, HttpError> {
-    if state.service.store().ready().await.is_ok() {
+    if state.service.ready().await.is_ok() {
         Ok(StatusCode::OK)
     } else {
         Err(HttpError::ServiceUnavailable)
@@ -393,11 +393,6 @@ async fn list_items(
 ) -> Result<Json<registry_casework_core::WorkItemPage>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let source_profile = source_profile_optional(&headers)?;
-    let cursor_context = format!(
-        "list:{:?}:{}",
-        query.view,
-        query.queue.as_deref().unwrap_or("")
-    );
     let limit = page_limit(&state, query.limit)?;
     let page = if let Some(source_profile) = source_profile {
         state
@@ -408,7 +403,7 @@ async fn list_items(
                 token,
                 query.view,
                 limit,
-                &cursor_context,
+                query.queue.as_deref(),
                 query.cursor.as_deref(),
             )
             .await?
@@ -461,13 +456,10 @@ async fn get_item(
 ) -> Result<Json<registry_casework_core::WorkItem>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let item = if let Some(source_profile) = source_profile_optional(&headers)? {
-        let item = state
+        state
             .service
-            .caller_item(&actor, item_id, source_profile, token)
+            .open_source_item(&actor, item_id, source_profile, token)
             .await?
-            .0;
-        state.service.store().record_opened(&actor, item_id).await?;
-        item
     } else {
         state.service.hosted_work_item(&actor, item_id).await?
     };
@@ -506,18 +498,16 @@ async fn claim(
     let item = if let Some(source_profile) = source_profile_optional(&headers)? {
         state
             .service
-            .preflight_source_claim(&actor, item_id, expected_revision, key)
-            .await?;
-        state
-            .service
-            .caller_item(&actor, item_id, source_profile, token)
+            .claim_source_item(
+                &actor,
+                item_id,
+                expected_revision,
+                source_profile,
+                key,
+                token,
+            )
             .await
-            .map_err(HttpError::from_source_event)?;
-        state
-            .service
-            .store()
-            .claim(&actor, item_id, expected_revision, key)
-            .await?
+            .map_err(HttpError::from_source_event)?
     } else {
         state
             .service
@@ -541,16 +531,14 @@ async fn release(
     let item = if let Some(source_profile) = source_profile_optional(&headers)? {
         state
             .service
-            .preflight_source_release(&actor, item_id, expected_revision, key)
-            .await?;
-        state
-            .service
-            .caller_item(&actor, item_id, source_profile, token)
-            .await?;
-        state
-            .service
-            .store()
-            .release(&actor, item_id, expected_revision, key)
+            .release_source_item(
+                &actor,
+                item_id,
+                expected_revision,
+                source_profile,
+                key,
+                token,
+            )
             .await?
     } else {
         state
@@ -570,16 +558,10 @@ async fn get_draft(
     Path(item_id): Path<Uuid>,
 ) -> Result<Json<DraftResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
-    state
-        .service
-        .caller_item(&actor, item_id, source_profile(&headers)?, token)
-        .await?;
     let draft = state
         .service
-        .store()
-        .read_draft(&actor, item_id)
-        .await?
-        .ok_or(HttpError::NotFound)?;
+        .source_draft(&actor, item_id, source_profile(&headers)?, token)
+        .await?;
     Ok(Json(DraftResponse { draft }))
 }
 
@@ -593,33 +575,18 @@ async fn save_draft(
     let source_profile = source_profile(&headers)?;
     let expected_revision = if_match(&headers)?;
     let key = idempotency_key(&headers)?;
-    state
-        .service
-        .preflight_source_draft_save(
-            &actor,
-            item_id,
-            expected_revision,
-            &request.binding,
-            &request.reason,
-            &request.flagged_fields,
-            key,
-        )
-        .await?;
-    state
-        .service
-        .caller_item(&actor, item_id, source_profile, token)
-        .await?;
     let draft = state
         .service
-        .store()
-        .save_draft(
+        .save_source_draft(
             &actor,
             item_id,
             expected_revision,
+            source_profile,
             &request.binding,
             &request.reason,
             &request.flagged_fields,
             key,
+            token,
         )
         .await?;
     Ok(Json(DraftResponse { draft }))
@@ -636,16 +603,14 @@ async fn delete_draft(
     let key = idempotency_key(&headers)?;
     state
         .service
-        .preflight_source_draft_delete(&actor, item_id, expected_revision, key)
-        .await?;
-    state
-        .service
-        .caller_item(&actor, item_id, source_profile, token)
-        .await?;
-    state
-        .service
-        .store()
-        .delete_draft(&actor, item_id, expected_revision, key)
+        .delete_source_draft(
+            &actor,
+            item_id,
+            expected_revision,
+            source_profile,
+            key,
+            token,
+        )
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -661,9 +626,9 @@ async fn decide(
     if request.source_profile_id != selected_source_profile {
         return Err(HttpError::Invalid);
     }
-    let (attempt, _) = state
+    let response = state
         .service
-        .decide(
+        .decide_mutation(
             &actor,
             item_id,
             if_match_allow_zero(&headers)?,
@@ -676,11 +641,7 @@ async fn decide(
             token,
         )
         .await?;
-    let item = state.service.store().item(item_id).await?;
-    Ok(Json(MutationResponse {
-        item,
-        attempt: Some(attempt),
-    }))
+    Ok(Json(response))
 }
 
 async fn decide_hosted_item(
@@ -716,9 +677,9 @@ async fn recover(
     if request.source_profile_id != selected_source_profile {
         return Err(HttpError::Invalid);
     }
-    let (attempt, _) = state
+    let response = state
         .service
-        .recover(
+        .recover_mutation(
             &actor,
             path.item_id,
             path.attempt_id,
@@ -726,11 +687,7 @@ async fn recover(
             token,
         )
         .await?;
-    let item = state.service.store().item(path.item_id).await?;
-    Ok(Json(MutationResponse {
-        item,
-        attempt: Some(attempt),
-    }))
+    Ok(Json(response))
 }
 
 async fn recover_by_key(
@@ -744,9 +701,9 @@ async fn recover_by_key(
     if request.source_profile_id != selected_source_profile {
         return Err(HttpError::Invalid);
     }
-    let (attempt, _) = state
+    let response = state
         .service
-        .recover_by_key(
+        .recover_mutation_by_key(
             &actor,
             item_id,
             selected_source_profile,
@@ -754,29 +711,29 @@ async fn recover_by_key(
             token,
         )
         .await?;
-    let item = state.service.store().item(item_id).await?;
-    Ok(Json(MutationResponse {
-        item,
-        attempt: Some(attempt),
-    }))
+    Ok(Json(response))
 }
 
 async fn history(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(item_id): Path<Uuid>,
+    Query(query): Query<HostedPageQuery>,
 ) -> Result<Json<HistoryPage>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
-    state
-        .service
-        .caller_item(&actor, item_id, source_profile(&headers)?, token)
-        .await?;
-    let items = state.service.store().history(&actor, item_id, 100).await?;
-    Ok(Json(Page {
-        items,
-        next_cursor: None,
-        status: PageStatus::Complete,
-    }))
+    Ok(Json(
+        state
+            .service
+            .source_history(
+                &actor,
+                item_id,
+                source_profile(&headers)?,
+                token,
+                page_limit(&state, query.limit)?,
+                query.cursor.as_deref(),
+            )
+            .await?,
+    ))
 }
 
 async fn holdings(
@@ -1238,7 +1195,7 @@ pub enum HttpError {
     SourceNotFound,
     SourceBadGateway,
     SourceSignatureInvalid,
-    SourceUnavailable,
+    SourceUnavailable(Option<Uuid>),
     Internal,
     Validation(HostedValidationError),
 }
@@ -1277,8 +1234,11 @@ impl From<ServiceError> for HttpError {
             ServiceError::HostedValidation(validation) => Self::Validation(validation),
             ServiceError::BindingMoved => Self::ProposalChanged,
             ServiceError::UncertainAttempt(attempt_id) => Self::RecoveryPending(Some(attempt_id)),
+            ServiceError::PostWriteSourceUnavailable(attempt_id) => {
+                Self::SourceUnavailable(Some(attempt_id))
+            }
             ServiceError::Adapter(registry_casework_core::SourceAdapterError::Unavailable) => {
-                Self::SourceUnavailable
+                Self::SourceUnavailable(None)
             }
             ServiceError::Adapter(
                 registry_casework_core::SourceAdapterError::Concealed
@@ -1335,7 +1295,7 @@ impl HttpError {
             Self::SourceNotFound => ProblemCode::SourceNotFound,
             Self::SourceBadGateway => ProblemCode::SourceBadGateway,
             Self::SourceSignatureInvalid => ProblemCode::SourceSignatureInvalid,
-            Self::SourceUnavailable => ProblemCode::WorkItemSourceUnavailable,
+            Self::SourceUnavailable(_) => ProblemCode::WorkItemSourceUnavailable,
             Self::Internal => ProblemCode::RuntimeFailure,
             Self::Validation(_) => ProblemCode::RequestInvalid,
             Self::Absence(error) => match error {
@@ -1356,6 +1316,7 @@ impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
         let attempt_reference = match &self {
             Self::RecoveryPending(attempt_id) => *attempt_id,
+            Self::SourceUnavailable(attempt_id) => *attempt_id,
             _ => None,
         };
         let validation = match &self {

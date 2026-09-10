@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use registry_casework_core::{
-    ActiveSubjectsPage, ActorContext, AttemptStatus, CallerSubjectView, CaseworkAction,
-    CaseworkProject, DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest,
-    HoldingSummary, InboxPolicy, InboxView, OccurrenceState, OperationName, Page, PageStatus,
-    PrepareActionRequest, SourceAdapter, SourceAdapterError, SourceBinding, SourceReceipt,
-    SubjectRef, WorkItem,
+    ActiveSubjectsPage, ActorContext, AttemptState, AttemptStatus, CallerSubjectView,
+    CaseworkAction, CaseworkProject, DiscoveryCursor, Draft, EphemeralCredential, EventRequest,
+    ExecutePreparedRequest, HistoryEntry, HoldingSummary, InboxPolicy, InboxView, MutationResponse,
+    OccurrenceState, OperationName, Page, PageStatus, PrepareActionRequest, SourceAdapter,
+    SourceAdapterError, SourceBinding, SourceReceipt, SubjectRef, WorkItem,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -15,11 +16,37 @@ use uuid::Uuid;
 
 use crate::{PostgresStore, StoreError};
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceCursorContext<'a> {
+    feed: &'static str,
+    view: InboxView,
+    queue: Option<&'a str>,
+}
+
 #[derive(Clone)]
 pub struct CaseworkService {
     pub(crate) store: PostgresStore,
     adapters: Arc<BTreeMap<String, Arc<dyn SourceAdapter>>>,
     pub(crate) project: Arc<CaseworkProject>,
+    audit_publisher_health: AuditPublisherHealth,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct AuditPublisherHealth(Arc<AtomicBool>);
+
+impl AuditPublisherHealth {
+    pub(crate) fn mark_failed(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn mark_recovered(&self) {
+        self.0.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        !self.0.load(Ordering::Acquire)
+    }
 }
 
 impl std::fmt::Debug for CaseworkService {
@@ -81,12 +108,25 @@ impl CaseworkService {
             store,
             adapters: Arc::new(registered),
             project: Arc::new(project),
+            audit_publisher_health: AuditPublisherHealth::default(),
         })
     }
 
     #[must_use]
     pub fn store(&self) -> &PostgresStore {
         &self.store
+    }
+
+    pub(crate) fn audit_publisher_health(&self) -> AuditPublisherHealth {
+        self.audit_publisher_health.clone()
+    }
+
+    pub async fn ready(&self) -> Result<(), ServiceError> {
+        if !self.audit_publisher_health.is_ready() {
+            return Err(StoreError::Unavailable.into());
+        }
+        self.store.ready().await?;
+        Ok(())
     }
 
     pub async fn receive_event(
@@ -149,13 +189,16 @@ impl CaseworkService {
             match adapter.read_authoritative(&subject).await {
                 Ok(observation) => {
                     let (routing, target) = self.routing_policy_for(&observation)?;
+                    let routing_policy_digest =
+                        routing_policy_digest(self.request_policy_for(&observation.subject)?)?;
                     let clock = self.clock_policy_for(&subject)?;
                     self.store
-                        .apply_observation_with_context(
+                        .apply_observation_with_policy_context(
                             &observation,
                             &routing.queue,
                             target,
                             Some(&routing),
+                            Some(&routing_policy_digest),
                             clock.as_ref(),
                         )
                         .await?;
@@ -189,13 +232,16 @@ impl CaseworkService {
             match adapter.read_authoritative(&subject).await {
                 Ok(observation) => {
                     let (routing, target) = self.routing_policy_for(&observation)?;
+                    let routing_policy_digest =
+                        routing_policy_digest(self.request_policy_for(&observation.subject)?)?;
                     let clock = self.clock_policy_for(&subject)?;
                     self.store
-                        .apply_observation_with_context(
+                        .apply_observation_with_policy_context(
                             &observation,
                             &routing.queue,
                             target,
                             Some(&routing),
+                            Some(&routing_policy_digest),
                             clock.as_ref(),
                         )
                         .await?;
@@ -294,26 +340,209 @@ impl CaseworkService {
                 EphemeralCredential::new(token),
             )
             .await?;
+        let item = self
+            .assemble_caller_visible_item(actor, item_id, source_profile_id, &view)
+            .await?;
+        Ok((item, view))
+    }
+
+    async fn assemble_caller_visible_item(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        view: &CallerSubjectView,
+    ) -> Result<WorkItem, ServiceError> {
         // The source call is intentionally outside a database transaction.
-        // Re-read local state afterward so an operator erasure that committed
-        // while that call was in flight remains the visibility boundary.
+        // Read local projections only after source disclosure succeeds, then
+        // re-read the item last so an erasure committed during that work stays
+        // the final visibility boundary.
+        let item = self.store.item(item_id).await?;
+        if !self.store.can_view_item(actor, &item).await? {
+            return Err(ServiceError::NotFound);
+        }
+        let live_attempt = self
+            .store
+            .live_attempt_status_for_actor(actor, item_id, source_profile_id)
+            .await?;
+        let routing_copy = self.filtered_routing_copy(item_id, view).await?;
+        let routing = self.store.work_item_routing(item_id).await?;
+        let clock_occurrences = self.store.clock_occurrences_for_item(item_id).await?;
+
         let mut item = self.store.item(item_id).await?;
         if !self.store.can_view_item(actor, &item).await? {
             return Err(ServiceError::NotFound);
         }
-        item.live_attempt = self
-            .store
-            .live_attempt_status_for_actor(actor, item.item_id, source_profile_id)
-            .await?;
+        item.live_attempt = live_attempt;
         if view.binding.generation != item.binding.generation {
             if item.live_attempt.is_some() {
-                return Ok((item, view));
+                item.routing = routing;
+                item.clock_occurrences = clock_occurrences;
+                return Ok(item);
             }
             return Err(ServiceError::BindingMoved);
         }
-        item.routing_copy = self.filtered_routing_copy(item.item_id, &view).await?;
-        item.actions = local_actions(actor, &item, &view);
-        Ok((item, view))
+        item.routing = routing;
+        item.clock_occurrences = clock_occurrences;
+        item.routing_copy = routing_copy;
+        item.actions = local_actions(actor, &item, view);
+        Ok(item)
+    }
+
+    pub async fn source_history(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        token: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Page<HistoryEntry>, ServiceError> {
+        self.caller_item(actor, item_id, source_profile_id, token)
+            .await?;
+        self.store
+            .history_page(actor, source_profile_id, item_id, limit, cursor)
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    pub async fn erase_expired_source_history_cursors(&self) -> Result<usize, ServiceError> {
+        self.store
+            .erase_expired_source_history_cursors()
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    pub async fn open_source_item(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        token: &str,
+    ) -> Result<WorkItem, ServiceError> {
+        let item = self
+            .caller_item(actor, item_id, source_profile_id, token)
+            .await?
+            .0;
+        self.store.record_opened(actor, item_id).await?;
+        Ok(item)
+    }
+
+    pub async fn claim_source_item(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        source_profile_id: &str,
+        idempotency_key: &str,
+        token: &str,
+    ) -> Result<WorkItem, ServiceError> {
+        self.preflight_source_claim(actor, item_id, expected_revision, idempotency_key)
+            .await?;
+        self.caller_item(actor, item_id, source_profile_id, token)
+            .await?;
+        self.store
+            .claim(actor, item_id, expected_revision, idempotency_key)
+            .await?;
+        Ok(self
+            .caller_item(actor, item_id, source_profile_id, token)
+            .await?
+            .0)
+    }
+
+    pub async fn release_source_item(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        source_profile_id: &str,
+        idempotency_key: &str,
+        token: &str,
+    ) -> Result<WorkItem, ServiceError> {
+        self.preflight_source_release(actor, item_id, expected_revision, idempotency_key)
+            .await?;
+        self.caller_item(actor, item_id, source_profile_id, token)
+            .await?;
+        self.store
+            .release(actor, item_id, expected_revision, idempotency_key)
+            .await?;
+        Ok(self
+            .caller_item(actor, item_id, source_profile_id, token)
+            .await?
+            .0)
+    }
+
+    pub async fn source_draft(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        token: &str,
+    ) -> Result<Draft, ServiceError> {
+        self.caller_item(actor, item_id, source_profile_id, token)
+            .await?;
+        self.store
+            .read_draft(actor, item_id)
+            .await?
+            .ok_or(ServiceError::NotFound)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_source_draft(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        source_profile_id: &str,
+        binding: &SourceBinding,
+        reason: &str,
+        flagged_fields: &[String],
+        idempotency_key: &str,
+        token: &str,
+    ) -> Result<Draft, ServiceError> {
+        self.preflight_source_draft_save(
+            actor,
+            item_id,
+            expected_revision,
+            binding,
+            reason,
+            flagged_fields,
+            idempotency_key,
+        )
+        .await?;
+        self.caller_item(actor, item_id, source_profile_id, token)
+            .await?;
+        self.store
+            .save_draft(
+                actor,
+                item_id,
+                expected_revision,
+                binding,
+                reason,
+                flagged_fields,
+                idempotency_key,
+            )
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    pub async fn delete_source_draft(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        source_profile_id: &str,
+        idempotency_key: &str,
+        token: &str,
+    ) -> Result<(), ServiceError> {
+        self.preflight_source_draft_delete(actor, item_id, expected_revision, idempotency_key)
+            .await?;
+        self.caller_item(actor, item_id, source_profile_id, token)
+            .await?;
+        self.store
+            .delete_draft(actor, item_id, expected_revision, idempotency_key)
+            .await?;
+        Ok(())
     }
 
     pub async fn preflight_source_claim(
@@ -423,17 +652,18 @@ impl CaseworkService {
         source_profile_id: &str,
         token: &str,
         limit: usize,
-        cursor_context: &str,
+        queue: Option<&str>,
         cursor: Option<&str>,
     ) -> Result<Page<WorkItem>, ServiceError> {
-        self.inbox_for_view(
+        self.inbox_for_context(
             actor,
             source_profile_id,
             token,
             InboxView::MyTeams,
             limit,
-            cursor_context,
+            queue,
             cursor,
+            "list",
         )
         .await
     }
@@ -446,22 +676,43 @@ impl CaseworkService {
         token: &str,
         view: InboxView,
         limit: usize,
-        cursor_context: &str,
+        queue: Option<&str>,
         cursor: Option<&str>,
     ) -> Result<Page<WorkItem>, ServiceError> {
+        self.inbox_for_context(
+            actor,
+            source_profile_id,
+            token,
+            view,
+            limit,
+            queue,
+            cursor,
+            "list",
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn inbox_for_context(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: &str,
+        token: &str,
+        view: InboxView,
+        limit: usize,
+        queue: Option<&str>,
+        cursor: Option<&str>,
+        feed: &'static str,
+    ) -> Result<Page<WorkItem>, ServiceError> {
         let policy = &self.project.inbox;
+        let cursor_context = source_cursor_context(feed, view, queue)?;
         let after = self
             .store
-            .resolve_cursor(actor, source_profile_id, cursor_context, cursor)
+            .resolve_cursor(actor, source_profile_id, &cursor_context, cursor)
             .await?;
         let desired = limit.clamp(1, 100);
         let started = Instant::now();
         let deadline = Duration::from_millis(policy.page_deadline_milliseconds);
-        let queue = cursor_context.rsplit_once(':').and_then(|(prefix, value)| {
-            (prefix.starts_with("list:") || prefix == "next")
-                .then_some(value)
-                .filter(|value| !value.is_empty())
-        });
         let candidates = self
             .store
             .inbox_candidates_for_view(actor, view, policy.maximum_candidate_scan, after, queue)
@@ -556,7 +807,7 @@ impl CaseworkService {
         let mut last_examined = after;
         let mut items = Vec::new();
         let candidate_count = candidates.items.len();
-        for mut item in candidates.items {
+        for item in candidates.items {
             if items.len() == desired
                 || reads == policy.maximum_source_reads
                 || started.elapsed() >= deadline
@@ -583,27 +834,14 @@ impl CaseworkService {
                 Ok(Ok(view)) => {
                     examined += 1;
                     last_examined = Some((item.passive_due_at, item.item_id));
-                    item = match self.store.item(item.item_id).await {
+                    let item = match self
+                        .assemble_caller_visible_item(actor, item.item_id, source_profile_id, &view)
+                        .await
+                    {
                         Ok(current) => current,
-                        Err(StoreError::NotFound) => continue,
-                        Err(error) => return Err(error.into()),
+                        Err(ServiceError::NotFound) => continue,
+                        Err(error) => return Err(error),
                     };
-                    if !self.store.can_view_item(actor, &item).await? {
-                        continue;
-                    }
-                    item.live_attempt = self
-                        .store
-                        .live_attempt_status_for_actor(actor, item.item_id, source_profile_id)
-                        .await?;
-                    if view.binding.generation != item.binding.generation {
-                        if item.live_attempt.is_some() {
-                            items.push(item);
-                            continue;
-                        }
-                        return Err(ServiceError::BindingMoved);
-                    }
-                    item.routing_copy = self.filtered_routing_copy(item.item_id, &view).await?;
-                    item.actions = local_actions(actor, &item, &view);
                     items.push(item);
                 }
                 Ok(Err(SourceAdapterError::Concealed | SourceAdapterError::Denied)) => {
@@ -633,7 +871,7 @@ impl CaseworkService {
         let next_cursor = if unvisited {
             Some(
                 self.store
-                    .issue_cursor(actor, source_profile_id, cursor_context, last_examined)
+                    .issue_cursor(actor, source_profile_id, &cursor_context, last_examined)
                     .await?,
             )
         } else {
@@ -655,13 +893,15 @@ impl CaseworkService {
         cursor: Option<&str>,
     ) -> Result<WorkItem, ServiceError> {
         let page = self
-            .inbox(
+            .inbox_for_context(
                 actor,
                 source_profile_id,
                 token,
+                InboxView::MyTeams,
                 1,
-                &format!("next:{}", queue.unwrap_or("")),
+                queue,
                 cursor,
+                "next",
             )
             .await?;
         let item = if let Some(item) = page.items.into_iter().next() {
@@ -1016,6 +1256,101 @@ impl CaseworkService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn decide_mutation(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        source_profile_id: &str,
+        operation: OperationName,
+        reason: Option<&str>,
+        flagged_fields: &[String],
+        displayed_binding: &SourceBinding,
+        idempotency_key: &str,
+        token: &str,
+    ) -> Result<MutationResponse, ServiceError> {
+        let (attempt, _) = self
+            .decide(
+                actor,
+                item_id,
+                expected_revision,
+                source_profile_id,
+                operation,
+                reason,
+                flagged_fields,
+                displayed_binding,
+                idempotency_key,
+                token,
+            )
+            .await?;
+        self.source_mutation_response(actor, item_id, source_profile_id, token, attempt)
+            .await
+    }
+
+    pub async fn recover_mutation(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        attempt_id: Uuid,
+        source_profile_id: &str,
+        token: &str,
+    ) -> Result<MutationResponse, ServiceError> {
+        let (attempt, _) = self
+            .recover(actor, item_id, attempt_id, source_profile_id, token)
+            .await?;
+        self.source_mutation_response(actor, item_id, source_profile_id, token, attempt)
+            .await
+    }
+
+    pub async fn recover_mutation_by_key(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        idempotency_key: &str,
+        token: &str,
+    ) -> Result<MutationResponse, ServiceError> {
+        let (attempt, _) = self
+            .recover_by_key(actor, item_id, source_profile_id, idempotency_key, token)
+            .await?;
+        self.source_mutation_response(actor, item_id, source_profile_id, token, attempt)
+            .await
+    }
+
+    async fn source_mutation_response(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        token: &str,
+        attempt: AttemptStatus,
+    ) -> Result<MutationResponse, ServiceError> {
+        let item = match self
+            .caller_item(actor, item_id, source_profile_id, token)
+            .await
+        {
+            Ok((item, _)) => item,
+            Err(ServiceError::Adapter(SourceAdapterError::Unavailable)) => {
+                return Err(
+                    if matches!(
+                        attempt.state,
+                        AttemptState::Pending | AttemptState::Uncertain
+                    ) {
+                        ServiceError::UncertainAttempt(attempt.attempt_id)
+                    } else {
+                        ServiceError::PostWriteSourceUnavailable(attempt.attempt_id)
+                    },
+                );
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(MutationResponse {
+            item,
+            attempt: Some(attempt),
+        })
+    }
+
     pub async fn caller_visible_holdings(
         &self,
         actor: &ActorContext,
@@ -1027,7 +1362,16 @@ impl CaseworkService {
             return Err(ServiceError::Forbidden);
         }
         let page = self
-            .inbox(actor, source_profile_id, token, 100, "holdings", cursor)
+            .inbox_for_context(
+                actor,
+                source_profile_id,
+                token,
+                InboxView::MyTeams,
+                100,
+                None,
+                cursor,
+                "holdings",
+            )
             .await?;
         let status = page.status;
         let next_cursor = page.next_cursor;
@@ -1201,6 +1545,29 @@ fn bounded_event_identifier(value: &str) -> &str {
     &value[..end]
 }
 
+fn source_cursor_context(
+    feed: &'static str,
+    view: InboxView,
+    queue: Option<&str>,
+) -> Result<String, ServiceError> {
+    serde_json::to_string(&SourceCursorContext { feed, view, queue })
+        .map_err(|_| ServiceError::Configuration)
+}
+
+fn routing_policy_digest(
+    request: &registry_casework_core::SourceRequestPolicy,
+) -> Result<String, ServiceError> {
+    let value = serde_json::json!({
+        "entity": &request.entity,
+        "queue": &request.queue,
+        "projection": &request.projection,
+        "routing": &request.routing,
+    });
+    let canonical = registry_platform_canonical_json::canonicalize_json(&value)
+        .map_err(|_| ServiceError::Configuration)?;
+    Ok(sha256_string(&Sha256::digest(canonical)))
+}
+
 fn decision_hash(
     expected_revision: i64,
     source_profile_id: &str,
@@ -1248,6 +1615,9 @@ fn local_actions(
     item: &WorkItem,
     source: &CallerSubjectView,
 ) -> Vec<CaseworkAction> {
+    if item.live_attempt.is_some() {
+        return Vec::new();
+    }
     let if_match = format!("\"{}\"", item.revision);
     if actor.role == registry_casework_core::CaseworkRole::Staff
         && item.holder.is_none()
@@ -1299,10 +1669,31 @@ pub enum ServiceError {
     BindingMoved,
     #[error("the source attempt remains uncertain")]
     UncertainAttempt(Uuid),
+    #[error("the source became unavailable after the durable attempt was stored")]
+    PostWriteSourceUnavailable(Uuid),
     #[error(transparent)]
     HostedValidation(#[from] registry_casework_core::HostedValidationError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
     Adapter(#[from] SourceAdapterError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_context_preserves_colons_in_typed_queue_identity() {
+        let context = source_cursor_context("list", InboxView::Mine, Some("region:appeals"))
+            .expect("cursor context");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&context).expect("context JSON"),
+            serde_json::json!({
+                "feed": "list",
+                "view": "mine",
+                "queue": "region:appeals"
+            })
+        );
+    }
 }

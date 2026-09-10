@@ -3,7 +3,7 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use registry_casework_core::{
     evaluate_activity_clock, evaluate_subject_clock, transition, ActivityClockEvaluation,
-    ActorContext, CalendarPolicy, CaseworkRole, ClockOccurrenceView, ClockPolicy,
+    ActorContext, CalendarPolicy, CaseworkRole, ClockNextEffect, ClockOccurrenceView, ClockPolicy,
     ClockRecomputeChange, ClockRecomputePreview, ClockRecomputeResult, ClockRuntimeState,
     HistoryKind, HolidaySetDocument, OccurrenceEvent, OccurrenceKind, OccurrenceState,
     ReminderOccurrence, SourceAdapterError, StepOccurrence, SubjectRef,
@@ -169,11 +169,36 @@ impl PostgresStore {
     ) -> Result<Vec<ClockOccurrenceView>, StoreError> {
         let client = self.client().await?;
         let rows = client.query(
-            "SELECT o.clock_occurrence_id,o.source_id,o.subject_kind,o.subject_id,o.clock_id,o.state,o.policy_digest,o.current_calculation_generation,o.recompute_generation,c.anchor_at,c.started_at,c.due_at,c.at_risk_at,c.completed_at FROM casework_clock_occurrences o JOIN casework_items i ON i.item_id=o.item_id AND i.erased_at IS NULL LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.item_id=$1 ORDER BY o.clock_id,o.clock_occurrence_id",
+            "SELECT o.clock_occurrence_id,o.source_id,o.subject_kind,o.subject_id,o.clock_id,o.state,o.policy_digest,o.current_calculation_generation,o.recompute_generation,c.anchor_at,c.started_at,c.due_at,c.at_risk_at,c.completed_at,c.reminders,c.steps,COALESCE((SELECT jsonb_agg(jsonb_build_object('kind',e.effect_kind,'id',e.effect_id) ORDER BY e.effect_kind,e.effect_id) FROM casework_clock_effects e WHERE e.clock_occurrence_id=o.clock_occurrence_id),'[]'::jsonb) FROM casework_clock_occurrences o JOIN casework_items i ON i.item_id=o.item_id AND i.erased_at IS NULL LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.item_id=$1 ORDER BY o.clock_id,o.clock_occurrence_id",
             &[&item_id],
         ).await?;
         rows.into_iter()
             .map(|row| {
+                let state = parse_clock_state(&row.get::<_, String>(5))?;
+                let next_effect = if matches!(
+                    state,
+                    ClockRuntimeState::Running
+                        | ClockRuntimeState::Paused
+                        | ClockRuntimeState::VerificationPending
+                ) {
+                    let reminders: Vec<ReminderOccurrence> = row
+                        .get::<_, Option<Value>>(14)
+                        .map(serde_json::from_value)
+                        .transpose()?
+                        .ok_or(StoreError::Corrupt)?;
+                    let steps: Vec<StepOccurrence> = row
+                        .get::<_, Option<Value>>(15)
+                        .map(serde_json::from_value)
+                        .transpose()?
+                        .ok_or(StoreError::Corrupt)?;
+                    let applied = serde_json::from_value::<Vec<AppliedEffect>>(row.get(16))?
+                        .into_iter()
+                        .map(|effect| (effect.kind, effect.id))
+                        .collect();
+                    next_unapplied_effect(&reminders, &steps, &applied)
+                } else {
+                    None
+                };
                 Ok(ClockOccurrenceView {
                     clock_occurrence_id: row.get(0),
                     subject: SubjectRef {
@@ -182,7 +207,7 @@ impl PostgresStore {
                         id: row.get(3),
                     },
                     clock_id: row.get(4),
-                    state: parse_clock_state(&row.get::<_, String>(5))?,
+                    state,
                     policy_digest: row.get(6),
                     calculation_generation: row.get(7),
                     recompute_generation: row.get(8),
@@ -191,6 +216,7 @@ impl PostgresStore {
                     due_at: row.get(11),
                     at_risk_at: row.get(12),
                     completed_at: row.get(13),
+                    next_effect,
                 })
             })
             .collect()
@@ -648,12 +674,11 @@ impl CaseworkService {
         source_profile_id: &str,
         token: &str,
     ) -> Result<Vec<ClockOccurrenceView>, ServiceError> {
-        self.caller_item(actor, item_id, source_profile_id, token)
-            .await?;
-        self.store
-            .clock_occurrences_for_item(item_id)
-            .await
-            .map_err(ServiceError::from)
+        Ok(self
+            .caller_item(actor, item_id, source_profile_id, token)
+            .await?
+            .0
+            .clock_occurrences)
     }
 
     pub async fn create_holiday_revision(
@@ -1067,32 +1092,81 @@ async fn next_unapplied_action(
             &[&id],
         )
         .await?;
-    let done = rows
+    let applied = rows
         .into_iter()
         .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
         .collect::<std::collections::BTreeSet<_>>();
-    Ok(value
-        .reminders
-        .iter()
-        .filter(|v| !done.contains(&("reminder".to_owned(), v.id.clone())))
-        .map(|v| v.at)
-        .chain(
-            value
-                .steps
-                .iter()
-                .filter(|v| !done.contains(&("step".to_owned(), v.id.clone())))
-                .map(|v| v.at),
-        )
-        .min())
+    Ok(
+        next_unapplied_effect(&value.reminders, &value.steps, &applied)
+            .as_ref()
+            .map(clock_effect_at),
+    )
 }
 
 fn earliest_action(value: &StoredCalculation, _now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    value
-        .reminders
+    next_unapplied_effect(
+        &value.reminders,
+        &value.steps,
+        &std::collections::BTreeSet::new(),
+    )
+    .as_ref()
+    .map(clock_effect_at)
+}
+
+#[derive(Deserialize)]
+struct AppliedEffect {
+    kind: String,
+    id: String,
+}
+
+fn next_unapplied_effect(
+    reminders: &[ReminderOccurrence],
+    steps: &[StepOccurrence],
+    applied: &std::collections::BTreeSet<(String, String)>,
+) -> Option<ClockNextEffect> {
+    reminders
         .iter()
-        .map(|v| v.at)
-        .chain(value.steps.iter().map(|v| v.at))
-        .min()
+        .filter(|effect| !applied.contains(&("reminder".to_owned(), effect.id.clone())))
+        .map(|effect| ClockNextEffect::Reminder {
+            id: effect.id.clone(),
+            at: effect.at,
+        })
+        .chain(
+            steps
+                .iter()
+                .filter(|effect| !applied.contains(&("step".to_owned(), effect.id.clone())))
+                .map(|effect| ClockNextEffect::Reassign {
+                    id: effect.id.clone(),
+                    at: effect.at,
+                    because: effect.because.clone(),
+                    queue_id: effect.reassign_queue.clone(),
+                }),
+        )
+        .min_by(|left, right| {
+            clock_effect_at(left)
+                .cmp(&clock_effect_at(right))
+                .then_with(|| clock_effect_order(left).cmp(&clock_effect_order(right)))
+                .then_with(|| clock_effect_id(left).cmp(clock_effect_id(right)))
+        })
+}
+
+fn clock_effect_at(effect: &ClockNextEffect) -> DateTime<Utc> {
+    match effect {
+        ClockNextEffect::Reminder { at, .. } | ClockNextEffect::Reassign { at, .. } => *at,
+    }
+}
+
+fn clock_effect_order(effect: &ClockNextEffect) -> u8 {
+    match effect {
+        ClockNextEffect::Reminder { .. } => 0,
+        ClockNextEffect::Reassign { .. } => 1,
+    }
+}
+
+fn clock_effect_id(effect: &ClockNextEffect) -> &str {
+    match effect {
+        ClockNextEffect::Reminder { id, .. } | ClockNextEffect::Reassign { id, .. } => id,
+    }
 }
 
 fn calculation_state(value: &StoredCalculation) -> ClockRuntimeState {
@@ -1189,6 +1263,52 @@ async fn insert_clock_idempotency(
         &[&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&operation,&resource,&key,&request_hash,&response,&Utc::now()],
     ).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod next_effect_tests {
+    use super::*;
+
+    #[test]
+    fn projection_advances_using_only_persisted_effect_keys() {
+        let reminder_at = DateTime::parse_from_rfc3339("2026-09-10T09:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let reassign_at = DateTime::parse_from_rfc3339("2026-09-11T09:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let reminders = vec![ReminderOccurrence {
+            id: "due-soon".to_owned(),
+            at: reminder_at,
+        }];
+        let steps = vec![StepOccurrence {
+            id: "deadline".to_owned(),
+            because: "Deadline passed".to_owned(),
+            at: reassign_at,
+            reassign_queue: "overdue".to_owned(),
+        }];
+        let mut applied = std::collections::BTreeSet::new();
+
+        assert_eq!(
+            next_unapplied_effect(&reminders, &steps, &applied),
+            Some(ClockNextEffect::Reminder {
+                id: "due-soon".to_owned(),
+                at: reminder_at,
+            })
+        );
+        applied.insert(("reminder".to_owned(), "due-soon".to_owned()));
+        assert_eq!(
+            next_unapplied_effect(&reminders, &steps, &applied),
+            Some(ClockNextEffect::Reassign {
+                id: "deadline".to_owned(),
+                at: reassign_at,
+                because: "Deadline passed".to_owned(),
+                queue_id: "overdue".to_owned(),
+            })
+        );
+        applied.insert(("step".to_owned(), "deadline".to_owned()));
+        assert_eq!(next_unapplied_effect(&reminders, &steps, &applied), None);
+    }
 }
 
 #[cfg(all(test, feature = "postgres-test"))]
@@ -1369,7 +1489,7 @@ mod tests {
             Some(instant("2026-08-01T15:00:00+07:00")),
             None,
         );
-        store
+        let activity_item = store
             .apply_observation_with_context(
                 &activity,
                 "default",
@@ -1378,7 +1498,33 @@ mod tests {
                 Some(&activity_policy()),
             )
             .await
-            .expect("activity observation");
+            .expect("activity observation")
+            .expect("activity item");
+        let initial_projection = store
+            .clock_occurrences_for_item(activity_item.item_id)
+            .await
+            .expect("initial clock projection");
+        assert!(matches!(
+            initial_projection[0].next_effect,
+            Some(ClockNextEffect::Reminder { ref id, .. }) if id == "due-soon"
+        ));
+        client.execute(
+            "INSERT INTO casework_clock_effects(clock_occurrence_id,effect_kind,effect_id,calculation_generation,event_id,applied_at) VALUES($1,'reminder','due-soon',1,$2,now())",
+            &[&initial_projection[0].clock_occurrence_id, &Uuid::new_v4()],
+        ).await.expect("persist applied reminder");
+        let resumed_projection = store
+            .clock_occurrences_for_item(activity_item.item_id)
+            .await
+            .expect("projection after persisted effect");
+        assert_eq!(
+            resumed_projection[0].next_effect,
+            Some(ClockNextEffect::Reassign {
+                id: "supervisor-at-deadline".to_owned(),
+                at: instant("2026-08-10T17:00:00+07:00"),
+                because: "Deadline passed".to_owned(),
+                queue_id: "overdue-review".to_owned(),
+            })
+        );
         let claim = store
             .claim_due_clocks(10)
             .await
@@ -1401,7 +1547,7 @@ mod tests {
                 .apply_clock_claim(&claim, &activity)
                 .await
                 .expect("apply timer"),
-            2
+            1
         );
         store
             .apply_observation_with_context(
@@ -1418,6 +1564,11 @@ mod tests {
             .await
             .expect("restart pass")
             .is_empty());
+        let completed_projection = store
+            .clock_occurrences_for_item(activity_item.item_id)
+            .await
+            .expect("projection after all effects applied");
+        assert_eq!(completed_projection[0].next_effect, None);
         let item = client
             .query_one(
                 "SELECT queue_id,revision FROM casework_items WHERE subject_id='activity-subject'",

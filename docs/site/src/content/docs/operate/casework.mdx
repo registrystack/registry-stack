@@ -104,7 +104,9 @@ secret. Fix the reported dependency or binding and restart; do not bypass the
 package or transport check.
 
 Probe `GET /health` for process liveness and `GET /ready` before routing traffic.
-Readiness checks PostgreSQL. Source outages remain visible on affected work-item
+Readiness checks PostgreSQL and audit publication. A failed audit publication
+pass makes readiness fail, logs only the failed stage, and retries; a successful
+pass restores readiness. Source outages remain visible on affected work-item
 operations instead of turning the inbox into an apparently complete empty page.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, migrate_from_path() and serve_from_path();

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::sync::Arc;
 
@@ -12,10 +12,11 @@ use registry_casework_core::{
     PreparedSourceAttempt, QueuePolicy, RoutingActivity, RoutingCondition, RoutingContext,
     RoutingFieldDescriptor, RoutingPredicate, RoutingRule, RoutingSourceMetadata, SourceAdapter,
     SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy,
-    SubjectRef, TransitionHint,
+    SubjectRef, TransitionHint, WorkItemRouting,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
@@ -27,6 +28,7 @@ const GENERATION: &str = "routing-generation-1";
 struct RoutingSource {
     metadata: RoutingSourceMetadata,
     observations: BTreeMap<String, AuthoritativeObservation>,
+    concealed: BTreeSet<String>,
 }
 
 #[async_trait]
@@ -77,6 +79,9 @@ impl SourceAdapter for RoutingSource {
         _source_profile_id: &str,
         _credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
+        if self.concealed.contains(&subject.id) {
+            return Err(SourceAdapterError::Concealed);
+        }
         let observation = self
             .observations
             .get(&subject.id)
@@ -305,11 +310,29 @@ async fn synchronization_uses_first_matching_stage_then_region_and_falls_back_to
     let both = Uuid::new_v4();
     let regional = Uuid::new_v4();
     let fallback = Uuid::new_v4();
+    let concealed = Uuid::new_v4();
     let observations = [
         observation(both, "legal", "north"),
         observation(regional, "technical", "north"),
         observation(fallback, "technical", "south"),
+        observation(concealed, "technical", "north"),
     ];
+    let project = routing_project();
+    let policy = &project.sources[0].requests[0];
+    let canonical = registry_platform_canonical_json::canonicalize_json(&json!({
+        "entity": &policy.entity,
+        "queue": &policy.queue,
+        "projection": &policy.projection,
+        "routing": &policy.routing,
+    }))
+    .expect("routing policy canonicalizes");
+    let expected_policy_digest = format!(
+        "sha256:{}",
+        Sha256::digest(canonical)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
     let source = Arc::new(RoutingSource {
         metadata: metadata(),
         observations: observations
@@ -317,13 +340,10 @@ async fn synchronization_uses_first_matching_stage_then_region_and_falls_back_to
             .cloned()
             .map(|observation| (observation.subject.id.clone(), observation))
             .collect(),
+        concealed: BTreeSet::from([concealed.to_string()]),
     });
-    let service = CaseworkService::new(
-        store.clone(),
-        routing_project(),
-        [source as Arc<dyn SourceAdapter>],
-    )
-    .expect("routing service starts with matching source metadata");
+    let service = CaseworkService::new(store.clone(), project, [source as Arc<dyn SourceAdapter>])
+        .expect("routing service starts with matching source metadata");
     let subjects = observations
         .iter()
         .map(|observation| observation.subject.clone())
@@ -337,13 +357,23 @@ async fn synchronization_uses_first_matching_stage_then_region_and_falls_back_to
             .synchronize_pending(10)
             .await
             .expect("synchronize routed work"),
-        3
+        4
     );
 
-    for (subject_id, expected_queue) in [
-        (both, "priority"),
-        (regional, "regional"),
-        (fallback, "triage"),
+    for (subject_id, expected_queue, expected_rule, expected_because) in [
+        (
+            both,
+            "priority",
+            Some("legal-first"),
+            Some("Legal review has priority"),
+        ),
+        (
+            regional,
+            "regional",
+            Some("north-region"),
+            Some("Northern work is regional"),
+        ),
+        (fallback, "triage", None, None),
     ] {
         let item_id: Uuid = database
             .query_one(
@@ -358,6 +388,14 @@ async fn synchronization_uses_first_matching_stage_then_region_and_falls_back_to
             .await
             .expect("current team member can read routed work");
         assert_eq!(item.queue_id, expected_queue);
+        assert_eq!(
+            item.routing,
+            Some(WorkItemRouting {
+                rule_id: expected_rule.map(str::to_owned),
+                because: expected_because.map(str::to_owned),
+                policy_digest: Some(expected_policy_digest.clone()),
+            })
+        );
         assert_eq!(
             view.disclosed.get("summary"),
             Some(&json!("caller-visible"))
@@ -376,6 +414,26 @@ async fn synchronization_uses_first_matching_stage_then_region_and_falls_back_to
         assert!(!history_json.contains("\"north\""));
         assert!(!history_json.contains("\"south\""));
     }
+
+    let concealed_item_id: Uuid = database
+        .query_one(
+            "SELECT item_id FROM casework_items WHERE subject_id=$1",
+            &[&concealed.to_string()],
+        )
+        .await
+        .expect("concealed routed item exists")
+        .get(0);
+    assert!(matches!(
+        service
+            .caller_item(
+                &staff,
+                concealed_item_id,
+                "source-profile",
+                "ephemeral-token"
+            )
+            .await,
+        Err(ServiceError::Adapter(SourceAdapterError::Concealed))
+    ));
 }
 
 #[tokio::test]
@@ -392,6 +450,7 @@ async fn startup_refuses_routing_projection_absent_from_source_metadata() {
     let source = Arc::new(RoutingSource {
         metadata: metadata(),
         observations: BTreeMap::new(),
+        concealed: BTreeSet::new(),
     });
     assert!(matches!(
         CaseworkService::new(store, project, [source as Arc<dyn SourceAdapter>]),

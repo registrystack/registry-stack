@@ -9,7 +9,7 @@ use registry_casework_core::{
     Draft, DurableEvent, HistoryEntry, HistoryKind, InboxView, IssuerPrincipal, OccurrenceEvent,
     OccurrenceKind, OccurrenceState, OperationName, Page, PageStatus, PreparedSourceAttempt,
     SourceBinding, SourceReceipt, StaffingDiagnostic, SubjectRef, TeamRecord, TransitionHint,
-    WorkItem,
+    WorkItem, WorkItemRouting,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
@@ -25,6 +25,7 @@ const HOSTED_MIGRATION: &str = include_str!("../migrations/0002_hosted_casework.
 const ASSIGNMENT_MIGRATION: &str = include_str!("../migrations/0003_assignment.sql");
 const CLOCK_MIGRATION: &str = include_str!("../migrations/0004_clocks.sql");
 const SOURCE_RETENTION_MIGRATION: &str = include_str!("../migrations/0005_source_retention.sql");
+const SOURCE_HISTORY_MIGRATION: &str = include_str!("../migrations/0006_source_history.sql");
 
 #[derive(Clone)]
 pub struct PostgresStore {
@@ -194,6 +195,25 @@ impl PostgresStore {
             transaction
                 .execute(
                     "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(5,now())",
+                    &[],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let source_history_applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=6)",
+                &[],
+            )
+            .await?
+            .get(0);
+        if !source_history_applied {
+            transaction.batch_execute(SOURCE_HISTORY_MIGRATION).await?;
+            transaction
+                .execute(
+                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(6,now())",
                     &[],
                 )
                 .await?;
@@ -419,6 +439,26 @@ impl PostgresStore {
         routing: Option<&registry_casework_core::RoutingDecision>,
         clock: Option<&crate::ResolvedClockPolicy>,
     ) -> Result<Option<WorkItem>, StoreError> {
+        self.apply_observation_with_policy_context(
+            observation,
+            queue_id,
+            passive_target_seconds,
+            routing,
+            None,
+            clock,
+        )
+        .await
+    }
+
+    pub(crate) async fn apply_observation_with_policy_context(
+        &self,
+        observation: &AuthoritativeObservation,
+        queue_id: &str,
+        passive_target_seconds: Option<i64>,
+        routing: Option<&registry_casework_core::RoutingDecision>,
+        routing_policy_digest: Option<&str>,
+        clock: Option<&crate::ResolvedClockPolicy>,
+    ) -> Result<Option<WorkItem>, StoreError> {
         if observation.ordered_revision <= 0
             || passive_target_seconds.is_some_and(|seconds| seconds <= 0)
             || observation.occurrence_key.is_empty()
@@ -605,6 +645,8 @@ impl PostgresStore {
                     passive_due_at: due,
                     updated_at: now,
                     hosted: None,
+                    routing: None,
+                    clock_occurrences: Vec::new(),
                     actions: Vec::new(),
                     routing_copy: None,
                     live_attempt: None,
@@ -612,13 +654,21 @@ impl PostgresStore {
                 if observation.occurrence_kind == OccurrenceKind::Review {
                     transaction.execute("INSERT INTO casework_correction_context(item_id,source_binding,reason,flagged_fields,created_at) SELECT $1,c.source_binding,c.reason,c.flagged_fields,c.created_at FROM casework_correction_context c JOIN casework_items prior ON prior.item_id=c.item_id WHERE prior.source_id=$2 AND prior.subject_kind=$3 AND prior.subject_id=$4 ORDER BY c.created_at DESC LIMIT 1 ON CONFLICT(item_id) DO NOTHING", &[&item_id,&observation.subject.source_id,&observation.subject.kind,&observation.subject.id]).await?;
                 }
+                let mut observed_detail = json!({
+                    "sourceRevision": observation.ordered_revision,
+                    "routingRule": routing.and_then(|decision| decision.rule_id.as_deref()),
+                    "routingBecause": routing.and_then(|decision| decision.because.as_deref()),
+                });
+                if let Some(digest) = routing_policy_digest {
+                    observed_detail["routingPolicyDigest"] = Value::String(digest.to_owned());
+                }
                 append_item_event(
                     &transaction,
                     &item,
                     HistoryKind::Observed,
                     None,
                     "system:reconciliation",
-                    json!({"sourceRevision":observation.ordered_revision,"routingRule":routing.and_then(|decision|decision.rule_id.as_deref()),"routingBecause":routing.and_then(|decision|decision.because.as_deref())}),
+                    observed_detail,
                 )
                 .await?;
                 result = Some(item);
@@ -1860,6 +1910,130 @@ impl PostgresStore {
         rows.into_iter().map(history_from_row).collect()
     }
 
+    pub async fn work_item_routing(
+        &self,
+        item_id: Uuid,
+    ) -> Result<Option<WorkItemRouting>, StoreError> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT h.detail->>'routingRule',h.detail->>'routingBecause',h.detail->>'routingPolicyDigest' FROM casework_history h JOIN casework_items i ON i.item_id=h.item_id AND i.erased_at IS NULL WHERE h.item_id=$1 AND h.kind='observed' AND h.detail->>'routingPolicyDigest' IS NOT NULL ORDER BY h.occurred_at,h.event_id LIMIT 1",
+                &[&item_id],
+            )
+            .await?;
+        Ok(row.map(|row| WorkItemRouting {
+            rule_id: row.get(0),
+            because: row.get(1),
+            policy_digest: row.get(2),
+        }))
+    }
+
+    pub async fn history_page(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: &str,
+        item_id: Uuid,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Page<HistoryEntry>, StoreError> {
+        let limit = limit.clamp(1, 100);
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        transaction
+            .query_opt(
+                "SELECT item_id FROM casework_items WHERE item_id=$1 AND erased_at IS NULL FOR UPDATE",
+                &[&item_id],
+            )
+            .await?
+            .ok_or(StoreError::NotFound)?;
+        let after = if let Some(cursor) = cursor {
+            let cursor_id = Uuid::parse_str(cursor).map_err(|_| StoreError::CursorInvalid)?;
+            let row = transaction
+                .query_opt(
+                    "SELECT issuer,subject,casework_profile_id,source_profile_id,item_id,last_occurred_at,last_event_id,expires_at FROM casework_history_cursors WHERE cursor_id=$1",
+                    &[&cursor_id],
+                )
+                .await?
+                .ok_or(StoreError::CursorInvalid)?;
+            if row.get::<_, String>(0) != actor.principal.issuer
+                || row.get::<_, String>(1) != actor.principal.subject
+                || row.get::<_, String>(2) != actor.profile_id
+                || row.get::<_, String>(3) != source_profile_id
+                || row.get::<_, Uuid>(4) != item_id
+            {
+                return Err(StoreError::CursorInvalid);
+            }
+            if row.get::<_, DateTime<Utc>>(7) <= Utc::now() {
+                return Err(StoreError::CursorExpired);
+            }
+            Some((row.get::<_, DateTime<Utc>>(5), row.get::<_, Uuid>(6)))
+        } else {
+            None
+        };
+        let membership_kind = match actor.role {
+            CaseworkRole::Staff => "staff",
+            CaseworkRole::Supervisor => "supervisor",
+            CaseworkRole::Administrator | CaseworkRole::Requester => {
+                return Err(StoreError::NotFound)
+            }
+        };
+        let authorized: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id WHERE i.item_id=$1 AND i.erased_at IS NULL AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind=$4)",
+                &[&item_id,&actor.principal.issuer,&actor.principal.subject,&membership_kind],
+            )
+            .await?
+            .get(0);
+        if !authorized {
+            return Err(StoreError::NotFound);
+        }
+        let has_after = after.is_some();
+        let (after_at, after_id) = after.unwrap_or((Utc::now(), Uuid::nil()));
+        let query_limit = i64::try_from(limit + 1).map_err(|_| StoreError::Invalid)?;
+        let rows = transaction
+            .query(
+                "SELECT h.event_id,h.item_id,h.item_revision,h.kind,h.occurred_at,h.actor_issuer,h.actor_subject,h.profile_id,h.detail FROM casework_history h JOIN casework_items i ON i.item_id=h.item_id AND i.erased_at IS NULL JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind=$4 WHERE h.item_id=$1 AND (NOT $5 OR (h.occurred_at,h.event_id)>($6,$7)) ORDER BY h.occurred_at,h.event_id LIMIT $8",
+                &[&item_id,&actor.principal.issuer,&actor.principal.subject,&membership_kind,&has_after,&after_at,&after_id,&query_limit],
+            )
+            .await?;
+        let more = rows.len() > limit;
+        let mut items = Vec::with_capacity(rows.len().min(limit));
+        let mut last = None;
+        for row in rows.into_iter().take(limit) {
+            let history = history_from_row(row)?;
+            last = Some((history.occurred_at, history.event_id));
+            items.push(history);
+        }
+        let next_cursor = if more {
+            let (last_occurred_at, last_event_id) = last.ok_or(StoreError::Corrupt)?;
+            let cursor_id = Uuid::new_v4();
+            transaction.execute(
+                "INSERT INTO casework_history_cursors(cursor_id,issuer,subject,casework_profile_id,source_profile_id,item_id,last_occurred_at,last_event_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '15 minutes')",
+                &[&cursor_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&source_profile_id,&item_id,&last_occurred_at,&last_event_id],
+            ).await?;
+            Some(cursor_id.to_string())
+        } else {
+            None
+        };
+        transaction.commit().await?;
+        Ok(Page {
+            items,
+            next_cursor,
+            status: PageStatus::Complete,
+        })
+    }
+
+    pub async fn erase_expired_source_history_cursors(&self) -> Result<usize, StoreError> {
+        let client = self.client().await?;
+        let deleted = client
+            .execute(
+                "WITH due AS (SELECT cursor_id FROM casework_history_cursors WHERE expires_at<=now() ORDER BY expires_at,cursor_id LIMIT 100 FOR UPDATE SKIP LOCKED) DELETE FROM casework_history_cursors c USING due WHERE c.cursor_id=due.cursor_id",
+                &[],
+            )
+            .await?;
+        usize::try_from(deleted).map_err(|_| StoreError::Corrupt)
+    }
+
     pub async fn claim_sync_batch(
         &self,
         limit: i64,
@@ -2338,6 +2512,8 @@ pub(crate) fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
         passive_due_at: row.get("passive_due_at"),
         updated_at: row.get("updated_at"),
         hosted: None,
+        routing: None,
+        clock_occurrences: Vec::new(),
         actions: Vec::new(),
         routing_copy: None,
         live_attempt: None,
