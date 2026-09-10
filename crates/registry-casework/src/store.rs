@@ -1725,10 +1725,17 @@ impl PostgresStore {
         };
         let cursor_id = Uuid::parse_str(cursor).map_err(|_| StoreError::Invalid)?;
         let client = self.client().await?;
-        let row=client.query_opt("SELECT c.last_passive_due_at,i.first_observed_at,c.last_item_id FROM casework_cursors c JOIN casework_items i ON i.item_id=c.last_item_id WHERE c.cursor_id=$1 AND c.issuer=$2 AND c.subject=$3 AND c.casework_profile_id=$4 AND c.source_profile_id=$5 AND c.context=$6 AND c.expires_at>now()", &[&cursor_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&source_profile_id,&context]).await?.ok_or(StoreError::Invalid)?;
-        Ok(row
-            .get::<_, Option<Uuid>>(2)
-            .map(|item_id| (row.get(0), row.get::<_, DateTime<Utc>>(1), item_id)))
+        let row=client.query_opt("SELECT c.last_passive_due_at,i.first_observed_at,c.last_item_id FROM casework_cursors c LEFT JOIN casework_items i ON i.item_id=c.last_item_id AND i.erased_at IS NULL WHERE c.cursor_id=$1 AND c.issuer=$2 AND c.subject=$3 AND c.casework_profile_id=$4 AND c.source_profile_id=$5 AND c.context=$6 AND c.expires_at>now()", &[&cursor_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&source_profile_id,&context]).await?.ok_or(StoreError::Invalid)?;
+        match (
+            row.get::<_, Option<Uuid>>(2),
+            row.get::<_, Option<DateTime<Utc>>>(1),
+        ) {
+            (None, _) => Ok(None),
+            (Some(item_id), Some(first_observed_at)) => {
+                Ok(Some((row.get(0), first_observed_at, item_id)))
+            }
+            (Some(_), None) => Err(StoreError::Invalid),
+        }
     }
 
     pub(crate) async fn issue_cursor(
