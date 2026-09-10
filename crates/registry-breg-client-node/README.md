@@ -70,7 +70,12 @@ Inputs are the same domain data object or field-based patch array accepted by
 the corresponding object method, encoded as JSON text. They are not arbitrary
 HTTP request bodies. The client refuses duplicates, invalid JSON, bounds
 violations, and numeric literals whose value would change during decoding.
-Mutation builders also enforce BReg's existing numeric model: for example,
+Structured JavaScript inputs reject every integer-valued `Number` outside
+`Number.isSafeInteger`, including nested Create, PATCH, action, and batch
+values, because JavaScript may already have rounded the caller's value. Use the
+corresponding `...Json` method with exact JSON text when a governed integer may
+be wider than JavaScript's safe range.
+Exact JSON mutation builders also enforce BReg's existing numeric model: for example,
 `9007199254740992` is supported while `9007199254740993` is refused before
 network I/O. Exponent or decimal spellings cannot bypass the exact-value check.
 Fixed-scale decimals remain JSON strings. Null and absent members remain distinct.

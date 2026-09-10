@@ -421,6 +421,20 @@ class MutationParityTests(unittest.TestCase):
             [{"code": "manual-check", "label": "Manual check"}],
         )
         self.assertEqual(self.contract.immediate_actions[0]["input_mode"], "fixed")
+        batch_operation = next(
+            operation
+            for operation in self.contract.operations
+            if operation["id"] == "records.company.batch"
+        )
+        self.assertIs(batch_operation["request"]["allow_create"], True)
+        self.assertIs(batch_operation["request"]["allow_patch"], False)
+        get_operation = next(
+            operation
+            for operation in self.contract.operations
+            if operation["id"] == "records.company.get"
+        )
+        self.assertIsNone(get_operation["request"]["allow_create"])
+        self.assertIsNone(get_operation["request"]["allow_patch"])
 
         binding = self.contract.select_immediate_action(
             "rename-company", "company-writer"

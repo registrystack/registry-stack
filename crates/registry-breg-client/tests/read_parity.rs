@@ -10,7 +10,7 @@ use axum::Router;
 use registry_breg_client::{
     BRegAsOfListRequest, BRegBoundingBox, BRegGeoJsonListRequest, BRegGeoJsonOptions,
     BRegListRequest, BRegRecordOptions, BRegRelationshipListRequest, BRegSnapshotListRequest,
-    BaseRegistryClient, BaseRegistryClientConfig,
+    BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError, TransportKind,
 };
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use serde_json::{json, Value};
@@ -46,7 +46,7 @@ async fn handler(State(state): State<StateData>, request: Request<Body>) -> Resp
     state.0.lock().unwrap().push(format!("{accept} {uri}"));
     if accept == "application/geo+json" {
         let list = !uri.contains(RECORD_ID);
-        let document = if list {
+        let mut document = if list {
             json!({
                 "type":"FeatureCollection",
                 "features":[feature(Value::Null)],
@@ -56,6 +56,14 @@ async fn handler(State(state): State<StateData>, request: Request<Body>) -> Resp
         } else {
             feature(Value::Null)
         };
+        if uri.contains("large-geojson") {
+            if list {
+                document["features"][0]["properties"]["padding"] =
+                    json!("x".repeat(2 * 1024 * 1024));
+            } else {
+                document["properties"]["padding"] = json!("x".repeat(2 * 1024 * 1024));
+            }
+        }
         return response("application/geo+json", document, false, false);
     }
 
@@ -74,6 +82,13 @@ async fn handler(State(state): State<StateData>, request: Request<Body>) -> Resp
     };
     if uri.contains(":snapshot") {
         document["snapshot"] = json!("breg1_00000000-0000-4000-8000-000000000002");
+        if uri.contains("timestamp-normalized") || uri.contains("timestamp-mismatch") {
+            document["validAt"] = if uri.contains("timestamp-mismatch") {
+                json!("2026-09-10T00:00:01Z")
+            } else {
+                json!("2026-09-10T00:00:00Z")
+            };
+        }
     }
     let etag = !collection && !uri.contains("/revisions/");
     response("application/json", document, true, etag)
@@ -115,6 +130,13 @@ fn response(media: &str, value: Value, link: bool, etag: bool) -> Response<Body>
 }
 
 async fn client(provider: Arc<CountingToken>) -> (BaseRegistryClient, Arc<Mutex<Vec<String>>>) {
+    client_with_max_response_bytes(provider, registry_breg_client::DEFAULT_MAX_RESPONSE_BYTES).await
+}
+
+async fn client_with_max_response_bytes(
+    provider: Arc<CountingToken>,
+    maximum: u64,
+) -> (BaseRegistryClient, Arc<Mutex<Vec<String>>>) {
     let captured = Arc::new(Mutex::new(Vec::new()));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -129,8 +151,114 @@ async fn client(provider: Arc<CountingToken>) -> (BaseRegistryClient, Arc<Mutex<
     });
     let config =
         BaseRegistryClientConfig::new(Url::parse(&format!("http://{address}/prefix")).unwrap())
-            .with_token_provider(provider);
+            .with_token_provider(provider)
+            .with_max_response_bytes(maximum);
     (BaseRegistryClient::new(config).unwrap(), captured)
+}
+
+#[tokio::test]
+async fn snapshot_valid_at_uses_the_servers_canonical_utc_representation() {
+    let provider = Arc::new(CountingToken(AtomicUsize::new(0)));
+    let (client, captured) = client(provider).await;
+    let request = BRegSnapshotListRequest::default()
+        .valid_at("2026-09-10T00:00:00.000Z")
+        .unwrap();
+
+    let page = client
+        .list_snapshot_records("timestamp-normalized", &request)
+        .await
+        .expect("equivalent canonical server validAt");
+    assert_eq!(page.value.valid_at.as_deref(), Some("2026-09-10T00:00:00Z"));
+    let continuation = page
+        .value
+        .continuation
+        .as_ref()
+        .expect("snapshot response has another page");
+    assert_eq!(
+        serde_json::to_value(continuation).unwrap()["validAt"],
+        "2026-09-10T00:00:00Z"
+    );
+    let continued = client
+        .continue_snapshot_list(continuation)
+        .await
+        .expect("normalized validAt identity survives continuation");
+    assert_eq!(
+        continued.value.valid_at.as_deref(),
+        Some("2026-09-10T00:00:00Z")
+    );
+    assert!(captured
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|value| value.contains("validAt=2026-09-10T00%3A00%3A00Z")));
+
+    let error = client
+        .list_snapshot_records("timestamp-mismatch", &request)
+        .await
+        .expect_err("a different instant must remain a protocol failure");
+    assert!(matches!(error, BaseRegistryClientError::Protocol { .. }));
+}
+
+#[tokio::test]
+async fn geojson_uses_the_configured_response_body_bound() {
+    let provider = Arc::new(CountingToken(AtomicUsize::new(0)));
+    let high_limit = 3 * 1024 * 1024;
+    let (client, _) = client_with_max_response_bytes(provider.clone(), high_limit).await;
+    let feature = client
+        .get_geojson_record("large-geojson", RECORD_ID, &BRegGeoJsonOptions::default())
+        .await
+        .expect("configured bound above two MiB permits the response");
+    assert_eq!(
+        feature.value.properties["padding"].as_str().unwrap().len(),
+        2 * 1024 * 1024
+    );
+    let first = client
+        .list_geojson_records(
+            "large-geojson",
+            &BRegGeoJsonListRequest::default().top(1).unwrap(),
+        )
+        .await
+        .expect("configured bound applies to a GeoJSON collection");
+    assert_eq!(
+        first.value.value.features[0].properties["padding"]
+            .as_str()
+            .unwrap()
+            .len(),
+        2 * 1024 * 1024
+    );
+    let continued = client
+        .continue_geojson_list(first.value.continuation.as_ref().unwrap())
+        .await
+        .expect("configured bound applies to GeoJSON continuation pages");
+    assert_eq!(
+        continued.value.value.features[0].properties["padding"]
+            .as_str()
+            .unwrap()
+            .len(),
+        2 * 1024 * 1024
+    );
+
+    let (client, _) = client_with_max_response_bytes(provider, 2 * 1024 * 1024).await;
+    let error = client
+        .get_geojson_record("large-geojson", RECORD_ID, &BRegGeoJsonOptions::default())
+        .await
+        .expect_err("configured body bound remains enforced");
+    assert!(matches!(
+        error,
+        BaseRegistryClientError::Transport {
+            kind: TransportKind::ResponseTooLarge
+        }
+    ));
+    let error = client
+        .continue_geojson_list(first.value.continuation.as_ref().unwrap())
+        .await
+        .expect_err("configured body bound remains enforced for continuation pages");
+    assert!(matches!(
+        error,
+        BaseRegistryClientError::Transport {
+            kind: TransportKind::ResponseTooLarge
+        }
+    ));
 }
 
 #[tokio::test]

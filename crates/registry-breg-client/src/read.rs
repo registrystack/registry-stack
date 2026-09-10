@@ -156,8 +156,7 @@ impl BRegSnapshotListRequest {
     /// checks before the server applies that configured type.
     pub fn valid_at(mut self, value: impl Into<String>) -> Result<Self, BRegRequestError> {
         let value = value.into();
-        validate_bounded_scalar(&value, 1024, INVALID_VALID_AT)?;
-        self.valid_at = Some(value);
+        self.valid_at = Some(normalize_snapshot_valid_at(&value)?);
         Ok(self)
     }
 
@@ -482,9 +481,7 @@ impl BRegSnapshotContinuation {
         valid_at: Option<&str>,
     ) -> Result<Self, BRegRequestError> {
         validate_snapshot_reference(snapshot)?;
-        if let Some(value) = valid_at {
-            validate_bounded_scalar(value, 1024, INVALID_VALID_AT)?;
-        }
+        let valid_at = valid_at.map(normalize_snapshot_valid_at).transpose()?;
         Ok(Self {
             collection: BRegContinuation::try_from_parts(
                 route,
@@ -494,7 +491,7 @@ impl BRegSnapshotContinuation {
                 meta,
             )?,
             snapshot: snapshot.to_owned(),
-            valid_at: valid_at.map(str::to_owned),
+            valid_at,
         })
     }
 
@@ -502,13 +499,15 @@ impl BRegSnapshotContinuation {
         value: BRegSnapshotContinuationProjection,
     ) -> Result<Self, BRegRequestError> {
         validate_snapshot_reference(&value.snapshot)?;
-        if let Some(valid_at) = &value.valid_at {
-            validate_bounded_scalar(valid_at, 1024, INVALID_VALID_AT)?;
-        }
+        let valid_at = value
+            .valid_at
+            .as_deref()
+            .map(normalize_snapshot_valid_at)
+            .transpose()?;
         Ok(Self {
             collection: BRegContinuation::try_from_projection(value.collection)?,
             snapshot: value.snapshot,
-            valid_at: value.valid_at,
+            valid_at,
         })
     }
 
@@ -713,6 +712,18 @@ fn validate_bounded_scalar(
         return Err(BRegRequestError::new(reason));
     }
     Ok(())
+}
+
+pub(crate) fn normalize_snapshot_valid_at(value: &str) -> Result<String, BRegRequestError> {
+    validate_bounded_scalar(value, 1024, INVALID_VALID_AT)?;
+    if let Ok(parsed) = OffsetDateTime::parse(value, &Rfc3339) {
+        if parsed.offset() == UtcOffset::UTC {
+            return parsed
+                .format(&Rfc3339)
+                .map_err(|_| BRegRequestError::new(INVALID_VALID_AT));
+        }
+    }
+    Ok(value.to_owned())
 }
 
 fn validate_snapshot_reference(value: &str) -> Result<(), BRegRequestError> {

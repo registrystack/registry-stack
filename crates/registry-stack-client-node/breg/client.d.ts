@@ -1,5 +1,8 @@
 export type JsonScalar = string | number | boolean | null
 export type JsonValue = JsonScalar | ReadonlyArray<JsonValue> | { readonly [key: string]: JsonValue }
+/** Structured mutation inputs reject integer-valued numbers outside
+ * `Number.isSafeInteger`. Use the corresponding `...Json` method for exact
+ * wider integer values. */
 export type JsonObject = { readonly [key: string]: JsonValue }
 /** An integer that satisfies `Number.isSafeInteger` and the option's documented bounds. */
 export type SafeInteger = number
@@ -331,6 +334,8 @@ export interface BRegOperationDescriptor {
     readonly removeSemantics: string | null
     readonly maximumItems: SafeInteger | null
     readonly maximumBodyBytes: SafeInteger | null
+    readonly allowCreate: boolean | null
+    readonly allowPatch: boolean | null
   }
 }
 

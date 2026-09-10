@@ -195,13 +195,12 @@ impl BaseRegistryClient {
             .query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
         let wire = self
-            .get_bounded(
+            .get(
                 &["v1", "records", entity_route, record_identifier],
                 &pairs,
                 GEOJSON_MEDIA_TYPE,
                 Credential::Optional,
                 EntityTagExpectation::Forbidden,
-                2 * 1024 * 1024,
             )
             .await?;
         decode_geojson_feature(wire)
@@ -719,6 +718,11 @@ impl BaseRegistryClient {
         format: BRegRecordFormat,
     ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
         self.validate_create_binding(operation, request)?;
+        if !request.matches_recovery_execution(operation, idempotency_key, format) {
+            return Err(BaseRegistryClientError::invalid_request(
+                "the recovered Base Registry Engine Create request does not match its original execution",
+            ));
+        }
         let segments = fixed_operation_segments(operation.path())?;
         let pairs = access_profile_query(Some(operation.access_profile()))?;
         let url = self.url_with_query(&segments, &pairs)?;
@@ -961,9 +965,11 @@ impl BaseRegistryClient {
         operation: &BRegCreateBinding,
         request: &BRegCreateRequest,
     ) -> Result<(), BaseRegistryClientError> {
-        if !operation.matches_source(&self.source_binding()) {
+        if !operation.matches_source(&self.source_binding())
+            || !request.matches_recovery_binding(operation)
+        {
             return Err(BaseRegistryClientError::invalid_request(
-                "the Base Registry Engine Create operation belongs to another client source",
+                "the Base Registry Engine Create operation does not match its client or recovered request binding",
             ));
         }
         request
@@ -1336,13 +1342,12 @@ impl BaseRegistryClient {
     ) -> Result<BRegComplete<BRegGeoJsonPage>, BaseRegistryClientError> {
         validate_entity_route(entity_route)?;
         let wire = self
-            .get_bounded(
+            .get(
                 &["v1", "records", entity_route],
                 pairs,
                 GEOJSON_MEDIA_TYPE,
                 Credential::Optional,
                 EntityTagExpectation::Forbidden,
-                2 * 1024 * 1024,
             )
             .await?;
         let complete = decode_geojson_collection(wire)?;
@@ -1463,23 +1468,6 @@ impl BaseRegistryClient {
         builder = self.authorize(builder, credential).await?;
         let response = self.transport.send(builder).await?;
         self.wire(response, accept, etag).await
-    }
-
-    async fn get_bounded(
-        &self,
-        segments: &[&str],
-        pairs: &[(String, String)],
-        accept: &str,
-        credential: Credential,
-        etag: EntityTagExpectation,
-        maximum_bytes: u64,
-    ) -> Result<BRegWire, BaseRegistryClientError> {
-        let url = self.url_with_query(segments, pairs)?;
-        let mut builder = self.transport.http.get(url).header(ACCEPT, accept);
-        builder = self.authorize(builder, credential).await?;
-        let response = self.transport.send(builder).await?;
-        self.wire_with_bound(response, accept, etag, maximum_bytes)
-            .await
     }
 
     async fn authorize(
@@ -1858,13 +1846,9 @@ fn snapshot_extensions(
         .ok_or_else(|| body_error(complete))?;
     let valid_at = match complete.value.extensions.get("validAt") {
         None => None,
-        Some(Value::String(value))
-            if !value.is_empty()
-                && value.len() <= 1024
-                && !value.bytes().any(|byte| byte.is_ascii_control()) =>
-        {
-            Some(value.clone())
-        }
+        Some(Value::String(value)) => Some(
+            crate::read::normalize_snapshot_valid_at(value).map_err(|_| body_error(complete))?,
+        ),
         Some(_) => return Err(body_error(complete)),
     };
     if complete

@@ -61,8 +61,8 @@ These additions require no database migration and do not change grants or retent
 
 Direct native lists accept `bbox` alongside the scalar filters permitted by the profile.
 A box is four decimal strings in west, south, east, north order.
-Rust constructs `BRegBoundingBox::new(west, south, east, north)`; Node and Python pass a four-element
-array or sequence.
+Rust constructs `BRegBoundingBox::new(west, south, east, north)`; Node passes a four-element
+array and Python passes a four-tuple.
 Coordinates use CRS84 longitude and latitude ranges, inclusive edges, and non-crossing bounds.
 Zero-area boxes are valid.
 The client rejects non-finite coordinates, reversed bounds, invalid ranges, and boxes exceeding
@@ -74,7 +74,7 @@ For a configured `establishments` route and `map-reader` profile, a native JSON 
 ```python
 page = client.list_records(
     "establishments", access_profile="map-reader",
-    bbox=["100", "13", "101", "14"], top=20,
+    bbox=("100", "13", "101", "14"), top=20,
 )
 ```
 

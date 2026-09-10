@@ -14,6 +14,9 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
+use crate::metadata::BRegCreateBinding;
+use crate::query::BRegRecordFormat;
+
 /// Maximum encoded body accepted by Base Registry Engine mutation routes.
 pub const MAXIMUM_BREG_MUTATION_BODY_BYTES: usize = 2 * 1024 * 1024;
 
@@ -114,6 +117,15 @@ pub enum BRegMutationRequestError {
 pub struct BRegCreateRequest {
     body: Zeroizing<Vec<u8>>,
     submitted_fields: BTreeSet<String>,
+    // Recovery adds the complete original execution identity without exposing
+    // any route, key, or format mutator that could weaken an exact replay.
+    recovery_execution: Option<BRegRecoveredCreateExecution>,
+}
+
+struct BRegRecoveredCreateExecution {
+    binding: BRegCreateBinding,
+    idempotency_key: BRegIdempotencyKey,
+    format: BRegRecordFormat,
 }
 
 impl BRegCreateRequest {
@@ -131,6 +143,7 @@ impl BRegCreateRequest {
         Ok(Self {
             body: Zeroizing::new(body),
             submitted_fields: data.into_iter().map(|(field, _)| field).collect(),
+            recovery_execution: None,
         })
     }
 
@@ -142,6 +155,42 @@ impl BRegCreateRequest {
 
     pub(crate) fn body(&self) -> &[u8] {
         self.body.as_slice()
+    }
+
+    pub(crate) fn bind_recovery(
+        &mut self,
+        binding: &BRegCreateBinding,
+        idempotency_key: &BRegIdempotencyKey,
+        format: BRegRecordFormat,
+    ) {
+        self.recovery_execution = Some(BRegRecoveredCreateExecution {
+            binding: binding.clone(),
+            idempotency_key: idempotency_key.clone(),
+            format,
+        });
+    }
+
+    pub(crate) fn matches_recovery_binding(&self, binding: &BRegCreateBinding) -> bool {
+        self.recovery_execution
+            .as_ref()
+            .is_none_or(|expected| expected.binding == *binding)
+    }
+
+    pub(crate) fn matches_recovery_execution(
+        &self,
+        binding: &BRegCreateBinding,
+        idempotency_key: &BRegIdempotencyKey,
+        format: BRegRecordFormat,
+    ) -> bool {
+        self.recovery_execution.as_ref().is_none_or(|expected| {
+            expected.binding == *binding
+                && expected.idempotency_key == *idempotency_key
+                && expected.format == format
+        })
+    }
+
+    pub(crate) fn is_recovery_bound(&self) -> bool {
+        self.recovery_execution.is_some()
     }
 
     /// Bind the caller fields to the exact caller-filtered operation grant.

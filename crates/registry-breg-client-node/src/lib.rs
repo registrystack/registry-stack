@@ -1873,7 +1873,8 @@ impl Metadata {
                     "idempotencyKeyRequired": request.idempotency_key_required(), "ifMatchRequired": request.if_match_required(),
                     "mutationSemantics": request.mutation_semantics(), "patchPathPrefix": request.patch_path_prefix(),
                     "patchOperations": request.patch_operations(), "removeSemantics": request.remove_semantics(),
-                    "maximumItems": request.maximum_items(), "maximumBodyBytes": request.maximum_body_bytes() },
+                    "maximumItems": request.maximum_items(), "maximumBodyBytes": request.maximum_body_bytes(),
+                    "allowCreate": request.allow_create(), "allowPatch": request.allow_patch() },
             })
         }).collect())
     }

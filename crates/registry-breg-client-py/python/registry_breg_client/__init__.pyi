@@ -109,7 +109,9 @@ class BRegLifecycleAction:
 
 class BRegMetadata:
     @property
-    def operations(self) -> Sequence[dict[str, JsonValue]]: ...
+    def operations(self) -> Sequence[dict[str, JsonValue]]:
+        """Operation request projections include allow_create and allow_patch as bool | None."""
+        ...
     @property
     def actions(self) -> JsonValue | None: ...
     @property

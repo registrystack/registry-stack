@@ -1,5 +1,6 @@
 """Exercise process-safe mutation recovery through the public Python binding."""
 
+import copy
 import json
 import threading
 import unittest
@@ -120,11 +121,13 @@ class RecoveryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.requests = []
         requests = self.requests
+        served_metadata = {"value": metadata()}
+        self.served_metadata = served_metadata
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
                 requests.append((self.command, self.path, dict(self.headers), b""))
-                self.respond(metadata(), 200, False)
+                self.respond(served_metadata["value"], 200, False)
 
             def do_POST(self) -> None:  # noqa: N802
                 body = self.rfile.read(int(self.headers["content-length"]))
@@ -184,6 +187,18 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.requests), before)
         self.assertNotIn("Created Ltd", repr(recovered))
         self.assertNotIn("persisted-create-1", repr(recovered))
+
+        changed = copy.deepcopy(metadata())
+        changed["revision"] = "sha256:" + "b" * 64
+        self.served_metadata["value"] = changed
+        wrong_binding = self.client.registry_contract("company-writer").select_create(
+            "records.company.create", "company-writer"
+        )
+        before_wrong_execution = len(self.requests)
+        with self.assertRaises(BaseRegistryClientError) as mismatch:
+            self.client.execute_recovered_create(wrong_binding, recovered)
+        self.assertEqual(mismatch.exception.kind, "invalid_request")
+        self.assertEqual(len(self.requests), before_wrong_execution)
 
         result = self.client.execute_recovered_create(fresh, recovered)
         self.assertEqual(result["value"]["data"]["recordIdentifier"], RECORD_ID)

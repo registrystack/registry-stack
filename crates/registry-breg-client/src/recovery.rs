@@ -109,6 +109,9 @@ impl BaseRegistryClient {
         format: BRegRecordFormat,
     ) -> Result<BRegPreparedCreate, BaseRegistryClientError> {
         self.validate_create_binding(binding, request)?;
+        if !request.matches_recovery_execution(binding, key, format) {
+            return Err(refusal());
+        }
         BRegPreparedCreate::encode(&CreateEvidence {
             version: 1,
             source: self.source_binding(),
@@ -144,15 +147,16 @@ impl BaseRegistryClient {
         if !body.is_empty() {
             return Err(refusal());
         }
-        let request = BRegCreateRequest::new(data.as_object().cloned().ok_or_else(refusal)?)
+        let mut request = BRegCreateRequest::new(data.as_object().cloned().ok_or_else(refusal)?)
             .map_err(|_| refusal())?;
         // Only canonical bytes emitted by prepare_create are accepted. Never
         // silently rewrite persisted bytes under the original idempotency key.
         if request.body() != evidence.body.as_bytes() {
             return Err(refusal());
         }
-        self.validate_create_binding(binding, &request)?;
         let key = BRegIdempotencyKey::parse(evidence.idempotency_key).map_err(|_| refusal())?;
+        self.validate_create_binding(binding, &request)?;
+        request.bind_recovery(binding, &key, evidence.format);
         Ok((request, key, evidence.format))
     }
 

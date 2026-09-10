@@ -65,7 +65,8 @@ function cloneJson(value, budget, depth, kind) {
     return value;
   }
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw inputError(kind);
+    if (!Number.isFinite(value)
+      || (Number.isInteger(value) && !Number.isSafeInteger(value))) throw inputError(kind);
     return value;
   }
   if (value === undefined || typeof value !== 'object' || isProxy(value)) throw inputError(kind);

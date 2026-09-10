@@ -18,6 +18,7 @@ const metadata = {
     inputs: [
       { id: 'target', apiName: 'targetId', required: true, nullable: false, classification: 'internal', fieldType: { type: 'reference', target: 'item', onDelete: 'restrict' } },
       { id: 'label', apiName: 'label', required: false, nullable: true, classification: 'internal', fieldType: { type: 'string', minLength: 1, maxLength: 16 } },
+      { id: 'sequence', apiName: 'sequence', required: false, nullable: true, classification: 'internal', fieldType: { type: 'int64' } },
     ],
     referenceInputs: [{ input: 'target', apiName: 'targetId', targetEntity: 'item' }],
     requiredConditionKeys: ['targetId'],
@@ -60,12 +61,14 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     assert.equal(result.value.action, 'update-item');
     assert.equal(result.value.results.item.recordId, targetId);
     const exactConditions = await client.actionTargetConditionsJson(binding, `{"targetId":"${targetId}"}`);
-    const exact = await client.invokeActionJson(binding, `{"targetId":"${targetId}","label":"new"}`, 'invoke-two', exactConditions);
+    const exact = await client.invokeActionJson(binding, `{"targetId":"${targetId}","label":"new","sequence":9007199254740992}`, 'invoke-two', exactConditions);
     assert.match(exact.valueJson, /"revision":9007199254740992/);
     assert.equal(requests.at(-1).headers['idempotency-key'], 'invoke-two');
+    assert.match(requests.at(-1).body, /"sequence":9007199254740992/);
     assert.match(requests.at(-1).body, /"preconditions":\{"targetId":\{"ifMatch":"\\"opaque-condition\\""\}\}/);
     const count = requests.length;
     await assert.rejects(client.invokeAction(binding, { targetId, unknown: true }, 'invalid'), error => error.kind === 'invalid_request');
+    assert.throws(() => client.invokeAction(binding, { targetId, sequence: Number.MAX_SAFE_INTEGER + 1 }, 'unsafe'), error => error.kind === 'invalid_request');
     const foreign = new BaseRegistryClient({ baseUrl: 'http://127.0.0.1:1' });
     await assert.rejects(foreign.invokeAction(binding, { targetId }, 'foreign', conditions), error => error.kind === 'invalid_request');
     assert.equal(requests.length, count);
