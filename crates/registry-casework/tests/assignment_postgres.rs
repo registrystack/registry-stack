@@ -567,6 +567,7 @@ async fn caseload_apply_is_per_item_and_source_live_attempt_blocks_assignment() 
         )
         .await
         .expect("claim hosted item");
+    let claimed_at = hosted.held_since.expect("claim establishes heldSince");
     let source = add_source_item(&fixture, visible_id).await;
     let source = fixture
         .store
@@ -666,6 +667,9 @@ async fn caseload_apply_is_per_item_and_source_live_attempt_blocks_assignment() 
         .await
         .expect("moved hosted item");
     assert_eq!(moved.holder, Some(fixture.staff_c.principal.clone()));
+    assert!(moved
+        .held_since
+        .is_some_and(|moved_at| moved_at > claimed_at));
 }
 
 #[tokio::test]

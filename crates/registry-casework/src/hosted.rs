@@ -12,6 +12,7 @@ use registry_casework_core::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
 
@@ -339,7 +340,11 @@ impl StoredHostedItem {
         })
     }
 
-    fn work_item(&self, actions: Vec<CaseworkAction>) -> Result<WorkItem, StoreError> {
+    fn work_item(
+        &self,
+        held_since: Option<DateTime<Utc>>,
+        actions: Vec<CaseworkAction>,
+    ) -> Result<WorkItem, StoreError> {
         let snapshot = self.snapshot()?;
         let display = self.display.clone().ok_or(StoreError::NotFound)?;
         let requester_reference = self
@@ -366,6 +371,7 @@ impl StoredHostedItem {
             state: occurrence_state(self.state),
             queue_id: self.queue_id.clone(),
             holder: self.holder.clone(),
+            held_since: self.holder.as_ref().and(held_since),
             assignment: self.assignment.clone(),
             revision: self.revision,
             first_observed_at: self.created_at,
@@ -402,31 +408,88 @@ fn hosted_actions(
     item: &StoredHostedItem,
 ) -> Result<Vec<CaseworkAction>, StoreError> {
     let snapshot = item.snapshot()?;
-    if !snapshot.deciding_profiles.contains(&actor.profile_id) {
-        return Ok(Vec::new());
-    }
     let if_match = format!("\"{}\"", item.revision);
+    let mut actions = Vec::new();
+    if actor.role == CaseworkRole::Supervisor {
+        if !item.state.is_active() {
+            return Ok(Vec::new());
+        }
+        actions.push(CaseworkAction {
+            operation: "assign".to_owned(),
+            href: format!("/v1/work-items/{}/assign", item.item_id),
+            if_match: if_match.clone(),
+        });
+        if item.state == HostedState::Claimed && item.holder.is_some() {
+            actions.push(CaseworkAction {
+                operation: "release".to_owned(),
+                href: format!("/v1/work-items/{}/release", item.item_id),
+                if_match: if_match.clone(),
+            });
+        }
+    }
+    if !snapshot.deciding_profiles.contains(&actor.profile_id) {
+        return Ok(actions);
+    }
     if item.state == HostedState::Open && item.holder.is_none() {
-        return Ok(vec![CaseworkAction {
+        actions.push(CaseworkAction {
             operation: "claim".to_owned(),
             href: format!("/v1/work-items/{}/claim", item.item_id),
             if_match,
-        }]);
+        });
+        return Ok(actions);
     }
     if item.state != HostedState::Claimed || item.holder.as_ref() != Some(&actor.principal) {
-        return Ok(Vec::new());
+        return Ok(actions);
     }
-    let mut actions = vec![CaseworkAction {
-        operation: "release".to_owned(),
-        href: format!("/v1/work-items/{}/release", item.item_id),
-        if_match: if_match.clone(),
-    }];
+    if actor.role == CaseworkRole::Staff {
+        actions.extend([
+            CaseworkAction {
+                operation: "release".to_owned(),
+                href: format!("/v1/work-items/{}/release", item.item_id),
+                if_match: if_match.clone(),
+            },
+            CaseworkAction {
+                operation: "delegate".to_owned(),
+                href: format!("/v1/work-items/{}/delegate", item.item_id),
+                if_match: if_match.clone(),
+            },
+        ]);
+    }
     actions.extend(snapshot.outcomes.into_iter().map(|outcome| CaseworkAction {
         operation: outcome.id,
         href: format!("/v1/work-items/{}/hosted-decisions", item.item_id),
         if_match: if_match.clone(),
     }));
     Ok(actions)
+}
+
+async fn hosted_holder_timings(
+    transaction: &Transaction<'_>,
+    item_ids: &[Uuid],
+) -> Result<BTreeMap<Uuid, (i64, Option<DateTime<Utc>>)>, StoreError> {
+    if item_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    Ok(transaction
+        .query(
+            "SELECT i.item_id,i.revision,CASE WHEN i.holder_issuer IS NULL THEN NULL ELSE (SELECT h.occurred_at FROM casework_hosted_history h WHERE h.item_id=i.item_id AND h.kind IN ('claimed','assigned','delegated','caseload_moved') ORDER BY h.item_revision DESC,h.occurred_at DESC,h.event_id DESC LIMIT 1) END FROM casework_hosted_items i WHERE i.item_id=ANY($1) AND (i.terminal_retained_until IS NULL OR i.terminal_retained_until>now())",
+            &[&item_ids],
+        )
+        .await?
+        .into_iter()
+        .map(|row| (row.get(0), (row.get(1), row.get(2))))
+        .collect())
+}
+
+fn hosted_held_since(
+    item: &StoredHostedItem,
+    timings: &BTreeMap<Uuid, (i64, Option<DateTime<Utc>>)>,
+) -> Option<DateTime<Utc>> {
+    item.holder.as_ref()?;
+    timings
+        .get(&item.item_id)
+        .filter(|(revision, _)| *revision == item.revision)
+        .and_then(|(_, held_since)| *held_since)
 }
 
 fn membership_kind(role: CaseworkRole) -> Result<&'static str, StoreError> {
@@ -591,16 +654,28 @@ impl PostgresStore {
         let (after_at, after_id) = after.unwrap_or((Utc::now(), Uuid::nil()));
         let query_limit = i64::try_from(limit + 1).map_err(|_| StoreError::Invalid)?;
         let rows = transaction.query(
-            "SELECT i.* FROM casework_hosted_items i WHERE i.state IN ('open','claimed') AND i.kind_policy->'decidingProfiles' ? $4 AND EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=$1 AND m.subject=$2 AND m.membership_kind=$3) AND (NOT $5 OR (i.created_at,i.item_id)>($6,$7)) ORDER BY i.created_at,i.item_id LIMIT $8",
+            "SELECT i.* FROM casework_hosted_items i WHERE i.state IN ('open','claimed') AND ($3='supervisor' OR i.kind_policy->'decidingProfiles' ? $4) AND EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=$1 AND m.subject=$2 AND m.membership_kind=$3) AND (NOT $5 OR (i.created_at,i.item_id)>($6,$7)) ORDER BY i.created_at,i.item_id LIMIT $8",
             &[&actor.principal.issuer,&actor.principal.subject,&membership_kind,&actor.profile_id,&has_after,&after_at,&after_id,&query_limit],
         ).await?;
         let more = rows.len() > limit;
-        let mut items = Vec::with_capacity(rows.len().min(limit));
+        let stored_items = rows
+            .into_iter()
+            .take(limit)
+            .map(|row| stored_hosted_item(&row))
+            .collect::<Result<Vec<_>, _>>()?;
+        let item_ids = stored_items
+            .iter()
+            .map(|item| item.item_id)
+            .collect::<Vec<_>>();
+        let holder_timings = hosted_holder_timings(&transaction, &item_ids).await?;
+        let mut items = Vec::with_capacity(stored_items.len());
         let mut last = None;
-        for row in rows.into_iter().take(limit) {
-            let item = stored_hosted_item(&row)?;
+        for item in stored_items {
             last = Some((item.created_at, item.item_id));
-            items.push(item.work_item(hosted_actions(actor, &item)?)?);
+            items.push(item.work_item(
+                hosted_held_since(&item, &holder_timings),
+                hosted_actions(actor, &item)?,
+            )?);
         }
         let next_cursor = if more {
             Some(
@@ -1432,7 +1507,11 @@ impl PostgresStore {
         {
             return Err(StoreError::NotFound);
         }
-        item.work_item(hosted_actions(actor, &item)?)
+        let holder_timings = hosted_holder_timings(&transaction, &[item_id]).await?;
+        item.work_item(
+            hosted_held_since(&item, &holder_timings),
+            hosted_actions(actor, &item)?,
+        )
     }
 
     pub async fn add_hosted_note(
@@ -1661,8 +1740,9 @@ impl PostgresStore {
             .ok_or(StoreError::NotFound)?;
         let mut item = stored_hosted_item(&row)?;
         let snapshot = item.snapshot()?;
-        if !snapshot.deciding_profiles.contains(&actor.profile_id)
-            || !has_queue_authority(&transaction, actor, &item.queue_id).await?
+        let supervisor_release = !claim && actor.role == CaseworkRole::Supervisor;
+        if !has_queue_authority(&transaction, actor, &item.queue_id).await?
+            || (!supervisor_release && !snapshot.deciding_profiles.contains(&actor.profile_id))
         {
             return Err(StoreError::Forbidden);
         }
@@ -1685,11 +1765,12 @@ impl PostgresStore {
         if claim && item.holder.is_some() {
             return Err(StoreError::AlreadyClaimed);
         }
-        if !claim && !owns {
+        if !(claim || owns || supervisor_release && item.holder.is_some()) {
             return Err(StoreError::NotHolder);
         }
         let next = item.revision.checked_add(1).ok_or(StoreError::Corrupt)?;
         let now = Utc::now();
+        let previous_holder = item.holder.clone();
         let (state, holder) = if claim {
             (HostedState::Claimed, Some(actor.principal.clone()))
         } else {
@@ -1709,16 +1790,33 @@ impl PostgresStore {
         });
         item.revision = next;
         item.updated_at = now;
-        append_hosted_history(
+        let holder_event_id = append_hosted_history(
             &transaction,
             item_id,
             next,
             if claim { "claimed" } else { "released" },
             actor,
-            json!({}),
+            if claim {
+                json!({})
+            } else {
+                json!({"previousHolder": previous_holder})
+            },
         )
         .await?;
-        let result = item.work_item(hosted_actions(actor, &item)?)?;
+        let held_since = if claim {
+            Some(
+                transaction
+                    .query_one(
+                        "SELECT occurred_at FROM casework_hosted_history WHERE event_id=$1",
+                        &[&holder_event_id],
+                    )
+                    .await?
+                    .get(0),
+            )
+        } else {
+            None
+        };
+        let result = item.work_item(held_since, hosted_actions(actor, &item)?)?;
         let response = serde_json::to_value(&result)?;
         insert_hosted_idempotency(
             &transaction,

@@ -116,6 +116,10 @@ pub struct WorkItem {
     pub queue_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holder: Option<IssuerPrincipal>,
+    /// When the current holder took responsibility for this item. This is
+    /// absent whenever the item has no holder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_since: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment: Option<AssignmentContext>,
     pub revision: i64,

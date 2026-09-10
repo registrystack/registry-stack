@@ -639,6 +639,7 @@ impl PostgresStore {
                     state: observation.state,
                     queue_id: queue_id.to_owned(),
                     holder: None,
+                    held_since: None,
                     assignment: None,
                     revision: 1,
                     first_observed_at: now,
@@ -726,16 +727,13 @@ impl PostgresStore {
             .await?
             .ok_or(StoreError::NotFound)?;
         let item = row_to_item(&row)?;
-        if claim {
-            if !is_staff_for_queue(&transaction, actor, &item.queue_id).await? {
-                return Err(StoreError::Forbidden);
-            }
-        } else {
-            let owns = item.holder.as_ref() == Some(&actor.principal);
-            let supervises = is_supervisor_for_queue(&transaction, actor, &item.queue_id).await?;
-            if item.holder.is_none() || !(owns || supervises) {
-                return Err(StoreError::NotHolder);
-            }
+        let staff_authority = actor.role == CaseworkRole::Staff
+            && is_staff_for_queue(&transaction, actor, &item.queue_id).await?;
+        let supervisor_authority = !claim
+            && actor.role == CaseworkRole::Supervisor
+            && is_supervisor_for_queue(&transaction, actor, &item.queue_id).await?;
+        if !staff_authority && (claim || !supervisor_authority) {
+            return Err(StoreError::Forbidden);
         }
         if let Some(response) = idempotent_response(
             &transaction,
@@ -752,6 +750,12 @@ impl PostgresStore {
         if claim && item.holder.is_some() {
             return Err(StoreError::AlreadyClaimed);
         }
+        if !claim
+            && (item.holder.is_none()
+                || (staff_authority && item.holder.as_ref() != Some(&actor.principal)))
+        {
+            return Err(StoreError::NotHolder);
+        }
         if item.revision != expected_revision || !item.state.is_active() {
             return Err(StoreError::Conflict);
         }
@@ -765,12 +769,14 @@ impl PostgresStore {
         let next_revision = item.revision.checked_add(1).ok_or(StoreError::Corrupt)?;
         let now = Utc::now();
         let holder = claim.then_some(&actor.principal);
+        let previous_holder = item.holder.clone();
         transaction.execute(
             "UPDATE casework_items SET holder_issuer=$2,holder_subject=$3,state=$4,revision=$5,updated_at=$6,assignment_owner_issuer=$7,assignment_owner_subject=$8,assigned_by_issuer=NULL,assigned_by_subject=NULL,assignment_absence_ids='{}',staffing_diagnostic=NULL WHERE item_id=$1",
             &[&item_id,&holder.map(|p| &p.issuer),&holder.map(|p| &p.subject),&state_name(next_state),&next_revision,&now,&holder.map(|p| &p.issuer),&holder.map(|p| &p.subject)]
         ).await?;
         let mut updated = item;
         updated.holder = holder.cloned();
+        updated.held_since = None;
         updated.assignment = holder.cloned().map(|owner| AssignmentContext {
             owner: Some(owner),
             assigned_by: None,
@@ -780,7 +786,7 @@ impl PostgresStore {
         updated.state = next_state;
         updated.revision = next_revision;
         updated.updated_at = now;
-        append_item_event(
+        let event_id = append_item_event(
             &transaction,
             &updated,
             if claim {
@@ -790,9 +796,24 @@ impl PostgresStore {
             },
             Some(actor),
             &actor.profile_id,
-            json!({}),
+            if claim {
+                json!({})
+            } else {
+                json!({"previousHolder": previous_holder})
+            },
         )
         .await?;
+        if claim {
+            updated.held_since = Some(
+                transaction
+                    .query_one(
+                        "SELECT occurred_at FROM casework_history WHERE event_id=$1",
+                        &[&event_id],
+                    )
+                    .await?
+                    .get(0),
+            );
+        }
         let response = serde_json::to_value(&updated)?;
         insert_idempotency(
             &transaction,
@@ -1928,6 +1949,26 @@ impl PostgresStore {
         }))
     }
 
+    pub(crate) async fn source_holder_timings(
+        &self,
+        item_ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, i64, Option<DateTime<Utc>>)>, StoreError> {
+        if item_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let client = self.client().await?;
+        let rows = client
+            .query(
+                "SELECT i.item_id,i.revision,CASE WHEN i.holder_issuer IS NULL THEN NULL ELSE (SELECT h.occurred_at FROM casework_history h WHERE h.item_id=i.item_id AND h.kind IN ('claimed','assigned','delegated','caseload_moved') ORDER BY h.item_revision DESC,h.occurred_at DESC,h.event_id DESC LIMIT 1) END FROM casework_items i WHERE i.item_id=ANY($1) AND i.erased_at IS NULL",
+                &[&item_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .collect())
+    }
+
     pub async fn history_page(
         &self,
         actor: &ActorContext,
@@ -2506,6 +2547,7 @@ pub(crate) fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
         state: parse_state(&row.get::<_, String>("state"))?,
         queue_id: row.get("queue_id"),
         holder,
+        held_since: None,
         assignment,
         revision: row.get("revision"),
         first_observed_at: row.get("first_observed_at"),

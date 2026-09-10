@@ -341,7 +341,7 @@ impl CaseworkService {
             )
             .await?;
         let item = self
-            .assemble_caller_visible_item(actor, item_id, source_profile_id, &view)
+            .assemble_caller_visible_item(actor, item_id, source_profile_id, &view, None)
             .await?;
         Ok((item, view))
     }
@@ -352,6 +352,7 @@ impl CaseworkService {
         item_id: Uuid,
         source_profile_id: &str,
         view: &CallerSubjectView,
+        known_holder_timing: Option<(i64, Option<chrono::DateTime<chrono::Utc>>)>,
     ) -> Result<WorkItem, ServiceError> {
         // The source call is intentionally outside a database transaction.
         // Read local projections only after source disclosure succeeds, then
@@ -368,11 +369,40 @@ impl CaseworkService {
         let routing_copy = self.filtered_routing_copy(item_id, view).await?;
         let routing = self.store.work_item_routing(item_id).await?;
         let clock_occurrences = self.store.clock_occurrences_for_item(item_id).await?;
+        let mut holder_timing = if let Some(timing) = known_holder_timing {
+            Some(timing)
+        } else {
+            self.store
+                .source_holder_timings(&[item_id])
+                .await?
+                .pop()
+                .map(|(_, revision, held_since)| (revision, held_since))
+        };
 
         let mut item = self.store.item(item_id).await?;
+        if item.holder.is_some()
+            && holder_timing
+                .as_ref()
+                .is_none_or(|(revision, _)| *revision != item.revision)
+        {
+            holder_timing = self
+                .store
+                .source_holder_timings(&[item_id])
+                .await?
+                .pop()
+                .map(|(_, revision, held_since)| (revision, held_since));
+            item = self.store.item(item_id).await?;
+        }
         if !self.store.can_view_item(actor, &item).await? {
             return Err(ServiceError::NotFound);
         }
+        item.held_since = if item.holder.is_some() {
+            holder_timing
+                .filter(|(revision, _)| *revision == item.revision)
+                .and_then(|(_, held_since)| held_since)
+        } else {
+            None
+        };
         item.live_attempt = live_attempt;
         if view.binding.generation != item.binding.generation {
             if item.live_attempt.is_some() {
@@ -717,6 +747,18 @@ impl CaseworkService {
             .store
             .inbox_candidates_for_view(actor, view, policy.maximum_candidate_scan, after, queue)
             .await?;
+        let candidate_ids = candidates
+            .items
+            .iter()
+            .map(|item| item.item_id)
+            .collect::<Vec<_>>();
+        let holder_timings = self
+            .store
+            .source_holder_timings(&candidate_ids)
+            .await?
+            .into_iter()
+            .map(|(item_id, revision, held_since)| (item_id, (revision, held_since)))
+            .collect::<BTreeMap<_, _>>();
         let mut unavailable = false;
         let mut discovery_pending = false;
         let relevant_sources = self
@@ -835,7 +877,13 @@ impl CaseworkService {
                     examined += 1;
                     last_examined = Some((item.passive_due_at, item.item_id));
                     let item = match self
-                        .assemble_caller_visible_item(actor, item.item_id, source_profile_id, &view)
+                        .assemble_caller_visible_item(
+                            actor,
+                            item.item_id,
+                            source_profile_id,
+                            &view,
+                            holder_timings.get(&item.item_id).cloned(),
+                        )
                         .await
                     {
                         Ok(current) => current,
@@ -1619,6 +1667,28 @@ fn local_actions(
         return Vec::new();
     }
     let if_match = format!("\"{}\"", item.revision);
+    if actor.role == registry_casework_core::CaseworkRole::Supervisor {
+        if !matches!(
+            item.state,
+            registry_casework_core::OccurrenceState::Open
+                | registry_casework_core::OccurrenceState::Claimed
+        ) {
+            return Vec::new();
+        }
+        let mut actions = vec![CaseworkAction {
+            operation: "assign".to_owned(),
+            href: format!("/v1/work-items/{}/assign", item.item_id),
+            if_match: if_match.clone(),
+        }];
+        if item.holder.is_some() && item.state == registry_casework_core::OccurrenceState::Claimed {
+            actions.push(CaseworkAction {
+                operation: "release".to_owned(),
+                href: format!("/v1/work-items/{}/release", item.item_id),
+                if_match,
+            });
+        }
+        return actions;
+    }
     if actor.role == registry_casework_core::CaseworkRole::Staff
         && item.holder.is_none()
         && item.state == registry_casework_core::OccurrenceState::Open
@@ -1635,11 +1705,18 @@ fn local_actions(
     {
         return Vec::new();
     }
-    let mut actions = vec![CaseworkAction {
-        operation: "release".to_owned(),
-        href: format!("/v1/work-items/{}/release", item.item_id),
-        if_match: if_match.clone(),
-    }];
+    let mut actions = vec![
+        CaseworkAction {
+            operation: "release".to_owned(),
+            href: format!("/v1/work-items/{}/release", item.item_id),
+            if_match: if_match.clone(),
+        },
+        CaseworkAction {
+            operation: "delegate".to_owned(),
+            href: format!("/v1/work-items/{}/delegate", item.item_id),
+            if_match: if_match.clone(),
+        },
+    ];
     actions.extend(
         source
             .permitted_operations

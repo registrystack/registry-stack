@@ -4,13 +4,13 @@ use std::sync::Arc;
 use chrono::Utc;
 use registry_casework::{
     CaseworkService, DatabaseConfig, PostgresStore, ServiceError, StoreError,
-    HOSTED_TERMINAL_CURSOR_CONTEXT,
+    HOSTED_STAFF_INBOX_CURSOR_CONTEXT, HOSTED_TERMINAL_CURSOR_CONTEXT,
 };
 use registry_casework_core::{
     AccessProfile, ActorContext, BootstrapDirectoryRequest, CaseworkIdentity, CaseworkProject,
     CaseworkRole, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
-    HostedKindPolicy, HostedOutcomePolicy, HostedRetentionPolicy, InboxPolicy, IssuerPrincipal,
-    QueuePolicy,
+    HostedKindPolicy, HostedNoteRequest, HostedOutcomePolicy, HostedRetentionPolicy, InboxPolicy,
+    IssuerPrincipal, OccurrenceState, QueuePolicy,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -249,6 +249,173 @@ async fn ten_creates_and_two_retries_remain_one_item_per_key_and_requester() {
             .hosted_requester_item(&fixture.other_requester, first_id)
             .await,
         Err(ServiceError::Store(StoreError::NotFound))
+    ));
+}
+
+#[tokio::test]
+async fn supervisor_force_release_and_held_since_follow_current_queue_authority() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service
+        .hosted_create(
+            &fixture.requester,
+            &create_request("supervisor-release"),
+            "create-supervisor-release",
+        )
+        .await
+        .expect("create hosted item");
+    let open_for_supervisor = fixture
+        .service
+        .hosted_work_item(&fixture.supervisor, created.item_id)
+        .await
+        .expect("supervisor sees open hosted item");
+    assert_eq!(open_for_supervisor.actions.len(), 1);
+    assert_eq!(open_for_supervisor.actions[0].operation, "assign");
+    let claimed = fixture
+        .service
+        .hosted_claim(
+            &fixture.staff,
+            created.item_id,
+            created.revision,
+            "claim-supervisor-release",
+        )
+        .await
+        .expect("staff claims hosted item");
+    let held_since = claimed.held_since.expect("claim establishes heldSince");
+    assert!(claimed
+        .actions
+        .iter()
+        .any(|action| action.operation == "delegate"));
+    let noted = fixture
+        .service
+        .hosted_note(
+            &fixture.requester,
+            created.item_id,
+            claimed.revision,
+            &HostedNoteRequest {
+                note: "unrelated note".to_owned(),
+            },
+            "note-while-held",
+        )
+        .await
+        .expect("requester note advances item revision");
+    let visible = fixture
+        .service
+        .hosted_work_item(&fixture.supervisor, created.item_id)
+        .await
+        .expect("current supervisor sees held item");
+    assert_eq!(visible.revision, noted.revision);
+    assert_eq!(visible.held_since, Some(held_since));
+    assert_eq!(
+        visible
+            .actions
+            .iter()
+            .map(|action| action.operation.as_str())
+            .collect::<Vec<_>>(),
+        ["assign", "release"]
+    );
+    let inbox = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.supervisor,
+            10,
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("supervisor team inbox");
+    assert_eq!(inbox.items.len(), 1);
+    assert_eq!(inbox.items[0].held_since, Some(held_since));
+    assert_eq!(
+        inbox.items[0]
+            .actions
+            .iter()
+            .map(|action| action.operation.as_str())
+            .collect::<Vec<_>>(),
+        ["assign", "release"]
+    );
+
+    let sibling = actor("sibling-supervisor", CaseworkRole::Supervisor, "supervisor");
+    assert!(matches!(
+        fixture
+            .service
+            .hosted_work_item(&sibling, created.item_id)
+            .await,
+        Err(ServiceError::Store(StoreError::NotFound))
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .hosted_release(&sibling, created.item_id, noted.revision, "sibling-release")
+            .await,
+        Err(ServiceError::Store(StoreError::Forbidden))
+    ));
+
+    let released = fixture
+        .service
+        .hosted_release(
+            &fixture.supervisor,
+            created.item_id,
+            noted.revision,
+            "supervisor-release",
+        )
+        .await
+        .expect("supervisor releases another holder");
+    assert_eq!(released.state, OccurrenceState::Open);
+    assert!(released.holder.is_none());
+    assert!(released.held_since.is_none());
+    let replay = fixture
+        .service
+        .hosted_release(
+            &fixture.supervisor,
+            created.item_id,
+            noted.revision,
+            "supervisor-release",
+        )
+        .await
+        .expect("current supervisor replays exact release");
+    assert_eq!(replay, released);
+    let detail: serde_json::Value = fixture
+        .database
+        .query_one(
+            "SELECT detail FROM casework_hosted_history WHERE item_id=$1 AND kind='released'",
+            &[&created.item_id],
+        )
+        .await
+        .expect("released history")
+        .get(0);
+    assert_eq!(
+        detail["previousHolder"]["subject"],
+        fixture.staff.principal.subject
+    );
+    let projected = fixture
+        .service
+        .hosted_staff_history(&fixture.supervisor, created.item_id, 100, None)
+        .await
+        .expect("supervisor reads protected history projection");
+    assert!(!serde_json::to_string(&projected)
+        .expect("history JSON")
+        .contains(&fixture.staff.principal.subject));
+
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_memberships WHERE team_id='batch-team' AND issuer=$1 AND subject=$2 AND membership_kind='supervisor'",
+            &[&fixture.supervisor.principal.issuer, &fixture.supervisor.principal.subject],
+        )
+        .await
+        .expect("revoke supervisor membership");
+    assert!(matches!(
+        fixture
+            .service
+            .hosted_release(
+                &fixture.supervisor,
+                created.item_id,
+                noted.revision,
+                "supervisor-release"
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Forbidden))
     ));
 }
 

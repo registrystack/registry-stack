@@ -412,6 +412,7 @@ fn subject(id: Uuid) -> SubjectRef {
 
 struct Fixture {
     service: CaseworkService,
+    database: tokio_postgres::Client,
     staff: ActorContext,
     supervisor: ActorContext,
     outsider: ActorContext,
@@ -516,8 +517,17 @@ async fn fixture_with_source(source: MockSource, inbox: InboxPolicy) -> Fixture 
         [Arc::new(source) as Arc<dyn SourceAdapter>],
     )
     .unwrap();
+    let database = {
+        let url = std::env::var(DATABASE_ENV).expect("visibility database URL");
+        let (client, connection) = tokio_postgres::connect(&url, NoTls)
+            .await
+            .expect("connect visibility database");
+        tokio::spawn(async move { connection.await.expect("visibility database connection") });
+        client
+    };
     Fixture {
         service,
+        database,
         staff,
         supervisor,
         outsider,
@@ -682,7 +692,232 @@ async fn service_visibility_boundaries() {
     inbox_views_filter_before_candidate_pagination().await;
     recovery_problem_discloses_only_the_entitled_original_attempt().await;
     caller_owned_live_attempt_survives_a_fresh_session_without_cross_actor_disclosure().await;
+    supervisor_release_and_holder_timing_obey_current_authority().await;
     http_authentication_and_directory_authority_are_enforced().await;
+}
+
+async fn supervisor_release_and_holder_timing_obey_current_authority() {
+    let released_subject = Uuid::from_u128(30);
+    let fenced_subject = Uuid::from_u128(31);
+    let fixture = fixture(
+        [
+            (released_subject, CallerRead::Visible("released")),
+            (fenced_subject, CallerRead::Visible("fenced")),
+        ],
+        policy(10, 1_000),
+    )
+    .await;
+    add_item(&fixture.service, released_subject, None).await;
+    add_item(&fixture.service, fenced_subject, None).await;
+    let items = fixture
+        .service
+        .store()
+        .inbox_candidates(&fixture.staff, 10, None, None)
+        .await
+        .expect("seeded items")
+        .items;
+    let released_item = items
+        .iter()
+        .find(|item| item.subject.id == released_subject.to_string())
+        .expect("release item");
+    let (open_for_supervisor, _) = fixture
+        .service
+        .caller_item(
+            &fixture.supervisor,
+            released_item.item_id,
+            "reader",
+            "token",
+        )
+        .await
+        .expect("supervisor sees open source item");
+    assert_eq!(open_for_supervisor.actions.len(), 1);
+    assert_eq!(open_for_supervisor.actions[0].operation, "assign");
+    let claimed = fixture
+        .service
+        .claim_source_item(
+            &fixture.staff,
+            released_item.item_id,
+            released_item.revision,
+            "reader",
+            "claim-supervisor-release",
+            "token",
+        )
+        .await
+        .expect("staff claims source item");
+    let held_since = claimed.held_since.expect("claim establishes heldSince");
+    assert!(claimed
+        .actions
+        .iter()
+        .any(|action| action.operation == "delegate"));
+    fixture
+        .service
+        .save_source_draft(
+            &fixture.staff,
+            claimed.item_id,
+            claimed.revision,
+            "reader",
+            &claimed.binding,
+            "reviewing",
+            &[],
+            "draft-held-since",
+            "token",
+        )
+        .await
+        .expect("unrelated draft revision");
+    let (after_draft, _) = fixture
+        .service
+        .caller_item(&fixture.supervisor, claimed.item_id, "reader", "token")
+        .await
+        .expect("supervisor sees held item");
+    assert_eq!(after_draft.held_since, Some(held_since));
+    assert_eq!(
+        after_draft
+            .actions
+            .iter()
+            .map(|action| action.operation.as_str())
+            .collect::<Vec<_>>(),
+        ["assign", "release"]
+    );
+    let sibling_supervisor = actor("sibling-supervisor", CaseworkRole::Supervisor);
+    assert!(matches!(
+        fixture
+            .service
+            .caller_item(&sibling_supervisor, claimed.item_id, "reader", "token")
+            .await,
+        Err(ServiceError::NotFound)
+    ));
+    let released = fixture
+        .service
+        .release_source_item(
+            &fixture.supervisor,
+            claimed.item_id,
+            after_draft.revision,
+            "reader",
+            "supervisor-release",
+            "token",
+        )
+        .await
+        .expect("supervisor releases another holder");
+    assert_eq!(released.state, OccurrenceState::Open);
+    assert!(released.holder.is_none());
+    assert!(released.held_since.is_none());
+    let release_replay = fixture
+        .service
+        .release_source_item(
+            &fixture.supervisor,
+            claimed.item_id,
+            after_draft.revision,
+            "reader",
+            "supervisor-release",
+            "token",
+        )
+        .await
+        .expect("current supervisor replays exact release");
+    assert_eq!(release_replay, released);
+    let release_detail: serde_json::Value = fixture
+        .database
+        .query_one(
+            "SELECT detail FROM casework_history WHERE item_id=$1 AND kind='released'",
+            &[&claimed.item_id],
+        )
+        .await
+        .expect("source release history")
+        .get(0);
+    assert_eq!(
+        release_detail["previousHolder"]["subject"],
+        fixture.staff.principal.subject
+    );
+
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_memberships WHERE team_id='team' AND issuer=$1 AND subject=$2 AND membership_kind='supervisor'",
+            &[&fixture.supervisor.principal.issuer, &fixture.supervisor.principal.subject],
+        )
+        .await
+        .expect("revoke supervisor membership");
+    assert!(matches!(
+        fixture
+            .service
+            .release_source_item(
+                &fixture.supervisor,
+                claimed.item_id,
+                after_draft.revision,
+                "reader",
+                "supervisor-release",
+                "token"
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::NotFound)) | Err(ServiceError::NotFound)
+    ));
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team',$1,$2,'supervisor')",
+            &[&fixture.supervisor.principal.issuer, &fixture.supervisor.principal.subject],
+        )
+        .await
+        .expect("restore supervisor membership");
+
+    let fenced_item = items
+        .iter()
+        .find(|item| item.subject.id == fenced_subject.to_string())
+        .expect("fenced item");
+    let fenced = fixture
+        .service
+        .claim_source_item(
+            &fixture.staff,
+            fenced_item.item_id,
+            fenced_item.revision,
+            "reader",
+            "claim-fenced-release",
+            "token",
+        )
+        .await
+        .expect("claim fenced item");
+    let prepared = PreparedSourceAttempt {
+        source_binding: fenced.binding.clone(),
+        recovery_evidence: RecoveryEvidence::new(vec![2]).expect("bounded evidence"),
+    };
+    fixture
+        .service
+        .store()
+        .reserve_attempt_for_execution(
+            &fixture.staff,
+            fenced.item_id,
+            fenced.revision,
+            "reader",
+            OperationName::parse("approve").expect("operation"),
+            None,
+            &[],
+            "fenced-release-attempt",
+            "sha256:fenced-release",
+            &prepared,
+        )
+        .await
+        .expect("reserve live attempt");
+    let (visible, _) = fixture
+        .service
+        .caller_item(&fixture.supervisor, fenced.item_id, "reader", "token")
+        .await
+        .expect("supervisor may see fenced item");
+    assert!(visible.actions.is_empty());
+    assert!(matches!(
+        fixture
+            .service
+            .release_source_item(
+                &fixture.supervisor,
+                fenced.item_id,
+                fenced.revision,
+                "reader",
+                "release-live-attempt",
+                "token"
+            )
+            .await,
+        Err(ServiceError::Store(
+            StoreError::AttemptPending | StoreError::Conflict
+        ))
+    ));
 }
 
 async fn post_write_source_failure_retains_the_attempt_reference() {
