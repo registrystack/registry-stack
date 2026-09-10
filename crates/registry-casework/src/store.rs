@@ -24,6 +24,7 @@ const MIGRATION: &str = include_str!("../migrations/0001_casework.sql");
 const HOSTED_MIGRATION: &str = include_str!("../migrations/0002_hosted_casework.sql");
 const ASSIGNMENT_MIGRATION: &str = include_str!("../migrations/0003_assignment.sql");
 const CLOCK_MIGRATION: &str = include_str!("../migrations/0004_clocks.sql");
+const SOURCE_RETENTION_MIGRATION: &str = include_str!("../migrations/0005_source_retention.sql");
 
 #[derive(Clone)]
 pub struct PostgresStore {
@@ -172,6 +173,27 @@ impl PostgresStore {
             transaction
                 .execute(
                     "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(4,now())",
+                    &[],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let source_retention_applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=5)",
+                &[],
+            )
+            .await?
+            .get(0);
+        if !source_retention_applied {
+            transaction
+                .batch_execute(SOURCE_RETENTION_MIGRATION)
+                .await?;
+            transaction
+                .execute(
+                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(5,now())",
                     &[],
                 )
                 .await?;
@@ -348,13 +370,24 @@ impl PostgresStore {
         }
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        let erased = transaction
+            .query_opt(
+                "SELECT erased_at FROM casework_subjects WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3 FOR UPDATE",
+                &[&hint.subject.source_id, &hint.subject.kind, &hint.subject.id],
+            )
+            .await?
+            .is_some_and(|row| row.get::<_, Option<DateTime<Utc>>>(0).is_some());
+        if erased {
+            transaction.commit().await?;
+            return Ok(false);
+        }
         let inserted = transaction.execute(
             "INSERT INTO casework_source_events(source_id,deduplication_key,subject_kind,subject_id,ordered_revision,received_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
             &[&hint.subject.source_id,&hint.deduplication_key,&hint.subject.kind,&hint.subject.id,&hint.ordered_revision,&Utc::now()]
         ).await? == 1;
         if inserted {
             transaction.execute(
-                "INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending) VALUES($1,$2,$3,$4,$5,0,true,true) ON CONFLICT(source_id,subject_kind,subject_id) DO UPDATE SET wanted_revision=GREATEST(casework_subjects.wanted_revision,EXCLUDED.wanted_revision), sync_pending=true WHERE casework_subjects.binding_generation=EXCLUDED.binding_generation",
+                "INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending) VALUES($1,$2,$3,$4,$5,0,true,true) ON CONFLICT(source_id,subject_kind,subject_id) DO UPDATE SET wanted_revision=GREATEST(casework_subjects.wanted_revision,EXCLUDED.wanted_revision), sync_pending=true WHERE casework_subjects.binding_generation=EXCLUDED.binding_generation AND casework_subjects.erased_at IS NULL",
                 &[&hint.subject.source_id,&hint.subject.kind,&hint.subject.id,&generation,&hint.ordered_revision]
             ).await?;
         }
@@ -401,19 +434,30 @@ impl PostgresStore {
             &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id,&observation.binding.generation,&observation.ordered_revision]
         ).await?;
         let subject_row = transaction.query_opt(
-            "SELECT binding_generation,wanted_revision,applied_revision,representation_etag FROM casework_subjects WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3 FOR UPDATE",
+            "SELECT binding_generation,wanted_revision,applied_revision,representation_etag,erased_at FROM casework_subjects WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3 FOR UPDATE",
             &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id]
         ).await?;
-        let (generation, _wanted, applied, applied_representation_etag): (
+        let (generation, _wanted, applied, applied_representation_etag, erased): (
             String,
             i64,
             i64,
             Option<String>,
+            bool,
         ) = if let Some(row) = subject_row {
-            (row.get(0), row.get(1), row.get(2), row.get(3))
+            (
+                row.get(0),
+                row.get(1),
+                row.get(2),
+                row.get(3),
+                row.get::<_, Option<DateTime<Utc>>>(4).is_some(),
+            )
         } else {
             return Err(StoreError::Corrupt);
         };
+        if erased {
+            transaction.commit().await?;
+            return Ok(None);
+        }
         if generation != observation.binding.generation {
             return Err(StoreError::StaleGeneration);
         }
@@ -443,13 +487,8 @@ impl PostgresStore {
             && applied_representation_etag.as_deref()
                 == Some(observation.representation_etag.as_str())
         {
-            crate::reconcile_clock_observation(
-                &transaction,
-                observation,
-                clock,
-                Utc::now(),
-            )
-            .await?;
+            crate::reconcile_clock_observation(&transaction, observation, clock, Utc::now())
+                .await?;
             transaction.execute(
                 "UPDATE casework_subjects SET sync_pending=(wanted_revision>$4),sync_lease_until=NULL WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3",
                 &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id,&observation.ordered_revision]
@@ -1488,7 +1527,7 @@ impl PostgresStore {
     ) -> Result<Option<AttemptStatus>, StoreError> {
         let client = self.client().await?;
         let row = client.query_opt(
-            "SELECT attempt_id,state,item_revision,operation,created_at,receipt,actor_issuer,actor_subject,casework_profile_id,request_hash FROM casework_attempts WHERE item_id=$1 AND idempotency_key=$2",
+            "SELECT a.attempt_id,a.state,a.item_revision,a.operation,a.created_at,a.receipt,a.actor_issuer,a.actor_subject,a.casework_profile_id,a.request_hash,i.erased_at FROM casework_attempts a JOIN casework_items i ON i.item_id=a.item_id WHERE a.item_id=$1 AND a.idempotency_key=$2",
             &[&item_id,&idempotency_key],
         ).await?;
         let Some(row) = row else {
@@ -1500,6 +1539,9 @@ impl PostgresStore {
             || row.get::<_, String>(9) != request_hash
         {
             return Err(StoreError::IdempotencyConflict);
+        }
+        if row.get::<_, Option<DateTime<Utc>>>(10).is_some() {
+            return Err(StoreError::IdempotencyExpired);
         }
         Ok(Some(AttemptStatus {
             attempt_id: row.get(0),
@@ -1522,13 +1564,16 @@ impl PostgresStore {
         idempotency_key: &str,
     ) -> Result<Option<(String, AttemptStatus)>, StoreError> {
         let client = self.client().await?;
-        let row=client.query_opt("SELECT source_profile_id,attempt_id,state,item_revision,operation,created_at,receipt,actor_issuer,actor_subject,casework_profile_id FROM casework_attempts WHERE item_id=$1 AND idempotency_key=$2", &[&item_id,&idempotency_key]).await?;
+        let row=client.query_opt("SELECT a.source_profile_id,a.attempt_id,a.state,a.item_revision,a.operation,a.created_at,a.receipt,a.actor_issuer,a.actor_subject,a.casework_profile_id,i.erased_at FROM casework_attempts a JOIN casework_items i ON i.item_id=a.item_id WHERE a.item_id=$1 AND a.idempotency_key=$2", &[&item_id,&idempotency_key]).await?;
         let Some(row) = row else { return Ok(None) };
         if row.get::<_, String>(7) != actor.principal.issuer
             || row.get::<_, String>(8) != actor.principal.subject
             || row.get::<_, String>(9) != actor.profile_id
         {
             return Err(StoreError::NotFound);
+        }
+        if row.get::<_, Option<DateTime<Utc>>>(10).is_some() {
+            return Err(StoreError::IdempotencyExpired);
         }
         let state = parse_attempt_state(&row.get::<_, String>(2))?;
         if !matches!(state, AttemptState::Completed | AttemptState::Refused) {
@@ -1557,12 +1602,15 @@ impl PostgresStore {
         attempt_id: Uuid,
     ) -> Result<Option<(String, AttemptStatus)>, StoreError> {
         let client = self.client().await?;
-        let row=client.query_opt("SELECT source_profile_id,item_id,state,item_revision,operation,created_at,receipt,actor_issuer,actor_subject,casework_profile_id FROM casework_attempts WHERE attempt_id=$1", &[&attempt_id]).await?.ok_or(StoreError::NotFound)?;
+        let row=client.query_opt("SELECT a.source_profile_id,a.item_id,a.state,a.item_revision,a.operation,a.created_at,a.receipt,a.actor_issuer,a.actor_subject,a.casework_profile_id,i.erased_at FROM casework_attempts a JOIN casework_items i ON i.item_id=a.item_id WHERE a.attempt_id=$1", &[&attempt_id]).await?.ok_or(StoreError::NotFound)?;
         if row.get::<_, String>(7) != actor.principal.issuer
             || row.get::<_, String>(8) != actor.principal.subject
             || row.get::<_, String>(9) != actor.profile_id
         {
             return Err(StoreError::NotFound);
+        }
+        if row.get::<_, Option<DateTime<Utc>>>(10).is_some() {
+            return Err(StoreError::IdempotencyExpired);
         }
         let state = parse_attempt_state(&row.get::<_, String>(2))?;
         if !matches!(state, AttemptState::Completed | AttemptState::Refused) {
@@ -1627,6 +1675,85 @@ impl PostgresStore {
         row_to_item(&row)
     }
 
+    /// Check only for an erased, payload-free idempotency record. This never
+    /// returns a saved success response and grants no authority for a new
+    /// operation.
+    pub(crate) async fn preflight_erased_item_idempotency(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        operation: &str,
+        idempotency_key: &str,
+        expected_hash: &str,
+    ) -> Result<(), StoreError> {
+        if idempotency_key.is_empty() || idempotency_key.len() > 256 {
+            return Err(StoreError::Invalid);
+        }
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT d.request_hash,d.response,i.queue_id,i.holder_issuer,i.holder_subject FROM casework_idempotency d JOIN casework_items i ON i.item_id=$1 AND i.erased_at IS NOT NULL WHERE d.issuer=$2 AND d.subject=$3 AND d.profile_id=$4 AND d.operation=$5 AND d.resource=$6 AND d.idempotency_key=$7",
+                &[&item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&operation,&item_id.to_string(),&idempotency_key],
+            )
+            .await?;
+        let Some(row) = row else {
+            return Ok(());
+        };
+        let membership_kind = match (operation, actor.role) {
+            ("item.claim" | "draft.save" | "draft.delete", CaseworkRole::Staff) => "staff",
+            ("item.release", CaseworkRole::Staff) => "staff",
+            ("item.release", CaseworkRole::Supervisor) => "supervisor",
+            _ => return Ok(()),
+        };
+        let queue_id: String = row.get(2);
+        let currently_serves: bool = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=$1 AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind=$4)",
+                &[&queue_id,&actor.principal.issuer,&actor.principal.subject,&membership_kind],
+            )
+            .await?
+            .get(0);
+        let holds_item = row.get::<_, Option<String>>(3).as_deref()
+            == Some(actor.principal.issuer.as_str())
+            && row.get::<_, Option<String>>(4).as_deref() == Some(actor.principal.subject.as_str());
+        if !currently_serves || matches!(operation, "draft.save" | "draft.delete") && !holds_item {
+            return Ok(());
+        }
+        if row.get::<_, String>(0) != expected_hash {
+            return Err(StoreError::IdempotencyConflict);
+        }
+        if row.get::<_, Option<Value>>(1).is_none() {
+            return Err(StoreError::IdempotencyExpired);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn preflight_erased_attempt(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        idempotency_key: &str,
+        expected_hash: &str,
+    ) -> Result<(), StoreError> {
+        if idempotency_key.is_empty() || idempotency_key.len() > 256 {
+            return Err(StoreError::Invalid);
+        }
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT a.request_hash FROM casework_attempts a JOIN casework_items i ON i.item_id=a.item_id AND i.erased_at IS NOT NULL JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind='staff' WHERE a.item_id=$1 AND a.idempotency_key=$4 AND a.actor_issuer=$2 AND a.actor_subject=$3 AND a.casework_profile_id=$5 AND i.holder_issuer=$2 AND i.holder_subject=$3",
+                &[&item_id,&actor.principal.issuer,&actor.principal.subject,&idempotency_key,&actor.profile_id],
+            )
+            .await?;
+        let Some(row) = row else {
+            return Ok(());
+        };
+        if row.get::<_, String>(0) != expected_hash {
+            return Err(StoreError::IdempotencyConflict);
+        }
+        Err(StoreError::IdempotencyExpired)
+    }
+
     pub async fn can_view_item(
         &self,
         actor: &ActorContext,
@@ -1670,7 +1797,7 @@ impl PostgresStore {
             InboxView::CompletedByMe => "completed_by_me",
         };
         let rows=client.query(
-            "SELECT i.* FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$1 AND m.subject=$2 WHERE m.membership_kind=$3 AND ($4::text IS NULL OR i.queue_id=$4) AND (($5='mine' AND i.state NOT IN ('completed','superseded','cancelled') AND i.holder_issuer=$1 AND i.holder_subject=$2) OR ($5='my_teams' AND i.state NOT IN ('completed','superseded','cancelled')) OR ($5='team_holdings' AND i.state NOT IN ('completed','superseded','cancelled') AND i.holder_issuer IS NOT NULL) OR ($5='overdue' AND i.state NOT IN ('completed','superseded','cancelled') AND i.passive_due_at<now()) OR ($5='completed_by_me' AND i.state='completed' AND EXISTS(SELECT 1 FROM casework_history h WHERE h.item_id=i.item_id AND h.kind='action_completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND (NOT $6 OR ($7::timestamptz IS NOT NULL AND (i.passive_due_at > $7 OR i.passive_due_at IS NULL OR (i.passive_due_at=$7 AND i.item_id>$8))) OR ($7::timestamptz IS NULL AND i.passive_due_at IS NULL AND i.item_id>$8)) ORDER BY i.passive_due_at NULLS LAST,i.item_id LIMIT $9",
+            "SELECT i.* FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$1 AND m.subject=$2 WHERE i.erased_at IS NULL AND m.membership_kind=$3 AND ($4::text IS NULL OR i.queue_id=$4) AND (($5='mine' AND i.state NOT IN ('completed','superseded','cancelled') AND i.holder_issuer=$1 AND i.holder_subject=$2) OR ($5='my_teams' AND i.state NOT IN ('completed','superseded','cancelled')) OR ($5='team_holdings' AND i.state NOT IN ('completed','superseded','cancelled') AND i.holder_issuer IS NOT NULL) OR ($5='overdue' AND i.state NOT IN ('completed','superseded','cancelled') AND i.passive_due_at<now()) OR ($5='completed_by_me' AND i.state='completed' AND EXISTS(SELECT 1 FROM casework_history h WHERE h.item_id=i.item_id AND h.kind='action_completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND (NOT $6 OR ($7::timestamptz IS NOT NULL AND (i.passive_due_at > $7 OR i.passive_due_at IS NULL OR (i.passive_due_at=$7 AND i.item_id>$8))) OR ($7::timestamptz IS NULL AND i.passive_due_at IS NULL AND i.item_id>$8)) ORDER BY i.passive_due_at NULLS LAST,i.item_id LIMIT $9",
             &[&actor.principal.issuer,&actor.principal.subject,&match actor.role { CaseworkRole::Staff=>"staff", CaseworkRole::Supervisor=>"supervisor", CaseworkRole::Administrator=>"administrator", CaseworkRole::Requester=>"requester" },&queue,&view,&has_after,&after_due,&after_id,&limit]
         ).await?;
         let items = rows
@@ -1695,7 +1822,7 @@ impl PostgresStore {
         }
         let client = self.client().await?;
         let rows=client.query(
-            "SELECT i.holder_issuer,i.holder_subject,i.queue_id,count(*)::bigint,count(*) FILTER(WHERE i.passive_due_at IS NOT NULL AND i.passive_due_at < now())::bigint FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships lead ON lead.team_id=q.team_id AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' WHERE i.holder_issuer IS NOT NULL AND i.state NOT IN ('completed','superseded','cancelled') GROUP BY i.holder_issuer,i.holder_subject,i.queue_id ORDER BY i.queue_id,i.holder_issuer,i.holder_subject",
+            "SELECT i.holder_issuer,i.holder_subject,i.queue_id,count(*)::bigint,count(*) FILTER(WHERE i.passive_due_at IS NOT NULL AND i.passive_due_at < now())::bigint FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships lead ON lead.team_id=q.team_id AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' WHERE i.erased_at IS NULL AND i.holder_issuer IS NOT NULL AND i.state NOT IN ('completed','superseded','cancelled') GROUP BY i.holder_issuer,i.holder_subject,i.queue_id ORDER BY i.queue_id,i.holder_issuer,i.holder_subject",
             &[&actor.principal.issuer,&actor.principal.subject]
         ).await?;
         rows.into_iter()
@@ -1740,7 +1867,7 @@ impl PostgresStore {
     ) -> Result<Vec<SubjectRef>, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY source_id,subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $1", &[&limit]).await?;
+        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE erased_at IS NULL AND sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY source_id,subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $1", &[&limit]).await?;
         let subjects: Vec<_> = rows
             .into_iter()
             .map(|row| SubjectRef {
@@ -1765,7 +1892,7 @@ impl PostgresStore {
     ) -> Result<Vec<SubjectRef>, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2 AND sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $3", &[&source_id,&generation,&limit]).await?;
+        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2 AND erased_at IS NULL AND sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $3", &[&source_id,&generation,&limit]).await?;
         let subjects: Vec<_> = rows
             .into_iter()
             .map(|row| SubjectRef {
@@ -1788,7 +1915,7 @@ impl PostgresStore {
         limit: i64,
     ) -> Result<Vec<SubjectRef>, StoreError> {
         let client = self.client().await?;
-        let rows=client.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE source_id=$1 AND active=true ORDER BY subject_kind,subject_id LIMIT $2", &[&source_id,&limit]).await?;
+        let rows=client.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE source_id=$1 AND active=true AND erased_at IS NULL ORDER BY subject_kind,subject_id LIMIT $2", &[&source_id,&limit]).await?;
         Ok(rows
             .into_iter()
             .map(|row| SubjectRef {
@@ -1807,7 +1934,7 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         for subject in subjects {
-            transaction.execute("INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending) VALUES($1,$2,$3,$4,0,0,true,true) ON CONFLICT(source_id,subject_kind,subject_id) DO UPDATE SET sync_pending=true WHERE casework_subjects.binding_generation=EXCLUDED.binding_generation", &[&subject.source_id,&subject.kind,&subject.id,&generation]).await?;
+            transaction.execute("INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending) VALUES($1,$2,$3,$4,0,0,true,true) ON CONFLICT(source_id,subject_kind,subject_id) DO UPDATE SET sync_pending=true WHERE casework_subjects.binding_generation=EXCLUDED.binding_generation AND casework_subjects.erased_at IS NULL", &[&subject.source_id,&subject.kind,&subject.id,&generation]).await?;
         }
         transaction.commit().await?;
         Ok(())
@@ -1828,7 +1955,7 @@ impl PostgresStore {
             return Err(StoreError::AttemptPending);
         }
         transaction.execute(
-            "UPDATE casework_subjects SET binding_generation=$2,wanted_revision=0,applied_revision=0,representation_etag=NULL,sync_pending=true,sync_lease_until=NULL WHERE source_id=$1 AND binding_generation<>$2",
+            "UPDATE casework_subjects SET binding_generation=$2,wanted_revision=0,applied_revision=0,representation_etag=NULL,sync_pending=true,sync_lease_until=NULL WHERE source_id=$1 AND binding_generation<>$2 AND erased_at IS NULL",
             &[&source_id,&generation],
         ).await?;
         transaction.commit().await?;
@@ -1862,7 +1989,7 @@ impl PostgresStore {
         generation: &str,
     ) -> Result<bool, StoreError> {
         let client = self.client().await?;
-        Ok(client.query_one("SELECT EXISTS(SELECT 1 FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2 AND sync_pending=true)", &[&source_id,&generation]).await?.get(0))
+        Ok(client.query_one("SELECT EXISTS(SELECT 1 FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2 AND erased_at IS NULL AND sync_pending=true)", &[&source_id,&generation]).await?.get(0))
     }
 
     pub async fn pending_audit(&self, limit: i64) -> Result<Vec<(Uuid, Value)>, StoreError> {
@@ -1888,7 +2015,7 @@ impl PostgresStore {
         let client = self.client().await?;
         let limit = i64::try_from(limit.min(1000)).map_err(|_| StoreError::Invalid)?;
         let rows = client.query(
-            "SELECT event_id,item_id,item_revision,event_kind,occurred_at,actor_reference,detail FROM casework_events WHERE ($1::uuid IS NULL OR event_id>$1) ORDER BY event_id LIMIT $2",
+            "SELECT e.event_id,e.item_id,e.item_revision,e.event_kind,e.occurred_at,e.actor_reference,e.detail FROM casework_events e JOIN casework_items i ON i.item_id=e.item_id AND i.erased_at IS NULL WHERE ($1::uuid IS NULL OR e.event_id>$1) ORDER BY e.event_id LIMIT $2",
             &[&after,&limit],
         ).await?;
         Ok(rows
@@ -2135,7 +2262,7 @@ async fn idempotent_response(
         }
         return row
             .get::<_, Option<Value>>(1)
-            .ok_or(StoreError::AttemptPending)
+            .ok_or(StoreError::IdempotencyExpired)
             .map(Some);
     }
     Ok(None)
@@ -2177,6 +2304,9 @@ fn hash_bytes(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
+    if row.get::<_, Option<DateTime<Utc>>>("erased_at").is_some() {
+        return Err(StoreError::NotFound);
+    }
     let holder = match (
         row.get::<_, Option<String>>("holder_issuer"),
         row.get::<_, Option<String>>("holder_subject"),

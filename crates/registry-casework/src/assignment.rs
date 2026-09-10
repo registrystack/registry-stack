@@ -443,7 +443,7 @@ impl PostgresStore {
         item_id: Uuid,
     ) -> Result<AssignmentOrigin, StoreError> {
         let client = self.client().await?;
-        let row=client.query_one("SELECT EXISTS(SELECT 1 FROM casework_items WHERE item_id=$1),EXISTS(SELECT 1 FROM casework_hosted_items WHERE item_id=$1)",&[&item_id]).await?;
+        let row=client.query_one("SELECT EXISTS(SELECT 1 FROM casework_items WHERE item_id=$1 AND erased_at IS NULL),EXISTS(SELECT 1 FROM casework_hosted_items WHERE item_id=$1)",&[&item_id]).await?;
         match (row.get(0), row.get(1)) {
             (true, false) => Ok(AssignmentOrigin::Source),
             (false, true) => Ok(AssignmentOrigin::Hosted),
@@ -486,7 +486,7 @@ impl PostgresStore {
         let desired = limit.clamp(1, 100);
         let query_limit = i64::try_from(desired + 1).map_err(|_| StoreError::Invalid)?;
         let rows=transaction.query(
-            "SELECT origin,item_id FROM (SELECT 'source'::text origin,i.item_id,i.queue_id FROM casework_items i WHERE i.holder_issuer=$1 AND i.holder_subject=$2 AND i.state NOT IN ('completed','superseded','cancelled') UNION ALL SELECT 'hosted'::text origin,i.item_id,i.queue_id FROM casework_hosted_items i WHERE i.holder_issuer=$1 AND i.holder_subject=$2 AND i.state IN ('open','claimed')) candidates WHERE ($3::text IS NULL OR queue_id=$3) AND item_id>$4 AND EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=candidates.queue_id AND m.issuer=$5 AND m.subject=$6 AND m.membership_kind='supervisor') ORDER BY item_id LIMIT $7",
+            "SELECT origin,item_id FROM (SELECT 'source'::text origin,i.item_id,i.queue_id FROM casework_items i WHERE i.erased_at IS NULL AND i.holder_issuer=$1 AND i.holder_subject=$2 AND i.state NOT IN ('completed','superseded','cancelled') UNION ALL SELECT 'hosted'::text origin,i.item_id,i.queue_id FROM casework_hosted_items i WHERE i.holder_issuer=$1 AND i.holder_subject=$2 AND i.state IN ('open','claimed')) candidates WHERE ($3::text IS NULL OR queue_id=$3) AND item_id>$4 AND EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=candidates.queue_id AND m.issuer=$5 AND m.subject=$6 AND m.membership_kind='supervisor') ORDER BY item_id LIMIT $7",
             &[&movement.from.issuer,&movement.from.subject,&movement.queue_id,&after,&actor.principal.issuer,&actor.principal.subject,&query_limit],
         ).await?;
         let more = rows.len() > desired;
@@ -556,7 +556,7 @@ impl PostgresStore {
         let limit = i64::try_from(limit.clamp(1, 100)).map_err(|_| StoreError::Invalid)?;
         let rows = client
             .query(
-                "SELECT origin,item_id FROM (SELECT 'source'::text AS origin,i.item_id FROM casework_items i WHERE i.state='claimed' AND i.holder_issuer IS NOT NULL AND NOT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=i.holder_issuer AND m.subject=i.holder_subject AND m.membership_kind='staff') AND NOT EXISTS(SELECT 1 FROM casework_attempts a WHERE a.item_id=i.item_id AND a.state IN ('pending','uncertain')) UNION ALL SELECT 'hosted'::text AS origin,i.item_id FROM casework_hosted_items i WHERE i.state='claimed' AND i.holder_issuer IS NOT NULL AND NOT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=i.holder_issuer AND m.subject=i.holder_subject AND m.membership_kind='staff')) candidates ORDER BY item_id LIMIT $1",
+                "SELECT origin,item_id FROM (SELECT 'source'::text AS origin,i.item_id FROM casework_items i WHERE i.erased_at IS NULL AND i.state='claimed' AND i.holder_issuer IS NOT NULL AND NOT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=i.holder_issuer AND m.subject=i.holder_subject AND m.membership_kind='staff') AND NOT EXISTS(SELECT 1 FROM casework_attempts a WHERE a.item_id=i.item_id AND a.state IN ('pending','uncertain')) UNION ALL SELECT 'hosted'::text AS origin,i.item_id FROM casework_hosted_items i WHERE i.state='claimed' AND i.holder_issuer IS NOT NULL AND NOT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=i.holder_issuer AND m.subject=i.holder_subject AND m.membership_kind='staff')) candidates ORDER BY item_id LIMIT $1",
                 &[&limit],
             )
             .await?;
@@ -588,10 +588,14 @@ impl PostgresStore {
             AssignmentOrigin::Source => "casework_items",
             AssignmentOrigin::Hosted => "casework_hosted_items",
         };
+        let visible = match origin {
+            AssignmentOrigin::Source => " AND erased_at IS NULL",
+            AssignmentOrigin::Hosted => "",
+        };
         let row = transaction
             .query_opt(
                 &format!(
-                    "SELECT queue_id,state,holder_issuer,holder_subject,revision FROM {table} WHERE item_id=$1 FOR UPDATE"
+                    "SELECT queue_id,state,holder_issuer,holder_subject,revision FROM {table} WHERE item_id=$1{visible} FOR UPDATE"
                 ),
                 &[&item_id],
             )
@@ -798,7 +802,11 @@ impl PostgresStore {
             AssignmentOrigin::Source => "casework_items",
             AssignmentOrigin::Hosted => "casework_hosted_items",
         };
-        let sql=format!("SELECT queue_id,state,holder_issuer,holder_subject,assignment_owner_issuer,assignment_owner_subject,revision FROM {table} WHERE item_id=$1 FOR UPDATE");
+        let visible = match origin {
+            AssignmentOrigin::Source => " AND erased_at IS NULL",
+            AssignmentOrigin::Hosted => "",
+        };
+        let sql=format!("SELECT queue_id,state,holder_issuer,holder_subject,assignment_owner_issuer,assignment_owner_subject,revision FROM {table} WHERE item_id=$1{visible} FOR UPDATE");
         let row = transaction
             .query_opt(&sql, &[&item_id])
             .await?
@@ -1622,7 +1630,7 @@ async fn assignment_replay(
         Some(row) if row.get::<_, String>(0) == hash => row
             .get::<_, Option<Value>>(1)
             .map(Some)
-            .ok_or(StoreError::Corrupt),
+            .ok_or(StoreError::IdempotencyExpired),
         Some(_) => Err(StoreError::IdempotencyConflict),
         None => Ok(None),
     }

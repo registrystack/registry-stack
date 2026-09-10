@@ -282,7 +282,7 @@ impl CaseworkService {
         source_profile_id: &str,
         token: &str,
     ) -> Result<(WorkItem, CallerSubjectView), ServiceError> {
-        let mut item = self.store.item(item_id).await?;
+        let item = self.store.item(item_id).await?;
         if !self.store.can_view_item(actor, &item).await? {
             return Err(ServiceError::NotFound);
         }
@@ -294,6 +294,13 @@ impl CaseworkService {
                 EphemeralCredential::new(token),
             )
             .await?;
+        // The source call is intentionally outside a database transaction.
+        // Re-read local state afterward so an operator erasure that committed
+        // while that call was in flight remains the visibility boundary.
+        let mut item = self.store.item(item_id).await?;
+        if !self.store.can_view_item(actor, &item).await? {
+            return Err(ServiceError::NotFound);
+        }
         item.live_attempt = self
             .store
             .live_attempt_status_for_actor(actor, item.item_id, source_profile_id)
@@ -307,6 +314,107 @@ impl CaseworkService {
         item.routing_copy = self.filtered_routing_copy(item.item_id, &view).await?;
         item.actions = local_actions(actor, &item, &view);
         Ok((item, view))
+    }
+
+    pub async fn preflight_source_claim(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+    ) -> Result<(), ServiceError> {
+        if actor.role != registry_casework_core::CaseworkRole::Staff {
+            return Ok(());
+        }
+        self.store
+            .preflight_erased_item_idempotency(
+                actor,
+                item_id,
+                "item.claim",
+                idempotency_key,
+                &local_item_hash(item_id, expected_revision, true),
+            )
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    pub async fn preflight_source_release(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+    ) -> Result<(), ServiceError> {
+        if !matches!(
+            actor.role,
+            registry_casework_core::CaseworkRole::Staff
+                | registry_casework_core::CaseworkRole::Supervisor
+        ) {
+            return Ok(());
+        }
+        self.store
+            .preflight_erased_item_idempotency(
+                actor,
+                item_id,
+                "item.release",
+                idempotency_key,
+                &local_item_hash(item_id, expected_revision, false),
+            )
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn preflight_source_draft_save(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        binding: &SourceBinding,
+        reason: &str,
+        flagged_fields: &[String],
+        idempotency_key: &str,
+    ) -> Result<(), ServiceError> {
+        if actor.role != registry_casework_core::CaseworkRole::Staff {
+            return Ok(());
+        }
+        let hash = Sha256::digest(
+            serde_json::to_vec(&(expected_revision, binding, reason, flagged_fields))
+                .map_err(|_| ServiceError::Configuration)?,
+        );
+        self.store
+            .preflight_erased_item_idempotency(
+                actor,
+                item_id,
+                "draft.save",
+                idempotency_key,
+                &sha256_string(&hash),
+            )
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    pub async fn preflight_source_draft_delete(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+    ) -> Result<(), ServiceError> {
+        if actor.role != registry_casework_core::CaseworkRole::Staff {
+            return Ok(());
+        }
+        let hash = Sha256::digest(format!("{item_id}:{expected_revision}:draft.delete"));
+        self.store
+            .preflight_erased_item_idempotency(
+                actor,
+                item_id,
+                "draft.delete",
+                idempotency_key,
+                &sha256_string(&hash),
+            )
+            .await
+            .map_err(ServiceError::from)
     }
 
     pub async fn inbox(
@@ -475,6 +583,14 @@ impl CaseworkService {
                 Ok(Ok(view)) => {
                     examined += 1;
                     last_examined = Some((item.passive_due_at, item.item_id));
+                    item = match self.store.item(item.item_id).await {
+                        Ok(current) => current,
+                        Err(StoreError::NotFound) => continue,
+                        Err(error) => return Err(error.into()),
+                    };
+                    if !self.store.can_view_item(actor, &item).await? {
+                        continue;
+                    }
                     item.live_attempt = self
                         .store
                         .live_attempt_status_for_actor(actor, item.item_id, source_profile_id)
@@ -572,9 +688,7 @@ impl CaseworkService {
         idempotency_key: &str,
         token: &str,
     ) -> Result<(AttemptStatus, Option<SourceReceipt>), ServiceError> {
-        let (item, view) = self
-            .caller_item(actor, item_id, source_profile_id, token)
-            .await?;
+        let is_staff = actor.role == registry_casework_core::CaseworkRole::Staff;
         let request_hash = decision_hash(
             expected_revision,
             source_profile_id,
@@ -583,6 +697,17 @@ impl CaseworkService {
             flagged_fields,
             displayed_binding,
         )?;
+        if is_staff {
+            self.store
+                .preflight_erased_attempt(actor, item_id, idempotency_key, &request_hash)
+                .await?;
+        }
+        let (item, view) = self
+            .caller_item(actor, item_id, source_profile_id, token)
+            .await?;
+        if !is_staff {
+            return Err(ServiceError::Forbidden);
+        }
         if let Some(attempt) = self
             .store
             .attempt_by_key(actor, item_id, idempotency_key, &request_hash)
@@ -1101,6 +1226,21 @@ fn decision_hash(
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     ))
+}
+
+fn local_item_hash(item_id: Uuid, expected_revision: i64, claim: bool) -> String {
+    let digest = Sha256::digest(format!("{item_id}:{expected_revision}:{claim}"));
+    sha256_string(&digest)
+}
+
+fn sha256_string(digest: &[u8]) -> String {
+    format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 fn local_actions(

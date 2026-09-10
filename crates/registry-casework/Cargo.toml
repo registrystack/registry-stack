@@ -88,3 +88,8 @@ required-features = ["postgres-test"]
 name = "routing_postgres"
 path = "tests/routing_postgres.rs"
 required-features = ["postgres-test"]
+
+[[test]]
+name = "source_retention_postgres"
+path = "tests/source_retention_postgres.rs"
+required-features = ["postgres-test"]

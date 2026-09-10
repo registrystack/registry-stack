@@ -9,6 +9,7 @@ mod http;
 pub mod problem;
 mod runtime;
 mod service;
+mod source_retention;
 mod store;
 
 pub(crate) use clocks::{reconcile_clock_observation, ResolvedClockPolicy};

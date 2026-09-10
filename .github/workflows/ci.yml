@@ -670,6 +670,7 @@ jobs:
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_hosted
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_hosted_acceptance
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_clocks
+          docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_source_retention
       - name: Verify hosted authorization, assignment, replay, and retention
         env:
           CASEWORK_HOSTED_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_hosted
@@ -684,6 +685,10 @@ jobs:
         env:
           CASEWORK_HOSTED_ACCEPTANCE_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_hosted_acceptance
         run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_standalone
+      - name: Verify source erasure, replay authority, and restart
+        env:
+          CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_source_retention
+        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres
 
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})

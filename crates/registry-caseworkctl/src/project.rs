@@ -5,7 +5,9 @@ use registry_casework::{
     secret_resolver, validate_breg_source_description, verify_policy_package,
     PolicyPackageManifest, PostgresStore, RuntimeConfig, POLICY_PACKAGE_MANIFEST_FILE,
 };
-use registry_casework_core::{CaseworkProject, SourceAdapter as _};
+use registry_casework_core::{
+    CaseworkProject, SourceAdapter as _, SourceRetentionReport, SourceRetentionSelector,
+};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
@@ -595,6 +597,47 @@ pub(super) fn db_migrate(project: &Path, operator: Option<&Path>) -> Result<Valu
     }))
 }
 
+pub(super) fn retention_erase(
+    project: &Path,
+    operator: Option<&Path>,
+    source_id: String,
+    request_kind: String,
+    request_id: String,
+    apply: bool,
+) -> Result<Value> {
+    let (project, operator, config) = load_runtime(project, operator)?;
+    let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let store = PostgresStore::connect_migration(&config.database, &resolver)
+        .context("the Casework migration database configuration is invalid")?;
+    let selector = SourceRetentionSelector {
+        source_id,
+        request_kind,
+        request_id,
+    };
+    let runtime = async_runtime()?;
+    let report = if apply {
+        runtime.block_on(store.erase_source_retention(&selector))
+    } else {
+        runtime.block_on(store.preview_source_retention(&selector))
+    }
+    .context("processing Casework source retention")?;
+    Ok(source_retention_output(&project, &operator, report))
+}
+
+fn source_retention_output(
+    project: &Path,
+    operator: &Path,
+    report: SourceRetentionReport,
+) -> Value {
+    json!({
+        "ok": true,
+        "command": "retention erase",
+        "project": project,
+        "operator": operator,
+        "report": report,
+    })
+}
+
 pub(super) fn dev_start(project: &Path, operator: Option<&Path>) -> Result<Value> {
     let (project, operator, config) = load_runtime(project, operator)?;
     let state = state_paths(&project);
@@ -887,6 +930,41 @@ mod tests {
         policy.check().unwrap();
         assert_eq!(policy.sources.len(), 1);
         assert_eq!(policy.queues.len(), 1);
+    }
+
+    #[test]
+    fn source_retention_output_is_count_only() {
+        let output = source_retention_output(
+            Path::new("/casework"),
+            Path::new("/casework/operator.yaml"),
+            SourceRetentionReport {
+                selector: SourceRetentionSelector {
+                    source_id: "registry".into(),
+                    request_kind: "correction".into(),
+                    request_id: "request-1".into(),
+                },
+                applied: false,
+                blocked_live_attempts: 1,
+                items: 2,
+                drafts: 3,
+                correction_contexts: 4,
+                attempt_payloads: 5,
+                receipt_payloads: 6,
+                history_details: 7,
+                event_details: 8,
+                idempotency_responses: 9,
+                audit_records: 10,
+                clock_occurrences: 11,
+                clock_previews: 12,
+            },
+        );
+
+        assert_eq!(output["command"], "retention erase");
+        assert_eq!(output["report"]["selector"]["requestId"], "request-1");
+        assert_eq!(output["report"]["blockedLiveAttempts"], 1);
+        assert_eq!(output["report"]["clockOccurrences"], 11);
+        assert_eq!(output["report"]["clockPreviews"], 12);
+        assert_eq!(output["report"].as_object().unwrap().len(), 14);
     }
 
     #[test]

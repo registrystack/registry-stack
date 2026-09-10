@@ -506,6 +506,10 @@ async fn claim(
     let item = if let Some(source_profile) = source_profile_optional(&headers)? {
         state
             .service
+            .preflight_source_claim(&actor, item_id, expected_revision, key)
+            .await?;
+        state
+            .service
             .caller_item(&actor, item_id, source_profile, token)
             .await
             .map_err(HttpError::from_source_event)?;
@@ -535,6 +539,10 @@ async fn release(
     let expected_revision = if_match(&headers)?;
     let key = idempotency_key(&headers)?;
     let item = if let Some(source_profile) = source_profile_optional(&headers)? {
+        state
+            .service
+            .preflight_source_release(&actor, item_id, expected_revision, key)
+            .await?;
         state
             .service
             .caller_item(&actor, item_id, source_profile, token)
@@ -582,9 +590,24 @@ async fn save_draft(
     Json(request): Json<SaveDraftRequest>,
 ) -> Result<Json<DraftResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
+    let source_profile = source_profile(&headers)?;
+    let expected_revision = if_match(&headers)?;
+    let key = idempotency_key(&headers)?;
     state
         .service
-        .caller_item(&actor, item_id, source_profile(&headers)?, token)
+        .preflight_source_draft_save(
+            &actor,
+            item_id,
+            expected_revision,
+            &request.binding,
+            &request.reason,
+            &request.flagged_fields,
+            key,
+        )
+        .await?;
+    state
+        .service
+        .caller_item(&actor, item_id, source_profile, token)
         .await?;
     let draft = state
         .service
@@ -592,11 +615,11 @@ async fn save_draft(
         .save_draft(
             &actor,
             item_id,
-            if_match(&headers)?,
+            expected_revision,
             &request.binding,
             &request.reason,
             &request.flagged_fields,
-            idempotency_key(&headers)?,
+            key,
         )
         .await?;
     Ok(Json(DraftResponse { draft }))
@@ -608,19 +631,21 @@ async fn delete_draft(
     Path(item_id): Path<Uuid>,
 ) -> Result<StatusCode, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
+    let source_profile = source_profile(&headers)?;
+    let expected_revision = if_match(&headers)?;
+    let key = idempotency_key(&headers)?;
     state
         .service
-        .caller_item(&actor, item_id, source_profile(&headers)?, token)
+        .preflight_source_draft_delete(&actor, item_id, expected_revision, key)
+        .await?;
+    state
+        .service
+        .caller_item(&actor, item_id, source_profile, token)
         .await?;
     state
         .service
         .store()
-        .delete_draft(
-            &actor,
-            item_id,
-            if_match(&headers)?,
-            idempotency_key(&headers)?,
-        )
+        .delete_draft(&actor, item_id, expected_revision, key)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

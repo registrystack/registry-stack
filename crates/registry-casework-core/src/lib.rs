@@ -14,6 +14,7 @@ mod http;
 mod model;
 mod policy;
 mod routing;
+mod source_retention;
 mod timing;
 mod transition;
 
@@ -27,5 +28,6 @@ pub use http::*;
 pub use model::*;
 pub use policy::*;
 pub use routing::*;
+pub use source_retention::*;
 pub use timing::*;
 pub use transition::*;

@@ -108,7 +108,16 @@ impl PostgresStore {
             if row.get::<_, String>(0) != digest {
                 return Err(StoreError::Conflict);
             }
-            insert_clock_idempotency(&transaction,actor,"holiday.revision.create",&resource,idempotency_key,&digest,&Value::Null).await?;
+            insert_clock_idempotency(
+                &transaction,
+                actor,
+                "holiday.revision.create",
+                &resource,
+                idempotency_key,
+                &digest,
+                &Value::Null,
+            )
+            .await?;
             transaction.commit().await?;
             return Ok(());
         }
@@ -160,7 +169,7 @@ impl PostgresStore {
     ) -> Result<Vec<ClockOccurrenceView>, StoreError> {
         let client = self.client().await?;
         let rows = client.query(
-            "SELECT o.clock_occurrence_id,o.source_id,o.subject_kind,o.subject_id,o.clock_id,o.state,o.policy_digest,o.current_calculation_generation,o.recompute_generation,c.anchor_at,c.started_at,c.due_at,c.at_risk_at,c.completed_at FROM casework_clock_occurrences o LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.item_id=$1 ORDER BY o.clock_id,o.clock_occurrence_id",
+            "SELECT o.clock_occurrence_id,o.source_id,o.subject_kind,o.subject_id,o.clock_id,o.state,o.policy_digest,o.current_calculation_generation,o.recompute_generation,c.anchor_at,c.started_at,c.due_at,c.at_risk_at,c.completed_at FROM casework_clock_occurrences o JOIN casework_items i ON i.item_id=o.item_id AND i.erased_at IS NULL LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.item_id=$1 ORDER BY o.clock_id,o.clock_occurrence_id",
             &[&item_id],
         ).await?;
         rows.into_iter()
@@ -208,7 +217,7 @@ impl PostgresStore {
             .transpose()?
             .ok_or(StoreError::NotFound)?;
         let rows=transaction.query(
-            "SELECT o.clock_occurrence_id,o.item_id,o.current_calculation_generation,o.source_revision,o.source_etag,c.policy_digest,c.policy,c.calendar,c.anchor_at,c.started_at,c.source_timing,c.completed_at FROM casework_clock_occurrences o JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.clock_id=$1 AND o.scope='activity' AND o.state IN ('running','paused','verification_pending') ORDER BY o.clock_occurrence_id FOR UPDATE OF o LIMIT 101",
+            "SELECT o.clock_occurrence_id,o.item_id,o.current_calculation_generation,o.source_revision,o.source_etag,c.policy_digest,c.policy,c.calendar,c.anchor_at,c.started_at,c.source_timing,c.completed_at FROM casework_clock_occurrences o JOIN casework_items i ON i.item_id=o.item_id AND i.erased_at IS NULL JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.clock_id=$1 AND o.scope='activity' AND o.state IN ('running','paused','verification_pending') ORDER BY o.clock_occurrence_id FOR UPDATE OF o LIMIT 101",
             &[&request.clock_id],
         ).await?;
         if rows.is_empty() || rows.len() > 100 {
@@ -284,7 +293,7 @@ impl PostgresStore {
         let request_hash = digest_json(&json!({"previewId":preview_id}))?;
         if let Some(row)=transaction.query_opt("SELECT request_hash,response FROM casework_idempotency WHERE issuer=$1 AND subject=$2 AND profile_id=$3 AND operation='clock.recompute.apply' AND resource=$4 AND idempotency_key=$5 FOR UPDATE",&[&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&preview_id.to_string(),&idempotency_key]).await?{
             if row.get::<_,String>(0)!=request_hash{return Err(StoreError::IdempotencyConflict)}
-            return serde_json::from_value(row.get::<_,Option<Value>>(1).ok_or(StoreError::Corrupt)?).map_err(StoreError::Json)
+            return serde_json::from_value(row.get::<_,Option<Value>>(1).ok_or(StoreError::IdempotencyExpired)?).map_err(StoreError::Json)
         }
         // Match reconciliation's subject -> item -> clock order across every
         // occurrence in this all-or-nothing preview.
@@ -389,7 +398,7 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let rows = transaction.query(
-            "SELECT clock_occurrence_id,source_id,subject_kind,subject_id FROM casework_clock_occurrences WHERE state IN ('running','verification_pending') AND next_action_at<=now() AND (lease_until IS NULL OR lease_until<now()) ORDER BY next_action_at,clock_occurrence_id FOR UPDATE SKIP LOCKED LIMIT $1",
+            "SELECT o.clock_occurrence_id,o.source_id,o.subject_kind,o.subject_id FROM casework_clock_occurrences o LEFT JOIN casework_items i ON i.item_id=o.item_id JOIN casework_subjects s ON s.source_id=o.source_id AND s.subject_kind=o.subject_kind AND s.subject_id=o.subject_id AND s.erased_at IS NULL WHERE (o.item_id IS NULL OR i.erased_at IS NULL) AND o.state IN ('running','verification_pending') AND o.next_action_at<=now() AND (o.lease_until IS NULL OR o.lease_until<now()) ORDER BY o.next_action_at,o.clock_occurrence_id FOR UPDATE OF o SKIP LOCKED LIMIT $1",
             &[&limit],
         ).await?;
         let mut claims = Vec::with_capacity(rows.len());
@@ -420,7 +429,7 @@ impl PostgresStore {
             "WITH due AS (SELECT preview_id,clock_occurrence_id FROM casework_clock_recompute_previews WHERE expires_at<=now() ORDER BY expires_at,preview_id,clock_occurrence_id LIMIT 100 FOR UPDATE SKIP LOCKED) DELETE FROM casework_clock_recompute_previews p USING due WHERE p.preview_id=due.preview_id AND p.clock_occurrence_id=due.clock_occurrence_id",
             &[],
         ).await?;
-        usize::try_from(affected).map_err(|_|StoreError::Corrupt)
+        usize::try_from(affected).map_err(|_| StoreError::Corrupt)
     }
 
     pub(crate) async fn defer_clock_claim(
@@ -447,29 +456,45 @@ impl PostgresStore {
         // Reconciliation uses subject -> item -> clock. Preserve that order so
         // a timer cannot deadlock with a source transition for this subject.
         let subject = transaction.query_opt(
-            "SELECT binding_generation,wanted_revision,applied_revision,representation_etag FROM casework_subjects WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3 FOR UPDATE",
+            "SELECT binding_generation,wanted_revision,applied_revision,representation_etag,erased_at FROM casework_subjects WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3 FOR UPDATE",
             &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id],
         ).await?.ok_or(StoreError::Conflict)?;
-        let preview_item=transaction.query_opt(
-            "SELECT item_id FROM casework_clock_occurrences WHERE clock_occurrence_id=$1",
-            &[&claim.clock_occurrence_id],
-        ).await?.and_then(|row|row.get::<_,Option<Uuid>>(0));
-        let Some(preview_item)=preview_item else{return Err(StoreError::Conflict)};
-        let mut item=locked_item(&transaction,preview_item).await?;
+        if subject.get::<_, Option<DateTime<Utc>>>(4).is_some() {
+            transaction.execute(
+                "UPDATE casework_clock_occurrences SET state='cancelled',next_action_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
+                &[&claim.clock_occurrence_id, &claim.lease_token],
+            ).await?;
+            transaction.commit().await?;
+            return Ok(0);
+        }
+        let preview_item = transaction
+            .query_opt(
+                "SELECT item_id FROM casework_clock_occurrences WHERE clock_occurrence_id=$1",
+                &[&claim.clock_occurrence_id],
+            )
+            .await?
+            .and_then(|row| row.get::<_, Option<Uuid>>(0));
+        let Some(preview_item) = preview_item else {
+            return Err(StoreError::Conflict);
+        };
+        let mut item = locked_item(&transaction, preview_item).await?;
         let occurrence = transaction.query_opt(
             "SELECT state,scope,scope_key,item_id,current_calculation_generation,source_binding_generation,source_revision,source_etag FROM casework_clock_occurrences WHERE clock_occurrence_id=$1 AND lease_token=$2 FOR UPDATE",
             &[&claim.clock_occurrence_id,&claim.lease_token],
         ).await?;
-        let Some(occurrence)=occurrence else {
+        let Some(occurrence) = occurrence else {
             let state=transaction.query_opt(
                 "SELECT state FROM casework_clock_occurrences WHERE clock_occurrence_id=$1 FOR UPDATE",
                 &[&claim.clock_occurrence_id],
             ).await?.map(|row|row.get::<_,String>(0));
-            if state.as_deref().is_some_and(|value|matches!(value,"completed"|"cancelled")){
+            if state
+                .as_deref()
+                .is_some_and(|value| matches!(value, "completed" | "cancelled"))
+            {
                 transaction.commit().await?;
-                return Ok(0)
+                return Ok(0);
             }
-            return Err(StoreError::Conflict)
+            return Err(StoreError::Conflict);
         };
         let state: String = occurrence.get(0);
         if !matches!(state.as_str(), "running" | "verification_pending") {
@@ -502,7 +527,9 @@ impl PostgresStore {
             return Ok(0);
         }
         let item_id = item_id.ok_or(StoreError::Corrupt)?;
-        if item_id!=preview_item{return Err(StoreError::Conflict)}
+        if item_id != preview_item {
+            return Err(StoreError::Conflict);
+        }
         let attempt: bool = transaction.query_one(
             "SELECT EXISTS(SELECT 1 FROM casework_attempts WHERE item_id=$1 AND state IN ('pending','uncertain'))",
             &[&item_id],
@@ -751,8 +778,7 @@ pub(crate) async fn reconcile_clock_observation(
         ).await?;
     }
     if scope == "activity"
-        && (observation.occurrence_kind != OccurrenceKind::Review
-            || !observation.state.is_active())
+        && (observation.occurrence_kind != OccurrenceKind::Review || !observation.state.is_active())
     {
         transaction.execute(
             "UPDATE casework_clock_occurrences SET state='cancelled',next_action_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=$5 WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3 AND clock_id=$4 AND scope='activity' AND state NOT IN ('completed','cancelled')",
@@ -1172,8 +1198,8 @@ mod tests {
     use registry_casework_core::{
         ActivityClockAnchor, BootstrapDirectoryRequest, ClockReassignment, ClockReminder,
         ClockStep, ClockStepAction, ClockStepInstant, ElapsedDuration, IssuerPrincipal,
-        ReviewTiming, SourceBinding, SubjectClockAnchor, SubjectClockCompletion,
-        SubjectClockPause, WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
+        ReviewTiming, SourceBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause,
+        WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
     };
     use registry_platform_config::{SecretProvider, SecretResolver};
 
@@ -1261,12 +1287,9 @@ mod tests {
                 &BootstrapDirectoryRequest {
                     team_id: "team-a".to_owned(),
                     staff: vec![],
-                    supervisors: vec![actor(
-                        "supervisor",
-                        CaseworkRole::Supervisor,
-                        "supervisor",
-                    )
-                    .principal],
+                    supervisors: vec![
+                        actor("supervisor", CaseworkRole::Supervisor, "supervisor").principal,
+                    ],
                     queue_id: "default".to_owned(),
                 },
                 "bootstrap-clock",
@@ -1390,7 +1413,11 @@ mod tests {
             )
             .await
             .expect("later reconciliation");
-        assert!(store.claim_due_clocks(10).await.expect("restart pass").is_empty());
+        assert!(store
+            .claim_due_clocks(10)
+            .await
+            .expect("restart pass")
+            .is_empty());
         let item = client
             .query_one(
                 "SELECT queue_id,revision FROM casework_items WHERE subject_id='activity-subject'",
@@ -1400,7 +1427,14 @@ mod tests {
             .expect("reassigned item");
         assert_eq!(item.get::<_, String>(0), "overdue-review");
         assert_eq!(item.get::<_, i64>(1), 2);
-        assert_eq!(client.query_one("SELECT count(*) FROM casework_clock_effects",&[]).await.unwrap().get::<_,i64>(0),2);
+        assert_eq!(
+            client
+                .query_one("SELECT count(*) FROM casework_clock_effects", &[])
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            2
+        );
 
         let mut missing_timing = observation(
             "missing-timing",
@@ -1454,16 +1488,65 @@ mod tests {
             Some(instant("2026-08-01T15:00:00+07:00")),
             None,
         );
-        store.apply_observation_with_context(&hinted,"default",None,None,Some(&activity_policy())).await.unwrap();
-        let hinted_claim=store.claim_due_clocks(10).await.unwrap().into_iter().find(|claim|claim.subject.id=="hinted-before-commit").unwrap();
-        store.apply_observation_with_context(&hinted,"default",None,None,Some(&activity_policy())).await.unwrap();
-        store.ingest_transition("binding-a",&registry_casework_core::TransitionHint{subject:hinted.subject.clone(),deduplication_key:"later-source-event".to_owned(),ordered_revision:2}).await.unwrap();
-        assert_eq!(store.apply_clock_claim(&hinted_claim,&hinted).await.unwrap(),0);
+        store
+            .apply_observation_with_context(
+                &hinted,
+                "default",
+                None,
+                None,
+                Some(&activity_policy()),
+            )
+            .await
+            .unwrap();
+        let hinted_claim = store
+            .claim_due_clocks(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.subject.id == "hinted-before-commit")
+            .unwrap();
+        store
+            .apply_observation_with_context(
+                &hinted,
+                "default",
+                None,
+                None,
+                Some(&activity_policy()),
+            )
+            .await
+            .unwrap();
+        store
+            .ingest_transition(
+                "binding-a",
+                &registry_casework_core::TransitionHint {
+                    subject: hinted.subject.clone(),
+                    deduplication_key: "later-source-event".to_owned(),
+                    ordered_revision: 2,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .apply_clock_claim(&hinted_claim, &hinted)
+                .await
+                .unwrap(),
+            0
+        );
         assert_eq!(client.query_one("SELECT count(*) FROM casework_clock_effects e JOIN casework_clock_occurrences o USING(clock_occurrence_id) WHERE o.subject_id='hinted-before-commit'",&[]).await.unwrap().get::<_,i64>(0),0);
-        hinted.ordered_revision=2;
-        hinted.representation_etag="\"r2\"".to_owned();
-        hinted.state=OccurrenceState::Completed;
-        store.apply_observation_with_context(&hinted,"default",None,None,Some(&activity_policy())).await.unwrap();
+        hinted.ordered_revision = 2;
+        hinted.representation_etag = "\"r2\"".to_owned();
+        hinted.state = OccurrenceState::Completed;
+        store
+            .apply_observation_with_context(
+                &hinted,
+                "default",
+                None,
+                None,
+                Some(&activity_policy()),
+            )
+            .await
+            .unwrap();
 
         let mut completed_before_commit = observation(
             "completed-before-clock",
@@ -1474,36 +1557,159 @@ mod tests {
             Some(instant("2026-08-01T15:00:00+07:00")),
             None,
         );
-        store.apply_observation_with_context(&completed_before_commit,"default",None,None,Some(&activity_policy())).await.unwrap();
-        let stale_claim=store.claim_due_clocks(10).await.unwrap().into_iter().find(|claim|claim.subject.id=="completed-before-clock").expect("claimed stale timer");
-        store.put_holiday_set(&admin,&HolidaySetDocument{holiday_set:"office-holidays".to_owned(),revision:8,dates:vec![]},"holiday-8").await.unwrap();
-        let source_stale_preview=store.preview_clock_recompute(&admin,&registry_casework_core::ClockRecomputeRequest{clock_id:"review-deadline".to_owned(),holiday_set:"office-holidays".to_owned(),holiday_revision:8}).await.unwrap();
-        store.ingest_transition("binding-a",&registry_casework_core::TransitionHint{subject:activity.subject.clone(),deduplication_key:"activity-changed-after-preview".to_owned(),ordered_revision:2}).await.unwrap();
-        assert!(matches!(store.apply_clock_recompute(&admin,source_stale_preview.preview_id,"source-stale-recompute").await,Err(StoreError::Conflict)));
-        let mut activity_v2=activity.clone();
-        activity_v2.ordered_revision=2;
-        activity_v2.representation_etag="\"r2\"".to_owned();
-        store.apply_observation_with_context(&activity_v2,"overdue-review",None,None,Some(&activity_policy())).await.unwrap();
-        let stale_preview=store.preview_clock_recompute(&admin,&registry_casework_core::ClockRecomputeRequest{clock_id:"review-deadline".to_owned(),holiday_set:"office-holidays".to_owned(),holiday_revision:8}).await.unwrap();
-        completed_before_commit.ordered_revision=2;
-        completed_before_commit.representation_etag="\"r2\"".to_owned();
-        completed_before_commit.state=OccurrenceState::Completed;
-        store.apply_observation_with_context(&completed_before_commit,"default",None,None,Some(&activity_policy())).await.unwrap();
-        assert_eq!(store.apply_clock_claim(&stale_claim,&completed_before_commit).await.unwrap(),0);
+        store
+            .apply_observation_with_context(
+                &completed_before_commit,
+                "default",
+                None,
+                None,
+                Some(&activity_policy()),
+            )
+            .await
+            .unwrap();
+        let stale_claim = store
+            .claim_due_clocks(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.subject.id == "completed-before-clock")
+            .expect("claimed stale timer");
+        store
+            .put_holiday_set(
+                &admin,
+                &HolidaySetDocument {
+                    holiday_set: "office-holidays".to_owned(),
+                    revision: 8,
+                    dates: vec![],
+                },
+                "holiday-8",
+            )
+            .await
+            .unwrap();
+        let source_stale_preview = store
+            .preview_clock_recompute(
+                &admin,
+                &registry_casework_core::ClockRecomputeRequest {
+                    clock_id: "review-deadline".to_owned(),
+                    holiday_set: "office-holidays".to_owned(),
+                    holiday_revision: 8,
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .ingest_transition(
+                "binding-a",
+                &registry_casework_core::TransitionHint {
+                    subject: activity.subject.clone(),
+                    deduplication_key: "activity-changed-after-preview".to_owned(),
+                    ordered_revision: 2,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .apply_clock_recompute(
+                    &admin,
+                    source_stale_preview.preview_id,
+                    "source-stale-recompute"
+                )
+                .await,
+            Err(StoreError::Conflict)
+        ));
+        let mut activity_v2 = activity.clone();
+        activity_v2.ordered_revision = 2;
+        activity_v2.representation_etag = "\"r2\"".to_owned();
+        store
+            .apply_observation_with_context(
+                &activity_v2,
+                "overdue-review",
+                None,
+                None,
+                Some(&activity_policy()),
+            )
+            .await
+            .unwrap();
+        let stale_preview = store
+            .preview_clock_recompute(
+                &admin,
+                &registry_casework_core::ClockRecomputeRequest {
+                    clock_id: "review-deadline".to_owned(),
+                    holiday_set: "office-holidays".to_owned(),
+                    holiday_revision: 8,
+                },
+            )
+            .await
+            .unwrap();
+        completed_before_commit.ordered_revision = 2;
+        completed_before_commit.representation_etag = "\"r2\"".to_owned();
+        completed_before_commit.state = OccurrenceState::Completed;
+        store
+            .apply_observation_with_context(
+                &completed_before_commit,
+                "default",
+                None,
+                None,
+                Some(&activity_policy()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .apply_clock_claim(&stale_claim, &completed_before_commit)
+                .await
+                .unwrap(),
+            0
+        );
         assert_eq!(client.query_one("SELECT count(*) FROM casework_clock_effects e JOIN casework_clock_occurrences o USING(clock_occurrence_id) WHERE o.subject_id='completed-before-clock'",&[]).await.unwrap().get::<_,i64>(0),0);
-        assert!(matches!(store.apply_clock_recompute(&admin,stale_preview.preview_id,"stale-recompute").await,Err(StoreError::Conflict)));
+        assert!(matches!(
+            store
+                .apply_clock_recompute(&admin, stale_preview.preview_id, "stale-recompute")
+                .await,
+            Err(StoreError::Conflict)
+        ));
 
-        let preview=store.preview_clock_recompute(&admin,&registry_casework_core::ClockRecomputeRequest{clock_id:"review-deadline".to_owned(),holiday_set:"office-holidays".to_owned(),holiday_revision:8}).await.unwrap();
-        assert_eq!(preview.changes.len(),1);
-        assert_ne!(preview.changes[0].old_due_at,preview.changes[0].proposed_due_at);
-        let recomputed=store.apply_clock_recompute(&admin,preview.preview_id,"apply-recompute").await.unwrap();
-        assert_eq!(recomputed.applied_occurrences.len(),1);
-        assert_eq!(store.apply_clock_recompute(&admin,preview.preview_id,"apply-recompute").await.unwrap(),recomputed);
+        let preview = store
+            .preview_clock_recompute(
+                &admin,
+                &registry_casework_core::ClockRecomputeRequest {
+                    clock_id: "review-deadline".to_owned(),
+                    holiday_set: "office-holidays".to_owned(),
+                    holiday_revision: 8,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview.changes.len(), 1);
+        assert_ne!(
+            preview.changes[0].old_due_at,
+            preview.changes[0].proposed_due_at
+        );
+        let recomputed = store
+            .apply_clock_recompute(&admin, preview.preview_id, "apply-recompute")
+            .await
+            .unwrap();
+        assert_eq!(recomputed.applied_occurrences.len(), 1);
+        assert_eq!(
+            store
+                .apply_clock_recompute(&admin, preview.preview_id, "apply-recompute")
+                .await
+                .unwrap(),
+            recomputed
+        );
         let generation=client.query_one("SELECT current_calculation_generation,recompute_generation,next_action_at FROM casework_clock_occurrences WHERE subject_id='activity-subject'",&[]).await.unwrap();
-        assert_eq!(generation.get::<_,i64>(0),2);
-        assert_eq!(generation.get::<_,i64>(1),1);
-        assert_eq!(generation.get::<_,Option<DateTime<Utc>>>(2),None);
-        assert_eq!(client.query_one("SELECT count(*) FROM casework_clock_effects",&[]).await.unwrap().get::<_,i64>(0),2);
+        assert_eq!(generation.get::<_, i64>(0), 2);
+        assert_eq!(generation.get::<_, i64>(1), 1);
+        assert_eq!(generation.get::<_, Option<DateTime<Utc>>>(2), None);
+        assert_eq!(
+            client
+                .query_one("SELECT count(*) FROM casework_clock_effects", &[])
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            2
+        );
 
         let subject_policy = ResolvedClockPolicy {
             clock: ClockPolicy::Subject {
@@ -1532,35 +1738,58 @@ mod tests {
                 completed_at: None,
             }),
         );
-        let item1 = store.apply_observation_with_context(&review,"default",None,None,Some(&subject_policy)).await.unwrap().unwrap();
-        review.ordered_revision=2;
-        review.representation_etag="\"r2\"".to_owned();
-        review.occurrence_key="review:proposal-2".to_owned();
-        review.state=OccurrenceState::WaitingApplicant;
-        review.review_timing.as_mut().unwrap().pause_started_at=Some(instant("2026-08-01T13:00:00+07:00"));
-        store.apply_observation_with_context(&review,"default",None,None,Some(&subject_policy)).await.unwrap();
-        review.ordered_revision=3;
-        review.representation_etag="\"r3\"".to_owned();
-        review.state=OccurrenceState::Open;
-        let timing=review.review_timing.as_mut().unwrap();
-        timing.pause_started_at=None;
-        timing.paused_milliseconds=24*60*60*1_000;
-        let item3=store.apply_observation_with_context(&review,"default",None,None,Some(&subject_policy)).await.unwrap().unwrap();
-        let clocks=store.clock_occurrences_for_item(item3.item_id).await.unwrap();
-        assert_eq!(clocks.len(),1);
-        assert_eq!(clocks[0].due_at,Some(instant("2026-08-04T09:00:00+07:00")));
-        assert_ne!(item1.item_id,item3.item_id);
-        let occurrence_id=clocks[0].clock_occurrence_id;
-        review.ordered_revision=4;
-        review.representation_etag="\"r4\"".to_owned();
-        review.occurrence_key="application:proposal-2".to_owned();
-        review.occurrence_kind=OccurrenceKind::Application;
-        review.stage=None;
-        review.state=OccurrenceState::Open;
-        review.review_timing.as_mut().unwrap().completed_at=Some(instant("2026-08-02T14:00:00+07:00"));
-        let application=store.apply_observation_with_context(&review,"default",None,None,Some(&subject_policy)).await.unwrap().unwrap();
-        let frozen=store.clock_occurrences_for_item(application.item_id).await.unwrap();
-        assert_eq!(frozen[0].clock_occurrence_id,occurrence_id);
-        assert_eq!(frozen[0].state,ClockRuntimeState::Completed);
+        let item1 = store
+            .apply_observation_with_context(&review, "default", None, None, Some(&subject_policy))
+            .await
+            .unwrap()
+            .unwrap();
+        review.ordered_revision = 2;
+        review.representation_etag = "\"r2\"".to_owned();
+        review.occurrence_key = "review:proposal-2".to_owned();
+        review.state = OccurrenceState::WaitingApplicant;
+        review.review_timing.as_mut().unwrap().pause_started_at =
+            Some(instant("2026-08-01T13:00:00+07:00"));
+        store
+            .apply_observation_with_context(&review, "default", None, None, Some(&subject_policy))
+            .await
+            .unwrap();
+        review.ordered_revision = 3;
+        review.representation_etag = "\"r3\"".to_owned();
+        review.state = OccurrenceState::Open;
+        let timing = review.review_timing.as_mut().unwrap();
+        timing.pause_started_at = None;
+        timing.paused_milliseconds = 24 * 60 * 60 * 1_000;
+        let item3 = store
+            .apply_observation_with_context(&review, "default", None, None, Some(&subject_policy))
+            .await
+            .unwrap()
+            .unwrap();
+        let clocks = store
+            .clock_occurrences_for_item(item3.item_id)
+            .await
+            .unwrap();
+        assert_eq!(clocks.len(), 1);
+        assert_eq!(clocks[0].due_at, Some(instant("2026-08-04T09:00:00+07:00")));
+        assert_ne!(item1.item_id, item3.item_id);
+        let occurrence_id = clocks[0].clock_occurrence_id;
+        review.ordered_revision = 4;
+        review.representation_etag = "\"r4\"".to_owned();
+        review.occurrence_key = "application:proposal-2".to_owned();
+        review.occurrence_kind = OccurrenceKind::Application;
+        review.stage = None;
+        review.state = OccurrenceState::Open;
+        review.review_timing.as_mut().unwrap().completed_at =
+            Some(instant("2026-08-02T14:00:00+07:00"));
+        let application = store
+            .apply_observation_with_context(&review, "default", None, None, Some(&subject_policy))
+            .await
+            .unwrap()
+            .unwrap();
+        let frozen = store
+            .clock_occurrences_for_item(application.item_id)
+            .await
+            .unwrap();
+        assert_eq!(frozen[0].clock_occurrence_id, occurrence_id);
+        assert_eq!(frozen[0].state, ClockRuntimeState::Completed);
     }
 }

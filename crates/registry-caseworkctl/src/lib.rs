@@ -41,6 +41,8 @@ enum Command {
     Doctor(OperatorArgs),
     /// Manage Casework's own database.
     Db(DbArgs),
+    /// Preview or erase retained local payload copies for one source request.
+    Retention(RetentionArgs),
     /// Manage a retained local Casework process.
     Dev(DevArgs),
 }
@@ -136,6 +138,36 @@ enum DbCommand {
 }
 
 #[derive(Debug, Args)]
+struct RetentionArgs {
+    #[command(subcommand)]
+    command: RetentionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RetentionCommand {
+    /// Preview or erase retained local payload copies for one exact source request.
+    Erase(RetentionEraseArgs),
+}
+
+#[derive(Debug, Args)]
+struct RetentionEraseArgs {
+    #[command(flatten)]
+    operator: OperatorArgs,
+    /// Stable Casework source identifier.
+    #[arg(long)]
+    source_id: String,
+    /// Source-owned request kind.
+    #[arg(long)]
+    request_kind: String,
+    /// Source-owned request identifier.
+    #[arg(long)]
+    request_id: String,
+    /// Apply the reviewed local erasure. Omit to preview.
+    #[arg(long)]
+    apply: bool,
+}
+
+#[derive(Debug, Args)]
 struct DevArgs {
     #[command(subcommand)]
     command: DevCommand,
@@ -195,6 +227,16 @@ fn run(cli: Cli) -> Result<Value> {
                 project::db_migrate(&args.project, args.operator.as_deref())
             }
         },
+        Command::Retention(args) => match args.command {
+            RetentionCommand::Erase(args) => project::retention_erase(
+                &args.operator.project,
+                args.operator.operator.as_deref(),
+                args.source_id,
+                args.request_kind,
+                args.request_id,
+                args.apply,
+            ),
+        },
         Command::Dev(args) => match args.command {
             DevCommand::Start(args) => project::dev_start(&args.project, args.operator.as_deref()),
             DevCommand::Stop(args) => project::dev_stop(&args.project),
@@ -202,4 +244,61 @@ fn run(cli: Cli) -> Result<Value> {
         },
     }
     .context("casework command refused")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retention_erase_previews_unless_apply_is_explicit() {
+        let parse = |extra: &[&str]| {
+            let mut arguments = vec![
+                "caseworkctl",
+                "retention",
+                "erase",
+                "/tmp/casework-project",
+                "--source-id",
+                "registry",
+                "--request-kind",
+                "correction",
+                "--request-id",
+                "request-1",
+            ];
+            arguments.extend_from_slice(extra);
+            Cli::try_parse_from(arguments).unwrap()
+        };
+
+        let Command::Retention(RetentionArgs {
+            command: RetentionCommand::Erase(preview),
+        }) = parse(&[]).command
+        else {
+            panic!("expected retention erase");
+        };
+        assert!(!preview.apply);
+
+        let Command::Retention(RetentionArgs {
+            command: RetentionCommand::Erase(apply),
+        }) = parse(&["--apply"]).command
+        else {
+            panic!("expected retention erase");
+        };
+        assert!(apply.apply);
+    }
+
+    #[test]
+    fn retention_erase_help_explains_exact_selection_and_explicit_apply() {
+        let error =
+            Cli::try_parse_from(["caseworkctl", "retention", "erase", "--help"]).unwrap_err();
+        let help = error.to_string();
+        for expected in [
+            "--source-id",
+            "--request-kind",
+            "--request-id",
+            "--apply",
+            "Omit to preview",
+        ] {
+            assert!(help.contains(expected), "missing help text: {expected}");
+        }
+    }
 }
