@@ -905,6 +905,7 @@ impl CaseworkClient {
         )
     }
 
+    #[pyo3(signature = (token, profile, source_profile, item_id, query=None))]
     fn work_item_history<'py>(
         &self,
         py: Python<'py>,
@@ -912,16 +913,19 @@ impl CaseworkClient {
         profile: &str,
         source_profile: &str,
         item_id: &str,
+        query: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let item_id = uuid(py, item_id)?;
+        let query: HostedPageQuery = optional_input(py, query)?;
         let token = bearer(py, token)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .work_item_history(auth(&token, profile, Some(source_profile)), item_id),
-                )
+                self.runtime.block_on(self.inner.work_item_history(
+                    auth(&token, profile, Some(source_profile)),
+                    item_id,
+                    &query,
+                ))
             }),
         )
     }

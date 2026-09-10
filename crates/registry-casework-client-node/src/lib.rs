@@ -586,11 +586,17 @@ impl CaseworkClient {
         profile: String,
         source_profile: String,
         item_id: String,
+        query: Option<Value>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let query: HostedPageQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
-                .work_item_history(auth(&token, &profile, &source_profile), uuid(&item_id)?)
+                .work_item_history(
+                    auth(&token, &profile, &source_profile),
+                    uuid(&item_id)?,
+                    &query,
+                )
                 .await,
         )
     }

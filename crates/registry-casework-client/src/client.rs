@@ -460,14 +460,13 @@ impl CaseworkClient {
         &self,
         auth: CaseworkAuth<'_>,
         item_id: Uuid,
+        query: &HostedPageQuery,
     ) -> Result<CaseworkComplete<HistoryPage>, CaseworkClientError> {
         require_source_profile(&auth)?;
-        self.get_json(
-            &auth,
-            &["v1", "work-items", &item_id.to_string(), "history"],
-            &[],
-        )
-        .await
+        validate_page(query.cursor.as_deref(), query.limit)?;
+        let url = self.url(&["v1", "work-items", &item_id.to_string(), "history"])?;
+        let request = self.authorized(self.http.get(url).query(query), &auth)?;
+        self.send_json(request, StatusCode::OK).await
     }
 
     pub async fn holdings(

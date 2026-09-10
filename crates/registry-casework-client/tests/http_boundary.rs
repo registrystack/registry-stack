@@ -14,6 +14,7 @@ use url::Url;
 use uuid::Uuid;
 
 const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+type HistoryObservations = Arc<Mutex<Vec<(String, HeaderMap)>>>;
 
 #[tokio::test]
 async fn mutation_forwards_one_call_token_profile_revision_and_key_once() {
@@ -246,6 +247,87 @@ async fn capture_headers(
             ("traceparent", TRACEPARENT),
         ],
         "{}",
+    )
+}
+
+#[tokio::test]
+async fn source_history_forwards_the_bounded_page_query_and_source_profile() {
+    let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
+    let app = Router::new()
+        .route("/v1/work-items/{item}/history", get(capture_history_query))
+        .with_state(observations.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let first_page = client
+        .work_item_history(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::nil(),
+            &registry_casework_client::HostedPageQuery {
+                cursor: None,
+                limit: Some(1),
+            },
+        )
+        .await
+        .expect("first history page");
+    let next_cursor = first_page.value.next_cursor.expect("continuation");
+    let second_page = client
+        .work_item_history(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::nil(),
+            &registry_casework_client::HostedPageQuery {
+                cursor: Some(next_cursor),
+                limit: Some(1),
+            },
+        )
+        .await
+        .expect("second history page");
+
+    assert_eq!(
+        second_page.value.next_cursor.as_deref(),
+        Some("next-cursor")
+    );
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 2);
+    assert_eq!(
+        observations[0].0,
+        "/v1/work-items/00000000-0000-0000-0000-000000000000/history?limit=1"
+    );
+    assert_eq!(observations[0].1["registry-source-profile"], "reviewer");
+    assert_eq!(
+        observations[1].0,
+        "/v1/work-items/00000000-0000-0000-0000-000000000000/history?cursor=next-cursor&limit=1"
+    );
+    assert_eq!(observations[1].1["registry-source-profile"], "reviewer");
+    server.abort();
+}
+
+async fn capture_history_query(
+    State(observations): State<HistoryObservations>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    observations
+        .lock()
+        .expect("observations")
+        .push((uri.to_string(), headers));
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        r#"{"items":[],"nextCursor":"next-cursor","status":"complete"}"#,
     )
 }
 

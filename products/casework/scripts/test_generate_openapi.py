@@ -102,10 +102,46 @@ class GeneratedOpenApiTests(unittest.TestCase):
     def test_checkpoint_specific_schema_bounds_are_explicit(self) -> None:
         schemas = self.openapi["components"]["schemas"]
         self.assertEqual(
-            {"items", "status"}, set(schemas["HistoryPage"]["properties"])
+            {"items", "nextCursor", "status"},
+            set(schemas["HistoryPage"]["properties"]),
         )
         self.assertEqual(
             "complete", schemas["HistoryPage"]["properties"]["status"]["const"]
+        )
+        history_parameters = {
+            parameter["name"]: parameter
+            for parameter in self.openapi["paths"]["/v1/work-items/{item_id}/history"][
+                "get"
+            ]["parameters"]
+        }
+        self.assertEqual(1, history_parameters["limit"]["schema"]["minimum"])
+        self.assertEqual(100, history_parameters["limit"]["schema"]["maximum"])
+        self.assertIn("cursor.expired", history_parameters["cursor"]["description"])
+        self.assertIn("eventId", history_parameters["cursor"]["description"])
+        self.assertEqual(
+            {
+                "observed", "opened", "claimed", "assigned", "delegated",
+                "caseload_moved", "clock_reminder", "clock_step_applied",
+                "clock_recomputed", "released", "draft_saved", "attempt_reserved",
+                "attempt_uncertain", "action_completed", "superseded", "completed",
+            },
+            set(schemas["HistoryEntry"]["properties"]["kind"]["enum"]),
+        )
+        work_item = schemas["WorkItem"]["properties"]
+        self.assertEqual(
+            {"ruleId", "because", "policyDigest"},
+            set(schemas["WorkItemRouting"]["properties"]),
+        )
+        self.assertNotIn("maxItems", work_item["clockOccurrences"])
+        self.assertNotIn("maxItems", schemas["ClockOccurrenceList"])
+        next_effects = schemas["ClockNextEffect"]["oneOf"]
+        self.assertEqual(
+            ["reminder", "reassign"],
+            [variant["properties"]["kind"]["const"] for variant in next_effects],
+        )
+        self.assertEqual(
+            {"kind", "id", "at", "because", "queueId"},
+            set(next_effects[1]["required"]),
         )
         self.assertEqual(
             "^[a-z][a-z0-9_]{0,63}$", schemas["OperationName"]["pattern"]
@@ -118,6 +154,21 @@ class GeneratedOpenApiTests(unittest.TestCase):
             if parameter["name"] == "limit"
         )
         self.assertEqual(100, limit["schema"]["maximum"])
+
+    def test_source_unavailable_can_identify_a_durable_mutation_attempt(self) -> None:
+        for path in (
+            "/v1/work-items/{item_id}/decisions",
+            "/v1/work-items/{item_id}/attempts/recover",
+            "/v1/work-items/{item_id}/attempts/{attempt_id}/recover",
+        ):
+            response = self.openapi["paths"][path]["post"]["responses"]["503"]
+            attempt = response["headers"]["Registry-Casework-Attempt"]
+            self.assertEqual("uuid", attempt["schema"]["format"])
+            self.assertIn("post-write", attempt["description"])
+        item_read = self.openapi["paths"]["/v1/work-items/{item_id}"]["get"]
+        self.assertNotIn(
+            "Registry-Casework-Attempt", item_read["responses"]["503"]["headers"]
+        )
 
     def test_assignment_routes_preserve_authority_and_preconditions(self) -> None:
         def names(method: str, path: str) -> set[str]:
@@ -344,7 +395,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertIn("policyDigest", occurrence["properties"])
         self.assertIn("calculationGeneration", occurrence["required"])
         self.assertIn("recomputeGeneration", occurrence["required"])
-        self.assertEqual(32, schemas["ClockOccurrenceList"]["maxItems"])
+        self.assertNotIn("maxItems", schemas["ClockOccurrenceList"])
         self.assertEqual(
             100,
             schemas["ClockRecomputePreview"]["properties"]["changes"][

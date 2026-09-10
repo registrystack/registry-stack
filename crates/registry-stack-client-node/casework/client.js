@@ -120,7 +120,7 @@ for (const [method, jsonIndexes] of [
   ['decideWorkItem', [3, 5]],
   ['recoverDecision', [5]],
   ['recoverDecisionByKey', [5]],
-  ['workItemHistory', []],
+  ['workItemHistory', [4]],
   ['holdings', [3]],
   ['directory', []],
   ['bootstrapDirectory', [4]],

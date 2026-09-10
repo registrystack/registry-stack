@@ -27,7 +27,7 @@ export declare class CaseworkClient {
   decideWorkItem(token: string, profile: string, sourceProfile: string, action: any, idempotencyKey: string, decision: any): Promise<CaseworkOutcome>
   recoverDecision(token: string, profile: string, sourceProfile: string, itemId: string, attemptId: string, recovery: any): Promise<CaseworkOutcome>
   recoverDecisionByKey(token: string, profile: string, sourceProfile: string, itemId: string, idempotencyKey: string, recovery: any): Promise<CaseworkOutcome>
-  workItemHistory(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
+  workItemHistory(token: string, profile: string, sourceProfile: string, itemId: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   holdings(token: string, profile: string, sourceProfile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   directory(token: string, profile: string): Promise<CaseworkOutcome>
   bootstrapDirectory(token: string, profile: string, expectedRevision: number, idempotencyKey: string, bootstrap: any): Promise<CaseworkOutcome>

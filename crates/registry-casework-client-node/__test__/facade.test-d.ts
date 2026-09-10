@@ -29,6 +29,7 @@ void client.recoverDecisionByKey(
   'attempt-1',
   { sourceProfileId: sourceProfile },
 )
+void client.workItemHistory(token, profile, sourceProfile, item.itemId, { cursor: 'opaque', limit: 25 })
 
 const hostedCreate: HostedCreateRequest = {
   kind: 'decision',
@@ -60,6 +61,15 @@ if (item.occurrenceKind === 'hosted') {
   const requesterReference: string | undefined = item.hosted?.requesterReference
   void requesterReference
 }
+const routedBy: string | undefined = item.routing?.ruleId
+const nextClockEffect = item.clockOccurrences?.[0]?.nextEffect
+if (nextClockEffect?.kind === 'reassign') {
+  const queueId: string = nextClockEffect.queueId
+  void queueId
+}
+void routedBy
+const liveAttemptId: string | undefined = item.liveAttempt?.attemptId
+void liveAttemptId
 
 function completedAccountability(entry: HistoryEntry): string | undefined {
   if (entry.kind !== 'action_completed') return undefined

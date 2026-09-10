@@ -635,11 +635,64 @@
         ],
         "type": "object"
       },
+      "ClockNextEffect": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "reminder"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "at"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "because": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "reassign"
+              },
+              "queueId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "at",
+              "because",
+              "queueId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ClockOccurrenceList": {
         "items": {
           "$ref": "#/components/schemas/ClockOccurrenceView"
         },
-        "maxItems": 32,
         "type": "array"
       },
       "ClockOccurrenceView": {
@@ -694,6 +747,16 @@
               {
                 "format": "date-time",
                 "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nextEffect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClockNextEffect"
               },
               {
                 "type": "null"
@@ -1299,6 +1362,12 @@
               "observed",
               "opened",
               "claimed",
+              "assigned",
+              "delegated",
+              "caseload_moved",
+              "clock_reminder",
+              "clock_step_applied",
+              "clock_recomputed",
               "released",
               "draft_saved",
               "attempt_reserved",
@@ -1336,6 +1405,16 @@
               "$ref": "#/components/schemas/HistoryEntry"
             },
             "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
             "const": "complete"
@@ -3656,6 +3735,12 @@
           "bindingReference": {
             "type": "string"
           },
+          "clockOccurrences": {
+            "items": {
+              "$ref": "#/components/schemas/ClockOccurrenceView"
+            },
+            "type": "array"
+          },
           "firstObservedAt": {
             "format": "date-time",
             "type": "string"
@@ -3712,6 +3797,16 @@
           "revision": {
             "format": "int64",
             "type": "integer"
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkItemRouting"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "routingCopy": {
             "anyOf": [
@@ -3801,6 +3896,45 @@
           "items",
           "status"
         ],
+        "type": "object"
+      },
+      "WorkItemRouting": {
+        "additionalProperties": false,
+        "properties": {
+          "because": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policyDigest": {
+            "anyOf": [
+              {
+                "maxLength": 71,
+                "minLength": 71,
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ruleId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
         "type": "object"
       },
       "WorkingDaysAfter": {
@@ -11399,6 +11533,14 @@
             },
             "description": "Problem response: service.unavailable, work-item.source-unavailable",
             "headers": {
+              "Registry-Casework-Attempt": {
+                "description": "Durable attempt UUID when this source mutation was stored but its post-write authoritative read was unavailable.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "work-item.source-unavailable"
+              },
               "Retry-After": {
                 "description": "Seconds before retrying the unavailable dependency.",
                 "schema": {
@@ -11714,6 +11856,14 @@
             },
             "description": "Problem response: service.unavailable, work-item.source-unavailable",
             "headers": {
+              "Registry-Casework-Attempt": {
+                "description": "Durable attempt UUID when this source mutation was stored but its post-write authoritative read was unavailable.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "work-item.source-unavailable"
+              },
               "Retry-After": {
                 "description": "Seconds before retrying the unavailable dependency.",
                 "schema": {
@@ -12047,7 +12197,7 @@
     },
     "/v1/work-items/{item_id}/clocks": {
       "get": {
-        "description": "Staff or Supervisor read under the same current source visibility as the item. Registry-Source-Profile is required. Returns at most 32 occurrences with pinned policy digest and separate calculation and recompute generations.",
+        "description": "Staff or Supervisor read under the same current source visibility as the item. Registry-Source-Profile is required. Returns occurrences ordered by clockId and clockOccurrenceId with pinned policy digest and separate calculation and recompute generations.",
         "operationId": "getWorkItemClocks",
         "parameters": [
           {
@@ -12645,6 +12795,14 @@
             },
             "description": "Problem response: service.unavailable, work-item.source-unavailable",
             "headers": {
+              "Registry-Casework-Attempt": {
+                "description": "Durable attempt UUID when this source mutation was stored but its post-write authoritative read was unavailable.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "x-present-for-problem-code": "work-item.source-unavailable"
+              },
               "Retry-After": {
                 "description": "Seconds before retrying the unavailable dependency.",
                 "schema": {
@@ -13914,6 +14072,7 @@
     },
     "/v1/work-items/{item_id}/history": {
       "get": {
+        "description": "Staff or Supervisor only under current source visibility. Results are ordered by occurredAt and eventId.",
         "operationId": "getHistory",
         "parameters": [
           {
@@ -13958,6 +14117,26 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to the human principal, selected Casework profile, selected source profile, and item. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by eventId.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -13980,11 +14159,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: cursor.invalid, request.invalid",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14058,6 +14244,21 @@
               }
             },
             "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14144,7 +14345,7 @@
             "bearerAuth": []
           }
         ],
-        "summary": "Read bounded item history"
+        "summary": "Read paginated item history"
       }
     },
     "/v1/work-items/{item_id}/hosted-decisions": {

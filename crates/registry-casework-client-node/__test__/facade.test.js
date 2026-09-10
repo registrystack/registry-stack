@@ -61,6 +61,44 @@ test('decision forwards the selected source profile with mutation headers', asyn
   assert.equal(observed['idempotency-key'], 'attempt-9');
 });
 
+test('source history forwards cursor and limit and returns the continuation', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({ items: [], nextCursor: 'next-cursor', status: 'complete' }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const page = await client.workItemHistory(
+    'one-call-secret',
+    'staff',
+    'reviewer',
+    '00000000-0000-0000-0000-000000000000',
+    { cursor: 'opaque-cursor', limit: 25 },
+  );
+
+  assert.equal(page.value.nextCursor, 'next-cursor');
+  assert.equal(
+    observed.path,
+    '/v1/work-items/00000000-0000-0000-0000-000000000000/history?cursor=opaque-cursor&limit=25',
+  );
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+});
+
 test('recovery-pending problem preserves the original attempt reference', async (context) => {
   const originalAttemptId = '10000000-0000-4000-8000-000000000001';
   const server = problemServer('work-item.recovery-pending', {

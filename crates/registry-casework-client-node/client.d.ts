@@ -35,6 +35,11 @@ export interface CorrectionRoutingCopy {
   reason?: string
   flaggedFields: ReadonlyArray<string>
 }
+export interface WorkItemRouting {
+  ruleId?: string
+  because?: string
+  policyDigest?: string
+}
 export interface WorkItem {
   itemId: string
   subject: SubjectRef
@@ -53,6 +58,9 @@ export interface WorkItem {
   actions: ReadonlyArray<CaseworkAction>
   routingCopy?: CorrectionRoutingCopy
   hosted?: HostedWorkItemContext
+  routing?: WorkItemRouting
+  clockOccurrences?: ReadonlyArray<ClockOccurrenceView>
+  liveAttempt?: AttemptStatus
 }
 export interface Page<T> { items: ReadonlyArray<T>; nextCursor?: string; status: PageStatus }
 export interface ListWorkItemsQuery {
@@ -324,6 +332,9 @@ export class CaseworkClientError extends Error {
 }
 
 export type ClockRuntimeState = 'running' | 'paused' | 'completed' | 'cancelled' | 'verification_pending' | 'source_facts_missing'
+export type ClockNextEffect =
+  | { kind: 'reminder'; id: string; at: string }
+  | { kind: 'reassign'; id: string; at: string; because: string; queueId: string }
 export interface ClockOccurrenceView {
   clockOccurrenceId: string
   subject: SubjectRef
@@ -337,6 +348,7 @@ export interface ClockOccurrenceView {
   dueAt?: string
   atRiskAt?: string
   completedAt?: string
+  nextEffect?: ClockNextEffect
 }
 export interface HolidaySetDocument { holidaySet: string; revision: SafeInteger; dates: ReadonlyArray<string> }
 export interface HolidaySetRevisionInput { document: HolidaySetDocument }
@@ -373,7 +385,7 @@ export class CaseworkClient {
   decideWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string, decision: DecideRequest): Promise<CaseworkOutcome<MutationResponse>>
   recoverDecision(token: string, profile: string, sourceProfile: string, itemId: string, attemptId: string, recovery: RecoverAttemptRequest): Promise<CaseworkOutcome<MutationResponse>>
   recoverDecisionByKey(token: string, profile: string, sourceProfile: string, itemId: string, idempotencyKey: string, recovery: RecoverAttemptRequest): Promise<CaseworkOutcome<MutationResponse>>
-  workItemHistory(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<Page<HistoryEntry>>>
+  workItemHistory(token: string, profile: string, sourceProfile: string, itemId: string, query?: HostedPageQuery | null): Promise<CaseworkOutcome<Page<HistoryEntry>>>
   holdings(token: string, profile: string, sourceProfile: string, query?: HoldingsQuery | null): Promise<CaseworkOutcome<Page<HoldingSummary>>>
   directory(token: string, profile: string): Promise<CaseworkOutcome<DirectoryResponse>>
   bootstrapDirectory(token: string, profile: string, expectedRevision: SafeInteger, idempotencyKey: string, request: BootstrapDirectoryRequest): Promise<CaseworkOutcome<DirectoryResponse>>

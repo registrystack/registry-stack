@@ -85,6 +85,7 @@ SCHEMA_STRUCTS = {
         "SubjectRef": "SubjectRef",
         "CaseworkAction": "CaseworkAction",
         "AssignmentContext": "AssignmentContext",
+        "WorkItemRouting": "WorkItemRouting",
         "WorkItem": "WorkItem",
         "CorrectionRoutingCopy": "CorrectionRoutingCopy",
         "Draft": "Draft",
@@ -319,6 +320,11 @@ def schemas(problem_entries: list[dict]) -> dict:
             "passiveDueAt": nullable(instant),
             "updatedAt": instant,
             "hosted": nullable(ref("HostedWorkItemContext")),
+            "routing": nullable(ref("WorkItemRouting")),
+            "clockOccurrences": {
+                "type": "array",
+                "items": ref("ClockOccurrenceView"),
+            },
             "actions": array(ref("CaseworkAction")),
             "routingCopy": nullable(ref("CorrectionRoutingCopy")),
             "liveAttempt": ref("AttemptStatus"),
@@ -344,6 +350,14 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "staffingDiagnostic": nullable(ref("StaffingDiagnostic")),
             },
             ["absenceIds"],
+        ),
+        "WorkItemRouting": obj(
+            {
+                "ruleId": nullable(text),
+                "because": nullable(text),
+                "policyDigest": nullable(policy_digest),
+            },
+            [],
         ),
         "HostedPolicyDigest": policy_digest,
         "OpaqueActorRef": actor_ref,
@@ -696,10 +710,10 @@ def schemas(problem_entries: list[dict]) -> dict:
         ),
         "MutationResponse": obj({"item": ref("WorkItem"), "attempt": nullable(ref("AttemptStatus"))}, ["item"]),
         "HistoryEntry": obj(
-            {"eventId": uuid, "itemId": uuid, "itemRevision": integer, "kind": {"type": "string", "enum": ["observed", "opened", "claimed", "released", "draft_saved", "attempt_reserved", "attempt_uncertain", "action_completed", "superseded", "completed"]}, "occurredAt": instant, "actor": nullable(ref("IssuerPrincipal")), "profileId": text, "detail": {}},
+            {"eventId": uuid, "itemId": uuid, "itemRevision": integer, "kind": {"type": "string", "enum": ["observed", "opened", "claimed", "assigned", "delegated", "caseload_moved", "clock_reminder", "clock_step_applied", "clock_recomputed", "released", "draft_saved", "attempt_reserved", "attempt_uncertain", "action_completed", "superseded", "completed"]}, "occurredAt": instant, "actor": nullable(ref("IssuerPrincipal")), "profileId": text, "detail": {}},
             ["eventId", "itemId", "itemRevision", "kind", "occurredAt", "profileId", "detail"],
         ),
-        "HistoryPage": obj({"items": array(ref("HistoryEntry")), "status": {"const": "complete"}}, ["items", "status"]),
+        "HistoryPage": obj({"items": array(ref("HistoryEntry")), "nextCursor": nullable(text), "status": {"const": "complete"}}, ["items", "status"]),
         "HoldingSummary": obj({"principal": ref("IssuerPrincipal"), "queueId": text, "activeItems": {"type": "integer", "minimum": 0}, "overdueItems": {"type": "integer", "minimum": 0}}, ["principal", "queueId", "activeItems", "overdueItems"]),
         "HoldingsPage": obj({"items": array(ref("HoldingSummary")), "nextCursor": nullable(text), "status": page_status}, ["items", "status"]),
         "TeamRecord": obj({"id": text, "members": array(ref("IssuerPrincipal")), "supervisors": array(ref("IssuerPrincipal")), "servedQueues": array(text), "revision": integer}, ["id", "members", "supervisors", "servedQueues", "revision"]),
@@ -924,6 +938,28 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "source_facts_missing",
             ],
         },
+        "ClockNextEffect": {
+            "oneOf": [
+                obj(
+                    {
+                        "kind": {"const": "reminder"},
+                        "id": text,
+                        "at": instant,
+                    },
+                    ["kind", "id", "at"],
+                ),
+                obj(
+                    {
+                        "kind": {"const": "reassign"},
+                        "id": text,
+                        "at": instant,
+                        "because": text,
+                        "queueId": text,
+                    },
+                    ["kind", "id", "at", "because", "queueId"],
+                ),
+            ]
+        },
         "ClockOccurrenceView": obj(
             {
                 "clockOccurrenceId": uuid,
@@ -938,6 +974,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "dueAt": nullable(instant),
                 "atRiskAt": nullable(instant),
                 "completedAt": nullable(instant),
+                "nextEffect": nullable(ref("ClockNextEffect")),
             },
             [
                 "clockOccurrenceId",
@@ -951,7 +988,6 @@ def schemas(problem_entries: list[dict]) -> dict:
         ),
         "ClockOccurrenceList": {
             "type": "array",
-            "maxItems": 32,
             "items": ref("ClockOccurrenceView"),
         },
         "HolidaySetRevisionInput": obj(
@@ -1261,6 +1297,11 @@ HOSTED_VALIDATION_REASONS = [
     "reason_required",
     "text_invalid",
 ]
+SOURCE_ATTEMPT_REFERENCE_OPERATIONS = {
+    ("POST", "/v1/work-items/{item_id}/decisions"),
+    ("POST", "/v1/work-items/{item_id}/attempts/recover"),
+    ("POST", "/v1/work-items/{item_id}/attempts/{attempt_id}/recover"),
+}
 
 
 def apply_hosted_validation_headers(paths: dict) -> None:
@@ -1340,7 +1381,7 @@ def document(contract: dict) -> dict:
         ], description="With Registry-Source-Profile, reads BReg-backed work under that separate authority. Without it, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order.")},
         "/v1/work-items/next": {"get": operation("Get the next caller-visible item", "WorkItem", source=True, parameters=[parameter("queue", "query", "Optional queue identifier.", required=False), parameter("cursor", "query", "Opaque cursor.", required=False)])},
         "/v1/work-items/{item_id}": {"get": operation("Read one currently visible item", "WorkItem", source=True, source_required=False, parameters=[ITEM_ID])},
-        "/v1/work-items/{item_id}/clocks": {"get": operation("Read the item's clock occurrences", "ClockOccurrenceList", source=True, parameters=[ITEM_ID], description="Staff or Supervisor read under the same current source visibility as the item. Registry-Source-Profile is required. Returns at most 32 occurrences with pinned policy digest and separate calculation and recompute generations.")},
+        "/v1/work-items/{item_id}/clocks": {"get": operation("Read the item's clock occurrences", "ClockOccurrenceList", source=True, parameters=[ITEM_ID], description="Staff or Supervisor read under the same current source visibility as the item. Registry-Source-Profile is required. Returns occurrences ordered by clockId and clockOccurrenceId with pinned policy digest and separate calculation and recompute generations.")},
         "/v1/work-items/{item_id}/claim": {"post": operation("Claim an item", "MutationResponse", source=True, source_required=False, mutation=True, idempotency_contract=SHARED_HOSTED_IDEMPOTENCY, parameters=[ITEM_ID])},
         "/v1/work-items/{item_id}/assign": {"post": operation("Assign an item", "MutationResponse", source=True, source_required=False, mutation=True, body="AssignmentRequest", parameters=[ITEM_ID], description="Supervisor-only assignment for a currently served queue. Without Registry-Source-Profile the target is a hosted item; a source-backed item requires the source profile. The assignee is resolved through any active absence cover chain. If no eligible cover is available, the item remains open in its queue with staffingDiagnostic no_cover_available.")},
         "/v1/work-items/{item_id}/delegate": {"post": operation("Delegate a held item", "MutationResponse", source=True, source_required=False, mutation=True, body="DelegateRequest", parameters=[ITEM_ID], description="The current Staff holder delegates an item. Without Registry-Source-Profile the target is a hosted item; a source-backed item requires the source profile. Current item visibility, holder, revision, queue eligibility, and any live source attempt are checked before mutation.")},
@@ -1355,7 +1396,7 @@ def document(contract: dict) -> dict:
         "/v1/work-items/{item_id}/hosted-history": {"get": operation("List retained hosted lifecycle history", "HostedHistoryPage", parameters=[ITEM_ID, parameter("cursor", "query", "Opaque 15-minute cursor bound to the human principal, profile, item, and hosted history feed.", required=False), parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Human Staff or Supervisor only. Current deciding-profile and served-queue authority is checked. Results are ordered by occurredAt and eventId and may include requester notes, opaque actor references, outcomes, staff reasons, or cancellation reasons according to the event kind. They never expose requester or raw actor identity.")},
         "/v1/work-items/{item_id}/attempts/recover": {"post": operation("Recover the original attempt selected by idempotency key", "MutationResponse", source=True, body="RecoverAttemptRequest", parameters=[ITEM_ID, IDEMPOTENCY])},
         "/v1/work-items/{item_id}/attempts/{attempt_id}/recover": {"post": operation("Recover this exact original attempt", "MutationResponse", source=True, body="RecoverAttemptRequest", parameters=[ITEM_ID, ATTEMPT_ID])},
-        "/v1/work-items/{item_id}/history": {"get": operation("Read bounded item history", "HistoryPage", source=True, parameters=[ITEM_ID])},
+        "/v1/work-items/{item_id}/history": {"get": operation("Read paginated item history", "HistoryPage", source=True, parameters=[ITEM_ID, parameter("cursor", "query", "Opaque 15-minute cursor bound to the human principal, selected Casework profile, selected source profile, and item. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by eventId.", required=False), parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Staff or Supervisor only under current source visibility. Results are ordered by occurredAt and eventId.")},
         "/v1/holdings": {"get": operation("Read current caller-visible bounded holdings", "HoldingsPage", source=True, parameters=[parameter("cursor", "query", "Opaque cursor.", required=False)])},
         "/v1/directory": {"get": operation("Read the current authorized directory", "DirectoryResponse")},
         "/v1/directory/absences": {
@@ -1464,6 +1505,20 @@ def apply_operation_contract(paths: dict, contract: dict, catalog: dict[str, dic
             if code in framework and code not in codes
         )
         operation["responses"].update(problem_responses(codes, catalog))
+        if key in SOURCE_ATTEMPT_REFERENCE_OPERATIONS:
+            response_503 = operation["responses"].get("503")
+            if (
+                response_503 is None
+                or "work-item.source-unavailable" not in codes
+            ):
+                raise ValueError(
+                    f"source attempt reference lacks source-unavailable response for {key}"
+                )
+            response_503["headers"]["Registry-Casework-Attempt"] = {
+                "description": "Durable attempt UUID when this source mutation was stored but its post-write authoritative read was unavailable.",
+                "schema": {"type": "string", "format": "uuid"},
+                "x-present-for-problem-code": "work-item.source-unavailable",
+            }
 
 
 def schema_problem_codes(openapi: dict, schema: dict) -> set[str]:
@@ -1582,8 +1637,8 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
     ):
         if set(openapi_schemas[schema_name]["properties"]) != page_fields:
             raise ValueError(f"OpenAPI page shape drifted for {schema_name}")
-    if set(openapi_schemas["HistoryPage"]["properties"]) != {"items", "status"}:
-        raise ValueError("fixed-window HistoryPage must not advertise a cursor")
+    if set(openapi_schemas["HistoryPage"]["properties"]) != page_fields:
+        raise ValueError("OpenAPI page shape drifted for HistoryPage")
     hosted_source = (
         repository_root / "crates/registry-casework-core/src/hosted.rs"
     ).read_text(encoding="utf-8")
@@ -1708,6 +1763,9 @@ def verify_source(repository_root: Path) -> None:
     routing_source = (
         repository_root / "crates/registry-casework-core/src/routing.rs"
     ).read_text(encoding="utf-8")
+    clock_runtime_source = (
+        repository_root / "crates/registry-casework-core/src/clock_runtime.rs"
+    ).read_text(encoding="utf-8")
     webhook_crypto_source = (
         repository_root / "crates/registry-platform-crypto/src/breg_webhook.rs"
     ).read_text(encoding="utf-8")
@@ -1724,6 +1782,14 @@ def verify_source(repository_root: Path) -> None:
     for dto in DTO_MARKERS:
         if f"pub struct {dto}" not in core_http and f"pub type {dto}" not in core_http:
             raise ValueError(f"maintained OpenAPI DTO marker is missing: {dto}")
+    for marker in (
+        "pub enum ClockNextEffect",
+        "Reminder {",
+        "Reassign {",
+        '#[serde(rename = "queueId")]\n        queue_id: String',
+    ):
+        if marker not in clock_runtime_source:
+            raise ValueError(f"OpenAPI clock next-effect contract drifted: {marker}")
     problem_match = re.search(r"let body = ProblemBody \{(?P<fields>.*?)\n\s*\};", http_source, re.S)
     if not problem_match:
         raise ValueError("problem response construction is missing")

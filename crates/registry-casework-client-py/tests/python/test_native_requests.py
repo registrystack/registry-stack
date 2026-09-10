@@ -54,6 +54,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "revision": 7,
                 "dates": ["2026-09-11"],
             })
+        elif self.path.startswith(f"/tenant/v1/work-items/{ITEM_ID}/history?"):
+            self.respond({"items": [], "nextCursor": "next-cursor", "status": "complete"})
         elif self.path.startswith("/tenant/v1/work-items"):
             self.respond({"items": [], "status": "complete"})
         else:
@@ -259,6 +261,21 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(key_error.exception.code, "idempotency.expired")
         self.assertEqual(key_error.exception.status, 410)
         self.assertEqual(len(_Handler.observations), 2)
+
+    def test_source_history_forwards_page_query_and_returns_continuation(self) -> None:
+        page = self.client.work_item_history(
+            "staff-token",
+            "staff",
+            "source-one",
+            ITEM_ID,
+            {"cursor": "opaque-cursor", "limit": 25},
+        )
+        self.assertEqual(page["value"]["nextCursor"], "next-cursor")
+        self.assertEqual(
+            _Handler.observations[0]["path"],
+            f"/tenant/v1/work-items/{ITEM_ID}/history?cursor=opaque-cursor&limit=25",
+        )
+        self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
 
     def test_clock_calls_preserve_source_profile_revision_and_explicit_keys(self) -> None:
         clocks = self.client.work_item_clocks(

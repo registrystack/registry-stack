@@ -12,8 +12,9 @@ OccurrenceState: TypeAlias = Literal[
 PageStatus: TypeAlias = Literal["complete", "budget_exhausted", "source_unavailable"]
 HistoryKind: TypeAlias = Literal[
     "observed", "opened", "claimed", "assigned", "delegated", "caseload_moved",
-    "released", "draft_saved", "attempt_reserved", "attempt_uncertain",
-    "action_completed", "superseded", "completed",
+    "clock_reminder", "clock_step_applied", "clock_recomputed", "released",
+    "draft_saved", "attempt_reserved", "attempt_uncertain", "action_completed",
+    "superseded", "completed",
 ]
 
 class IssuerPrincipal(TypedDict):
@@ -38,12 +39,27 @@ ClockRuntimeState: TypeAlias = Literal[
     "source_facts_missing",
 ]
 
+class ClockReminderNextEffect(TypedDict):
+    kind: Literal["reminder"]
+    id: str
+    at: str
+
+class ClockReassignNextEffect(TypedDict):
+    kind: Literal["reassign"]
+    id: str
+    at: str
+    because: str
+    queueId: str
+
+ClockNextEffect: TypeAlias = ClockReminderNextEffect | ClockReassignNextEffect
+
 class _ClockOccurrenceViewOptional(TypedDict, total=False):
     anchorAt: str
     startedAt: str
     dueAt: str
     atRiskAt: str
     completedAt: str
+    nextEffect: ClockNextEffect
 
 class ClockOccurrenceView(_ClockOccurrenceViewOptional):
     clockOccurrenceId: str
@@ -122,6 +138,14 @@ class _AssignmentContextOptional(TypedDict, total=False):
 class AssignmentContext(_AssignmentContextOptional):
     absenceIds: list[str]
 
+class _WorkItemRoutingOptional(TypedDict, total=False):
+    ruleId: str
+    because: str
+    policyDigest: str
+
+class WorkItemRouting(_WorkItemRoutingOptional):
+    pass
+
 class _WorkItemOptional(TypedDict, total=False):
     stage: str
     holder: IssuerPrincipal
@@ -129,6 +153,8 @@ class _WorkItemOptional(TypedDict, total=False):
     passiveDueAt: str
     routingCopy: CorrectionRoutingCopy
     hosted: HostedWorkItemContext
+    routing: WorkItemRouting
+    clockOccurrences: list[ClockOccurrenceView]
     liveAttempt: "AttemptStatus"
 
 class WorkItem(_WorkItemOptional):
@@ -587,7 +613,7 @@ class CaseworkClient:
     def decide_work_item(self, token: str, profile: str, source_profile: str, action: CaseworkAction, idempotency_key: str, decision: DecideRequest) -> Complete[MutationResponse]: ...
     def recover_decision(self, token: str, profile: str, source_profile: str, item_id: str, attempt_id: str, recovery: RecoverAttemptRequest) -> Complete[MutationResponse]: ...
     def recover_decision_by_key(self, token: str, profile: str, source_profile: str, item_id: str, idempotency_key: str, recovery: RecoverAttemptRequest) -> Complete[MutationResponse]: ...
-    def work_item_history(self, token: str, profile: str, source_profile: str, item_id: str) -> Complete[Page[HistoryEntry]]: ...
+    def work_item_history(self, token: str, profile: str, source_profile: str, item_id: str, query: HostedPageQuery | None = None) -> Complete[Page[HistoryEntry]]: ...
     def holdings(self, token: str, profile: str, source_profile: str, query: HoldingsQuery | None = None) -> Complete[Page[HoldingSummary]]: ...
     def directory(self, token: str, profile: str) -> Complete[DirectoryResponse]: ...
     def bootstrap_directory(self, token: str, profile: str, expected_revision: int, idempotency_key: str, request: BootstrapDirectoryRequest) -> Complete[DirectoryResponse]: ...
