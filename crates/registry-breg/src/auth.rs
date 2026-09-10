@@ -13,7 +13,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use registry_platform_authcommon::{parse_bearer_token, validate_compact_access_token};
 use registry_platform_oidc::{
-    is_access_token_typ_pair, Audience, JwksFetcher, TokenVerifier, TokenVerifierConfig,
+    is_access_token_typ_pair, Audience, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -148,11 +148,22 @@ impl RegistryAuthenticator {
     ) -> Result<VerifiedRequestClaims, AuthenticationError> {
         validate_compact_access_token(token)
             .map_err(|_| AuthenticationError::MalformedCredential)?;
-        let verified = self
-            .verifier
-            .verify(token)
-            .await
-            .map_err(|_| AuthenticationError::VerificationRefused)?;
+        let verified = self.verifier.verify(token).await.map_err(|error| {
+            // The caller-facing refusal stays value-free and
+            // indistinct; operators get the one distinction that
+            // names an operational cause instead of a bad
+            // credential: a key outside the configured JWKS is how
+            // provider-side rotation presents.
+            if matches!(error, OidcError::UnknownKid) {
+                tracing::warn!(
+                    target: "registry_breg::auth",
+                    message = "refused an access token whose signing key is not in the \
+                               configured JWKS; for a static jwksSource the provider rotated \
+                               its keys: re-pin the document and restart"
+                );
+            }
+            AuthenticationError::VerificationRefused
+        })?;
         if !accepted_audience(verified.claims.aud.as_ref(), &self.audience) {
             return Err(AuthenticationError::InvalidClaims);
         }
