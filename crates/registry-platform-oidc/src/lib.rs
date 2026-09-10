@@ -911,6 +911,43 @@ impl TokenVerifierConfig {
     }
 }
 
+/// The `allowed_typ` list a single configured access-token type admits
+/// under RFC 9068. The access-token media type is spelled `at+jwt` (the
+/// recommended short form, RFC 9068 §2.1) or `application/at+jwt`, and a
+/// resource server MUST accept both spellings for that one token type
+/// while rejecting every other value (RFC 9068 §4), so configuring
+/// either spelling admits the pair. Any other configured type admits
+/// only itself. Comparison stays case-insensitive like every `typ` check
+/// in this module.
+#[must_use]
+pub fn access_token_typ_set(configured: &str) -> Vec<String> {
+    match configured.to_ascii_lowercase().as_str() {
+        "at+jwt" | "application/at+jwt" => {
+            vec!["at+jwt".to_owned(), "application/at+jwt".to_owned()]
+        }
+        _ => vec![configured.to_owned()],
+    }
+}
+
+/// Whether `values` is exactly the two RFC 9068 spellings of the one
+/// access-token media type, in either order and casing. This is the only
+/// multi-element `allowed_typ` shape that still names a single
+/// access-token type; every other shape admits more than one.
+#[must_use]
+pub fn is_access_token_typ_pair(values: &[String]) -> bool {
+    values.len() == 2
+        && values
+            .iter()
+            .filter(|value| value.eq_ignore_ascii_case("at+jwt"))
+            .count()
+            == 1
+        && values
+            .iter()
+            .filter(|value| value.eq_ignore_ascii_case("application/at+jwt"))
+            .count()
+            == 1
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Claims {
     #[serde(default)]
@@ -1608,6 +1645,43 @@ mod tests {
             request_timeout: Duration::from_secs(1),
             outage_tolerance: Duration::from_secs(3600),
         }
+    }
+
+    #[test]
+    fn the_rfc9068_media_type_admits_both_spellings_as_one_type() {
+        let pair = vec!["at+jwt".to_owned(), "application/at+jwt".to_owned()];
+        assert_eq!(access_token_typ_set("at+jwt"), pair);
+        assert_eq!(access_token_typ_set("application/at+jwt"), pair);
+        assert_eq!(access_token_typ_set("APPLICATION/AT+JWT"), pair);
+        assert_eq!(access_token_typ_set("JWT"), vec!["JWT".to_owned()]);
+        assert!(is_access_token_typ_pair(&access_token_typ_set("at+jwt")));
+        assert!(!is_access_token_typ_pair(&access_token_typ_set("JWT")));
+    }
+
+    #[test]
+    fn only_the_rfc9068_pair_names_one_access_token_type() {
+        assert!(is_access_token_typ_pair(&[
+            "at+jwt".to_owned(),
+            "application/at+jwt".to_owned()
+        ]));
+        assert!(is_access_token_typ_pair(&[
+            "application/at+jwt".to_owned(),
+            "at+jwt".to_owned()
+        ]));
+        assert!(!is_access_token_typ_pair(&[
+            "JWT".to_owned(),
+            "at+jwt".to_owned()
+        ]));
+        assert!(!is_access_token_typ_pair(&[
+            "at+jwt".to_owned(),
+            "at+jwt".to_owned()
+        ]));
+        assert!(!is_access_token_typ_pair(&[
+            "at+jwt".to_owned(),
+            "application/at+jwt".to_owned(),
+            "JWT".to_owned()
+        ]));
+        assert!(!is_access_token_typ_pair(&["at+jwt".to_owned()]));
     }
 
     #[test]

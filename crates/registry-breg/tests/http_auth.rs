@@ -25,7 +25,8 @@ use registry_breg::cursor::CursorCodec;
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig,
+    access_token_typ_set, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
+    TokenVerifierConfig,
 };
 use registry_platform_testing::{
     fixtures, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
@@ -726,6 +727,57 @@ async fn issuer_audience_algorithm_token_type_and_signature_are_all_verified() {
 }
 
 #[tokio::test]
+async fn the_rfc9068_typ_pair_admits_both_spellings_as_one_token_type() {
+    let harness = Harness::new().await;
+    let mut claims = valid_claims();
+    claims["iss"] = json!(harness.idp.issuer());
+    let short_form = harness.signed_token(claims.clone(), "at+jwt");
+    let full_form = harness.signed_token(claims.clone(), "application/at+jwt");
+    let legacy_type = harness.signed_token(claims, "JWT");
+
+    for configured in ["at+jwt", "application/at+jwt"] {
+        let mut config = verifier_config(&harness.idp);
+        config.allowed_typ = access_token_typ_set(configured);
+        let authenticator = authenticator_with_verifier(
+            &harness.registry,
+            &harness.idp,
+            config,
+            authority_claims(),
+        )
+        .expect("the RFC 9068 spellings configure one admitted token type");
+        for token in [&short_form, &full_form] {
+            authenticator
+                .authenticate(token)
+                .await
+                .expect("either RFC 9068 spelling of the media type is accepted");
+        }
+        let error = authenticator
+            .authenticate(&legacy_type)
+            .await
+            .expect_err("a different token type is still refused");
+        assert_eq!(error, AuthenticationError::VerificationRefused);
+    }
+
+    let verifier = TokenVerifier::new(
+        {
+            let mut config = verifier_config(&harness.idp);
+            config.allowed_typ = access_token_typ_set("at+jwt");
+            config
+        },
+        key_source(&harness.idp),
+    );
+    verifier
+        .key_source()
+        .ensure_key_set()
+        .await
+        .expect("MockIdP JWKS is reachable before verifier assertions");
+    assert_platform_refusal(&verifier, &legacy_type, |error| {
+        matches!(error, OidcError::TokenTypeNotAllowed)
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn malformed_or_duplicate_bearer_never_downgrades_to_anonymous() {
     let harness = Harness::new().await;
     for values in [
@@ -1064,6 +1116,11 @@ async fn constructor_requires_one_exact_bounded_verifier_profile() {
         .push(duplicate_algorithm.allowed_algorithms[0]);
     let mut duplicate_type = verifier_config(&harness.idp);
     duplicate_type.allowed_typ.push("at+jwt".to_owned());
+    let mut pair_plus_extra_type = verifier_config(&harness.idp);
+    pair_plus_extra_type.allowed_typ = access_token_typ_set("at+jwt");
+    pair_plus_extra_type.allowed_typ.push("JWT".to_owned());
+    let mut blank_type = verifier_config(&harness.idp);
+    blank_type.allowed_typ = vec![" ".to_owned()];
     let mut reserved_scope = verifier_config(&harness.idp);
     reserved_scope.scope_claim = "sub".to_owned();
 
@@ -1072,6 +1129,8 @@ async fn constructor_requires_one_exact_bounded_verifier_profile() {
         duplicate_audience,
         duplicate_algorithm,
         duplicate_type,
+        pair_plus_extra_type,
+        blank_type,
         reserved_scope,
     ] {
         let error = authenticator_with_verifier(

@@ -12,7 +12,9 @@ use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use registry_platform_authcommon::{parse_bearer_token, validate_compact_access_token};
-use registry_platform_oidc::{Audience, JwksFetcher, TokenVerifier, TokenVerifierConfig};
+use registry_platform_oidc::{
+    is_access_token_typ_pair, Audience, JwksFetcher, TokenVerifier, TokenVerifierConfig,
+};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -265,8 +267,7 @@ fn validate_verifier_profile(
         || config.audiences.len() != 1
         || !valid_config_value(&config.audiences[0])
         || config.allowed_algorithms.len() != 1
-        || config.allowed_typ.len() != 1
-        || !valid_config_value(&config.allowed_typ[0])
+        || !admits_one_access_token_type(&config.allowed_typ)
         || !valid_claim_name(&config.scope_claim)
         || REGISTERED_CLAIMS.contains(&config.scope_claim.as_str())
         || config.scope_separator.is_control()
@@ -287,6 +288,15 @@ fn validate_verifier_profile(
         }
     }
     Ok(())
+}
+
+/// Exactly one admitted access-token type semantics: a single valid
+/// `typ` value, or the two RFC 9068 spellings of the access-token media
+/// type, which name the same type and must be accepted together
+/// (RFC 9068 §4). Any other shape admits more than one token type.
+fn admits_one_access_token_type(allowed_typ: &[String]) -> bool {
+    (allowed_typ.len() == 1 && valid_config_value(&allowed_typ[0]))
+        || is_access_token_typ_pair(allowed_typ)
 }
 
 fn validate_claim_mapping(

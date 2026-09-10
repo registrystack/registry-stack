@@ -24,7 +24,8 @@ use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_oidc::{
-    fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    TokenVerifierConfig,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -1211,7 +1212,7 @@ impl OidcVerifierConfig {
             self.issuer.clone(),
             vec![self.audience.clone()],
             vec![self.allowed_algorithm.as_jsonwebtoken()],
-            vec![self.access_token_type.clone()],
+            access_token_typ_set(&self.access_token_type),
         )
         .with_scope_claim(self.scope_claim.clone())
         .with_scope_separator(self.scope_separator)
@@ -1942,6 +1943,10 @@ struct RawOidcVerifierConfig {
     issuer: String,
     audience: String,
     allowed_algorithm: OidcAlgorithm,
+    /// The one admitted access-token `typ` semantics. Configuring the
+    /// RFC 9068 access-token media type as `at+jwt` or
+    /// `application/at+jwt` admits both spellings of that one type; any
+    /// other value (for example `JWT`) admits only that exact value.
     access_token_type: String,
     scope_claim: String,
     scope_separator: char,
