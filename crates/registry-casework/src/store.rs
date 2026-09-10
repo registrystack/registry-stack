@@ -27,6 +27,14 @@ const CLOCK_MIGRATION: &str = include_str!("../migrations/0004_clocks.sql");
 const SOURCE_RETENTION_MIGRATION: &str = include_str!("../migrations/0005_source_retention.sql");
 const SOURCE_HISTORY_MIGRATION: &str = include_str!("../migrations/0006_source_history.sql");
 
+pub(crate) type InboxPosition = (Option<DateTime<Utc>>, DateTime<Utc>, Uuid);
+
+#[derive(Debug)]
+pub(crate) struct InboxCandidate {
+    pub item: WorkItem,
+    pub effective_due_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: Pool,
@@ -1705,34 +1713,36 @@ impl PostgresStore {
         )))
     }
 
-    pub async fn resolve_cursor(
+    pub(crate) async fn resolve_cursor(
         &self,
         actor: &ActorContext,
         source_profile_id: &str,
         context: &str,
         cursor: Option<&str>,
-    ) -> Result<Option<(Option<DateTime<Utc>>, Uuid)>, StoreError> {
+    ) -> Result<Option<InboxPosition>, StoreError> {
         let Some(cursor) = cursor else {
             return Ok(None);
         };
         let cursor_id = Uuid::parse_str(cursor).map_err(|_| StoreError::Invalid)?;
         let client = self.client().await?;
-        let row=client.query_opt("SELECT last_passive_due_at,last_item_id FROM casework_cursors WHERE cursor_id=$1 AND issuer=$2 AND subject=$3 AND casework_profile_id=$4 AND source_profile_id=$5 AND context=$6 AND expires_at>now()", &[&cursor_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&source_profile_id,&context]).await?.ok_or(StoreError::Invalid)?;
+        let row=client.query_opt("SELECT c.last_passive_due_at,i.first_observed_at,c.last_item_id FROM casework_cursors c JOIN casework_items i ON i.item_id=c.last_item_id WHERE c.cursor_id=$1 AND c.issuer=$2 AND c.subject=$3 AND c.casework_profile_id=$4 AND c.source_profile_id=$5 AND c.context=$6 AND c.expires_at>now()", &[&cursor_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&source_profile_id,&context]).await?.ok_or(StoreError::Invalid)?;
         Ok(row
-            .get::<_, Option<Uuid>>(1)
-            .map(|item_id| (row.get(0), item_id)))
+            .get::<_, Option<Uuid>>(2)
+            .map(|item_id| (row.get(0), row.get::<_, DateTime<Utc>>(1), item_id)))
     }
 
-    pub async fn issue_cursor(
+    pub(crate) async fn issue_cursor(
         &self,
         actor: &ActorContext,
         source_profile_id: &str,
         context: &str,
-        last: Option<(Option<DateTime<Utc>>, Uuid)>,
+        last: Option<InboxPosition>,
     ) -> Result<String, StoreError> {
         let cursor_id = Uuid::new_v4();
         let client = self.client().await?;
-        let (last_due, last_id) = last.map_or((None, None), |(due, id)| (due, Some(id)));
+        let (last_due, last_id) = last.map_or((None, None), |(due, _first_observed_at, id)| {
+            (due, Some(id))
+        });
         client.execute("INSERT INTO casework_cursors(cursor_id,issuer,subject,casework_profile_id,source_profile_id,context,last_passive_due_at,last_item_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '15 minutes')", &[&cursor_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&source_profile_id,&context,&last_due,&last_id]).await?;
         Ok(cursor_id.to_string())
     }
@@ -1844,21 +1854,49 @@ impl PostgresStore {
         after: Option<(Option<DateTime<Utc>>, Uuid)>,
         queue: Option<&str>,
     ) -> Result<Page<WorkItem>, StoreError> {
-        self.inbox_candidates_for_view(actor, InboxView::MyTeams, limit, after, queue)
-            .await
+        let after = match after {
+            Some((effective_due_at, item_id)) => Some((
+                effective_due_at,
+                self.item(item_id).await?.first_observed_at,
+                item_id,
+            )),
+            None => None,
+        };
+        let page = self
+            .inbox_candidates_for_view(actor, InboxView::MyTeams, limit, after, queue, None)
+            .await?;
+        Ok(Page {
+            items: page
+                .items
+                .into_iter()
+                .map(|candidate| candidate.item)
+                .collect(),
+            next_cursor: page.next_cursor,
+            status: page.status,
+        })
     }
 
-    pub async fn inbox_candidates_for_view(
+    pub(crate) async fn inbox_candidates_for_view(
         &self,
         actor: &ActorContext,
         view: InboxView,
         limit: usize,
-        after: Option<(Option<DateTime<Utc>>, Uuid)>,
+        after: Option<InboxPosition>,
         queue: Option<&str>,
-    ) -> Result<Page<WorkItem>, StoreError> {
+        subject: Option<&SubjectRef>,
+    ) -> Result<Page<InboxCandidate>, StoreError> {
         let limit = i64::try_from(limit.min(100)).map_err(|_| StoreError::Invalid)?;
-        let (after_due, after_id, has_after) =
-            after.map_or((None, None, false), |(due, id)| (due, Some(id), true));
+        let (after_due, after_first_observed_at, after_id, has_after) = after
+            .map_or((None, None, None, false), |(due, first_observed_at, id)| {
+                (due, Some(first_observed_at), Some(id), true)
+            });
+        let (source_id, subject_kind, subject_id) = subject.map_or((None, None, None), |subject| {
+            (
+                Some(subject.source_id.as_str()),
+                Some(subject.kind.as_str()),
+                Some(subject.id.as_str()),
+            )
+        });
         let client = self.client().await?;
         let view = match view {
             InboxView::Mine => "mine",
@@ -1868,13 +1906,18 @@ impl PostgresStore {
             InboxView::CompletedByMe => "completed_by_me",
         };
         let rows=client.query(
-            "SELECT i.* FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$1 AND m.subject=$2 WHERE i.erased_at IS NULL AND m.membership_kind=$3 AND ($4::text IS NULL OR i.queue_id=$4) AND (($5='mine' AND i.state NOT IN ('completed','superseded','cancelled') AND i.holder_issuer=$1 AND i.holder_subject=$2) OR ($5='my_teams' AND i.state NOT IN ('completed','superseded','cancelled')) OR ($5='team_holdings' AND i.state NOT IN ('completed','superseded','cancelled') AND i.holder_issuer IS NOT NULL) OR ($5='overdue' AND i.state NOT IN ('completed','superseded','cancelled') AND i.passive_due_at<now()) OR ($5='completed_by_me' AND i.state='completed' AND EXISTS(SELECT 1 FROM casework_history h WHERE h.item_id=i.item_id AND h.kind='action_completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND (NOT $6 OR ($7::timestamptz IS NOT NULL AND (i.passive_due_at > $7 OR i.passive_due_at IS NULL OR (i.passive_due_at=$7 AND i.item_id>$8))) OR ($7::timestamptz IS NULL AND i.passive_due_at IS NULL AND i.item_id>$8)) ORDER BY i.passive_due_at NULLS LAST,i.item_id LIMIT $9",
-            &[&actor.principal.issuer,&actor.principal.subject,&match actor.role { CaseworkRole::Staff=>"staff", CaseworkRole::Supervisor=>"supervisor", CaseworkRole::Administrator=>"administrator", CaseworkRole::Requester=>"requester" },&queue,&view,&has_after,&after_due,&after_id,&limit]
+            "WITH clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification_pending')) AS active_due_at FROM casework_clock_occurrences o LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.item_id IS NOT NULL GROUP BY o.item_id), candidates AS (SELECT i.*,CASE WHEN clock_due.item_id IS NULL THEN i.passive_due_at ELSE clock_due.active_due_at END AS effective_due_at FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$1 AND m.subject=$2 LEFT JOIN clock_due ON clock_due.item_id=i.item_id WHERE i.erased_at IS NULL AND m.membership_kind=$3 AND ($4::text IS NULL OR i.queue_id=$4) AND ($6::text IS NULL OR (i.source_id=$6 AND i.subject_kind=$7 AND i.subject_id=$8))) SELECT candidates.* FROM candidates WHERE (($5='mine' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer=$1 AND holder_subject=$2) OR ($5='my_teams' AND state NOT IN ('completed','superseded','cancelled')) OR ($5='team_holdings' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer IS NOT NULL) OR ($5='overdue' AND state NOT IN ('completed','superseded','cancelled') AND effective_due_at<now()) OR ($5='completed_by_me' AND state='completed' AND EXISTS(SELECT 1 FROM casework_history h WHERE h.item_id=candidates.item_id AND h.kind='action_completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND (NOT $9 OR ($10::timestamptz IS NOT NULL AND (effective_due_at>$10 OR effective_due_at IS NULL OR (effective_due_at=$10 AND (first_observed_at>$11 OR (first_observed_at=$11 AND item_id>$12))))) OR ($10::timestamptz IS NULL AND effective_due_at IS NULL AND (first_observed_at>$11 OR (first_observed_at=$11 AND item_id>$12)))) ORDER BY effective_due_at NULLS LAST,first_observed_at,item_id LIMIT $13",
+            &[&actor.principal.issuer,&actor.principal.subject,&match actor.role { CaseworkRole::Staff=>"staff", CaseworkRole::Supervisor=>"supervisor", CaseworkRole::Administrator=>"administrator", CaseworkRole::Requester=>"requester" },&queue,&view,&source_id,&subject_kind,&subject_id,&has_after,&after_due,&after_first_observed_at,&after_id,&limit]
         ).await?;
         let items = rows
             .iter()
-            .map(row_to_item)
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|row| {
+                Ok(InboxCandidate {
+                    item: row_to_item(row)?,
+                    effective_due_at: row.get("effective_due_at"),
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
         let next =
             (items.len() == usize::try_from(limit).unwrap_or(100)).then(|| "more".to_owned());
         Ok(Page {
@@ -1882,6 +1925,26 @@ impl PostgresStore {
             next_cursor: next,
             status: PageStatus::Complete,
         })
+    }
+
+    pub async fn served_queues(&self, actor: &ActorContext) -> Result<Vec<String>, StoreError> {
+        let membership_kind = match actor.role {
+            CaseworkRole::Staff => "staff",
+            CaseworkRole::Supervisor => "supervisor",
+            CaseworkRole::Administrator | CaseworkRole::Requester => {
+                return Err(StoreError::Forbidden);
+            }
+        };
+        let client = self.client().await?;
+        Ok(client
+            .query(
+                "SELECT DISTINCT q.queue_id FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE m.issuer=$1 AND m.subject=$2 AND m.membership_kind=$3 ORDER BY q.queue_id",
+                &[&actor.principal.issuer, &actor.principal.subject, &membership_kind],
+            )
+            .await?
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect())
     }
 
     pub async fn holdings(
@@ -1893,7 +1956,7 @@ impl PostgresStore {
         }
         let client = self.client().await?;
         let rows=client.query(
-            "SELECT i.holder_issuer,i.holder_subject,i.queue_id,count(*)::bigint,count(*) FILTER(WHERE i.passive_due_at IS NOT NULL AND i.passive_due_at < now())::bigint FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships lead ON lead.team_id=q.team_id AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' WHERE i.erased_at IS NULL AND i.holder_issuer IS NOT NULL AND i.state NOT IN ('completed','superseded','cancelled') GROUP BY i.holder_issuer,i.holder_subject,i.queue_id ORDER BY i.queue_id,i.holder_issuer,i.holder_subject",
+            "WITH clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification_pending')) AS active_due_at FROM casework_clock_occurrences o LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.item_id IS NOT NULL GROUP BY o.item_id), candidates AS (SELECT i.*,CASE WHEN clock_due.item_id IS NULL THEN i.passive_due_at ELSE clock_due.active_due_at END AS effective_due_at FROM casework_items i LEFT JOIN clock_due ON clock_due.item_id=i.item_id) SELECT i.holder_issuer,i.holder_subject,i.queue_id,count(*)::bigint,count(*) FILTER(WHERE i.effective_due_at IS NOT NULL AND i.effective_due_at < now())::bigint FROM candidates i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships lead ON lead.team_id=q.team_id AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' WHERE i.erased_at IS NULL AND i.holder_issuer IS NOT NULL AND i.state NOT IN ('completed','superseded','cancelled') GROUP BY i.holder_issuer,i.holder_subject,i.queue_id ORDER BY i.queue_id,i.holder_issuer,i.holder_subject",
             &[&actor.principal.issuer,&actor.principal.subject]
         ).await?;
         rows.into_iter()

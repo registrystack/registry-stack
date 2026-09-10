@@ -93,3 +93,8 @@ required-features = ["postgres-test"]
 name = "source_retention_postgres"
 path = "tests/source_retention_postgres.rs"
 required-features = ["postgres-test"]
+
+[[test]]
+name = "inbox_ordering_postgres"
+path = "tests/inbox_ordering_postgres.rs"
+required-features = ["postgres-test"]
