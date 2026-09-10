@@ -13,10 +13,10 @@ use casework_client_sdk::{
     CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
     CaseworkClient as RustClient, CaseworkClientConfig, CaseworkClientError as RustClientError,
     CaseworkComplete, CaseworkProtocolFailure, ClockRecomputeApplyRequest, ClockRecomputeRequest,
-    DecideRequest, DelegateRequest, DirectoryTeamUpdateRequest, HoldingsQuery,
-    HolidaySetRevisionInput, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
-    HostedNoteRequest, HostedPageQuery, HostedTerminalQuery, ListWorkItemsQuery, NextWorkItemQuery,
-    RecoverAttemptRequest, SaveDraftRequest,
+    DecideRequest, DelegateRequest, DirectoryTargetsQuery, DirectoryTeamUpdateRequest,
+    HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest, HostedCreateRequest,
+    HostedDecisionRequest, HostedNoteRequest, HostedPageQuery, HostedTerminalQuery,
+    ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest, SaveDraftRequest,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -964,6 +964,26 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime
                     .block_on(self.inner.directory(auth(&token, profile, None)))
+            }),
+        )
+    }
+
+    fn directory_targets<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        query: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query: DirectoryTargetsQuery = input(py, query)?;
+        let token = bearer(py, token)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .directory_targets(auth(&token, profile, None), &query),
+                )
             }),
         )
     }

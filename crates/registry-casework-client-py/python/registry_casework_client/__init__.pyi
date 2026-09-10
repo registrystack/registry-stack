@@ -205,6 +205,26 @@ class HostedTerminalQuery(TypedDict, total=False):
     cursor: str
     limit: int
 
+DirectoryTargetPurpose: TypeAlias = Literal["assignment", "absence_person", "absence_cover"]
+
+class _DirectoryTargetsPageOptional(TypedDict, total=False):
+    cursor: str
+    limit: int
+
+class DirectoryAssignmentTargetsQuery(_DirectoryTargetsPageOptional):
+    purpose: Literal["assignment"]
+    queue: str
+
+class DirectoryAbsencePersonTargetsQuery(_DirectoryTargetsPageOptional):
+    purpose: Literal["absence_person"]
+
+class DirectoryAbsenceCoverTargetsQuery(_DirectoryTargetsPageOptional):
+    purpose: Literal["absence_cover"]
+    personIssuer: str
+    personSubject: str
+
+DirectoryTargetsQuery: TypeAlias = DirectoryAssignmentTargetsQuery | DirectoryAbsencePersonTargetsQuery | DirectoryAbsenceCoverTargetsQuery
+
 class _ListWorkItemsQueryOptional(TypedDict, total=False):
     queue: str
     cursor: str
@@ -595,6 +615,8 @@ class Page(_PageOptional, Generic[T]):
     items: list[T]
     status: PageStatus
 
+DirectoryTargetPage: TypeAlias = Page[IssuerPrincipal]
+
 class CaseworkClientError(Exception):
     kind: str
     code: str | None
@@ -636,6 +658,7 @@ class CaseworkClient:
     def work_item_history(self, token: str, profile: str, source_profile: str, item_id: str, query: HostedPageQuery | None = None) -> Complete[Page[HistoryEntry]]: ...
     def holdings(self, token: str, profile: str, source_profile: str, query: HoldingsQuery | None = None) -> Complete[Page[HoldingSummary]]: ...
     def directory(self, token: str, profile: str) -> Complete[DirectoryResponse]: ...
+    def directory_targets(self, token: str, profile: str, query: DirectoryTargetsQuery) -> Complete[DirectoryTargetPage]: ...
     def bootstrap_directory(self, token: str, profile: str, expected_revision: int, idempotency_key: str, request: BootstrapDirectoryRequest) -> Complete[DirectoryResponse]: ...
     def update_directory_team(self, token: str, profile: str, team_id: str, expected_directory_revision: int, idempotency_key: str, request: DirectoryTeamUpdateRequest) -> Complete[DirectoryResponse]: ...
     def absences(self, token: str, profile: str, source_profile: str | None = None) -> Complete[list[AbsenceRecord]]: ...

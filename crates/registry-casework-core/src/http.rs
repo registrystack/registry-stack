@@ -70,6 +70,7 @@ pub const HOSTED_ACCOUNTABILITY_PATH: &str = "/v1/hosted-accountability";
 pub const NEXT_WORK_ITEM_PATH: &str = "/v1/work-items/next";
 pub const HOLDINGS_PATH: &str = "/v1/holdings";
 pub const DIRECTORY_PATH: &str = "/v1/directory";
+pub const DIRECTORY_TARGETS_PATH: &str = "/v1/directory/targets";
 pub const DESCRIPTION_PATH: &str = "/v1/casework";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -168,6 +169,93 @@ pub struct HoldingsQuery {
     pub cursor: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectoryTargetPurpose {
+    Assignment,
+    AbsencePerson,
+    AbsenceCover,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DirectoryTargetsQuery {
+    pub purpose: DirectoryTargetPurpose,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person_issuer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person_subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum DirectoryTargetsQueryError {
+    #[error("the directory target query fields do not match its purpose")]
+    Combination,
+    #[error("a directory target query value is invalid")]
+    Value,
+}
+
+impl DirectoryTargetsQuery {
+    pub fn check(&self) -> Result<(), DirectoryTargetsQueryError> {
+        match self.purpose {
+            DirectoryTargetPurpose::Assignment => {
+                if self.person_issuer.is_some() || self.person_subject.is_some() {
+                    return Err(DirectoryTargetsQueryError::Combination);
+                }
+                if self.queue.as_deref().is_none_or(str::is_empty) {
+                    return Err(DirectoryTargetsQueryError::Value);
+                }
+            }
+            DirectoryTargetPurpose::AbsencePerson => {
+                if self.queue.is_some()
+                    || self.person_issuer.is_some()
+                    || self.person_subject.is_some()
+                {
+                    return Err(DirectoryTargetsQueryError::Combination);
+                }
+            }
+            DirectoryTargetPurpose::AbsenceCover => {
+                if self.queue.is_some() {
+                    return Err(DirectoryTargetsQueryError::Combination);
+                }
+                let Some(person) = self.person() else {
+                    return Err(DirectoryTargetsQueryError::Combination);
+                };
+                if !valid_directory_principal(&person) {
+                    return Err(DirectoryTargetsQueryError::Value);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn person(&self) -> Option<IssuerPrincipal> {
+        self.person_issuer
+            .as_ref()
+            .zip(self.person_subject.as_ref())
+            .map(|(issuer, subject)| IssuerPrincipal {
+                issuer: issuer.clone(),
+                subject: subject.clone(),
+            })
+    }
+}
+
+fn valid_directory_principal(person: &IssuerPrincipal) -> bool {
+    !person.issuer.is_empty()
+        && person.issuer.len() <= MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES
+        && !person.issuer.chars().any(char::is_control)
+        && !person.subject.is_empty()
+        && person.subject.len() <= MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES
+        && !person.subject.chars().any(char::is_control)
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClaimRequest {}
@@ -259,6 +347,7 @@ pub struct WorkItemPage {
 }
 
 pub type HoldingsPage = Page<HoldingSummary>;
+pub type DirectoryTargetPage = Page<IssuerPrincipal>;
 pub type HistoryPage = Page<crate::HistoryEntry>;
 pub type HostedNotePage = Page<crate::HostedNote>;
 pub type HostedHistoryPage = Page<HostedHistoryEntry>;
@@ -414,5 +503,65 @@ mod tests {
             "status": "complete"
         }))
         .is_err());
+    }
+
+    #[test]
+    fn directory_target_query_fields_are_bound_to_their_purpose() {
+        let assignment: DirectoryTargetsQuery = serde_json::from_value(serde_json::json!({
+            "purpose": "assignment",
+            "queue": "review"
+        }))
+        .expect("assignment query decodes");
+        assignment.check().expect("assignment query validates");
+        assert_eq!(assignment.person(), None);
+
+        let absence_person: DirectoryTargetsQuery =
+            serde_json::from_value(serde_json::json!({"purpose": "absence_person"}))
+                .expect("absence-person query decodes");
+        absence_person
+            .check()
+            .expect("absence-person query validates");
+
+        let absence_cover: DirectoryTargetsQuery = serde_json::from_value(serde_json::json!({
+            "purpose": "absence_cover",
+            "personIssuer": "https://identity.example",
+            "personSubject": "officer-one"
+        }))
+        .expect("absence-cover query decodes");
+        absence_cover
+            .check()
+            .expect("absence-cover query validates");
+        assert_eq!(
+            absence_cover.person(),
+            Some(IssuerPrincipal {
+                issuer: "https://identity.example".to_owned(),
+                subject: "officer-one".to_owned(),
+            })
+        );
+
+        for invalid in [
+            serde_json::json!({"purpose": "assignment"}),
+            serde_json::json!({"purpose": "assignment", "queue": ""}),
+            serde_json::json!({
+                "purpose": "assignment",
+                "queue": "review",
+                "personIssuer": "https://identity.example",
+                "personSubject": "officer-one"
+            }),
+            serde_json::json!({"purpose": "absence_person", "queue": "review"}),
+            serde_json::json!({
+                "purpose": "absence_cover",
+                "personIssuer": "https://identity.example"
+            }),
+            serde_json::json!({
+                "purpose": "absence_cover",
+                "personIssuer": "",
+                "personSubject": "officer-one"
+            }),
+        ] {
+            let query: DirectoryTargetsQuery =
+                serde_json::from_value(invalid).expect("wire shape decodes");
+            assert!(query.check().is_err());
+        }
     }
 }

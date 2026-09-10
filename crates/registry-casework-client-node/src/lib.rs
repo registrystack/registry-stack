@@ -13,9 +13,10 @@ use registry_casework_client::{
     CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
     CaseworkClient as CoreClient, CaseworkClientConfig as CoreConfig, CaseworkClientError,
     ClockRecomputeApplyRequest, ClockRecomputeRequest, DecideRequest, DelegateRequest,
-    HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest, HostedCreateRequest,
-    HostedDecisionRequest, HostedNoteRequest, HostedPageQuery, HostedTerminalQuery,
-    ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest, SaveDraftRequest,
+    DirectoryTargetsQuery, HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest,
+    HostedCreateRequest, HostedDecisionRequest, HostedNoteRequest, HostedPageQuery,
+    HostedTerminalQuery, ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest,
+    SaveDraftRequest,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -624,6 +625,22 @@ impl CaseworkClient {
         outcome(
             self.inner
                 .directory(CaseworkAuth::new(&token, &profile))
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn directory_targets(
+        &self,
+        token: String,
+        profile: String,
+        query: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: DirectoryTargetsQuery = input(query)?;
+        outcome(
+            self.inner
+                .directory_targets(CaseworkAuth::new(&token, &profile), &query)
                 .await,
         )
     }

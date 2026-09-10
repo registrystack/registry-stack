@@ -8,7 +8,8 @@ use axum::Router;
 use registry_casework_client::{
     BearerToken, CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
     CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure, DecideRequest,
-    HostedDecisionRequest, HostedValidationReason, RecoverAttemptRequest, SourceBinding,
+    DirectoryTargetPurpose, DirectoryTargetsQuery, HostedDecisionRequest, HostedValidationReason,
+    RecoverAttemptRequest, SourceBinding,
 };
 use url::Url;
 use uuid::Uuid;
@@ -332,6 +333,72 @@ async fn capture_history_query(
 }
 
 #[tokio::test]
+async fn directory_targets_forward_the_exact_context_without_a_source_profile() {
+    let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
+    let app = Router::new()
+        .route("/v1/directory/targets", get(capture_directory_targets))
+        .with_state(observations.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let page = client
+        .directory_targets(
+            CaseworkAuth::new(&token, "supervisor"),
+            &DirectoryTargetsQuery {
+                purpose: DirectoryTargetPurpose::AbsenceCover,
+                queue: None,
+                person_issuer: Some("https://id.example".into()),
+                person_subject: Some("absent-officer".into()),
+                cursor: Some("opaque-target-cursor".into()),
+                limit: Some(25),
+            },
+        )
+        .await
+        .expect("directory target page");
+
+    assert_eq!(page.value.items[0].subject, "cover-officer");
+    assert_eq!(page.value.next_cursor.as_deref(), Some("target-next"));
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(
+        observations[0].0,
+        "/v1/directory/targets?purpose=absence_cover&personIssuer=https%3A%2F%2Fid.example&personSubject=absent-officer&cursor=opaque-target-cursor&limit=25"
+    );
+    assert_eq!(observations[0].1["registry-casework-profile"], "supervisor");
+    assert!(!observations[0].1.contains_key("registry-source-profile"));
+    server.abort();
+}
+
+async fn capture_directory_targets(
+    State(observations): State<HistoryObservations>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    observations
+        .lock()
+        .expect("observations")
+        .push((uri.to_string(), headers));
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        r#"{"items":[{"issuer":"https://id.example","subject":"cover-officer"}],"nextCursor":"target-next","status":"complete"}"#,
+    )
+}
+
+#[tokio::test]
 async fn invalid_mutation_input_fails_before_network_io() {
     let client = CaseworkClient::new(CaseworkClientConfig::new(
         Url::parse("http://127.0.0.1:1/").expect("fixture URL"),
@@ -394,6 +461,62 @@ async fn invalid_subject_selectors_fail_before_network_io() {
     assert!(matches!(
         client
             .list_hosted_work_items(CaseworkAuth::new(&token, "staff"), &complete)
+            .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+}
+
+#[tokio::test]
+async fn invalid_directory_target_queries_fail_before_network_io() {
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse("http://127.0.0.1:1/").expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let missing_queue = DirectoryTargetsQuery {
+        purpose: DirectoryTargetPurpose::Assignment,
+        queue: None,
+        person_issuer: None,
+        person_subject: None,
+        cursor: None,
+        limit: Some(25),
+    };
+    assert!(matches!(
+        client
+            .directory_targets(CaseworkAuth::new(&token, "staff"), &missing_queue)
+            .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+
+    let partial_person = DirectoryTargetsQuery {
+        purpose: DirectoryTargetPurpose::AbsenceCover,
+        queue: None,
+        person_issuer: Some("https://id.example".into()),
+        person_subject: None,
+        cursor: None,
+        limit: Some(25),
+    };
+    assert!(matches!(
+        client
+            .directory_targets(CaseworkAuth::new(&token, "supervisor"), &partial_person)
+            .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+
+    let source_selected = DirectoryTargetsQuery {
+        purpose: DirectoryTargetPurpose::AbsencePerson,
+        queue: None,
+        person_issuer: None,
+        person_subject: None,
+        cursor: None,
+        limit: Some(25),
+    };
+    assert!(matches!(
+        client
+            .directory_targets(
+                CaseworkAuth::new(&token, "supervisor").with_source_profile("reader"),
+                &source_selected,
+            )
             .await,
         Err(CaseworkClientError::InvalidRequest { .. })
     ));

@@ -6,17 +6,18 @@ use registry_casework_core::{
     CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage,
     CaseloadPreviewQuery, CaseworkAction, ClaimRequest, ClockOccurrenceView,
     ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
-    DecideRequest, DelegateRequest, Description, DirectoryResponse, DraftResponse, HistoryPage,
-    HoldingsPage, HoldingsQuery, HolidaySetDocument, HolidaySetRevisionInput,
-    HostedAccountabilityRecord, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
-    HostedHistoryPage, HostedNotePage, HostedNoteRequest, HostedPageQuery, HostedTerminalPage,
-    HostedTerminalQuery, HostedTerminalResult, HostedValidationError, HostedValidationReason,
-    ListWorkItemsQuery, MutationResponse, NextWorkItemQuery, RecoverAttemptRequest, ReleaseRequest,
+    DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
+    DirectoryTargetsQuery, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery,
+    HolidaySetDocument, HolidaySetRevisionInput, HostedAccountabilityRecord, HostedCancelRequest,
+    HostedCreateRequest, HostedDecisionRequest, HostedHistoryPage, HostedNotePage,
+    HostedNoteRequest, HostedPageQuery, HostedTerminalPage, HostedTerminalQuery,
+    HostedTerminalResult, HostedValidationError, HostedValidationReason, ListWorkItemsQuery,
+    MutationResponse, NextWorkItemQuery, RecoverAttemptRequest, ReleaseRequest,
     RequesterHostedItem, SaveDraftRequest, WorkItem, WorkItemPage, CASEWORK_PROBLEM_TYPE_BASE,
-    CASEWORK_PROFILE_HEADER, HOLDINGS_PATH, HOSTED_ACCOUNTABILITY_PATH, HOSTED_ITEMS_PATH,
-    HOSTED_TERMINAL_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
-    MAXIMUM_CASEWORK_PROFILE_BYTES, NEXT_WORK_ITEM_PATH, SOURCE_PROFILE_HEADER,
-    VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER, WORK_ITEMS_PATH,
+    CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, HOLDINGS_PATH, HOSTED_ACCOUNTABILITY_PATH,
+    HOSTED_ITEMS_PATH, HOSTED_TERMINAL_PATH, IDEMPOTENCY_KEY_HEADER,
+    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, NEXT_WORK_ITEM_PATH,
+    SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER, WORK_ITEMS_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -498,6 +499,21 @@ impl CaseworkClient {
         auth: CaseworkAuth<'_>,
     ) -> Result<CaseworkComplete<DirectoryResponse>, CaseworkClientError> {
         self.get_json(&auth, &["v1", "directory"], &[]).await
+    }
+
+    pub async fn directory_targets(
+        &self,
+        auth: CaseworkAuth<'_>,
+        query: &DirectoryTargetsQuery,
+    ) -> Result<CaseworkComplete<DirectoryTargetPage>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        query.check().map_err(|_| {
+            CaseworkClientError::invalid_request("the directory target query is invalid")
+        })?;
+        validate_page(query.cursor.as_deref(), query.limit)?;
+        let url = self.url_from_constant(DIRECTORY_TARGETS_PATH)?;
+        let request = self.authorized(self.http.get(url).query(query), &auth)?;
+        self.send_json(request, StatusCode::OK).await
     }
 
     pub async fn bootstrap_directory(

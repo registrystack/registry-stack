@@ -39,6 +39,15 @@ void client.listWorkItems(token, profile, sourceProfile, {
 })
 // @ts-expect-error subject selectors must include all three fields
 void client.listWorkItems(token, profile, sourceProfile, { view: 'my_teams', sourceId: 'source-one' })
+void client.directoryTargets(token, profile, { purpose: 'assignment', queue: 'review', limit: 25 })
+void client.directoryTargets(token, profile, { purpose: 'absence_person' })
+void client.directoryTargets(token, profile, {
+  purpose: 'absence_cover', personIssuer: 'https://idp.example', personSubject: 'officer',
+})
+// @ts-expect-error assignment target discovery requires a queue
+void client.directoryTargets(token, profile, { purpose: 'assignment' })
+// @ts-expect-error absence cover discovery requires the complete person identity
+void client.directoryTargets(token, profile, { purpose: 'absence_cover', personIssuer: 'https://idp.example' })
 
 const hostedCreate: HostedCreateRequest = {
   kind: 'decision',

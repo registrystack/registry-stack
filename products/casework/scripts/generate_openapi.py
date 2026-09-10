@@ -39,6 +39,7 @@ ROUTES = {
     "/v1/work-items/{item_id}/history",
     "/v1/holdings",
     "/v1/directory",
+    "/v1/directory/targets",
     "/v1/directory/absences",
     "/v1/directory/absences/{absence_id}",
     "/v1/directory/bootstrap",
@@ -71,6 +72,8 @@ DTO_MARKERS = {
     "BootstrapDirectoryRequest",
     "DirectoryTeamUpdateRequest",
     "DirectoryResponse",
+    "DirectoryTargetsQuery",
+    "DirectoryTargetPage",
     "Description",
     "DraftResponse",
     "HostedTerminalQuery",
@@ -181,6 +184,7 @@ OPERATION_IDS = {
     ("POST", "/v1/hosted-items/{item_id}/cancel"): "cancelHostedItem",
     ("GET", "/v1/hosted-accountability/{event_id}"): "getHostedAccountability",
     ("GET", "/v1/directory"): "getDirectory",
+    ("GET", "/v1/directory/targets"): "listDirectoryTargets",
     ("GET", "/v1/directory/absences"): "listAbsences",
     ("POST", "/v1/directory/absences"): "createAbsence",
     ("DELETE", "/v1/directory/absences/{absence_id}"): "deleteAbsence",
@@ -732,6 +736,7 @@ def schemas(problem_entries: list[dict]) -> dict:
         "HoldingsPage": obj({"items": array(ref("HoldingSummary")), "nextCursor": nullable(text), "status": page_status}, ["items", "status"]),
         "TeamRecord": obj({"id": text, "members": array(ref("IssuerPrincipal")), "supervisors": array(ref("IssuerPrincipal")), "servedQueues": array(text), "revision": integer}, ["id", "members", "supervisors", "servedQueues", "revision"]),
         "DirectoryResponse": obj({"revision": integer, "teams": array(ref("TeamRecord"))}, ["revision", "teams"]),
+        "DirectoryTargetPage": obj({"items": array(ref("IssuerPrincipal")), "nextCursor": nullable(text), "status": page_status}, ["items", "status"]),
         "BootstrapDirectoryRequest": obj({"teamId": text, "staff": array(ref("IssuerPrincipal")), "supervisors": array(ref("IssuerPrincipal")), "queueId": text}, ["teamId", "staff", "supervisors", "queueId"]),
         "DirectoryTeamPrincipal": obj(
             {
@@ -1422,6 +1427,14 @@ def document(contract: dict) -> dict:
         "/v1/work-items/{item_id}/history": {"get": operation("Read paginated item history", "HistoryPage", source=True, parameters=[ITEM_ID, parameter("cursor", "query", "Opaque 15-minute cursor bound to the human principal, selected Casework profile, selected source profile, and item. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by eventId.", required=False), parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Staff or Supervisor only under current source visibility. Results are ordered by occurredAt and eventId.")},
         "/v1/holdings": {"get": operation("Read current caller-visible bounded holdings", "HoldingsPage", source=True, parameters=[parameter("cursor", "query", "Opaque cursor.", required=False)])},
         "/v1/directory": {"get": operation("Read the current authorized directory", "DirectoryResponse")},
+        "/v1/directory/targets": {"get": operation("List current directory targets", "DirectoryTargetPage", parameters=[
+            parameter("purpose", "query", "Required target-discovery purpose. assignment requires queue and forbids person fields; absence_person forbids queue and person fields; absence_cover requires both exact personIssuer and personSubject and forbids queue.", {"type": "string", "enum": ["assignment", "absence_person", "absence_cover"]}),
+            parameter("queue", "query", "Required nonempty queue identifier for assignment; forbidden for absence purposes.", {"type": "string", "minLength": 1}, required=False),
+            parameter("personIssuer", "query", "Exact issuer of the managed absent person. Required together with personSubject for absence_cover and forbidden otherwise.", {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}, required=False),
+            parameter("personSubject", "query", "Exact subject of the managed absent person. Required together with personIssuer for absence_cover and forbidden otherwise.", {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}, required=False),
+            parameter("cursor", "query", "Opaque 15-minute cursor bound to the authenticated human principal, selected Casework profile, purpose, queue, and person fields. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by issuer and subject.", required=False),
+            parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
+        ], description="Returns only issuer-qualified principals currently eligible for the requested use. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence_person lists people the caller may currently manage; absence_cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and names, teams, and absence details are never returned.")},
         "/v1/directory/absences": {
             "get": operation("List authorized absence records", "AbsenceRecordList", description="Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The bounded result contains at most 1000 records ordered by start time and absenceId."),
             "post": operation("Record an absence", "AbsenceRecord", mutation=True, allow_zero_revision=True, body="AbsenceInput", status="201", description="Uses the directory revision in If-Match. Staff can manage their own absence with cover from the same team; Supervisors can manage currently supervised staff; Administrators can manage any directory staff. The period is start-inclusive and end-exclusive."),
@@ -1660,6 +1673,7 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         "HostedNotePage",
         "HostedHistoryPage",
         "CaseloadPreviewPage",
+        "DirectoryTargetPage",
     ):
         if set(openapi_schemas[schema_name]["properties"]) != page_fields:
             raise ValueError(f"OpenAPI page shape drifted for {schema_name}")

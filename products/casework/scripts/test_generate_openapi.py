@@ -297,6 +297,38 @@ class GeneratedOpenApiTests(unittest.TestCase):
         )
         self.assertIn("no work-item identifiers", operation["description"])
 
+    def test_directory_target_discovery_is_purpose_bound_and_principal_only(self) -> None:
+        operation = self.openapi["paths"]["/v1/directory/targets"]["get"]
+        parameters = {
+            parameter["name"]: parameter for parameter in operation["parameters"]
+        }
+        self.assertEqual(
+            ["assignment", "absence_person", "absence_cover"],
+            parameters["purpose"]["schema"]["enum"],
+        )
+        self.assertTrue(parameters["purpose"]["required"])
+        for name in ("queue", "personIssuer", "personSubject", "cursor", "limit"):
+            self.assertFalse(parameters[name]["required"])
+        for name in ("personIssuer", "personSubject"):
+            self.assertEqual(2048, parameters[name]["schema"]["x-maximum-utf8-bytes"])
+        self.assertEqual(1, parameters["limit"]["schema"]["minimum"])
+        self.assertEqual(100, parameters["limit"]["schema"]["maximum"])
+        self.assertIn("purpose, queue, and person fields", parameters["cursor"]["description"])
+        self.assertIn("cursor.expired", parameters["cursor"]["description"])
+        self.assertNotIn(
+            "Registry-Source-Profile",
+            {parameter["name"] for parameter in operation["parameters"]},
+        )
+        self.assertIn("across teams", operation["description"])
+        self.assertIn("only issuer-qualified principals", operation["description"])
+        self.assertIn("names, teams, and absence details are never returned", operation["description"])
+        page = self.openapi["components"]["schemas"]["DirectoryTargetPage"]
+        self.assertEqual(
+            "#/components/schemas/IssuerPrincipal",
+            page["properties"]["items"]["items"]["$ref"],
+        )
+        self.assertEqual({"items", "nextCursor", "status"}, set(page["properties"]))
+
     def test_assignment_schemas_are_bounded_and_report_per_item_results(self) -> None:
         schemas = self.openapi["components"]["schemas"]
         self.assertIn("assignment", schemas["WorkItem"]["properties"])

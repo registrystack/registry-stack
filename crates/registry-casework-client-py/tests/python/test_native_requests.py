@@ -100,6 +100,15 @@ class _Handler(BaseHTTPRequestHandler):
             })
         elif self.path.startswith(f"/tenant/v1/work-items/{ITEM_ID}/history?"):
             self.respond({"items": [], "nextCursor": "next-cursor", "status": "complete"})
+        elif self.path.startswith("/tenant/v1/directory/targets?"):
+            self.respond({
+                "items": [{
+                    "issuer": "https://id.example",
+                    "subject": "cover-officer",
+                }],
+                "nextCursor": "target-next",
+                "status": "complete",
+            })
         elif self.path.startswith("/tenant/v1/work-items"):
             self.respond({
                 "items": [],
@@ -355,6 +364,41 @@ class NativeRequestTests(unittest.TestCase):
 
         self.assertEqual(item["value"]["heldSince"], "2026-09-11T03:04:05Z")
         self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
+
+    def test_directory_targets_preserve_exact_query_without_source_authority(self) -> None:
+        page = self.client.directory_targets(
+            "supervisor-token",
+            "supervisor",
+            {
+                "purpose": "absence_cover",
+                "personIssuer": "https://id.example",
+                "personSubject": "absent-officer",
+                "cursor": "opaque-target-cursor",
+                "limit": 25,
+            },
+        )
+
+        self.assertEqual(page["value"], {
+            "items": [{
+                "issuer": "https://id.example",
+                "subject": "cover-officer",
+            }],
+            "nextCursor": "target-next",
+            "status": "complete",
+        })
+        observation = _Handler.observations[0]
+        self.assertEqual(
+            parse_qs(urlsplit(observation["path"]).query),
+            {
+                "purpose": ["absence_cover"],
+                "personIssuer": ["https://id.example"],
+                "personSubject": ["absent-officer"],
+                "cursor": ["opaque-target-cursor"],
+                "limit": ["25"],
+            },
+        )
+        self.assertEqual(observation["profile"], "supervisor")
+        self.assertEqual(observation["source_profile"], "")
 
     def test_clock_calls_preserve_source_profile_revision_and_explicit_keys(self) -> None:
         clocks = self.client.work_item_clocks(

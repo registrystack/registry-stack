@@ -30,6 +30,7 @@ export declare class CaseworkClient {
   workItemHistory(token: string, profile: string, sourceProfile: string, itemId: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   holdings(token: string, profile: string, sourceProfile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   directory(token: string, profile: string): Promise<CaseworkOutcome>
+  directoryTargets(token: string, profile: string, query: any): Promise<CaseworkOutcome>
   bootstrapDirectory(token: string, profile: string, expectedRevision: number, idempotencyKey: string, bootstrap: any): Promise<CaseworkOutcome>
   absences(token: string, profile: string): Promise<CaseworkOutcome>
   createAbsence(token: string, profile: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>

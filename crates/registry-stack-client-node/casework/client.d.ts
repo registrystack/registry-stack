@@ -65,6 +65,16 @@ export interface WorkItem {
 }
 export interface Page<T> { items: ReadonlyArray<T>; nextCursor?: string; status: PageStatus }
 export interface WorkItemPage extends Page<WorkItem> { servedQueues: ReadonlyArray<string> }
+export type DirectoryTargetPurpose = 'assignment' | 'absence_person' | 'absence_cover'
+export type DirectoryTargetsQuery = {
+  cursor?: string
+  limit?: SafeInteger
+} & (
+  | { purpose: 'assignment'; queue: string; personIssuer?: never; personSubject?: never }
+  | { purpose: 'absence_person'; queue?: never; personIssuer?: never; personSubject?: never }
+  | { purpose: 'absence_cover'; queue?: never; personIssuer: string; personSubject: string }
+)
+export type DirectoryTargetPage = Page<IssuerPrincipal>
 export type ListWorkItemsQuery = {
   view: InboxView
   queue?: string
@@ -394,6 +404,7 @@ export class CaseworkClient {
   workItemHistory(token: string, profile: string, sourceProfile: string, itemId: string, query?: HostedPageQuery | null): Promise<CaseworkOutcome<Page<HistoryEntry>>>
   holdings(token: string, profile: string, sourceProfile: string, query?: HoldingsQuery | null): Promise<CaseworkOutcome<Page<HoldingSummary>>>
   directory(token: string, profile: string): Promise<CaseworkOutcome<DirectoryResponse>>
+  directoryTargets(token: string, profile: string, query: DirectoryTargetsQuery): Promise<CaseworkOutcome<DirectoryTargetPage>>
   bootstrapDirectory(token: string, profile: string, expectedRevision: SafeInteger, idempotencyKey: string, request: BootstrapDirectoryRequest): Promise<CaseworkOutcome<DirectoryResponse>>
   updateDirectoryTeam(token: string, profile: string, teamId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: DirectoryTeamUpdateRequest): Promise<CaseworkOutcome<DirectoryResponse>>
   workItemClocks(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<ReadonlyArray<ClockOccurrenceView>>>

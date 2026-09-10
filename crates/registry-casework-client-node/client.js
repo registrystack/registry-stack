@@ -123,6 +123,7 @@ for (const [method, jsonIndexes] of [
   ['workItemHistory', [4]],
   ['holdings', [3]],
   ['directory', []],
+  ['directoryTargets', [2]],
   ['bootstrapDirectory', [4]],
   ['updateDirectoryTeam', [5]],
   ['workItemClocks', []],

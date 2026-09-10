@@ -133,6 +133,51 @@ test('source inbox forwards one complete exact subject selector', async (context
   assert.deepEqual(page.value.servedQueues, ['appeals', 'review']);
 });
 
+test('directory target discovery preserves its exact purpose context without source authority', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { url: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        items: [{ issuer: 'https://id.example', subject: 'cover-officer' }],
+        nextCursor: 'target-next',
+        status: 'complete',
+      }));
+    });
+  });
+  await listen(server);
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
+  const page = await client.directoryTargets('one-call-secret', 'supervisor', {
+    purpose: 'absence_cover',
+    personIssuer: 'https://id.example',
+    personSubject: 'absent-officer',
+    cursor: 'opaque-target-cursor',
+    limit: 25,
+  });
+
+  const query = new URL(observed.url, 'http://fixture.invalid').searchParams;
+  assert.equal(query.get('purpose'), 'absence_cover');
+  assert.equal(query.get('personIssuer'), 'https://id.example');
+  assert.equal(query.get('personSubject'), 'absent-officer');
+  assert.equal(query.get('cursor'), 'opaque-target-cursor');
+  assert.equal(query.get('limit'), '25');
+  assert.equal(observed.headers['registry-casework-profile'], 'supervisor');
+  assert.equal(observed.headers['registry-source-profile'], undefined);
+  assert.deepEqual(page.value, {
+    items: [{ issuer: 'https://id.example', subject: 'cover-officer' }],
+    nextCursor: 'target-next',
+    status: 'complete',
+  });
+});
+
 test('native client preserves the optional held timestamp', async (context) => {
   const itemId = '00000000-0000-4000-8000-000000000001';
   const heldSince = '2026-09-11T03:04:05Z';

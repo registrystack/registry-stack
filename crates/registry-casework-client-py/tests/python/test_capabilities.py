@@ -20,6 +20,7 @@ class CapabilityTests(unittest.TestCase):
             "get_work_item", "claim_work_item", "release_work_item", "get_draft",
             "save_draft", "delete_draft", "decide_work_item", "recover_decision",
             "recover_decision_by_key", "work_item_history", "holdings", "directory",
+            "directory_targets",
             "bootstrap_directory",
             "update_directory_team",
             "absences", "create_absence", "update_absence", "delete_absence",
