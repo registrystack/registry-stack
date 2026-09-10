@@ -52,6 +52,7 @@ uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+registry-casework-client.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 tower.workspace = true
 wiremock.workspace = true
@@ -64,4 +65,14 @@ required-features = ["postgres-test"]
 [[test]]
 name = "service_visibility"
 path = "tests/service_visibility.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "hosted_standalone"
+path = "tests/hosted_standalone.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "hosted_postgres"
+path = "tests/hosted_postgres.rs"
 required-features = ["postgres-test"]

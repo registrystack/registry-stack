@@ -13,7 +13,7 @@ export interface CaseworkClientConfig {
 }
 
 export type InboxView = 'mine' | 'my_teams' | 'team_holdings' | 'overdue' | 'completed_by_me'
-export type OccurrenceKind = 'review' | 'application'
+export type OccurrenceKind = 'review' | 'application' | 'hosted'
 export type OccurrenceState = 'open' | 'claimed' | 'waiting_applicant' | 'waiting_application' | 'synchronizing' | 'completed' | 'superseded' | 'cancelled'
 export type OperationName = string
 export type AttemptState = 'pending' | 'uncertain' | 'completed' | 'refused'
@@ -51,6 +51,7 @@ export interface WorkItem {
   updatedAt: string
   actions: ReadonlyArray<CaseworkAction>
   routingCopy?: CorrectionRoutingCopy
+  hosted?: HostedWorkItemContext
 }
 export interface Page<T> { items: ReadonlyArray<T>; nextCursor?: string; status: PageStatus }
 export interface ListWorkItemsQuery {
@@ -141,11 +142,90 @@ export interface SourcePolicy {
   description: string
   requests: ReadonlyArray<SourceRequestPolicy>
 }
+export interface HostedRetentionPolicy { terminalDays: SafeInteger; accountabilityDays: SafeInteger }
+export interface HostedOutcomePolicy { id: string; label: string; reasonRequired: boolean }
+export interface HostedKindPolicy {
+  id: string
+  version: string
+  queue: string
+  decidingProfiles: ReadonlyArray<string>
+  retention: HostedRetentionPolicy
+  displaySchema: JsonValue
+  outcomes: ReadonlyArray<HostedOutcomePolicy>
+}
+export interface HostedWorkItemContext {
+  requesterReference: string
+  kind: string
+  version: string
+  display: JsonValue
+  kindPolicyDigest: string
+  outcomes: ReadonlyArray<HostedOutcomePolicy>
+}
+export interface HostedCreateRequest { kind: string; requesterReference: string; display: JsonValue }
+export interface HostedNoteRequest { note: string }
+export interface HostedCancelRequest { reason: string }
+export interface HostedDecisionRequest { outcome: string; reason?: string }
+export interface RequesterHostedItem {
+  itemId: string
+  requesterReference: string
+  kind: string
+  version: string
+  display: JsonValue
+  state: OccurrenceState
+  revision: SafeInteger
+  kindPolicyDigest: string
+  createdAt: string
+  updatedAt: string
+}
+export type HostedTerminalResult = {
+  itemId: string
+  eventId: string
+  requesterReference: string
+  kindPolicyDigest: string
+  terminalAt: string
+} & (
+  | { state: 'completed'; outcome: string; actorRef: string }
+  | { state: 'cancelled'; cancellationReason: string }
+)
+export interface HostedTerminalQuery { cursor?: string; limit?: SafeInteger }
+export interface HostedPageQuery { cursor?: string; limit?: SafeInteger }
+export interface HostedNote {
+  noteId: string
+  itemId: string
+  note: string
+  itemRevision: SafeInteger
+  recordedAt: string
+}
+export type HostedHistoryKind = 'created' | 'claimed' | 'released' | 'note_added' | 'completed' | 'cancelled'
+export interface HostedHistoryEntry {
+  eventId: string
+  itemId: string
+  itemRevision: SafeInteger
+  kind: HostedHistoryKind
+  occurredAt: string
+  actorRef?: string
+  note?: string
+  outcome?: string
+  reason?: string
+  cancellationReason?: string
+}
+export interface HostedAccountabilityRecord {
+  itemId: string
+  eventId: string
+  actorRef: string
+  actor: IssuerPrincipal
+  profileId: string
+  outcome: string
+  reason?: string
+  recordedAt: string
+  retainedUntil: string
+}
 export interface Description {
   projectId: string
   policyVersion: string
   queues: ReadonlyArray<QueueRecord>
   sources: ReadonlyArray<SourcePolicy>
+  hostedKinds: ReadonlyArray<HostedKindPolicy>
 }
 export interface TeamRecord {
   id: string
@@ -166,6 +246,9 @@ export interface CaseworkOutcome<T> { kind: 'complete'; value: T; traceId: strin
 
 export type KnownCaseworkProblemCode =
   | 'authentication.refused'
+  | 'cursor.expired'
+  | 'cursor.invalid'
+  | 'idempotency.expired'
   | 'idempotency.key-reused'
   | 'operation.not-authorized'
   | 'precondition.failed'
@@ -200,6 +283,10 @@ export class CaseworkClientError extends Error {
   readonly status?: SafeInteger
   readonly traceId?: string
   readonly originalAttemptId?: string
+  readonly validation?: {
+    readonly path: string
+    readonly reason: 'kind_not_allowed' | 'reference_invalid' | 'object_required' | 'maximum_bytes_exceeded' | 'maximum_depth_exceeded' | 'schema_mismatch' | 'outcome_not_declared' | 'reason_required' | 'text_invalid'
+  }
   readonly transportKind?: string
   readonly protocolFailure?: string
 }
@@ -207,6 +294,19 @@ export class CaseworkClientError extends Error {
 export class CaseworkClient {
   constructor(config: CaseworkClientConfig)
   description(token: string, profile: string): Promise<CaseworkOutcome<Description>>
+  createHostedItem(token: string, profile: string, idempotencyKey: string, request: HostedCreateRequest): Promise<CaseworkOutcome<RequesterHostedItem>>
+  getHostedItem(token: string, profile: string, itemId: string): Promise<CaseworkOutcome<RequesterHostedItem>>
+  addHostedNote(token: string, profile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, note: HostedNoteRequest): Promise<CaseworkOutcome<RequesterHostedItem>>
+  requesterHostedNotes(token: string, profile: string, itemId: string, query?: HostedPageQuery | null): Promise<CaseworkOutcome<Page<HostedNote>>>
+  cancelHostedItem(token: string, profile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, cancellation: HostedCancelRequest): Promise<CaseworkOutcome<HostedTerminalResult>>
+  hostedTerminalItems(token: string, profile: string, query?: HostedTerminalQuery | null): Promise<CaseworkOutcome<Page<HostedTerminalResult>>>
+  listHostedWorkItems(token: string, profile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<Page<WorkItem>>>
+  getHostedWorkItem(token: string, profile: string, itemId: string): Promise<CaseworkOutcome<WorkItem>>
+  hostedWorkItemHistory(token: string, profile: string, itemId: string, query?: HostedPageQuery | null): Promise<CaseworkOutcome<Page<HostedHistoryEntry>>>
+  hostedAccountabilityRecord(token: string, profile: string, eventId: string): Promise<CaseworkOutcome<HostedAccountabilityRecord>>
+  claimHostedWorkItem(token: string, profile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
+  releaseHostedWorkItem(token: string, profile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
+  decideHostedWorkItem(token: string, profile: string, action: CaseworkAction, idempotencyKey: string, decision: HostedDecisionRequest): Promise<CaseworkOutcome<HostedTerminalResult>>
   listWorkItems(token: string, profile: string, sourceProfile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<Page<WorkItem>>>
   nextWorkItem(token: string, profile: string, sourceProfile: string, query?: NextWorkItemQuery | null): Promise<CaseworkOutcome<WorkItem | null>>
   getWorkItem(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<WorkItem>>

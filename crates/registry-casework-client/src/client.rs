@@ -2,11 +2,16 @@ use std::fmt;
 
 use registry_casework_core::{
     BootstrapDirectoryRequest, CaseworkAction, ClaimRequest, DecideRequest, Description,
-    DirectoryResponse, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery, ListWorkItemsQuery,
-    MutationResponse, NextWorkItemQuery, RecoverAttemptRequest, ReleaseRequest, SaveDraftRequest,
-    WorkItem, WorkItemPage, CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER, HOLDINGS_PATH,
-    IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES,
-    NEXT_WORK_ITEM_PATH, SOURCE_PROFILE_HEADER, WORK_ITEMS_PATH,
+    DirectoryResponse, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery,
+    HostedAccountabilityRecord, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
+    HostedHistoryPage, HostedNotePage, HostedNoteRequest, HostedPageQuery, HostedTerminalPage,
+    HostedTerminalQuery, HostedTerminalResult, HostedValidationError, HostedValidationReason,
+    ListWorkItemsQuery, MutationResponse, NextWorkItemQuery, RecoverAttemptRequest, ReleaseRequest,
+    RequesterHostedItem, SaveDraftRequest, WorkItem, WorkItemPage, CASEWORK_PROBLEM_TYPE_BASE,
+    CASEWORK_PROFILE_HEADER, HOLDINGS_PATH, HOSTED_ACCOUNTABILITY_PATH, HOSTED_ITEMS_PATH,
+    HOSTED_TERMINAL_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
+    MAXIMUM_CASEWORK_PROFILE_BYTES, NEXT_WORK_ITEM_PATH, SOURCE_PROFILE_HEADER,
+    VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER, WORK_ITEMS_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -71,6 +76,193 @@ impl CaseworkClient {
         auth: CaseworkAuth<'_>,
     ) -> Result<CaseworkComplete<Description>, CaseworkClientError> {
         self.get_json(&auth, &["v1", "casework"], &[]).await
+    }
+
+    pub async fn create_hosted_item(
+        &self,
+        auth: CaseworkAuth<'_>,
+        idempotency_key: &str,
+        request: &HostedCreateRequest,
+    ) -> Result<CaseworkComplete<RequesterHostedItem>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        validate_idempotency_key(idempotency_key)?;
+        let url = self.url_from_constant(HOSTED_ITEMS_PATH)?;
+        let request = self
+            .authorized(self.http.post(url).json(request), &auth)?
+            .header(
+                HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
+                HeaderValue::from_str(idempotency_key).map_err(|_| {
+                    CaseworkClientError::invalid_request("the idempotency key is invalid")
+                })?,
+            );
+        self.send_json(request, StatusCode::CREATED).await
+    }
+
+    pub async fn get_hosted_item(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+    ) -> Result<CaseworkComplete<RequesterHostedItem>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.get_json(&auth, &["v1", "hosted-items", &item_id.to_string()], &[])
+            .await
+    }
+
+    pub async fn add_hosted_note(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        note: &HostedNoteRequest,
+    ) -> Result<CaseworkComplete<RequesterHostedItem>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.mutate(
+            &auth,
+            &["v1", "hosted-items", &item_id.to_string(), "notes"],
+            expected_revision,
+            idempotency_key,
+            note,
+        )
+        .await
+    }
+
+    pub async fn requester_hosted_notes(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+        query: &HostedPageQuery,
+    ) -> Result<CaseworkComplete<HostedNotePage>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        validate_page(query.cursor.as_deref(), query.limit)?;
+        let url = self.url(&["v1", "hosted-items", &item_id.to_string(), "notes"])?;
+        let request = self.authorized(self.http.get(url).query(query), &auth)?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn cancel_hosted_item(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        cancellation: &HostedCancelRequest,
+    ) -> Result<CaseworkComplete<HostedTerminalResult>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.mutate(
+            &auth,
+            &["v1", "hosted-items", &item_id.to_string(), "cancel"],
+            expected_revision,
+            idempotency_key,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn hosted_terminal_items(
+        &self,
+        auth: CaseworkAuth<'_>,
+        query: &HostedTerminalQuery,
+    ) -> Result<CaseworkComplete<HostedTerminalPage>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        validate_page(query.cursor.as_deref(), query.limit)?;
+        let url = self.url_from_constant(HOSTED_TERMINAL_PATH)?;
+        let request = self.authorized(self.http.get(url).query(query), &auth)?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn list_hosted_work_items(
+        &self,
+        auth: CaseworkAuth<'_>,
+        query: &ListWorkItemsQuery,
+    ) -> Result<CaseworkComplete<WorkItemPage>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        validate_page(query.cursor.as_deref(), query.limit)?;
+        let url = self.url_from_constant(WORK_ITEMS_PATH)?;
+        let request = self.authorized(self.http.get(url).query(query), &auth)?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn get_hosted_work_item(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+    ) -> Result<CaseworkComplete<WorkItem>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.get_json(&auth, &["v1", "work-items", &item_id.to_string()], &[])
+            .await
+    }
+
+    pub async fn hosted_work_item_history(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+        query: &HostedPageQuery,
+    ) -> Result<CaseworkComplete<HostedHistoryPage>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        validate_page(query.cursor.as_deref(), query.limit)?;
+        let url = self.url(&["v1", "work-items", &item_id.to_string(), "hosted-history"])?;
+        let request = self.authorized(self.http.get(url).query(query), &auth)?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn hosted_accountability_record(
+        &self,
+        auth: CaseworkAuth<'_>,
+        event_id: Uuid,
+    ) -> Result<CaseworkComplete<HostedAccountabilityRecord>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        let mut url = self.url_from_constant(HOSTED_ACCOUNTABILITY_PATH)?;
+        url.path_segments_mut()
+            .map_err(|_| CaseworkClientError::invalid_request("the event identifier is invalid"))?
+            .push(&event_id.to_string());
+        let request = self.authorized(self.http.get(url), &auth)?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn claim_hosted_work_item(
+        &self,
+        auth: CaseworkAuth<'_>,
+        action: &CaseworkAction,
+        idempotency_key: &str,
+    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.mutate_action(&auth, action, "claim", idempotency_key, &ClaimRequest {})
+            .await
+    }
+
+    pub async fn release_hosted_work_item(
+        &self,
+        auth: CaseworkAuth<'_>,
+        action: &CaseworkAction,
+        idempotency_key: &str,
+    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.mutate_action(
+            &auth,
+            action,
+            "release",
+            idempotency_key,
+            &ReleaseRequest {},
+        )
+        .await
+    }
+
+    pub async fn decide_hosted_work_item(
+        &self,
+        auth: CaseworkAuth<'_>,
+        action: &CaseworkAction,
+        idempotency_key: &str,
+        decision: &HostedDecisionRequest,
+    ) -> Result<CaseworkComplete<HostedTerminalResult>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        if action.operation != decision.outcome {
+            return Err(CaseworkClientError::invalid_request(
+                "the offered action does not match the hosted outcome",
+            ));
+        }
+        self.mutate_action(&auth, action, "hosted-decisions", idempotency_key, decision)
+            .await
     }
 
     pub async fn list_work_items(
@@ -346,7 +538,9 @@ impl CaseworkClient {
         idempotency_key: &str,
         body: &B,
     ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
-        if expected_operation != "decisions" && action.operation != expected_operation {
+        if !matches!(expected_operation, "decisions" | "hosted-decisions")
+            && action.operation != expected_operation
+        {
             return Err(CaseworkClientError::invalid_request(
                 "the offered Casework action has the wrong operation",
             ));
@@ -592,6 +786,18 @@ impl CaseworkClient {
             .iter()
             .cloned()
             .collect();
+        let validation_path_values: Vec<HeaderValue> = response
+            .headers()
+            .get_all(VALIDATION_PATH_HEADER)
+            .iter()
+            .cloned()
+            .collect();
+        let validation_reason_values: Vec<HeaderValue> = response
+            .headers()
+            .get_all(VALIDATION_REASON_HEADER)
+            .iter()
+            .cloned()
+            .collect();
         if !exact_media_type(response.headers(), PROBLEM_MEDIA_TYPE) {
             return protocol(status, CaseworkProtocolFailure::Status, trace_id);
         }
@@ -646,14 +852,52 @@ impl CaseworkClient {
             }
             (_, []) => None,
         };
+        let validation = match (
+            validation_path_values.as_slice(),
+            validation_reason_values.as_slice(),
+        ) {
+            ([], []) => None,
+            ([path], [reason]) if code == CaseworkProblemCode::RequestInvalid => {
+                let (Ok(path), Ok(reason)) = (path.to_str(), reason.to_str()) else {
+                    return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
+                };
+                if path.is_empty() || path.len() > 256 {
+                    return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
+                }
+                let Some(reason) = hosted_validation_reason(reason) else {
+                    return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
+                };
+                Some(HostedValidationError {
+                    path: path.to_owned(),
+                    reason,
+                })
+            }
+            _ => return protocol(status, CaseworkProtocolFailure::Problem, trace_id),
+        };
         CaseworkClientError::Problem {
             status: status.as_u16(),
             code,
             detail: expected_text.map(|(_, detail)| detail.to_owned()),
             trace_id,
             original_attempt_id,
+            validation,
         }
     }
+}
+
+fn hosted_validation_reason(value: &str) -> Option<HostedValidationReason> {
+    Some(match value {
+        "kind_not_allowed" => HostedValidationReason::KindNotAllowed,
+        "reference_invalid" => HostedValidationReason::ReferenceInvalid,
+        "object_required" => HostedValidationReason::ObjectRequired,
+        "maximum_bytes_exceeded" => HostedValidationReason::MaximumBytesExceeded,
+        "maximum_depth_exceeded" => HostedValidationReason::MaximumDepthExceeded,
+        "schema_mismatch" => HostedValidationReason::SchemaMismatch,
+        "outcome_not_declared" => HostedValidationReason::OutcomeNotDeclared,
+        "reason_required" => HostedValidationReason::ReasonRequired,
+        "text_invalid" => HostedValidationReason::TextInvalid,
+        _ => return None,
+    })
 }
 
 fn response_trace(
@@ -698,6 +942,15 @@ fn require_source_profile(auth: &CaseworkAuth<'_>) -> Result<(), CaseworkClientE
     if auth.source_profile.is_none() {
         return Err(CaseworkClientError::invalid_request(
             "this operation requires an explicit source profile",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_source_profile(auth: &CaseworkAuth<'_>) -> Result<(), CaseworkClientError> {
+    if auth.source_profile.is_some() {
+        return Err(CaseworkClientError::invalid_request(
+            "hosted operations do not accept a source profile",
         ));
     }
     Ok(())

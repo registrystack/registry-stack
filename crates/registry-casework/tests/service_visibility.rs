@@ -426,7 +426,7 @@ async fn reset_database() {
     let (client, connection) = tokio_postgres::connect(&url, NoTls)
         .await
         .expect("connect to dedicated visibility test database");
-    let driver = tokio::spawn(async move { connection.await });
+    let driver = tokio::spawn(connection);
     client
         .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
         .await
@@ -521,6 +521,7 @@ fn project(inbox: InboxPolicy) -> CaseworkProject {
                 target: None,
             }],
         }],
+        hosted_kinds: Vec::new(),
         inbox,
     }
 }
@@ -531,6 +532,7 @@ fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
         principal_claim: "sub".into(),
         required_scopes: vec!["casework".into()],
         role,
+        kinds: Vec::new(),
     }
 }
 

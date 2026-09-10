@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::CaseworkRole;
+use crate::HostedKindPolicy;
 
 pub const CASEWORK_API_VERSION: &str = "registry.registrystack.org/casework/v1alpha1";
 pub const CASEWORK_KIND: &str = "CaseworkProject";
@@ -34,6 +35,8 @@ pub struct CaseworkProject {
     pub queues: Vec<QueuePolicy>,
     #[serde(default)]
     pub sources: Vec<SourcePolicy>,
+    #[serde(default)]
+    pub hosted_kinds: Vec<HostedKindPolicy>,
     #[serde(default)]
     pub inbox: InboxPolicy,
 }
@@ -79,6 +82,53 @@ impl CaseworkProject {
         {
             return Err(ConfigError::AccessProfiles);
         }
+        let hosted_kinds: BTreeSet<_> = self.hosted_kinds.iter().map(|kind| &kind.id).collect();
+        if self.hosted_kinds.len() > crate::MAXIMUM_HOSTED_KINDS
+            || hosted_kinds.len() != self.hosted_kinds.len()
+            || !self.hosted_kinds.is_empty()
+                && !self
+                    .access_profiles
+                    .iter()
+                    .any(|profile| profile.role == CaseworkRole::Requester)
+            || self.hosted_kinds.iter().any(|kind| {
+                kind.check().is_err()
+                    || !queues.contains(&kind.queue)
+                    || kind.deciding_profiles.iter().any(|profile_id| {
+                        self.access_profiles
+                            .iter()
+                            .find(|profile| profile.id == *profile_id)
+                            .is_none_or(|profile| {
+                                !matches!(
+                                    profile.role,
+                                    CaseworkRole::Staff | CaseworkRole::Supervisor
+                                )
+                            })
+                    })
+            })
+            || self
+                .access_profiles
+                .iter()
+                .any(|profile| match profile.role {
+                    CaseworkRole::Requester => {
+                        profile.kinds.is_empty()
+                            || profile.kinds.len() > crate::MAXIMUM_HOSTED_KINDS
+                            || profile.kinds.iter().collect::<BTreeSet<_>>().len()
+                                != profile.kinds.len()
+                            || profile
+                                .kinds
+                                .iter()
+                                .any(|kind| !hosted_kinds.contains(kind))
+                    }
+                    CaseworkRole::Staff
+                    | CaseworkRole::Supervisor
+                    | CaseworkRole::Administrator => !profile.kinds.is_empty(),
+                })
+        {
+            return Err(ConfigError::HostedKinds);
+        }
+        if self.sources.is_empty() && self.hosted_kinds.is_empty() {
+            return Err(ConfigError::NoConfiguredWork);
+        }
         if self.sources.iter().any(|source| {
             source.id.is_empty()
                 || source.adapter.is_empty()
@@ -113,6 +163,10 @@ pub struct AccessProfile {
     pub principal_claim: String,
     pub required_scopes: Vec<String>,
     pub role: CaseworkRole,
+    /// Hosted kinds a Requester profile may create. Human profiles never use
+    /// this list to acquire payload access or decision authority.
+    #[serde(default)]
+    pub kinds: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -228,6 +282,10 @@ pub enum ConfigError {
     DefaultQueue,
     #[error("staff, supervisor, and administrator access profiles are required")]
     AccessProfiles,
+    #[error("the hosted kind policy or its profile grants are invalid")]
+    HostedKinds,
+    #[error("the Casework project configures no source or hosted work")]
+    NoConfiguredWork,
     #[error("the inbox work and response bounds are invalid")]
     InboxBounds,
 }
@@ -240,4 +298,72 @@ pub enum ConfigLoadError {
     Parse(#[source] serde_norway::Error),
     #[error(transparent)]
     Check(#[from] ConfigError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::standalone_decision_starter_kind;
+
+    fn profile(id: &str, role: CaseworkRole, kinds: &[&str]) -> AccessProfile {
+        AccessProfile {
+            id: id.to_owned(),
+            principal_claim: "registry_principal".to_owned(),
+            required_scopes: vec![format!("casework:{id}")],
+            role,
+            kinds: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
+        }
+    }
+
+    fn project() -> CaseworkProject {
+        CaseworkProject {
+            api_version: CASEWORK_API_VERSION.to_owned(),
+            kind: CASEWORK_KIND.to_owned(),
+            casework: CaseworkIdentity {
+                id: "standalone".to_owned(),
+                version: "1".to_owned(),
+            },
+            access_profiles: vec![
+                profile("staff", CaseworkRole::Staff, &[]),
+                profile("supervisor", CaseworkRole::Supervisor, &[]),
+                profile("administrator", CaseworkRole::Administrator, &[]),
+                profile("requester", CaseworkRole::Requester, &["decision"]),
+            ],
+            queues: vec![QueuePolicy {
+                id: "decisions".to_owned(),
+                label: "Decisions".to_owned(),
+            }],
+            sources: Vec::new(),
+            hosted_kinds: vec![standalone_decision_starter_kind()],
+            inbox: InboxPolicy::default(),
+        }
+    }
+
+    #[test]
+    fn standalone_work_requires_an_explicit_hosted_kind() {
+        let mut project = project();
+        assert_eq!(project.check(), Ok(()));
+
+        project.hosted_kinds.clear();
+        project.access_profiles.pop();
+        assert_eq!(project.check(), Err(ConfigError::NoConfiguredWork));
+    }
+
+    #[test]
+    fn requester_grants_are_closed_over_declared_kinds() {
+        let mut candidate = project();
+        candidate.access_profiles[3].kinds = vec!["undeclared".to_owned()];
+        assert_eq!(candidate.check(), Err(ConfigError::HostedKinds));
+
+        let mut candidate = project();
+        candidate.access_profiles[2].kinds = vec!["decision".to_owned()];
+        assert_eq!(candidate.check(), Err(ConfigError::HostedKinds));
+    }
+
+    #[test]
+    fn administrator_is_not_a_hosted_deciding_profile() {
+        let mut project = project();
+        project.hosted_kinds[0].deciding_profiles = vec!["administrator".to_owned()];
+        assert_eq!(project.check(), Err(ConfigError::HostedKinds));
+    }
 }

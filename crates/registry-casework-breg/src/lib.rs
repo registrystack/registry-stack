@@ -224,7 +224,11 @@ fn occurrence_key(
     binding: &SourceBinding,
 ) -> Result<String, SourceAdapterError> {
     let input = serde_json::to_vec(&(
-        occurrence_kind_name(kind),
+        match kind {
+            OccurrenceKind::Review => "review",
+            OccurrenceKind::Application => "application",
+            OccurrenceKind::Hosted => return Err(SourceAdapterError::Invalid),
+        },
         stage,
         binding.version.as_str(),
         binding.generation.as_str(),
@@ -240,12 +244,6 @@ fn occurrence_key(
     ))
 }
 
-fn occurrence_kind_name(kind: OccurrenceKind) -> &'static str {
-    match kind {
-        OccurrenceKind::Review => "review",
-        OccurrenceKind::Application => "application",
-    }
-}
 fn state_name(state: BRegRequestState) -> &'static str {
     match state {
         BRegRequestState::Draft => "draft",
@@ -671,6 +669,7 @@ mod tests {
         };
         let review = occurrence_key(OccurrenceKind::Review, Some("review"), &binding)
             .expect("review occurrence key");
+        assert!(occurrence_key(OccurrenceKind::Hosted, None, &binding).is_err());
         let mut changed = binding.clone();
         changed.version = "proposal-2".into();
         assert_ne!(

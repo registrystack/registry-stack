@@ -1,14 +1,16 @@
+use registry_casework_core::HostedValidationError;
 use registry_casework_core::{
-    AUTHENTICATION_REFUSED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM,
-    OPERATION_NOT_AUTHORIZED_PROBLEM, PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM,
-    PROFILE_NOT_AUTHORIZED_PROBLEM, PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM,
-    REQUEST_INVALID_PROBLEM, REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
-    REQUEST_UNPROCESSABLE_PROBLEM, REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM,
-    SERVICE_UNAVAILABLE_PROBLEM, SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM,
-    SOURCE_SIGNATURE_INVALID_PROBLEM, WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
-    WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM, WORK_ITEM_NOT_VISIBLE_PROBLEM,
-    WORK_ITEM_PROPOSAL_CHANGED_PROBLEM, WORK_ITEM_RECOVERY_PENDING_PROBLEM,
-    WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM, WORK_ITEM_SUPERSEDED_PROBLEM,
+    AUTHENTICATION_REFUSED_PROBLEM, CURSOR_EXPIRED_PROBLEM, CURSOR_INVALID_PROBLEM,
+    IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM, OPERATION_NOT_AUTHORIZED_PROBLEM,
+    PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
+    PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
+    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM, REQUEST_UNPROCESSABLE_PROBLEM,
+    REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM, SERVICE_UNAVAILABLE_PROBLEM,
+    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_SIGNATURE_INVALID_PROBLEM,
+    WORK_ITEM_ALREADY_CLAIMED_PROBLEM, WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM,
+    WORK_ITEM_NOT_VISIBLE_PROBLEM, WORK_ITEM_PROPOSAL_CHANGED_PROBLEM,
+    WORK_ITEM_RECOVERY_PENDING_PROBLEM, WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM,
+    WORK_ITEM_SUPERSEDED_PROBLEM,
 };
 use registry_platform_httputil::client::TransportKind;
 use std::fmt;
@@ -29,6 +31,9 @@ pub enum CaseworkProtocolFailure {
 #[non_exhaustive]
 pub enum CaseworkProblemCode {
     AuthenticationRefused,
+    CursorExpired,
+    CursorInvalid,
+    IdempotencyExpired,
     IdempotencyKeyReused,
     OperationNotAuthorized,
     PreconditionFailed,
@@ -63,6 +68,9 @@ impl CaseworkProblemCode {
     pub fn code(&self) -> &str {
         match self {
             Self::AuthenticationRefused => AUTHENTICATION_REFUSED_PROBLEM,
+            Self::CursorExpired => CURSOR_EXPIRED_PROBLEM,
+            Self::CursorInvalid => CURSOR_INVALID_PROBLEM,
+            Self::IdempotencyExpired => IDEMPOTENCY_EXPIRED_PROBLEM,
             Self::IdempotencyKeyReused => IDEMPOTENCY_KEY_REUSED_PROBLEM,
             Self::OperationNotAuthorized => OPERATION_NOT_AUTHORIZED_PROBLEM,
             Self::PreconditionFailed => PRECONDITION_FAILED_PROBLEM,
@@ -95,6 +103,9 @@ impl CaseworkProblemCode {
     pub(crate) fn parse(value: &str) -> Self {
         match value {
             AUTHENTICATION_REFUSED_PROBLEM => Self::AuthenticationRefused,
+            CURSOR_EXPIRED_PROBLEM => Self::CursorExpired,
+            CURSOR_INVALID_PROBLEM => Self::CursorInvalid,
+            IDEMPOTENCY_EXPIRED_PROBLEM => Self::IdempotencyExpired,
             IDEMPOTENCY_KEY_REUSED_PROBLEM => Self::IdempotencyKeyReused,
             OPERATION_NOT_AUTHORIZED_PROBLEM => Self::OperationNotAuthorized,
             PRECONDITION_FAILED_PROBLEM => Self::PreconditionFailed,
@@ -127,6 +138,9 @@ impl CaseworkProblemCode {
     pub(crate) fn expected_status(&self) -> Option<u16> {
         Some(match self {
             Self::AuthenticationRefused => 401,
+            Self::CursorExpired => 410,
+            Self::CursorInvalid => 400,
+            Self::IdempotencyExpired => 410,
             Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
                 403
             }
@@ -155,6 +169,9 @@ impl CaseworkProblemCode {
     pub(crate) fn expected_text(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
             Self::AuthenticationRefused => ("Authentication refused", "The bearer credential is missing, invalid, or expired. Sign in again."),
+            Self::CursorExpired => ("Cursor expired", "This cursor has expired. Start again without a cursor and deduplicate entries by eventId."),
+            Self::CursorInvalid => ("Cursor invalid", "The cursor is invalid for this request."),
+            Self::IdempotencyExpired => ("Idempotency window expired", "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."),
             Self::IdempotencyKeyReused => ("Idempotency key reused", "This idempotency key was used for a different request."),
             Self::OperationNotAuthorized => ("Operation not authorized", "Your current Casework authority does not allow this operation."),
             Self::PreconditionFailed => ("Precondition failed", "The item or directory changed since you loaded it. Reload and try again."),
@@ -211,6 +228,7 @@ pub enum CaseworkClientError {
         detail: Option<String>,
         trace_id: Option<String>,
         original_attempt_id: Option<uuid::Uuid>,
+        validation: Option<HostedValidationError>,
     },
     #[error("Registry Casework returned an invalid response")]
     Protocol {
@@ -227,5 +245,24 @@ impl CaseworkClientError {
 
     pub(crate) fn invalid_request(reason: &'static str) -> Self {
         Self::InvalidRequest { reason }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idempotency_expiry_has_an_exact_recoverable_contract() {
+        let code = CaseworkProblemCode::parse("idempotency.expired");
+        assert_eq!(code, CaseworkProblemCode::IdempotencyExpired);
+        assert_eq!(code.expected_status(), Some(410));
+        assert_eq!(
+            code.expected_text(),
+            Some((
+                "Idempotency window expired",
+                "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
+            ))
+        );
     }
 }

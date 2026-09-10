@@ -20,6 +20,7 @@ use uuid::Uuid;
 use crate::DatabaseConfig;
 
 const MIGRATION: &str = include_str!("../migrations/0001_casework.sql");
+const HOSTED_MIGRATION: &str = include_str!("../migrations/0002_hosted_casework.sql");
 
 #[derive(Clone)]
 pub struct PostgresStore {
@@ -96,8 +97,45 @@ impl PostgresStore {
     }
 
     pub async fn migrate(&self) -> Result<(), StoreError> {
-        let client = self.client().await?;
-        client.batch_execute(MIGRATION).await?;
+        let mut client = self.client().await?;
+        // The checkpoint schema predates a migration ledger. Apply its
+        // idempotent migration once more, then establish the forward-only
+        // ledger in the same transaction before adding hosted storage.
+        let transaction = client.transaction().await?;
+        transaction.batch_execute(MIGRATION).await?;
+        transaction
+            .batch_execute(
+                "CREATE TABLE IF NOT EXISTS casework_schema_migrations (\
+                 version bigint PRIMARY KEY CHECK (version > 0),\
+                 applied_at timestamptz NOT NULL);",
+            )
+            .await?;
+        transaction
+            .execute(
+                "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(1,now()) ON CONFLICT(version) DO NOTHING",
+                &[],
+            )
+            .await?;
+        transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let hosted_applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=2)",
+                &[],
+            )
+            .await?
+            .get(0);
+        if !hosted_applied {
+            transaction.batch_execute(HOSTED_MIGRATION).await?;
+            transaction
+                .execute(
+                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(2,now())",
+                    &[],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -117,7 +155,7 @@ impl PostgresStore {
             .get(0))
     }
 
-    async fn client(&self) -> Result<deadpool_postgres::Client, StoreError> {
+    pub(crate) async fn client(&self) -> Result<deadpool_postgres::Client, StoreError> {
         self.pool.get().await.map_err(|_| StoreError::Unavailable)
     }
 
@@ -460,6 +498,7 @@ impl PostgresStore {
                     first_observed_at: now,
                     passive_due_at: due,
                     updated_at: now,
+                    hosted: None,
                     actions: Vec::new(),
                     routing_copy: None,
                     live_attempt: None,
@@ -1558,7 +1597,7 @@ impl PostgresStore {
         };
         let rows=client.query(
             "SELECT i.* FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$1 AND m.subject=$2 WHERE m.membership_kind=$3 AND ($4::text IS NULL OR i.queue_id=$4) AND (($5='mine' AND i.state NOT IN ('completed','superseded','cancelled') AND i.holder_issuer=$1 AND i.holder_subject=$2) OR ($5='my_teams' AND i.state NOT IN ('completed','superseded','cancelled')) OR ($5='team_holdings' AND i.state NOT IN ('completed','superseded','cancelled') AND i.holder_issuer IS NOT NULL) OR ($5='overdue' AND i.state NOT IN ('completed','superseded','cancelled') AND i.passive_due_at<now()) OR ($5='completed_by_me' AND i.state='completed' AND EXISTS(SELECT 1 FROM casework_history h WHERE h.item_id=i.item_id AND h.kind='action_completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND (NOT $6 OR ($7::timestamptz IS NOT NULL AND (i.passive_due_at > $7 OR i.passive_due_at IS NULL OR (i.passive_due_at=$7 AND i.item_id>$8))) OR ($7::timestamptz IS NULL AND i.passive_due_at IS NULL AND i.item_id>$8)) ORDER BY i.passive_due_at NULLS LAST,i.item_id LIMIT $9",
-            &[&actor.principal.issuer,&actor.principal.subject,&match actor.role { CaseworkRole::Staff=>"staff", CaseworkRole::Supervisor=>"supervisor", CaseworkRole::Administrator=>"administrator" },&queue,&view,&has_after,&after_due,&after_id,&limit]
+            &[&actor.principal.issuer,&actor.principal.subject,&match actor.role { CaseworkRole::Staff=>"staff", CaseworkRole::Supervisor=>"supervisor", CaseworkRole::Administrator=>"administrator", CaseworkRole::Requester=>"requester" },&queue,&view,&has_after,&after_due,&after_id,&limit]
         ).await?;
         let items = rows
             .iter()
@@ -2092,6 +2131,7 @@ fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
         first_observed_at: row.get("first_observed_at"),
         passive_due_at: row.get("passive_due_at"),
         updated_at: row.get("updated_at"),
+        hosted: None,
         actions: Vec::new(),
         routing_copy: None,
         live_attempt: None,
@@ -2175,6 +2215,7 @@ fn occurrence_kind_name(value: OccurrenceKind) -> &'static str {
     match value {
         OccurrenceKind::Review => "review",
         OccurrenceKind::Application => "application",
+        OccurrenceKind::Hosted => "hosted",
     }
 }
 fn parse_occurrence(value: &str) -> Result<OccurrenceKind, StoreError> {
@@ -2288,12 +2329,18 @@ pub enum StoreError {
     NotHolder,
     #[error("the idempotency key was already used with different input")]
     IdempotencyConflict,
+    #[error("the stored idempotent response has expired")]
+    IdempotencyExpired,
     #[error("a source attempt is still pending recovery")]
     AttemptPending,
     #[error("the source binding generation is stale")]
     StaleGeneration,
     #[error("the request is invalid")]
     Invalid,
+    #[error("the pagination cursor is invalid")]
+    CursorInvalid,
+    #[error("the pagination cursor has expired")]
+    CursorExpired,
     #[error("stored Casework data is invalid")]
     Corrupt,
     #[error("the Casework database operation failed")]

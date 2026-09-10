@@ -3,6 +3,8 @@ import {
   CaseworkClientError,
   type CaseworkProblemCode,
   type DecideRequest,
+  type HostedCreateRequest,
+  type HostedDecisionRequest,
   type HistoryEntry,
   type WorkItem,
 } from '../client'
@@ -27,6 +29,25 @@ void client.recoverDecisionByKey(
   'attempt-1',
   { sourceProfileId: sourceProfile },
 )
+
+const hostedCreate: HostedCreateRequest = {
+  kind: 'decision',
+  requesterReference: 'batch-42',
+  display: { summary: 'Review the prepared batch' },
+}
+const hostedDecision: HostedDecisionRequest = { outcome: 'confirmed' }
+void client.createHostedItem(token, 'requester', 'create-42', hostedCreate)
+void client.requesterHostedNotes(token, 'requester', item.itemId, { limit: 25 })
+void client.hostedTerminalItems(token, 'requester', { limit: 25 })
+void client.listHostedWorkItems(token, profile, { view: 'my_teams', limit: 25 })
+void client.hostedWorkItemHistory(token, profile, item.itemId, { limit: 25 })
+void client.hostedAccountabilityRecord(token, 'supervisor', '00000000-0000-0000-0000-000000000000')
+void client.decideHostedWorkItem(token, profile, item.actions[0], 'decide-42', hostedDecision)
+
+if (item.occurrenceKind === 'hosted') {
+  const requesterReference: string | undefined = item.hosted?.requesterReference
+  void requesterReference
+}
 
 function completedAccountability(entry: HistoryEntry): string | undefined {
   if (entry.kind !== 'action_completed') return undefined

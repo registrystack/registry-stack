@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use registry_casework_core::{AccessProfile, ActorContext, CaseworkProject, IssuerPrincipal};
+use registry_casework_core::{
+    AccessProfile, ActorContext, CaseworkProject, CaseworkRole, IssuerPrincipal,
+};
 use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_oidc::{JwksFetcher, TokenVerifier, TokenVerifierConfig};
 use serde_json::Value;
@@ -58,15 +60,17 @@ impl CaseworkAuthenticator {
         {
             return Err(AuthenticationError::Profile);
         }
-        let human_identity = verified
-            .claims
-            .extra
-            .get(&self.human_identity.claim)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or(AuthenticationError::NotHuman)?;
-        if human_identity != self.human_identity.value {
-            return Err(AuthenticationError::NotHuman);
+        if profile.role != CaseworkRole::Requester {
+            let human_identity = verified
+                .claims
+                .extra
+                .get(&self.human_identity.claim)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or(AuthenticationError::NotHuman)?;
+            if human_identity != self.human_identity.value {
+                return Err(AuthenticationError::NotHuman);
+            }
         }
         let principal = if profile.principal_claim == "sub" {
             verified.claims.sub.as_deref()

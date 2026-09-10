@@ -10,7 +10,9 @@ use napi_derive::napi;
 use registry_casework_client::{
     BootstrapDirectoryRequest, CaseworkAction, CaseworkAuth, CaseworkClient as CoreClient,
     CaseworkClientConfig as CoreConfig, CaseworkClientError, DecideRequest, HoldingsQuery,
-    NextWorkItemQuery, RecoverAttemptRequest, SaveDraftRequest,
+    HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest, HostedNoteRequest,
+    HostedPageQuery, HostedTerminalQuery, ListWorkItemsQuery, NextWorkItemQuery,
+    RecoverAttemptRequest, SaveDraftRequest,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -75,6 +77,266 @@ impl CaseworkClient {
         outcome(
             self.inner
                 .description(CaseworkAuth::new(&token, &profile))
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn create_hosted_item(
+        &self,
+        token: String,
+        profile: String,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let request: HostedCreateRequest = input(request)?;
+        outcome(
+            self.inner
+                .create_hosted_item(
+                    CaseworkAuth::new(&token, &profile),
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn get_hosted_item(
+        &self,
+        token: String,
+        profile: String,
+        item_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .get_hosted_item(CaseworkAuth::new(&token, &profile), uuid(&item_id)?)
+                .await,
+        )
+    }
+
+    #[napi]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_hosted_note(
+        &self,
+        token: String,
+        profile: String,
+        item_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        note: Value,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let note: HostedNoteRequest = input(note)?;
+        outcome(
+            self.inner
+                .add_hosted_note(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&item_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &note,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn requester_hosted_notes(
+        &self,
+        token: String,
+        profile: String,
+        item_id: String,
+        query: Option<Value>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: HostedPageQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .requester_hosted_notes(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&item_id)?,
+                    &query,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn cancel_hosted_item(
+        &self,
+        token: String,
+        profile: String,
+        item_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        cancellation: Value,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let cancellation: HostedCancelRequest = input(cancellation)?;
+        outcome(
+            self.inner
+                .cancel_hosted_item(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&item_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &cancellation,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn hosted_terminal_items(
+        &self,
+        token: String,
+        profile: String,
+        query: Option<Value>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: HostedTerminalQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .hosted_terminal_items(CaseworkAuth::new(&token, &profile), &query)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn list_hosted_work_items(
+        &self,
+        token: String,
+        profile: String,
+        query: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: ListWorkItemsQuery = input(query)?;
+        outcome(
+            self.inner
+                .list_hosted_work_items(CaseworkAuth::new(&token, &profile), &query)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn get_hosted_work_item(
+        &self,
+        token: String,
+        profile: String,
+        item_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .get_hosted_work_item(CaseworkAuth::new(&token, &profile), uuid(&item_id)?)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn hosted_work_item_history(
+        &self,
+        token: String,
+        profile: String,
+        item_id: String,
+        query: Option<Value>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: HostedPageQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .hosted_work_item_history(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&item_id)?,
+                    &query,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn hosted_accountability_record(
+        &self,
+        token: String,
+        profile: String,
+        event_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .hosted_accountability_record(CaseworkAuth::new(&token, &profile), uuid(&event_id)?)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn claim_hosted_work_item(
+        &self,
+        token: String,
+        profile: String,
+        action: Value,
+        idempotency_key: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let action: CaseworkAction = input(action)?;
+        outcome(
+            self.inner
+                .claim_hosted_work_item(
+                    CaseworkAuth::new(&token, &profile),
+                    &action,
+                    &idempotency_key,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn release_hosted_work_item(
+        &self,
+        token: String,
+        profile: String,
+        action: Value,
+        idempotency_key: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let action: CaseworkAction = input(action)?;
+        outcome(
+            self.inner
+                .release_hosted_work_item(
+                    CaseworkAuth::new(&token, &profile),
+                    &action,
+                    &idempotency_key,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn decide_hosted_work_item(
+        &self,
+        token: String,
+        profile: String,
+        action: Value,
+        idempotency_key: String,
+        decision: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let action: CaseworkAction = input(action)?;
+        let decision: HostedDecisionRequest = input(decision)?;
+        outcome(
+            self.inner
+                .decide_hosted_work_item(
+                    CaseworkAuth::new(&token, &profile),
+                    &action,
+                    &idempotency_key,
+                    &decision,
+                )
                 .await,
         )
     }
@@ -480,6 +742,7 @@ fn client_error(error: CaseworkClientError) -> NapiError {
             detail,
             trace_id,
             original_attempt_id,
+            validation,
         } => {
             let message = detail
                 .clone()
@@ -490,6 +753,10 @@ fn client_error(error: CaseworkClientError) -> NapiError {
                 "code": code.code(),
                 "traceId": trace_id,
                 "originalAttemptId": original_attempt_id,
+                "validation": validation.map(|validation| json!({
+                    "path": validation.path,
+                    "reason": validation.reason,
+                })),
                 "detail": detail,
                 "message": message,
             })

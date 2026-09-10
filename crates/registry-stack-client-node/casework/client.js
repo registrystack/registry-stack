@@ -12,7 +12,7 @@ class CaseworkClientError extends Error {
     super(envelope.message);
     this.name = 'CaseworkClientError';
     this.kind = envelope.kind;
-    for (const field of ['code', 'detail', 'status', 'traceId', 'originalAttemptId', 'transportKind', 'protocolFailure']) {
+    for (const field of ['code', 'detail', 'status', 'traceId', 'originalAttemptId', 'validation', 'transportKind', 'protocolFailure']) {
       if (envelope[field] !== undefined && envelope[field] !== null) this[field] = envelope[field];
     }
   }
@@ -96,6 +96,19 @@ class CaseworkClient {
 
 for (const [method, jsonIndexes] of [
   ['description', []],
+  ['createHostedItem', [3]],
+  ['getHostedItem', []],
+  ['addHostedNote', [5]],
+  ['requesterHostedNotes', [3]],
+  ['cancelHostedItem', [5]],
+  ['hostedTerminalItems', [2]],
+  ['listHostedWorkItems', [2]],
+  ['getHostedWorkItem', []],
+  ['hostedWorkItemHistory', [3]],
+  ['hostedAccountabilityRecord', []],
+  ['claimHostedWorkItem', [2]],
+  ['releaseHostedWorkItem', [2]],
+  ['decideHostedWorkItem', [2, 4]],
   ['listWorkItems', [3]],
   ['nextWorkItem', [3]],
   ['getWorkItem', []],

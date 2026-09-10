@@ -4,7 +4,8 @@
 
 use axum::http::StatusCode;
 use registry_casework_core::{
-    AUTHENTICATION_REFUSED_PROBLEM, CASEWORK_PROBLEM_TYPE_BASE, IDEMPOTENCY_KEY_REUSED_PROBLEM,
+    AUTHENTICATION_REFUSED_PROBLEM, CASEWORK_PROBLEM_TYPE_BASE, CURSOR_EXPIRED_PROBLEM,
+    CURSOR_INVALID_PROBLEM, IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM,
     OPERATION_NOT_AUTHORIZED_PROBLEM, PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM,
     PROFILE_NOT_AUTHORIZED_PROBLEM, PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM,
     REQUEST_INVALID_PROBLEM, REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
@@ -26,6 +27,9 @@ pub fn type_uri(code: &str) -> String {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ProblemCode {
     AuthenticationRefused,
+    CursorExpired,
+    CursorInvalid,
+    IdempotencyExpired,
     IdempotencyKeyReused,
     OperationNotAuthorized,
     PreconditionFailed,
@@ -57,6 +61,9 @@ impl ProblemCode {
     /// Every registered code in code-string order.
     pub const ALL: &'static [Self] = &[
         Self::AuthenticationRefused,
+        Self::CursorExpired,
+        Self::CursorInvalid,
+        Self::IdempotencyExpired,
         Self::IdempotencyKeyReused,
         Self::OperationNotAuthorized,
         Self::PreconditionFailed,
@@ -88,6 +95,9 @@ impl ProblemCode {
     pub const fn code(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => AUTHENTICATION_REFUSED_PROBLEM,
+            Self::CursorExpired => CURSOR_EXPIRED_PROBLEM,
+            Self::CursorInvalid => CURSOR_INVALID_PROBLEM,
+            Self::IdempotencyExpired => IDEMPOTENCY_EXPIRED_PROBLEM,
             Self::IdempotencyKeyReused => IDEMPOTENCY_KEY_REUSED_PROBLEM,
             Self::OperationNotAuthorized => OPERATION_NOT_AUTHORIZED_PROBLEM,
             Self::PreconditionFailed => PRECONDITION_FAILED_PROBLEM,
@@ -120,6 +130,9 @@ impl ProblemCode {
     pub const fn status(self) -> StatusCode {
         match self {
             Self::AuthenticationRefused => StatusCode::UNAUTHORIZED,
+            Self::CursorExpired => StatusCode::GONE,
+            Self::CursorInvalid => StatusCode::BAD_REQUEST,
+            Self::IdempotencyExpired => StatusCode::GONE,
             Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
                 StatusCode::FORBIDDEN
             }
@@ -152,6 +165,9 @@ impl ProblemCode {
     pub const fn title(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => "Authentication refused",
+            Self::CursorExpired => "Cursor expired",
+            Self::CursorInvalid => "Cursor invalid",
+            Self::IdempotencyExpired => "Idempotency window expired",
             Self::IdempotencyKeyReused => "Idempotency key reused",
             Self::OperationNotAuthorized => "Operation not authorized",
             Self::PreconditionFailed => "Precondition failed",
@@ -185,6 +201,13 @@ impl ProblemCode {
         match self {
             Self::AuthenticationRefused => {
                 "The bearer credential is missing, invalid, or expired. Sign in again."
+            }
+            Self::CursorExpired => {
+                "This cursor has expired. Start again without a cursor and deduplicate entries by eventId."
+            }
+            Self::CursorInvalid => "The cursor is invalid for this request.",
+            Self::IdempotencyExpired => {
+                "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
             }
             Self::IdempotencyKeyReused => {
                 "This idempotency key was used for a different request."
@@ -276,6 +299,71 @@ const AUTHENTICATION: &[ProblemCode] = &[
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
 ];
+const HOSTED_READ: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+const HOSTED_PAGE: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::CursorExpired,
+    ProblemCode::CursorInvalid,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+const HOSTED_ITEM_PAGE: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::CursorExpired,
+    ProblemCode::CursorInvalid,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
+const HOSTED_CREATE: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::IdempotencyExpired,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+const HOSTED_MUTATION: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::PreconditionFailed,
+    ProblemCode::PreconditionRequired,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::IdempotencyExpired,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::WorkItemAlreadyClaimed,
+    ProblemCode::WorkItemNotHolder,
+    ProblemCode::WorkItemNotOffered,
+    ProblemCode::WorkItemNotVisible,
+    ProblemCode::RuntimeFailure,
+];
 const ITEM_READ: &[ProblemCode] = &[
     ProblemCode::AuthenticationRefused,
     ProblemCode::ProfileNotAuthorized,
@@ -295,6 +383,7 @@ const CLAIM: &[ProblemCode] = &[
     ProblemCode::PreconditionFailed,
     ProblemCode::PreconditionRequired,
     ProblemCode::IdempotencyKeyReused,
+    ProblemCode::IdempotencyExpired,
     ProblemCode::ServiceUnavailable,
     ProblemCode::WorkItemAlreadyClaimed,
     ProblemCode::WorkItemNotVisible,
@@ -309,6 +398,7 @@ const RELEASE: &[ProblemCode] = &[
     ProblemCode::PreconditionFailed,
     ProblemCode::PreconditionRequired,
     ProblemCode::IdempotencyKeyReused,
+    ProblemCode::IdempotencyExpired,
     ProblemCode::ServiceUnavailable,
     ProblemCode::WorkItemNotHolder,
     ProblemCode::WorkItemNotVisible,
@@ -484,6 +574,69 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         problems: HOLDINGS,
     },
     OperationContract {
+        method: "POST",
+        path: "/v1/hosted-items",
+        success_statuses: &[201],
+        extracts_path: false,
+        extracts_query: false,
+        accepts_json: true,
+        problems: HOSTED_CREATE,
+    },
+    OperationContract {
+        method: "GET",
+        path: "/v1/hosted-items/terminal",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: true,
+        accepts_json: false,
+        problems: HOSTED_PAGE,
+    },
+    OperationContract {
+        method: "GET",
+        path: "/v1/hosted-items/{item_id}",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: false,
+        problems: HOSTED_READ,
+    },
+    OperationContract {
+        method: "GET",
+        path: "/v1/hosted-accountability/{event_id}",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: false,
+        problems: HOSTED_READ,
+    },
+    OperationContract {
+        method: "POST",
+        path: "/v1/hosted-items/{item_id}/cancel",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: true,
+        problems: HOSTED_MUTATION,
+    },
+    OperationContract {
+        method: "POST",
+        path: "/v1/hosted-items/{item_id}/notes",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: true,
+        problems: HOSTED_MUTATION,
+    },
+    OperationContract {
+        method: "GET",
+        path: "/v1/hosted-items/{item_id}/notes",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: true,
+        accepts_json: false,
+        problems: HOSTED_ITEM_PAGE,
+    },
+    OperationContract {
         method: "GET",
         path: "/v1/work-items",
         success_statuses: &[200],
@@ -547,6 +700,15 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         problems: DECISION,
     },
     OperationContract {
+        method: "POST",
+        path: "/v1/work-items/{item_id}/hosted-decisions",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: false,
+        accepts_json: true,
+        problems: HOSTED_MUTATION,
+    },
+    OperationContract {
         method: "DELETE",
         path: "/v1/work-items/{item_id}/draft",
         success_statuses: &[204],
@@ -581,6 +743,15 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_query: false,
         accepts_json: false,
         problems: ITEM_READ,
+    },
+    OperationContract {
+        method: "GET",
+        path: "/v1/work-items/{item_id}/hosted-history",
+        success_statuses: &[200],
+        extracts_path: true,
+        extracts_query: true,
+        accepts_json: false,
+        problems: HOSTED_ITEM_PAGE,
     },
     OperationContract {
         method: "POST",

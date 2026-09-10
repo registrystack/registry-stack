@@ -43,7 +43,7 @@ struct InitArgs {
     /// New directory for the authored Casework project.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Project template; the checkpoint supports professional-review.
+    /// Project template: professional-review or standalone-decision.
     #[arg(long, value_name = "NAME")]
     template: String,
 }

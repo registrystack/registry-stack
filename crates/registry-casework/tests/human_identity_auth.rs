@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use registry_casework::{AuthenticationError, CaseworkAuthenticator, HumanIdentityConfig};
 use registry_casework_core::{
-    AccessProfile, CaseworkIdentity, CaseworkProject, CaseworkRole, InboxPolicy, QueuePolicy,
-    CASEWORK_API_VERSION, CASEWORK_KIND,
+    standalone_decision_starter_kind, AccessProfile, CaseworkIdentity, CaseworkProject,
+    CaseworkRole, InboxPolicy, QueuePolicy, CASEWORK_API_VERSION, CASEWORK_KIND,
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
@@ -16,7 +16,7 @@ const AUDIENCE: &str = "urn:test:casework";
 const QUEUE_MEMBER_PRINCIPAL: &str = "urn:test:person:queue-member";
 
 #[tokio::test]
-async fn trusted_human_assertion_gates_every_casework_actor_profile() {
+async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_service_identity() {
     let idp = MockIdp::start().await;
     let authenticator = authenticator(&idp);
 
@@ -57,6 +57,26 @@ async fn trusted_human_assertion_gates_every_casework_actor_profile() {
             );
         assert_eq!(refusal, AuthenticationError::NotHuman);
     }
+
+    let requester = authenticator
+        .authenticate(
+            &token(&idp, "casework:request", Some(json!("service"))),
+            "requester",
+        )
+        .await
+        .expect("the explicitly configured Requester profile accepts a service identity");
+    assert_eq!(requester.role, CaseworkRole::Requester);
+    assert_eq!(requester.principal.subject, QUEUE_MEMBER_PRINCIPAL);
+    assert_eq!(
+        authenticator
+            .authenticate(
+                &token(&idp, "casework:request", Some(json!("service"))),
+                "staff"
+            )
+            .await
+            .expect_err("selecting Staff does not union the Requester scope or identity class"),
+        AuthenticationError::Profile
+    );
 
     let wrong_audience = idp.mint_token(json!({
         "aud": "urn:test:other-service",
@@ -194,12 +214,20 @@ fn project() -> CaseworkProject {
                 "casework:admin",
                 CaseworkRole::Administrator,
             ),
+            AccessProfile {
+                id: "requester".to_owned(),
+                principal_claim: "registry_principal".to_owned(),
+                required_scopes: vec!["casework:request".to_owned()],
+                role: CaseworkRole::Requester,
+                kinds: vec!["decision".to_owned()],
+            },
         ],
         queues: vec![QueuePolicy {
             id: "default".to_owned(),
             label: "Default".to_owned(),
         }],
         sources: Vec::new(),
+        hosted_kinds: vec![standalone_decision_starter_kind()],
         inbox: InboxPolicy::default(),
     }
 }
@@ -210,5 +238,6 @@ fn profile(id: &str, scope: &str, role: CaseworkRole) -> AccessProfile {
         principal_claim: "registry_principal".to_owned(),
         required_scopes: vec![scope.to_owned()],
         role,
+        kinds: Vec::new(),
     }
 }

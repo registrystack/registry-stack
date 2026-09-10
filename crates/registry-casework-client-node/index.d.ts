@@ -3,6 +3,19 @@
 export declare class CaseworkClient {
   constructor(config: CaseworkClientConfig)
   description(token: string, profile: string): Promise<CaseworkOutcome>
+  createHostedItem(token: string, profile: string, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
+  getHostedItem(token: string, profile: string, itemId: string): Promise<CaseworkOutcome>
+  addHostedNote(token: string, profile: string, itemId: string, expectedRevision: number, idempotencyKey: string, note: any): Promise<CaseworkOutcome>
+  requesterHostedNotes(token: string, profile: string, itemId: string, query?: any | undefined | null): Promise<CaseworkOutcome>
+  cancelHostedItem(token: string, profile: string, itemId: string, expectedRevision: number, idempotencyKey: string, cancellation: any): Promise<CaseworkOutcome>
+  hostedTerminalItems(token: string, profile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
+  listHostedWorkItems(token: string, profile: string, query: any): Promise<CaseworkOutcome>
+  getHostedWorkItem(token: string, profile: string, itemId: string): Promise<CaseworkOutcome>
+  hostedWorkItemHistory(token: string, profile: string, itemId: string, query?: any | undefined | null): Promise<CaseworkOutcome>
+  hostedAccountabilityRecord(token: string, profile: string, eventId: string): Promise<CaseworkOutcome>
+  claimHostedWorkItem(token: string, profile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>
+  releaseHostedWorkItem(token: string, profile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>
+  decideHostedWorkItem(token: string, profile: string, action: any, idempotencyKey: string, decision: any): Promise<CaseworkOutcome>
   listWorkItems(token: string, profile: string, sourceProfile: string, query: any): Promise<CaseworkOutcome>
   nextWorkItem(token: string, profile: string, sourceProfile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   getWorkItem(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>

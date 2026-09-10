@@ -17,9 +17,9 @@ use crate::{PostgresStore, StoreError};
 
 #[derive(Clone)]
 pub struct CaseworkService {
-    store: PostgresStore,
+    pub(crate) store: PostgresStore,
     adapters: Arc<BTreeMap<String, Arc<dyn SourceAdapter>>>,
-    project: Arc<CaseworkProject>,
+    pub(crate) project: Arc<CaseworkProject>,
 }
 
 impl std::fmt::Debug for CaseworkService {
@@ -1055,6 +1055,8 @@ pub enum ServiceError {
     BindingMoved,
     #[error("the source attempt remains uncertain")]
     UncertainAttempt(Uuid),
+    #[error(transparent)]
+    HostedValidation(#[from] registry_casework_core::HostedValidationError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]

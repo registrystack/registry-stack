@@ -92,10 +92,77 @@ expect:
   targetElapsed: PT48H
 "#;
 
+const STANDALONE_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework:
+  id: standalone-decision
+  version: "1"
+accessProfiles:
+  - id: staff
+    principalClaim: sub
+    requiredScopes: [casework:staff]
+    role: staff
+  - id: supervisor
+    principalClaim: sub
+    requiredScopes: [casework:supervisor]
+    role: supervisor
+  - id: administrator
+    principalClaim: sub
+    requiredScopes: [casework:admin]
+    role: administrator
+  - id: requester
+    principalClaim: sub
+    requiredScopes: [casework:request]
+    role: requester
+    kinds: [decision]
+queues:
+  - id: decisions
+    label: Decisions awaiting review
+hostedKinds:
+  - id: decision
+    version: "1"
+    queue: decisions
+    decidingProfiles: [staff]
+    retention:
+      terminalDays: 90
+      accountabilityDays: 365
+    displaySchema:
+      type: object
+      additionalProperties: false
+      required: [summary, reference]
+      properties:
+        summary: {type: string, maxLength: 160}
+        reference: {type: string, maxLength: 120}
+    outcomes:
+      - id: confirmed
+        label: Confirm
+        reasonRequired: false
+      - id: rejected
+        label: Return for correction
+        reasonRequired: true
+"#;
+
+const STANDALONE_FIXTURE: &str = r#"apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+kind: CaseworkFixture
+name: standalone-decision-offline
+hosted:
+  kind: decision
+  display:
+    summary: Confirm the prepared synthetic batch
+    reference: synthetic-batch-0042
+expect:
+  queue: decisions
+  outcomes: [confirmed, rejected]
+"#;
+
 pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
-    if template != "professional-review" {
-        bail!("unknown template {template:?}; available template: professional-review");
-    }
+    let (project_yaml, fixture_name, fixture, next) = match template {
+        "professional-review" => (CASEWORK_YAML, "professional-review.yaml", FIXTURE,
+            "Run caseworkctl source add with the authored BReg project and --source-id professional-register."),
+        "standalone-decision" => (STANDALONE_YAML, "standalone-decision.yaml", STANDALONE_FIXTURE,
+            "Run caseworkctl check and test, configure operator.yaml with database and identity settings, then create a team serving decisions as an Administrator."),
+        _ => bail!("unknown template {template:?}; available templates: professional-review, standalone-decision"),
+    };
     if project.exists() {
         bail!("destination already exists; init never overwrites a project");
     }
@@ -109,12 +176,17 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         .context("creating project staging directory")?;
     fs::create_dir(staging.path().join("fixtures"))?;
     fs::create_dir(staging.path().join("sources"))?;
-    fs::write(staging.path().join("casework.yaml"), CASEWORK_YAML)?;
-    fs::write(staging.path().join("operator.example.yaml"), OPERATOR_YAML)?;
-    fs::write(
-        staging.path().join("fixtures/professional-review.yaml"),
-        FIXTURE,
-    )?;
+    fs::write(staging.path().join("casework.yaml"), project_yaml)?;
+    let operator_yaml = if template == "standalone-decision" {
+        OPERATOR_YAML
+            .split("\nsources:")
+            .next()
+            .unwrap_or(OPERATOR_YAML)
+    } else {
+        OPERATOR_YAML
+    };
+    fs::write(staging.path().join("operator.example.yaml"), operator_yaml)?;
+    fs::write(staging.path().join("fixtures").join(fixture_name), fixture)?;
     let staging_path = staging.keep();
     fs::rename(&staging_path, project)
         .context("publishing Casework project without replacement")?;
@@ -123,13 +195,30 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "command": "init",
         "template": template,
         "project": project,
-        "created": ["casework.yaml", "operator.example.yaml", "fixtures/professional-review.yaml", "sources/"],
-        "next": ["Run caseworkctl source add with the authored BReg project and --source-id professional-register."]
+        "created": ["casework.yaml", "operator.example.yaml", format!("fixtures/{fixture_name}"), "sources/"],
+        "next": [next]
     }))
 }
 
 pub(super) fn check(project: &Path) -> Result<Value> {
     let policy = load_and_check_policy(project)?;
+    if policy.sources.is_empty() {
+        return Ok(json!({
+            "ok": true,
+            "command": "check",
+            "project": project,
+            "effective": {
+                "projectId": policy.casework.id,
+                "mode": "standalone",
+                "queues": policy.queues,
+                "hostedKinds": policy.hosted_kinds,
+                "inbox": policy.inbox,
+                "sourceConnections": 0
+            },
+            "networkAccess": false,
+            "databaseAccess": false
+        }));
+    }
     let source_description = if policy
         .sources
         .iter()
@@ -168,6 +257,7 @@ pub(super) fn check(project: &Path) -> Result<Value> {
 
 pub(super) fn test(project: &Path) -> Result<Value> {
     let checked = check(project)?;
+    let policy = load_and_check_policy(project)?;
     let effective = &checked["effective"];
     let fixture_dir = project.join("fixtures");
     let mut paths = fs::read_dir(&fixture_dir)
@@ -182,7 +272,7 @@ pub(super) fn test(project: &Path) -> Result<Value> {
     let mut reports = Vec::new();
     for path in paths {
         let fixture = load_yaml(&path, "fixture")?;
-        validate_fixture(&fixture, effective)
+        validate_fixture(&fixture, effective, &policy)
             .with_context(|| format!("fixture {}", path.display()))?;
         reports.push(json!({
             "name": fixture["name"],
@@ -211,8 +301,14 @@ fn load_yaml(path: &Path, label: &str) -> Result<Value> {
 fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     let policy = CaseworkProject::load(project.join("casework.yaml"))
         .context("loading and checking casework.yaml")?;
+    if policy.sources.is_empty() {
+        if policy.hosted_kinds.is_empty() {
+            bail!("declare a hosted kind or connect a source before checking the project");
+        }
+        return Ok(policy);
+    }
     if policy.sources.len() != 1 || policy.queues.len() != 1 {
-        bail!("the checkpoint supports exactly one source and one queue");
+        bail!("the BReg starter supports exactly one source and one queue");
     }
     let source = &policy.sources[0];
     if source.adapter != "breg" || source.requests.len() != 1 {
@@ -233,11 +329,34 @@ fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     Ok(policy)
 }
 
-fn validate_fixture(fixture: &Value, effective: &Value) -> Result<()> {
+fn validate_fixture(fixture: &Value, effective: &Value, policy: &CaseworkProject) -> Result<()> {
     if fixture["apiVersion"] != "registry.registrystack.org/casework-fixture/v1alpha1"
         || fixture["kind"] != "CaseworkFixture"
     {
         bail!("fixture must declare the v1alpha1 CaseworkFixture contract");
+    }
+    if let Some(hosted) = fixture.get("hosted") {
+        let kind_id = hosted["kind"]
+            .as_str()
+            .context("hosted fixture requires a kind")?;
+        let kind = policy
+            .hosted_kinds
+            .iter()
+            .find(|kind| kind.id == kind_id)
+            .context("hosted fixture names an undeclared kind")?;
+        kind.validate_display(&hosted["display"])
+            .context("hosted fixture display does not satisfy the kind schema")?;
+        let outcomes = kind
+            .outcomes
+            .iter()
+            .map(|outcome| outcome.id.as_str())
+            .collect::<Vec<_>>();
+        if fixture["expect"]["queue"] != kind.queue
+            || fixture["expect"]["outcomes"] != json!(outcomes)
+        {
+            bail!("hosted fixture queue or outcomes do not match the declared kind");
+        }
+        return Ok(());
     }
     let assertions = [
         (
@@ -668,7 +787,34 @@ mod tests {
     fn fixture_exercises_effective_defaults() {
         let fixture: Value = serde_norway::from_str(FIXTURE).unwrap();
         let effective = json!({"sourceId":"professional-register","requestEntity":"scope-correction","queue":"corrections","applicationMode":"manual","queueTarget":{"elapsed":"PT48H"}});
-        validate_fixture(&fixture, &effective).unwrap();
+        validate_fixture(
+            &fixture,
+            &effective,
+            &serde_norway::from_str(CASEWORK_YAML).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn standalone_starter_checks_real_display_schema_without_a_source() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let checked = check(&project).unwrap();
+        assert_eq!(
+            load_and_check_policy(&project).unwrap().hosted_kinds,
+            vec![registry_casework_core::standalone_decision_starter_kind()]
+        );
+        assert_eq!(checked["effective"]["mode"], "standalone");
+        assert_eq!(checked["effective"]["sourceConnections"], 0);
+        test(&project).unwrap();
+        let fixture = project.join("fixtures/standalone-decision.yaml");
+        let mut value = load_yaml(&fixture, "fixture").unwrap();
+        value["hosted"]["display"]["undeclared"] = json!("synthetic");
+        fs::write(&fixture, serde_norway::to_string(&value).unwrap()).unwrap();
+        assert!(test(&project).is_err());
+        let operator = RuntimeConfig::load(project.join("operator.example.yaml")).unwrap();
+        assert!(operator.sources.is_empty());
     }
 
     #[test]

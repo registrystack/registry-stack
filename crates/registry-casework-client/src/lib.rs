@@ -16,9 +16,14 @@ pub use registry_casework_core::{
     AttemptState, AttemptStatus, BootstrapDirectoryRequest, CallerSubjectView, CaseworkAction,
     ClaimRequest, CorrectionRoutingCopy, DecideRequest, Description, DirectoryResponse, Draft,
     DraftResponse, HistoryEntry, HistoryKind, HistoryPage, HoldingSummary, HoldingsPage,
-    HoldingsQuery, InboxView, IssuerPrincipal, ListWorkItemsQuery, MutationResponse,
-    NextWorkItemQuery, OccurrenceKind, OccurrenceState, OperationName, Page, PageStatus,
-    QueueRecord, RecoverAttemptRequest, ReleaseRequest, SaveDraftRequest, SourceBinding,
+    HoldingsQuery, HostedAccountabilityRecord, HostedCancelRequest, HostedCreateRequest,
+    HostedDecisionRequest, HostedHistoryEntry, HostedHistoryKind, HostedHistoryPage,
+    HostedKindPolicy, HostedNote, HostedNotePage, HostedNoteRequest, HostedOutcomePolicy,
+    HostedPageQuery, HostedTerminalPage, HostedTerminalQuery, HostedTerminalResult,
+    HostedTerminalState, HostedValidationError, HostedValidationReason, HostedWorkItemContext,
+    InboxView, IssuerPrincipal, ListWorkItemsQuery, MutationResponse, NextWorkItemQuery,
+    OccurrenceKind, OccurrenceState, OpaqueActorRef, OperationName, Page, PageStatus, QueueRecord,
+    RecoverAttemptRequest, ReleaseRequest, RequesterHostedItem, SaveDraftRequest, SourceBinding,
     SourceReceipt, SubjectRef, TeamRecord, WorkItem, WorkItemPage,
 };
 pub use registry_platform_httputil::client::BearerToken;

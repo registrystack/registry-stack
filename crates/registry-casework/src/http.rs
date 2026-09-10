@@ -11,12 +11,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_casework_core::{
-    AttemptPath, BootstrapDirectoryRequest, CaseworkProject, DecideRequest, Description,
-    DirectoryResponse, DraftResponse, EventRequest, HistoryPage, HoldingsQuery, ListWorkItemsQuery,
-    MutationResponse, NextWorkItemQuery, Page, PageStatus, QueueRecord, RecoverAttemptRequest,
-    SaveDraftRequest, ATTEMPT_REFERENCE_HEADER, CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER,
-    IF_MATCH_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES,
-    SOURCE_PROFILE_HEADER,
+    AttemptPath, BootstrapDirectoryRequest, CaseworkProject, CaseworkRole, DecideRequest,
+    Description, DirectoryResponse, DraftResponse, EventRequest, HistoryPage, HoldingsQuery,
+    HostedAccountabilityRecord, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
+    HostedHistoryPage, HostedNotePage, HostedNoteRequest, HostedPageQuery, HostedTerminalPage,
+    HostedTerminalQuery, HostedTerminalResult, HostedValidationError, HostedValidationReason,
+    ListWorkItemsQuery, MutationResponse, NextWorkItemQuery, Page, PageStatus, QueueRecord,
+    RecoverAttemptRequest, RequesterHostedItem, SaveDraftRequest, ATTEMPT_REFERENCE_HEADER,
+    CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER,
+    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER,
+    VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
 };
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
@@ -33,6 +37,8 @@ tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
 }
 
+const MAXIMUM_PAGE_SIZE: usize = 100;
+
 #[derive(Clone)]
 pub struct HttpState {
     pub service: CaseworkService,
@@ -46,6 +52,21 @@ pub fn router(state: HttpState) -> Router {
             .route("/health", get(health))
             .route("/ready", get(ready))
             .route("/v1/casework", get(description))
+            .route("/v1/hosted-items", post(create_hosted_item))
+            .route("/v1/hosted-items/terminal", get(hosted_terminal_items))
+            .route("/v1/hosted-items/{item_id}", get(get_hosted_item))
+            .route(
+                "/v1/hosted-items/{item_id}/notes",
+                get(requester_hosted_notes).post(add_hosted_note),
+            )
+            .route(
+                "/v1/hosted-items/{item_id}/cancel",
+                post(cancel_hosted_item),
+            )
+            .route(
+                "/v1/hosted-accountability/{event_id}",
+                get(hosted_accountability),
+            )
             .route("/v1/work-items", get(list_items))
             .route("/v1/work-items/next", get(next_item))
             .route("/v1/work-items/{item_id}", get(get_item))
@@ -57,6 +78,10 @@ pub fn router(state: HttpState) -> Router {
             )
             .route("/v1/work-items/{item_id}/decisions", post(decide))
             .route(
+                "/v1/work-items/{item_id}/hosted-decisions",
+                post(decide_hosted_item),
+            )
+            .route(
                 "/v1/work-items/{item_id}/attempts/recover",
                 post(recover_by_key),
             )
@@ -65,6 +90,10 @@ pub fn router(state: HttpState) -> Router {
                 post(recover),
             )
             .route("/v1/work-items/{item_id}/history", get(history))
+            .route(
+                "/v1/work-items/{item_id}/hosted-history",
+                get(hosted_staff_history),
+            )
             .route("/v1/holdings", get(holdings))
             .route("/v1/directory", get(directory))
             .route("/v1/directory/bootstrap", post(bootstrap))
@@ -119,15 +148,15 @@ fn normalize_framework_rejection(response: Response) -> Response {
         StatusCode::UNPROCESSABLE_ENTITY => Some(ProblemCode::RequestUnprocessable),
         _ => None,
     };
-    problem.map_or(response, |problem| problem_response(problem, None))
+    problem.map_or(response, |problem| problem_response(problem, None, None))
 }
 
 async fn route_not_found() -> Response {
-    problem_response(ProblemCode::RequestNotFound, None)
+    problem_response(ProblemCode::RequestNotFound, None, None)
 }
 
 async fn method_not_allowed() -> Response {
-    problem_response(ProblemCode::RequestMethodNotAllowed, None)
+    problem_response(ProblemCode::RequestMethodNotAllowed, None, None)
 }
 
 async fn health() -> StatusCode {
@@ -146,7 +175,13 @@ async fn description(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<Json<Description>, HttpError> {
-    authenticate(&state, &headers).await?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    let selected_profile = state
+        .project
+        .access_profiles
+        .iter()
+        .find(|profile| profile.id == actor.profile_id)
+        .ok_or(HttpError::ProfileNotAuthorized)?;
     Ok(Json(Description {
         project_id: state.project.casework.id.clone(),
         policy_version: state.project.casework.version.clone(),
@@ -159,8 +194,151 @@ async fn description(
                 label: queue.label.clone(),
             })
             .collect(),
-        sources: state.project.sources.clone(),
+        sources: if actor.role == CaseworkRole::Requester {
+            Vec::new()
+        } else {
+            state.project.sources.clone()
+        },
+        hosted_kinds: state
+            .project
+            .hosted_kinds
+            .iter()
+            .filter(|kind| match actor.role {
+                CaseworkRole::Requester => selected_profile.kinds.contains(&kind.id),
+                CaseworkRole::Staff | CaseworkRole::Supervisor => {
+                    kind.deciding_profiles.contains(&actor.profile_id)
+                }
+                CaseworkRole::Administrator => true,
+            })
+            .cloned()
+            .collect(),
     }))
+}
+
+async fn create_hosted_item(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<HostedCreateRequest>,
+) -> Result<(StatusCode, Json<RequesterHostedItem>), HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    let item = state
+        .service
+        .hosted_create(&actor, &request, idempotency_key(&headers)?)
+        .await?;
+    Ok((StatusCode::CREATED, Json(item)))
+}
+
+async fn get_hosted_item(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+) -> Result<Json<RequesterHostedItem>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state.service.hosted_requester_item(&actor, item_id).await?,
+    ))
+}
+
+async fn add_hosted_note(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+    Json(request): Json<HostedNoteRequest>,
+) -> Result<Json<RequesterHostedItem>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .hosted_note(
+                &actor,
+                item_id,
+                if_match(&headers)?,
+                &request,
+                idempotency_key(&headers)?,
+            )
+            .await?,
+    ))
+}
+
+async fn requester_hosted_notes(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+    Query(query): Query<HostedPageQuery>,
+) -> Result<Json<HostedNotePage>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .hosted_requester_notes(
+                &actor,
+                item_id,
+                page_limit(&state, query.limit)?,
+                query.cursor.as_deref(),
+            )
+            .await?,
+    ))
+}
+
+async fn hosted_accountability(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(event_id): Path<Uuid>,
+) -> Result<Json<HostedAccountabilityRecord>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .hosted_accountability_record(&actor, event_id)
+            .await?,
+    ))
+}
+
+async fn cancel_hosted_item(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+    Json(request): Json<HostedCancelRequest>,
+) -> Result<Json<HostedTerminalResult>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .hosted_cancel(
+                &actor,
+                item_id,
+                if_match(&headers)?,
+                &request,
+                idempotency_key(&headers)?,
+            )
+            .await?,
+    ))
+}
+
+async fn hosted_terminal_items(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<HostedTerminalQuery>,
+) -> Result<Json<HostedTerminalPage>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .hosted_terminal_page(
+                &actor,
+                page_limit(&state, query.limit)?,
+                crate::HOSTED_TERMINAL_CURSOR_CONTEXT,
+                query.cursor.as_deref(),
+            )
+            .await?,
+    ))
 }
 
 async fn list_items(
@@ -169,26 +347,37 @@ async fn list_items(
     Query(query): Query<ListWorkItemsQuery>,
 ) -> Result<Json<registry_casework_core::WorkItemPage>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
-    let source_profile = source_profile(&headers)?;
+    let source_profile = source_profile_optional(&headers)?;
     let cursor_context = format!(
         "list:{:?}:{}",
         query.view,
         query.queue.as_deref().unwrap_or("")
     );
-    let page = state
-        .service
-        .inbox_for_view(
-            &actor,
-            source_profile,
-            token,
-            query.view,
-            query
-                .limit
-                .unwrap_or(state.service.inbox_policy().default_page_size),
-            &cursor_context,
-            query.cursor.as_deref(),
-        )
-        .await?;
+    let limit = page_limit(&state, query.limit)?;
+    let page = if let Some(source_profile) = source_profile {
+        state
+            .service
+            .inbox_for_view(
+                &actor,
+                source_profile,
+                token,
+                query.view,
+                limit,
+                &cursor_context,
+                query.cursor.as_deref(),
+            )
+            .await?
+    } else {
+        state
+            .service
+            .hosted_staff_inbox(
+                &actor,
+                limit,
+                crate::HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+                query.cursor.as_deref(),
+            )
+            .await?
+    };
     Ok(Json(page))
 }
 
@@ -226,12 +415,39 @@ async fn get_item(
     Path(item_id): Path<Uuid>,
 ) -> Result<Json<registry_casework_core::WorkItem>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
-    let (item, _) = state
-        .service
-        .caller_item(&actor, item_id, source_profile(&headers)?, token)
-        .await?;
-    state.service.store().record_opened(&actor, item_id).await?;
+    let item = if let Some(source_profile) = source_profile_optional(&headers)? {
+        let item = state
+            .service
+            .caller_item(&actor, item_id, source_profile, token)
+            .await?
+            .0;
+        state.service.store().record_opened(&actor, item_id).await?;
+        item
+    } else {
+        state.service.hosted_work_item(&actor, item_id).await?
+    };
     Ok(Json(item))
+}
+
+async fn hosted_staff_history(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+    Query(query): Query<HostedPageQuery>,
+) -> Result<Json<HostedHistoryPage>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .hosted_staff_history(
+                &actor,
+                item_id,
+                page_limit(&state, query.limit)?,
+                query.cursor.as_deref(),
+            )
+            .await?,
+    ))
 }
 
 async fn claim(
@@ -240,21 +456,25 @@ async fn claim(
     Path(item_id): Path<Uuid>,
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
-    state
-        .service
-        .caller_item(&actor, item_id, source_profile(&headers)?, token)
-        .await
-        .map_err(HttpError::from_source_event)?;
-    let item = state
-        .service
-        .store()
-        .claim(
-            &actor,
-            item_id,
-            if_match(&headers)?,
-            idempotency_key(&headers)?,
-        )
-        .await?;
+    let expected_revision = if_match(&headers)?;
+    let key = idempotency_key(&headers)?;
+    let item = if let Some(source_profile) = source_profile_optional(&headers)? {
+        state
+            .service
+            .caller_item(&actor, item_id, source_profile, token)
+            .await
+            .map_err(HttpError::from_source_event)?;
+        state
+            .service
+            .store()
+            .claim(&actor, item_id, expected_revision, key)
+            .await?
+    } else {
+        state
+            .service
+            .hosted_claim(&actor, item_id, expected_revision, key)
+            .await?
+    };
     Ok(Json(MutationResponse {
         item,
         attempt: None,
@@ -267,20 +487,24 @@ async fn release(
     Path(item_id): Path<Uuid>,
 ) -> Result<Json<MutationResponse>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
-    state
-        .service
-        .caller_item(&actor, item_id, source_profile(&headers)?, token)
-        .await?;
-    let item = state
-        .service
-        .store()
-        .release(
-            &actor,
-            item_id,
-            if_match(&headers)?,
-            idempotency_key(&headers)?,
-        )
-        .await?;
+    let expected_revision = if_match(&headers)?;
+    let key = idempotency_key(&headers)?;
+    let item = if let Some(source_profile) = source_profile_optional(&headers)? {
+        state
+            .service
+            .caller_item(&actor, item_id, source_profile, token)
+            .await?;
+        state
+            .service
+            .store()
+            .release(&actor, item_id, expected_revision, key)
+            .await?
+    } else {
+        state
+            .service
+            .hosted_release(&actor, item_id, expected_revision, key)
+            .await?
+    };
     Ok(Json(MutationResponse {
         item,
         attempt: None,
@@ -387,6 +611,28 @@ async fn decide(
         item,
         attempt: Some(attempt),
     }))
+}
+
+async fn decide_hosted_item(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+    Json(request): Json<HostedDecisionRequest>,
+) -> Result<Json<HostedTerminalResult>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .hosted_decide(
+                &actor,
+                item_id,
+                if_match(&headers)?,
+                &request,
+                idempotency_key(&headers)?,
+            )
+            .await?,
+    ))
 }
 
 async fn recover(
@@ -566,6 +812,28 @@ fn source_profile(headers: &HeaderMap) -> Result<&str, HttpError> {
     profile_header(headers, SOURCE_PROFILE_HEADER)
 }
 
+fn source_profile_optional(headers: &HeaderMap) -> Result<Option<&str>, HttpError> {
+    headers
+        .contains_key(SOURCE_PROFILE_HEADER)
+        .then(|| source_profile(headers))
+        .transpose()
+}
+
+fn reject_source_profile(headers: &HeaderMap) -> Result<(), HttpError> {
+    if headers.contains_key(SOURCE_PROFILE_HEADER) {
+        return Err(HttpError::Invalid);
+    }
+    Ok(())
+}
+
+fn page_limit(state: &HttpState, requested: Option<usize>) -> Result<usize, HttpError> {
+    let limit = requested.unwrap_or(state.service.inbox_policy().default_page_size);
+    (1..=MAXIMUM_PAGE_SIZE)
+        .contains(&limit)
+        .then_some(limit)
+        .ok_or(HttpError::Invalid)
+}
+
 fn idempotency_key(headers: &HeaderMap) -> Result<&str, HttpError> {
     let value = header(headers, IDEMPOTENCY_KEY_HEADER)?;
     if value.len() > MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES
@@ -624,6 +892,9 @@ fn if_match_with_minimum(headers: &HeaderMap, minimum: i64) -> Result<i64, HttpE
 #[derive(Debug)]
 pub enum HttpError {
     AuthenticationRefused,
+    CursorExpired,
+    CursorInvalid,
+    IdempotencyExpired,
     ProfileNotAuthorized,
     ProfileNotHuman,
     Forbidden,
@@ -644,11 +915,15 @@ pub enum HttpError {
     SourceSignatureInvalid,
     SourceUnavailable,
     Internal,
+    Validation(HostedValidationError),
 }
 
 impl From<StoreError> for HttpError {
     fn from(error: StoreError) -> Self {
         match error {
+            StoreError::CursorExpired => Self::CursorExpired,
+            StoreError::CursorInvalid => Self::CursorInvalid,
+            StoreError::IdempotencyExpired => Self::IdempotencyExpired,
             StoreError::NotFound => Self::NotFound,
             StoreError::Forbidden => Self::Forbidden,
             StoreError::Conflict => Self::PreconditionFailed,
@@ -673,6 +948,7 @@ impl From<ServiceError> for HttpError {
             ServiceError::Store(error) => error.into(),
             ServiceError::NotFound => Self::NotFound,
             ServiceError::Forbidden => Self::Forbidden,
+            ServiceError::HostedValidation(validation) => Self::Validation(validation),
             ServiceError::BindingMoved => Self::ProposalChanged,
             ServiceError::UncertainAttempt(attempt_id) => Self::RecoveryPending(Some(attempt_id)),
             ServiceError::Adapter(registry_casework_core::SourceAdapterError::Unavailable) => {
@@ -711,6 +987,9 @@ impl HttpError {
     fn problem(&self) -> ProblemCode {
         match self {
             Self::AuthenticationRefused => ProblemCode::AuthenticationRefused,
+            Self::CursorExpired => ProblemCode::CursorExpired,
+            Self::CursorInvalid => ProblemCode::CursorInvalid,
+            Self::IdempotencyExpired => ProblemCode::IdempotencyExpired,
             Self::ProfileNotAuthorized => ProblemCode::ProfileNotAuthorized,
             Self::ProfileNotHuman => ProblemCode::ProfileNotHuman,
             Self::Forbidden => ProblemCode::OperationNotAuthorized,
@@ -731,6 +1010,7 @@ impl HttpError {
             Self::SourceSignatureInvalid => ProblemCode::SourceSignatureInvalid,
             Self::SourceUnavailable => ProblemCode::WorkItemSourceUnavailable,
             Self::Internal => ProblemCode::RuntimeFailure,
+            Self::Validation(_) => ProblemCode::RequestInvalid,
         }
     }
 }
@@ -741,11 +1021,19 @@ impl IntoResponse for HttpError {
             Self::RecoveryPending(attempt_id) => *attempt_id,
             _ => None,
         };
-        problem_response(self.problem(), attempt_reference)
+        let validation = match &self {
+            Self::Validation(validation) => Some(validation),
+            _ => None,
+        };
+        problem_response(self.problem(), attempt_reference, validation)
     }
 }
 
-fn problem_response(problem: ProblemCode, attempt_reference: Option<Uuid>) -> Response {
+fn problem_response(
+    problem: ProblemCode,
+    attempt_reference: Option<Uuid>,
+    validation: Option<&HostedValidationError>,
+) -> Response {
     let trace = REQUEST_TRACE
         .try_with(Clone::clone)
         .unwrap_or_else(|_| TraceContext::server_created());
@@ -789,7 +1077,36 @@ fn problem_response(problem: ProblemCode, attempt_reference: Option<Uuid>) -> Re
                 .expect("UUIDs are valid bounded header values"),
         );
     }
+    if let Some(validation) = validation {
+        response.headers_mut().insert(
+            VALIDATION_PATH_HEADER,
+            validation
+                .path
+                .parse()
+                .expect("bounded JSON paths are valid header values"),
+        );
+        response.headers_mut().insert(
+            VALIDATION_REASON_HEADER,
+            hosted_validation_reason(validation.reason)
+                .parse()
+                .expect("validation reasons are valid header values"),
+        );
+    }
     response
+}
+
+fn hosted_validation_reason(reason: HostedValidationReason) -> &'static str {
+    match reason {
+        HostedValidationReason::KindNotAllowed => "kind_not_allowed",
+        HostedValidationReason::ReferenceInvalid => "reference_invalid",
+        HostedValidationReason::ObjectRequired => "object_required",
+        HostedValidationReason::MaximumBytesExceeded => "maximum_bytes_exceeded",
+        HostedValidationReason::MaximumDepthExceeded => "maximum_depth_exceeded",
+        HostedValidationReason::SchemaMismatch => "schema_mismatch",
+        HostedValidationReason::OutcomeNotDeclared => "outcome_not_declared",
+        HostedValidationReason::ReasonRequired => "reason_required",
+        HostedValidationReason::TextInvalid => "text_invalid",
+    }
 }
 
 #[cfg(test)]

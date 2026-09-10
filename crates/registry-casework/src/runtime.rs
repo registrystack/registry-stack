@@ -101,10 +101,17 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let worker_service = service.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(2));
+        let mut retention_ticks = 0_u8;
         loop {
             interval.tick().await;
             if let Err(error) = worker_service.synchronize_pending(100).await {
                 tracing::warn!(error = %error, "Casework synchronization pass did not complete");
+            }
+            retention_ticks = (retention_ticks + 1) % 30;
+            if retention_ticks == 0 {
+                if let Err(error) = worker_service.erase_expired_hosted().await {
+                    tracing::warn!(error = %error, "Casework hosted retention pass did not complete");
+                }
             }
         }
     });
