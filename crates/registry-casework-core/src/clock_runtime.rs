@@ -39,6 +39,11 @@ pub struct ClockOccurrenceView {
     pub completed_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_effect: Option<ClockNextEffect>,
+    /// The earliest unapplied reminder and reassignment, ordered by time.
+    /// At most two effects; these are authored instants, not retry timers.
+    /// Paused, completed, cancelled and source-facts-missing clocks omit them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upcoming_effects: Vec<ClockNextEffect>,
 }
 
 /// The next unapplied effect authored by the pinned clock policy. Runtime
@@ -114,7 +119,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn occurrence_projection_exposes_only_the_next_authored_effect() {
+    fn occurrence_projection_exposes_authored_effects_without_retry_inputs() {
         let at = DateTime::parse_from_rfc3339("2026-09-12T10:30:00+07:00")
             .unwrap()
             .with_timezone(&Utc);
@@ -141,6 +146,12 @@ mod tests {
                 because: "The review deadline passed.".to_owned(),
                 queue_id: "overdue".to_owned(),
             }),
+            upcoming_effects: vec![ClockNextEffect::Reassign {
+                id: "deadline".to_owned(),
+                at,
+                because: "The review deadline passed.".to_owned(),
+                queue_id: "overdue".to_owned(),
+            }],
         };
 
         let wire = serde_json::to_value(view).unwrap();
@@ -154,6 +165,7 @@ mod tests {
                 "queueId": "overdue"
             })
         );
+        assert_eq!(wire["upcomingEffects"], json!([wire["nextEffect"]]));
         for forbidden in [
             "nextActionAt",
             "sourceTiming",
