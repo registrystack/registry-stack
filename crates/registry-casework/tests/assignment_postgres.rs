@@ -9,13 +9,13 @@ use registry_casework_core::{
     AbsenceInput, AccessProfile, ActiveSubjectsPage, ActorContext, AssignmentRequest,
     AuthoritativeObservation, BootstrapDirectoryRequest, CallerSubjectView, CaseloadApplyRequest,
     CaseloadItemOutcome, CaseloadItemSelection, CaseloadMoveRequest, CaseworkIdentity,
-    CaseworkProject, CaseworkRole, DelegateRequest, DirectoryTeamUpdateRequest, DiscoveryCursor,
-    EphemeralCredential, EventRequest, ExecutePreparedRequest, HostedCreateRequest,
-    HostedHistoryKind, HostedKindPolicy, HostedOutcomePolicy, HostedRetentionPolicy, InboxPolicy,
-    IssuerPrincipal, OccurrenceKind, OccurrenceState, PageStatus, PrepareActionRequest,
-    PreparedSourceAttempt, QueuePolicy, SourceAdapter, SourceAdapterError, SourceBinding,
-    SourcePolicy, SourceReceipt, SourceRequestPolicy, StaffingDiagnostic, SubjectRef,
-    TransitionHint,
+    CaseworkProject, CaseworkRole, DelegateRequest, DirectoryTargetPurpose,
+    DirectoryTeamUpdateRequest, DiscoveryCursor, EphemeralCredential, EventRequest,
+    ExecutePreparedRequest, HostedCreateRequest, HostedHistoryKind, HostedKindPolicy,
+    HostedOutcomePolicy, HostedRetentionPolicy, InboxPolicy, IssuerPrincipal, OccurrenceKind,
+    OccurrenceState, PageStatus, PrepareActionRequest, PreparedSourceAttempt, QueuePolicy,
+    SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt,
+    SourceRequestPolicy, StaffingDiagnostic, SubjectRef, TransitionHint,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -482,6 +482,361 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
         uncovered_context.staffing_diagnostic,
         Some(StaffingDiagnostic::NoCoverAvailable)
     );
+
+    let removed_target_item = add_hosted_item(&fixture, "removed-target").await;
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_memberships WHERE issuer=$1 AND subject=$2 AND membership_kind='staff'",
+            &[
+                &fixture.staff_b.principal.issuer,
+                &fixture.staff_b.principal.subject,
+            ],
+        )
+        .await
+        .expect("remove selected target while its absence remains active");
+    assert!(matches!(
+        fixture
+            .service
+            .assign_item(
+                &fixture.supervisor,
+                None,
+                "unused",
+                removed_target_item.item_id,
+                removed_target_item.revision,
+                &AssignmentRequest {
+                    assignee: fixture.staff_b.principal.clone(),
+                    reason: Some("removed target".to_owned()),
+                },
+                "assign-removed-target",
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Forbidden))
+    ));
+    let outsider = principal("out-of-team");
+    assert!(matches!(
+        fixture
+            .service
+            .assign_item(
+                &fixture.supervisor,
+                None,
+                "unused",
+                removed_target_item.item_id,
+                removed_target_item.revision,
+                &AssignmentRequest {
+                    assignee: outsider,
+                    reason: Some("out of team".to_owned()),
+                },
+                "assign-out-of-team-target",
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Forbidden))
+    ));
+}
+
+#[tokio::test]
+async fn directory_targets_are_paged_query_bound_and_recheck_current_authority() {
+    let fixture = fixture([]).await;
+
+    let assignment = fixture
+        .service
+        .directory_targets(
+            &fixture.supervisor,
+            DirectoryTargetPurpose::Assignment,
+            Some(QUEUE),
+            None,
+            2,
+            None,
+        )
+        .await
+        .expect("supervisor assignment targets");
+    assert_eq!(assignment.items.len(), 2);
+    let assignment_cursor = assignment.next_cursor.expect("assignment cursor");
+    let staff_targets = fixture
+        .service
+        .directory_targets(
+            &fixture.staff_a,
+            DirectoryTargetPurpose::Assignment,
+            Some(QUEUE),
+            None,
+            100,
+            None,
+        )
+        .await
+        .expect("staff assignment targets");
+    assert_eq!(staff_targets.items.len(), 3);
+    assert!(matches!(
+        fixture
+            .service
+            .directory_targets(
+                &fixture.staff_a,
+                DirectoryTargetPurpose::Assignment,
+                Some(QUEUE),
+                None,
+                2,
+                Some(&assignment_cursor),
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .directory_targets(
+                &fixture.supervisor,
+                DirectoryTargetPurpose::AbsencePerson,
+                None,
+                None,
+                2,
+                Some(&assignment_cursor),
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .directory_targets(
+                &fixture.requester,
+                DirectoryTargetPurpose::Assignment,
+                Some(QUEUE),
+                None,
+                100,
+                None,
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Forbidden))
+    ));
+
+    let bulk_a = (0..100)
+        .map(|index| principal(&format!("bulk-a-{index:03}")))
+        .collect::<Vec<_>>();
+    let bulk_b = (0..5)
+        .map(|index| principal(&format!("bulk-b-{index:03}")))
+        .collect::<Vec<_>>();
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    assert!(matches!(
+        fixture
+            .service
+            .directory_targets(
+                &administrator,
+                DirectoryTargetPurpose::Assignment,
+                Some(QUEUE),
+                None,
+                100,
+                None,
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Forbidden))
+    ));
+    let staff_absence_people = fixture
+        .service
+        .directory_targets(
+            &fixture.staff_a,
+            DirectoryTargetPurpose::AbsencePerson,
+            None,
+            None,
+            100,
+            None,
+        )
+        .await
+        .expect("staff may select only self for absence management");
+    assert_eq!(
+        staff_absence_people.items,
+        vec![fixture.staff_a.principal.clone()]
+    );
+    assert!(matches!(
+        fixture
+            .service
+            .directory_targets(
+                &fixture.staff_a,
+                DirectoryTargetPurpose::AbsenceCover,
+                None,
+                Some(&fixture.staff_b.principal),
+                100,
+                None,
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Forbidden))
+    ));
+    let revision = fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            1,
+            "bulk-a",
+            &DirectoryTeamUpdateRequest {
+                staff: bulk_a.clone(),
+                supervisors: vec![fixture.supervisor.principal.clone()],
+                served_queues: Vec::new(),
+            },
+            "bulk-a",
+        )
+        .await
+        .expect("add first supervised team");
+    let revision = fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            revision,
+            "bulk-b",
+            &DirectoryTeamUpdateRequest {
+                staff: bulk_b.clone(),
+                supervisors: vec![fixture.supervisor.principal.clone()],
+                served_queues: Vec::new(),
+            },
+            "bulk-b",
+        )
+        .await
+        .expect("add second supervised team");
+
+    let first = fixture
+        .service
+        .directory_targets(
+            &fixture.supervisor,
+            DirectoryTargetPurpose::AbsencePerson,
+            None,
+            None,
+            100,
+            None,
+        )
+        .await
+        .expect("first supervised target page");
+    assert_eq!(first.items.len(), 100);
+    let cursor = first.next_cursor.expect("more than one target page");
+    let second = fixture
+        .service
+        .directory_targets(
+            &fixture.supervisor,
+            DirectoryTargetPurpose::AbsencePerson,
+            None,
+            None,
+            100,
+            Some(&cursor),
+        )
+        .await
+        .expect("second supervised target page");
+    assert_eq!(second.items.len(), 8);
+    assert!(second.next_cursor.is_none());
+    let mut all = first.items;
+    all.extend(second.items);
+    assert_eq!(all.len(), 108);
+    assert!(all.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let cover_targets = fixture
+        .service
+        .directory_targets(
+            &fixture.supervisor,
+            DirectoryTargetPurpose::AbsenceCover,
+            None,
+            Some(&fixture.staff_a.principal),
+            100,
+            None,
+        )
+        .await
+        .expect("same-team absence covers");
+    assert_eq!(
+        cover_targets.items,
+        vec![
+            fixture.staff_b.principal.clone(),
+            fixture.staff_c.principal.clone()
+        ]
+    );
+
+    let revision = fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            revision,
+            "review-team",
+            &DirectoryTeamUpdateRequest {
+                staff: vec![
+                    fixture.staff_a.principal.clone(),
+                    fixture.staff_b.principal.clone(),
+                    fixture.staff_c.principal.clone(),
+                ],
+                supervisors: Vec::new(),
+                served_queues: vec![QUEUE.to_owned()],
+            },
+            "remove-review-supervisor",
+        )
+        .await
+        .expect("remove supervisor from review team");
+    let revision = fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            revision,
+            "bulk-a",
+            &DirectoryTeamUpdateRequest {
+                staff: bulk_a,
+                supervisors: Vec::new(),
+                served_queues: Vec::new(),
+            },
+            "remove-bulk-a-supervisor",
+        )
+        .await
+        .expect("remove supervisor from first bulk team");
+    fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            revision,
+            "bulk-b",
+            &DirectoryTeamUpdateRequest {
+                staff: bulk_b,
+                supervisors: Vec::new(),
+                served_queues: Vec::new(),
+            },
+            "remove-bulk-b-supervisor",
+        )
+        .await
+        .expect("remove supervisor from second bulk team");
+    let after_revocation = fixture
+        .service
+        .directory_targets(
+            &fixture.supervisor,
+            DirectoryTargetPurpose::AbsencePerson,
+            None,
+            None,
+            100,
+            Some(&cursor),
+        )
+        .await
+        .expect("revoked supervisor has no remaining target scope");
+    assert!(after_revocation.items.is_empty());
+    assert!(matches!(
+        fixture
+            .service
+            .directory_targets(
+                &fixture.supervisor,
+                DirectoryTargetPurpose::Assignment,
+                Some(QUEUE),
+                None,
+                100,
+                None,
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Forbidden))
+    ));
+    let unrelated_supervisor = actor("unrelated", CaseworkRole::Supervisor, "supervisor");
+    let empty = fixture
+        .service
+        .directory_targets(
+            &unrelated_supervisor,
+            DirectoryTargetPurpose::AbsencePerson,
+            None,
+            None,
+            100,
+            None,
+        )
+        .await
+        .expect("supervisor with no teams has an empty scope");
+    assert!(empty.items.is_empty());
 }
 
 #[tokio::test]
@@ -1048,6 +1403,39 @@ async fn assignment_cursor_retention_deletes_expired_rows_in_bounded_batches() {
             .erase_expired_assignment_cursors()
             .await
             .expect("second bounded cursor sweep"),
+        1
+    );
+
+    for index in 0..101_i32 {
+        fixture.database.execute(
+            "INSERT INTO casework_directory_target_cursors(cursor_id,issuer,subject,profile_id,context_hash,last_issuer,last_subject,expires_at) VALUES($1,'issuer','subject','profile',$2,'last-issuer',$3,now()-interval '1 minute')",
+            &[&Uuid::new_v4(), &format!("target-context-{index}"), &format!("last-subject-{index}")],
+        ).await.expect("insert expired directory target cursor");
+    }
+    assert_eq!(
+        fixture
+            .service
+            .erase_expired_directory_target_cursors()
+            .await
+            .expect("first bounded target cursor sweep"),
+        100
+    );
+    let remaining: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_directory_target_cursors",
+            &[],
+        )
+        .await
+        .expect("count retained directory target cursors")
+        .get(0);
+    assert_eq!(remaining, 1);
+    assert_eq!(
+        fixture
+            .service
+            .erase_expired_directory_target_cursors()
+            .await
+            .expect("second bounded target cursor sweep"),
         1
     );
 }

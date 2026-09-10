@@ -520,6 +520,17 @@ const DIRECTORY: &[ProblemCode] = &[
     ProblemCode::ServiceUnavailable,
     ProblemCode::RuntimeFailure,
 ];
+const DIRECTORY_TARGETS: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::CursorExpired,
+    ProblemCode::CursorInvalid,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::RequestInvalid,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
 const ABSENCE_CREATE: &[ProblemCode] = &[
     ProblemCode::AbsenceCoverCycle,
     ProblemCode::AbsenceInvalidPeriod,
@@ -756,6 +767,15 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_query: false,
         accepts_json: false,
         problems: DIRECTORY,
+    },
+    OperationContract {
+        method: "GET",
+        path: "/v1/directory/targets",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: true,
+        accepts_json: false,
+        problems: DIRECTORY_TARGETS,
     },
     OperationContract {
         method: "GET",

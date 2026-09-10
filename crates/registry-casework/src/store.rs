@@ -26,6 +26,7 @@ const ASSIGNMENT_MIGRATION: &str = include_str!("../migrations/0003_assignment.s
 const CLOCK_MIGRATION: &str = include_str!("../migrations/0004_clocks.sql");
 const SOURCE_RETENTION_MIGRATION: &str = include_str!("../migrations/0005_source_retention.sql");
 const SOURCE_HISTORY_MIGRATION: &str = include_str!("../migrations/0006_source_history.sql");
+const DIRECTORY_TARGETS_MIGRATION: &str = include_str!("../migrations/0007_directory_targets.sql");
 
 pub(crate) type InboxPosition = (Option<DateTime<Utc>>, DateTime<Utc>, Uuid);
 
@@ -222,6 +223,27 @@ impl PostgresStore {
             transaction
                 .execute(
                     "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(6,now())",
+                    &[],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let directory_targets_applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=7)",
+                &[],
+            )
+            .await?
+            .get(0);
+        if !directory_targets_applied {
+            transaction
+                .batch_execute(DIRECTORY_TARGETS_MIGRATION)
+                .await?;
+            transaction
+                .execute(
+                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(7,now())",
                     &[],
                 )
                 .await?;

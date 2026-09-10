@@ -8,10 +8,11 @@ use registry_casework_core::{
     resolve_absence_cover, validate_absence, AbsenceInput, AbsenceRecord, ActorContext,
     AssignmentContext, AssignmentRequest, CaseloadApplyRequest, CaseloadItemOutcome,
     CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage, CaseworkRole, DelegateRequest,
-    DirectoryTeamUpdateRequest, HistoryKind, IssuerPrincipal, Page, PageStatus, SourceAdapterError,
-    StaffingDiagnostic, WorkItem, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
-    MAXIMUM_DIRECTORY_IDENTIFIER_BYTES, MAXIMUM_DIRECTORY_PRINCIPALS,
-    MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES, MAXIMUM_DIRECTORY_SERVED_QUEUES,
+    DirectoryTargetPage, DirectoryTargetPurpose, DirectoryTeamUpdateRequest, HistoryKind,
+    IssuerPrincipal, Page, PageStatus, SourceAdapterError, StaffingDiagnostic, WorkItem,
+    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_DIRECTORY_IDENTIFIER_BYTES,
+    MAXIMUM_DIRECTORY_PRINCIPALS, MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES,
+    MAXIMUM_DIRECTORY_SERVED_QUEUES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -53,6 +54,173 @@ struct AbsenceDeleteReplay {
 }
 
 impl PostgresStore {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn directory_targets(
+        &self,
+        actor: &ActorContext,
+        purpose: DirectoryTargetPurpose,
+        queue: Option<&str>,
+        person: Option<&IssuerPrincipal>,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<DirectoryTargetPage, StoreError> {
+        let valid_shape = match purpose {
+            DirectoryTargetPurpose::Assignment => {
+                queue.is_some_and(|queue| !queue.is_empty()) && person.is_none()
+            }
+            DirectoryTargetPurpose::AbsencePerson => queue.is_none() && person.is_none(),
+            DirectoryTargetPurpose::AbsenceCover => {
+                queue.is_none()
+                    && person
+                        .is_some_and(|person| valid_directory_people(std::slice::from_ref(person)))
+            }
+        };
+        if !valid_shape {
+            return Err(StoreError::Invalid);
+        }
+        let context_hash = assignment_hash(&(purpose, queue, person))?;
+        let desired = limit.clamp(1, 100);
+        let query_limit = i64::try_from(desired + 1).map_err(|_| StoreError::Invalid)?;
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+
+        // Every directory mutation takes this row for update before changing
+        // memberships. Holding a share lock makes the authority check, page,
+        // and any issued cursor one current directory snapshot.
+        transaction
+            .query_one(
+                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
+                &[],
+            )
+            .await?;
+        let after = if let Some(cursor) = cursor {
+            let cursor_id = Uuid::parse_str(cursor).map_err(|_| StoreError::CursorInvalid)?;
+            let row = transaction
+                .query_opt(
+                    "SELECT issuer,subject,profile_id,context_hash,last_issuer,last_subject,expires_at FROM casework_directory_target_cursors WHERE cursor_id=$1 FOR UPDATE",
+                    &[&cursor_id],
+                )
+                .await?
+                .ok_or(StoreError::CursorInvalid)?;
+            if row.get::<_, String>(0) != actor.principal.issuer
+                || row.get::<_, String>(1) != actor.principal.subject
+                || row.get::<_, String>(2) != actor.profile_id
+                || row.get::<_, String>(3) != context_hash
+            {
+                return Err(StoreError::CursorInvalid);
+            }
+            if row.get::<_, chrono::DateTime<Utc>>(6) <= Utc::now() {
+                return Err(StoreError::CursorExpired);
+            }
+            (row.get::<_, String>(4), row.get::<_, String>(5))
+        } else {
+            (String::new(), String::new())
+        };
+
+        let rows = match purpose {
+            DirectoryTargetPurpose::Assignment => {
+                let queue = queue.ok_or(StoreError::Invalid)?;
+                let authorized = match actor.role {
+                    CaseworkRole::Staff => {
+                        is_staff_for_queue(&transaction, &actor.principal, queue).await?
+                    }
+                    CaseworkRole::Supervisor => {
+                        can_assign_queue(&transaction, actor, queue).await?
+                    }
+                    CaseworkRole::Administrator | CaseworkRole::Requester => false,
+                };
+                if !authorized {
+                    return Err(StoreError::Forbidden);
+                }
+                transaction
+                    .query(
+                        "SELECT DISTINCT m.issuer,m.subject FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=$1 AND m.membership_kind='staff' AND (m.issuer,m.subject)>($2,$3) ORDER BY m.issuer,m.subject LIMIT $4",
+                        &[&queue, &after.0, &after.1, &query_limit],
+                    )
+                    .await?
+            }
+            DirectoryTargetPurpose::AbsencePerson => match actor.role {
+                CaseworkRole::Staff => {
+                    transaction
+                        .query(
+                            "SELECT DISTINCT m.issuer,m.subject FROM casework_memberships m WHERE m.issuer=$1 AND m.subject=$2 AND m.membership_kind='staff' AND (m.issuer,m.subject)>($3,$4) ORDER BY m.issuer,m.subject LIMIT $5",
+                            &[&actor.principal.issuer, &actor.principal.subject, &after.0, &after.1, &query_limit],
+                        )
+                        .await?
+                }
+                CaseworkRole::Supervisor => {
+                    transaction
+                        .query(
+                            "SELECT DISTINCT person.issuer,person.subject FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.membership_kind='staff' AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' AND (person.issuer,person.subject)>($3,$4) ORDER BY person.issuer,person.subject LIMIT $5",
+                            &[&actor.principal.issuer, &actor.principal.subject, &after.0, &after.1, &query_limit],
+                        )
+                        .await?
+                }
+                CaseworkRole::Administrator => {
+                    transaction
+                        .query(
+                            "SELECT DISTINCT m.issuer,m.subject FROM casework_memberships m WHERE m.membership_kind='staff' AND (m.issuer,m.subject)>($1,$2) ORDER BY m.issuer,m.subject LIMIT $3",
+                            &[&after.0, &after.1, &query_limit],
+                        )
+                        .await?
+                }
+                CaseworkRole::Requester => return Err(StoreError::Forbidden),
+            },
+            DirectoryTargetPurpose::AbsenceCover => {
+                let person = person.ok_or(StoreError::Invalid)?;
+                if !can_manage_person(&transaction, actor, person).await? {
+                    return Err(StoreError::Forbidden);
+                }
+                transaction
+                    .query(
+                        "SELECT DISTINCT cover.issuer,cover.subject FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.membership_kind='staff' AND (cover.issuer,cover.subject)<>($1,$2) AND (cover.issuer,cover.subject)>($3,$4) ORDER BY cover.issuer,cover.subject LIMIT $5",
+                        &[&person.issuer, &person.subject, &after.0, &after.1, &query_limit],
+                    )
+                    .await?
+            }
+        };
+        let more = rows.len() > desired;
+        let items = rows
+            .into_iter()
+            .take(desired)
+            .map(|row| IssuerPrincipal {
+                issuer: row.get(0),
+                subject: row.get(1),
+            })
+            .collect::<Vec<_>>();
+        let next_cursor = if more {
+            let last = items.last().ok_or(StoreError::Corrupt)?;
+            let cursor_id = Uuid::new_v4();
+            let expires_at = Utc::now() + TimeDelta::minutes(15);
+            transaction
+                .execute(
+                    "INSERT INTO casework_directory_target_cursors(cursor_id,issuer,subject,profile_id,context_hash,last_issuer,last_subject,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+                    &[&cursor_id, &actor.principal.issuer, &actor.principal.subject, &actor.profile_id, &context_hash, &last.issuer, &last.subject, &expires_at],
+                )
+                .await?;
+            Some(cursor_id.to_string())
+        } else {
+            None
+        };
+        transaction.commit().await?;
+        Ok(Page {
+            items,
+            next_cursor,
+            status: PageStatus::Complete,
+        })
+    }
+
+    pub async fn erase_expired_directory_target_cursors(&self) -> Result<usize, StoreError> {
+        let client = self.client().await?;
+        let affected = client
+            .execute(
+                "WITH due AS (SELECT cursor_id FROM casework_directory_target_cursors WHERE expires_at<=now() ORDER BY expires_at,cursor_id LIMIT 100 FOR UPDATE SKIP LOCKED) DELETE FROM casework_directory_target_cursors c USING due WHERE c.cursor_id=due.cursor_id",
+                &[],
+            )
+            .await?;
+        usize::try_from(affected).map_err(|_| StoreError::Corrupt)
+    }
+
     pub async fn update_directory_team(
         &self,
         actor: &ActorContext,
@@ -864,6 +1032,9 @@ impl PostgresStore {
         if !matches!(state.as_str(), "open" | "claimed") {
             return Err(StoreError::Conflict);
         }
+        if !is_staff_for_queue(&transaction, target, &queue).await? {
+            return Err(StoreError::Forbidden);
+        }
         let now = Utc::now();
         let absences = active_absences(&transaction, target, now).await?;
         let cover =
@@ -1441,6 +1612,29 @@ impl CaseworkService {
     pub async fn erase_expired_assignment_cursors(&self) -> Result<usize, ServiceError> {
         self.store
             .erase_expired_assignment_cursors()
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn directory_targets(
+        &self,
+        actor: &ActorContext,
+        purpose: DirectoryTargetPurpose,
+        queue: Option<&str>,
+        person: Option<&IssuerPrincipal>,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<DirectoryTargetPage, ServiceError> {
+        self.store
+            .directory_targets(actor, purpose, queue, person, limit, cursor)
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    pub async fn erase_expired_directory_target_cursors(&self) -> Result<usize, ServiceError> {
+        self.store
+            .erase_expired_directory_target_cursors()
             .await
             .map_err(ServiceError::from)
     }

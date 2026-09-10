@@ -128,6 +128,12 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 if let Err(error) = worker_service.erase_expired_assignment_cursors().await {
                     tracing::warn!(error = %error, "Casework assignment cursor retention pass did not complete");
                 }
+                if let Err(error) = worker_service
+                    .erase_expired_directory_target_cursors()
+                    .await
+                {
+                    tracing::warn!(error = %error, "Casework directory target cursor retention pass did not complete");
+                }
                 if let Err(error) = worker_service.erase_expired_source_history_cursors().await {
                     tracing::warn!(error = %error, "Casework source history cursor retention pass did not complete");
                 }

@@ -16,16 +16,16 @@ use registry_casework_core::{
     CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage,
     CaseloadPreviewQuery, CaseworkProject, CaseworkRole, ClockOccurrenceView,
     ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
-    DecideRequest, DelegateRequest, Description, DirectoryResponse, DraftResponse, EventRequest,
-    HistoryPage, HoldingsQuery, HolidaySetDocument, HolidaySetRevisionInput,
-    HostedAccountabilityRecord, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
-    HostedHistoryPage, HostedNotePage, HostedNoteRequest, HostedPageQuery, HostedTerminalPage,
-    HostedTerminalQuery, HostedTerminalResult, HostedValidationError, HostedValidationReason,
-    ListWorkItemsQuery, MutationResponse, NextWorkItemQuery, QueueRecord, RecoverAttemptRequest,
-    RequesterHostedItem, SaveDraftRequest, ATTEMPT_REFERENCE_HEADER, CASEWORK_PROFILE_HEADER,
-    IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
-    MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER,
-    VALIDATION_REASON_HEADER,
+    DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
+    DirectoryTargetsQuery, DraftResponse, EventRequest, HistoryPage, HoldingsQuery,
+    HolidaySetDocument, HolidaySetRevisionInput, HostedAccountabilityRecord, HostedCancelRequest,
+    HostedCreateRequest, HostedDecisionRequest, HostedHistoryPage, HostedNotePage,
+    HostedNoteRequest, HostedPageQuery, HostedTerminalPage, HostedTerminalQuery,
+    HostedTerminalResult, HostedValidationError, HostedValidationReason, ListWorkItemsQuery,
+    MutationResponse, NextWorkItemQuery, QueueRecord, RecoverAttemptRequest, RequesterHostedItem,
+    SaveDraftRequest, ATTEMPT_REFERENCE_HEADER, CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER,
+    IF_MATCH_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES,
+    SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
 };
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
@@ -104,6 +104,7 @@ pub fn router(state: HttpState) -> Router {
             )
             .route("/v1/holdings", get(holdings))
             .route("/v1/directory", get(directory))
+            .route("/v1/directory/targets", get(directory_targets))
             .route(
                 "/v1/directory/teams/{team_id}",
                 axum::routing::put(update_directory_team),
@@ -768,6 +769,30 @@ async fn directory(
     let (actor, _) = authenticate(&state, &headers).await?;
     let (revision, teams) = state.service.store().directory(&actor).await?;
     Ok(Json(DirectoryResponse { revision, teams }))
+}
+
+async fn directory_targets(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<DirectoryTargetsQuery>,
+) -> Result<Json<DirectoryTargetPage>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    query.check().map_err(|_| HttpError::Invalid)?;
+    let person = query.person();
+    Ok(Json(
+        state
+            .service
+            .directory_targets(
+                &actor,
+                query.purpose,
+                query.queue.as_deref(),
+                person.as_ref(),
+                page_limit(&state, query.limit)?,
+                query.cursor.as_deref(),
+            )
+            .await?,
+    ))
 }
 
 async fn update_directory_team(
