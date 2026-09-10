@@ -303,6 +303,29 @@ def validate_npm_packages(
                 raise ClientRegistryError(
                     "root npm package must not contain a native binary"
                 )
+            if client == "stack":
+                casework_members = {
+                    "package/casework/client.js",
+                    "package/casework/client.d.ts",
+                    "package/casework/index.js",
+                    "package/casework/index.d.ts",
+                }
+                exposed_casework = any(
+                    name.startswith("package/casework/") for name in names
+                )
+                casework_expected = includes_casework(
+                    version, include_casework=include_casework
+                )
+                missing_casework = casework_members - names
+                if casework_expected and missing_casework:
+                    raise ClientRegistryError(
+                        f"root npm package {path.name} has an incomplete casework facade: "
+                        f"{sorted(missing_casework)!r}"
+                    )
+                if not casework_expected and exposed_casework:
+                    raise ClientRegistryError(
+                        f"root npm package {path.name} unexpectedly exposes the casework facade"
+                    )
             if metadata.get("optionalDependencies") != expected_optional:
                 raise ClientRegistryError(
                     "root npm package does not bind the exact platform versions"

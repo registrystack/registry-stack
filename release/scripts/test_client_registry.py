@@ -32,6 +32,7 @@ def write_npm_package(
     version: str,
     binary: str | tuple[str, ...] | None = None,
     optional_dependencies: dict[str, str] | None = None,
+    facade_namespaces: tuple[str, ...] = (),
 ) -> None:
     metadata: dict[str, object] = {"name": name, "version": version}
     if optional_dependencies is not None:
@@ -45,6 +46,11 @@ def write_npm_package(
     elif binary is not None:
         for item in binary:
             entries[f"package/{item}"] = b"native\n"
+    for namespace in facade_namespaces:
+        entries[f"package/{namespace}/client.js"] = b"module.exports = {};\n"
+        entries[f"package/{namespace}/client.d.ts"] = b"export {};\n"
+        entries[f"package/{namespace}/index.js"] = b"module.exports = {}\n"
+        entries[f"package/{namespace}/index.d.ts"] = b"export {};\n"
     with tarfile.open(path, mode="w:gz") as archive:
         for member_name, payload in entries.items():
             info = tarfile.TarInfo(member_name)
@@ -105,6 +111,11 @@ class ClientRegistryTest(unittest.TestCase):
             name=definition.npm_root_package,
             version=self.version,
             optional_dependencies=optional,
+            facade_namespaces=("casework",)
+            if self.module.includes_casework(
+                self.version, include_casework=include_casework
+            )
+            else (),
         )
         for path in self.module.wheel_paths(self.directory, self.version, client):
             write_wheel(
@@ -210,6 +221,53 @@ class ClientRegistryTest(unittest.TestCase):
             )
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "validated\n")
+
+    def test_0_29_rejects_a_root_package_that_exposes_casework(self) -> None:
+        self.version = "0.29.0"
+        self._write_distribution("stack")
+        definition = self.module.client_definition("stack")
+        root = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[-1]
+        write_npm_package(
+            root,
+            name=definition.npm_root_package,
+            version=self.version,
+            optional_dependencies=self.module.expected_optional_dependencies(
+                "stack", self.version
+            ),
+            facade_namespaces=("casework",),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "unexpectedly exposes the casework facade",
+        ):
+            self.module.validate_npm_packages(
+                self.directory, self.version, "stack"
+            )
+
+    def test_selected_casework_requires_its_root_facade(self) -> None:
+        self.version = "0.30.0"
+        self._write_distribution("stack")
+        definition = self.module.client_definition("stack")
+        root = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[-1]
+        write_npm_package(
+            root,
+            name=definition.npm_root_package,
+            version=self.version,
+            optional_dependencies=self.module.expected_optional_dependencies(
+                "stack", self.version
+            ),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "incomplete casework facade",
+        ):
+            self.module.validate_npm_packages(
+                self.directory, self.version, "stack"
+            )
 
     def test_rejects_a_unified_wheel_without_casework(self) -> None:
         self._write_distribution("stack")
