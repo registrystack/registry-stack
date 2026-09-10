@@ -213,6 +213,18 @@ impl BRegRequestState {
             _ => None,
         }
     }
+
+    const fn identifier(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Submitted => "submitted",
+            Self::Approved => "approved",
+            Self::NeedsChanges => "needs_changes",
+            Self::Rejected => "rejected",
+            Self::Canceled => "canceled",
+            Self::Applied => "applied",
+        }
+    }
 }
 
 /// A positive change-request proposal version.
@@ -1028,6 +1040,121 @@ impl BRegLifecycleAuthority {
         self.source_binding == source
     }
 
+    pub(crate) fn recovery_identity(&self) -> Value {
+        json!({
+            "registry": self.registry_identifier,
+            "dataset": self.dataset_identifier,
+            "revision": self.registry_revision,
+            "entity": self.entity_type_identifier,
+            "profile": self.access_profile_identifier,
+        })
+    }
+
+    pub(crate) fn matches_recovery_identity(&self, identity: &Value) -> bool {
+        *identity == self.recovery_identity()
+    }
+
+    pub(crate) fn recover_action(
+        &self,
+        identity: Value,
+        body: &str,
+    ) -> Result<BRegLifecycleAction, BRegLifecyclePromotionError> {
+        let mut identity = exact_object(
+            identity,
+            &[
+                "operation",
+                "href",
+                "ifMatch",
+                "recordIdentifier",
+                "recordRevision",
+                "proposalVersion",
+            ],
+            &["stage", "effectDigest", "rebase"],
+        )
+        .map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        let operation = parse_operation(
+            &take_string(&mut identity, "operation")
+                .map_err(|_| BRegLifecyclePromotionError::Binding)?,
+        )
+        .map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        let href =
+            take_string(&mut identity, "href").map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        validate_relative_action_href(&href).map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        let if_match = take_string(&mut identity, "ifMatch")
+            .map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        if !valid_action_if_match(&if_match) {
+            return Err(BRegLifecyclePromotionError::Binding);
+        }
+        let stage = take_optional_identifier(&mut identity, "stage")
+            .map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        let record_identifier = take_string(&mut identity, "recordIdentifier")
+            .map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        validate_canonical_uuid(&record_identifier)
+            .map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        let record_revision = identity
+            .remove("recordRevision")
+            .and_then(|value| value.as_u64())
+            .filter(|value| *value > 0)
+            .ok_or(BRegLifecyclePromotionError::Binding)?;
+        let proposal_version = BRegProposalVersion::from_value(
+            &identity
+                .remove("proposalVersion")
+                .ok_or(BRegLifecyclePromotionError::Binding)?,
+        )
+        .map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        let effect_digest = take_optional_digest(&mut identity, "effectDigest")
+            .map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        let rebase = match identity.remove("rebase") {
+            None => None,
+            Some(Value::Bool(value)) => Some(value),
+            Some(_) => return Err(BRegLifecyclePromotionError::Binding),
+        };
+
+        let mut bindings = self
+            .operations
+            .iter()
+            .filter(|binding| binding.operation == operation && binding.stage == stage);
+        let binding = bindings
+            .next()
+            .filter(|_| bindings.next().is_none())
+            .ok_or(BRegLifecyclePromotionError::Binding)?;
+        if binding.href_for(&record_identifier, &self.access_profile_identifier)? != href {
+            return Err(BRegLifecyclePromotionError::Binding);
+        }
+
+        let body_value = crate::strict_json::from_slice(body.as_bytes())
+            .map_err(|_| BRegLifecyclePromotionError::Binding)?;
+        let action_body = recovery_action_body(
+            operation,
+            proposal_version,
+            effect_digest.clone(),
+            rebase,
+            body_value,
+        )?;
+        if serde_json::to_string(&action_body).map_err(|_| BRegLifecyclePromotionError::Binding)?
+            != body
+        {
+            return Err(BRegLifecyclePromotionError::Binding);
+        }
+
+        Ok(BRegLifecycleAction {
+            operation,
+            href,
+            if_match: BRegActionIfMatch(if_match),
+            stage,
+            body: action_body,
+            review: None,
+            registry_revision: self.registry_revision.clone(),
+            source_binding: self.source_binding.clone(),
+            record_identifier,
+            expected_receipt_revision: record_revision
+                .checked_add(1)
+                .ok_or(BRegLifecyclePromotionError::Binding)?,
+            proposal_version,
+            effect_digest,
+        })
+    }
+
     fn matches_record(&self, record: &BRegLifecycleRecordBinding) -> bool {
         self.registry_identifier == record.registry_identifier
             && self.dataset_identifier == record.dataset_identifier
@@ -1380,6 +1507,27 @@ impl BRegLifecycleAction {
         self.source_binding == source
     }
 
+    pub(crate) fn recovery_identity(&self) -> Value {
+        let mut identity = json!({
+            "operation": self.operation.identifier(),
+            "href": self.href,
+            "ifMatch": self.if_match.as_str(),
+            "recordIdentifier": self.record_identifier,
+            "recordRevision": self.expected_receipt_revision - 1,
+            "proposalVersion": self.proposal_version,
+        });
+        if let Some(stage) = &self.stage {
+            identity["stage"] = Value::String(stage.clone());
+        }
+        if let Some(effect_digest) = &self.effect_digest {
+            identity["effectDigest"] = Value::String(effect_digest.as_str().to_owned());
+        }
+        if let BRegLifecycleActionBody::ReviseRequest { rebase } = &self.body {
+            identity["rebase"] = Value::Bool(*rebase);
+        }
+        identity
+    }
+
     #[must_use]
     pub(crate) fn matches_record_identifier(&self, record_identifier: &str) -> bool {
         self.record_identifier == record_identifier
@@ -1501,6 +1649,63 @@ pub enum BRegLifecycleActionBody {
         proposal_version: BRegProposalVersion,
         effect_digest: BRegEffectDigest,
     },
+}
+
+fn recovery_action_body(
+    operation: BRegLifecycleOperation,
+    proposal_version: BRegProposalVersion,
+    effect_digest: Option<BRegEffectDigest>,
+    rebase: Option<bool>,
+    supplied: Value,
+) -> Result<BRegLifecycleActionBody, BRegLifecyclePromotionError> {
+    if (operation.requires_proposal_binding() && effect_digest.is_none())
+        || matches!(operation, BRegLifecycleOperation::ReviseRequest) != rebase.is_some()
+    {
+        return Err(BRegLifecyclePromotionError::Binding);
+    }
+    let reason = supplied.get("reason").cloned();
+    let body = match operation {
+        BRegLifecycleOperation::SubmitRequest => BRegLifecycleActionBody::SubmitRequest,
+        BRegLifecycleOperation::ApproveRequest => BRegLifecycleActionBody::ApproveRequest {
+            proposal_version,
+            effect_digest: effect_digest.ok_or(BRegLifecyclePromotionError::Binding)?,
+        },
+        BRegLifecycleOperation::RejectRequest => BRegLifecycleActionBody::RejectRequest {
+            proposal_version,
+            effect_digest: effect_digest.ok_or(BRegLifecyclePromotionError::Binding)?,
+            reason: recovery_reason(reason)?,
+        },
+        BRegLifecycleOperation::RequestRevision => BRegLifecycleActionBody::RequestRevision {
+            proposal_version,
+            effect_digest: effect_digest.ok_or(BRegLifecyclePromotionError::Binding)?,
+            reason: recovery_reason(reason)?,
+        },
+        BRegLifecycleOperation::ReviseRequest => BRegLifecycleActionBody::ReviseRequest {
+            rebase: rebase.ok_or(BRegLifecyclePromotionError::Binding)?,
+        },
+        BRegLifecycleOperation::CancelRequest => BRegLifecycleActionBody::CancelRequest,
+        BRegLifecycleOperation::ApplyRequest => BRegLifecycleActionBody::ApplyRequest {
+            proposal_version,
+            effect_digest: effect_digest.ok_or(BRegLifecyclePromotionError::Binding)?,
+        },
+    };
+    if body.to_value() != supplied {
+        return Err(BRegLifecyclePromotionError::Binding);
+    }
+    Ok(body)
+}
+
+fn recovery_reason(reason: Option<Value>) -> Result<Option<String>, BRegLifecyclePromotionError> {
+    match reason {
+        None => Ok(None),
+        Some(Value::String(reason))
+            if !reason.contains('\0')
+                && reason.chars().count() <= MAX_BREG_REVIEW_REASON_CHARACTERS =>
+        {
+            Ok(Some(reason))
+        }
+        Some(_) => Err(BRegLifecyclePromotionError::Binding),
+    }
 }
 
 impl BRegLifecycleActionBody {
@@ -1629,6 +1834,18 @@ impl BRegLifecycleActionReceipt {
     pub fn request(&self) -> &BRegLifecycleReceiptRequest {
         &self.request
     }
+
+    /// Return the exact validated receipt projection for durable attempt and
+    /// accountability storage. This contains no credential or record fields.
+    #[must_use]
+    pub fn to_value(&self) -> Value {
+        json!({
+            "id": self.record_identifier,
+            "revision": self.revision,
+            "snapshot": self.snapshot,
+            "request": self.request.to_value(),
+        })
+    }
 }
 
 impl fmt::Debug for BRegLifecycleActionReceipt {
@@ -1676,6 +1893,40 @@ impl BRegLifecycleReceiptRequest {
     #[must_use]
     pub fn application(&self) -> Option<&BRegLifecycleReceiptApplication> {
         self.application.as_ref()
+    }
+
+    fn to_value(&self) -> Value {
+        let mut value = json!({
+            "bregState": self.breg_state.identifier(),
+            "proposalVersion": self.proposal_version,
+            "effectDigest": self.effect_digest,
+            "application": self.application.as_ref().map(|application| json!({
+                "applicationId": application.application_identifier,
+                "proposalVersion": application.proposal_version,
+                "effectDigest": application.effect_digest,
+                "appliedAt": application.applied_at,
+            })),
+        });
+        if let Some(proposal) = &self.proposal {
+            let mut proposal_value = json!({
+                "reviewMode": match proposal.review_mode {
+                    BRegRequestReviewMode::None => "none",
+                    BRegRequestReviewMode::Staged => "staged",
+                },
+                "applicationDisposition": match proposal.application_disposition {
+                    BRegRequestApplicationDisposition::Apply => "apply",
+                    BRegRequestApplicationDisposition::Queue => "queue",
+                },
+            });
+            if let Some(reason) = &proposal.queue_reason {
+                proposal_value["queueReason"] = json!({
+                    "code": reason.code,
+                    "label": reason.label,
+                });
+            }
+            value["proposal"] = proposal_value;
+        }
+        value
     }
 }
 

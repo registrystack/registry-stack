@@ -30,7 +30,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 21))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 59))
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 61))
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),

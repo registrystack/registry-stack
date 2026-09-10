@@ -697,6 +697,12 @@ async fn promoted_lifecycle_action_uses_the_exact_route_headers_body_and_receipt
         .expect("execute action");
     assert_eq!(receipt.value.record_identifier(), RECORD_ID);
     assert_eq!(receipt.value.revision(), 8);
+    let receipt_value = receipt.value.to_value();
+    assert_eq!(receipt_value, receipt_body(RECORD_ID, "submitted"));
+    assert_eq!(
+        registry_breg_client::BRegLifecycleActionReceipt::from_value(receipt_value).unwrap(),
+        receipt.value
+    );
     assert!(receipt.metadata.etag().is_none());
     assert!(receipt.metadata.location().is_none());
 
@@ -2019,6 +2025,18 @@ async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
         .await
         .unwrap();
     let saved = prepared.as_bytes().to_vec();
+    let minimal: Value = serde_json::from_slice(&saved).unwrap();
+    let legacy_saved = serde_json::to_vec(&json!({
+        "version": 1,
+        "source": minimal["source"],
+        "registry_revision": action.registry_revision(),
+        "record": original_record,
+        "href": action.href(),
+        "body": serde_json::to_string(action.body()).unwrap(),
+        "if_match": action.if_match().as_str(),
+        "idempotency_key": "attempt-apply",
+    }))
+    .unwrap();
     drop(prepared);
     let prepared = BRegPreparedLifecycle::from_slice(&saved).unwrap();
     let contract = fixture
@@ -2039,7 +2057,18 @@ async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
         .client
         .recover_lifecycle_action(&authority, &prepared)
         .unwrap();
-    assert_eq!(action, recovered);
+    assert_eq!(action.operation(), recovered.operation());
+    assert_eq!(action.href(), recovered.href());
+    assert_eq!(action.if_match(), recovered.if_match());
+    assert_eq!(action.body(), recovered.body());
+    assert!(recovered.review().is_none());
+    let legacy = BRegPreparedLifecycle::from_slice(&legacy_saved).unwrap();
+    let (legacy_recovered, legacy_key) = fixture
+        .client
+        .recover_lifecycle_action(&authority, &legacy)
+        .unwrap();
+    assert_eq!(legacy_recovered, action);
+    assert_eq!(legacy_key.as_str(), "attempt-apply");
     fixture
         .client
         .execute_lifecycle_action(&recovered, &key)
@@ -2080,10 +2109,14 @@ async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
     for (field, value) in [
         ("href", json!("https://attacker.invalid/")),
         ("body", json!("{}")),
-        ("if_match", json!("\"changed\"")),
+        ("ifMatch", json!("\"changed\"")),
     ] {
         let mut tampered: Value = serde_json::from_slice(&saved).unwrap();
-        tampered[field] = value;
+        if field == "body" {
+            tampered[field] = value;
+        } else {
+            tampered["action"][field] = value;
+        }
         let tampered =
             BRegPreparedLifecycle::from_slice(&serde_json::to_vec(&tampered).unwrap()).unwrap();
         assert!(fixture
@@ -2091,6 +2124,14 @@ async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
             .recover_lifecycle_action(&authority, &tampered)
             .is_err());
     }
+    let mut tampered: Value = serde_json::from_slice(&saved).unwrap();
+    tampered["authority"]["profile"] = json!("other-profile");
+    let tampered =
+        BRegPreparedLifecycle::from_slice(&serde_json::to_vec(&tampered).unwrap()).unwrap();
+    assert!(fixture
+        .client
+        .recover_lifecycle_action(&authority, &tampered)
+        .is_err());
     assert_eq!(fixture.token.0.load(Ordering::SeqCst), token_count);
     let other = test_client(vec![]).await;
     assert!(other
@@ -2152,18 +2193,37 @@ async fn prepared_review_reason_survives_restart_and_exact_wire_retry() {
             lifecycle_response(cases["receipts"][operation].clone()),
         ])
         .await;
-        let contract = fixture
+        let first_caller = fixture
             .client
+            .with_bearer_token(BearerToken::new("original-human-token").unwrap());
+        let refreshed_caller = fixture
+            .client
+            .with_bearer_token(BearerToken::new("refreshed-human-token").unwrap());
+        let contract = first_caller
             .registry_contract(Some("writer"))
             .await
             .unwrap()
             .value;
         let authority = contract.select_lifecycle("item", "writer").unwrap();
-        let RegistryRecordResponse::Single(record) = RegistryRecordResponse::from_value(
-            cases["records"][operation].clone(),
-            RegistryRecordRepresentation::Json,
-        )
-        .unwrap() else {
+        let mut record_value = cases["records"][operation].clone();
+        record_value["data"]["domainData"] = json!({"privateField": "domain-data-canary"});
+        record_value["data"]["request"]["proposal"] = json!({
+            "reviewMode": "staged",
+            "applicationDisposition": "queue",
+            "queueReason": {"code": "manual-check", "label": "proposal-canary"}
+        });
+        record_value["data"]["request"]["actions"][0]["review"]["targets"] = json!([{
+            "entityId": "item",
+            "recordId": OTHER_RECORD_ID,
+            "operation": "patch",
+            "baseRevision": 3,
+            "before": {"privateField": "preview-before-canary"},
+            "after": {"privateField": "preview-after-canary"}
+        }]);
+        let RegistryRecordResponse::Single(record) =
+            RegistryRecordResponse::from_value(record_value, RegistryRecordRepresentation::Json)
+                .unwrap()
+        else {
             panic!("single")
         };
         let action = fixture
@@ -2183,27 +2243,42 @@ async fn prepared_review_reason_survives_restart_and_exact_wire_retry() {
             .prepare_lifecycle_action(&authority, &record, &action, &key("review-attempt"))
             .unwrap();
         let saved = prepared.as_bytes().to_vec();
-        fixture
-            .client
+        let saved_text = std::str::from_utf8(&saved).unwrap();
+        for excluded in [
+            "domain-data-canary",
+            "proposal-canary",
+            "preview-before-canary",
+            "preview-after-canary",
+            "history",
+            "decisions",
+        ] {
+            assert!(!saved_text.contains(excluded), "persisted {excluded}");
+        }
+        assert_eq!(
+            serde_json::from_slice::<Value>(&saved).unwrap()["version"],
+            json!(2)
+        );
+        first_caller
             .execute_lifecycle_action(&action, &key("review-attempt"))
             .await
             .unwrap();
         drop(prepared);
         let prepared = BRegPreparedLifecycle::from_slice(&saved).unwrap();
-        let contract = fixture
-            .client
+        let contract = refreshed_caller
             .registry_contract(Some("writer"))
             .await
             .unwrap()
             .value;
         let authority = contract.select_lifecycle("item", "writer").unwrap();
-        let (recovered, original_key) = fixture
-            .client
+        let (recovered, original_key) = refreshed_caller
             .recover_lifecycle_action(&authority, &prepared)
             .unwrap();
-        assert_eq!(recovered, action);
-        fixture
-            .client
+        assert_eq!(recovered.operation(), action.operation());
+        assert_eq!(recovered.href(), action.href());
+        assert_eq!(recovered.if_match(), action.if_match());
+        assert_eq!(recovered.body(), action.body());
+        assert!(recovered.review().is_none());
+        refreshed_caller
             .execute_lifecycle_action(&recovered, &original_key)
             .await
             .unwrap();
@@ -2211,6 +2286,14 @@ async fn prepared_review_reason_survives_restart_and_exact_wire_retry() {
         assert_eq!(requests[1].body, requests[3].body);
         assert_eq!(requests[1].if_match, requests[3].if_match);
         assert_eq!(requests[1].idempotency_key, requests[3].idempotency_key);
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer original-human-token")
+        );
+        assert_eq!(
+            requests[3].authorization.as_deref(),
+            Some("Bearer refreshed-human-token")
+        );
         assert_eq!(
             serde_json::from_slice::<Value>(&requests[1].body).unwrap()["reason"],
             "  Please correct the values.\nเหตุผล 📝  "

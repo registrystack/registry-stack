@@ -16,6 +16,9 @@ Crypto primitives shared by registry services.
 - Public JWK thumbprints through `PublicJwk::jkt`.
 - DID validation for allowed `did:web` and `did:key` inputs.
 - JSON Canonicalization Scheme style byte output for `serde_json::Value`.
+- Base Registry Engine Version 1 webhook signing and receiver verification,
+  including input bounds, signature-version checks, constant-time comparison,
+  and receiver-selected delivery-time skew.
 - Constant-time comparison dependencies for consumers that need them.
 
 ## Typical Use
@@ -101,6 +104,10 @@ interoperability and security policy.
 - `did:web` validation rejects IP literals, localhost, obvious metadata hosts,
   empty labels, and path traversal.
 - Signing helpers validate key material before use.
+- The BReg webhook helper preserves the product's exact length-prefixed Version
+  1 wire input. Receivers pass the HTTP method, request target, content type,
+  delivery headers, and body exactly as received, and choose a bounded accepted
+  delivery-time skew for their deployment.
 
 ## Testing
 

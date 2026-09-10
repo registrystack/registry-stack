@@ -35,6 +35,25 @@ segments are refused at construction.
 Health and readiness never acquire a token. Caller-filtered OpenAPI, metadata,
 schemas, record operations, and lifecycle actions may use one configured token.
 
+When a service forwards a human access token, derive a caller-scoped client
+instead of constructing another transport:
+
+```rust,no_run
+use registry_breg_client::BearerToken;
+
+# async fn run(client: &registry_breg_client::BaseRegistryClient) -> Result<(), Box<dyn std::error::Error>> {
+let caller = client.with_bearer_token(BearerToken::new("forwarded-access-token")?);
+let metadata = caller.registry_contract(Some("caseworker.v1")).await?;
+# let _ = metadata;
+# Ok(())
+# }
+```
+
+The derived value reuses the original connection pool and leaves the original
+client's configured credential unchanged. Each derived value owns its token, so
+different callers can use the same base client concurrently without a mutable
+credential slot. Keep it within the inbound request that supplied the token.
+
 ## Read records
 
 ```rust,no_run
@@ -149,6 +168,11 @@ Lifecycle action ETags are not interchangeable with record ETags. After a
 success or refusal, refetch the record before deciding which transition is
 currently available.
 
+`BRegLifecycleActionReceipt::to_value()` returns the exact validated receipt
+projection for durable attempt and accountability storage. It includes the
+source record identifier, revision, snapshot reference, and request outcome,
+and contains no access token or record fields.
+
 ## Response security
 
 Before returning a body, the client enforces bounded headers and body, exactly
@@ -168,8 +192,11 @@ selectors, response bodies, header values, URLs, or transport error chains.
 
 `prepare_create` and `prepare_lifecycle_action` return inert bounded evidence
 with `as_bytes()` and `from_slice()`. Persist it in an owner-only file before
-sending the mutation. The evidence contains request values and the caller's
-idempotency key; its Debug representation is redacted. It contains no tokens.
+sending the mutation. Create evidence contains the request values. Lifecycle
+evidence contains only the authority, record and action binding needed to
+reconstruct the exact request; it omits record fields, proposal and review
+previews, history, and decisions. Both forms contain the caller's idempotency
+key, have redacted Debug representations, and contain no tokens.
 
 After restart, fetch caller-filtered `registry_contract` again under the same
 principal and selected profile. Select the current Create binding or lifecycle
@@ -177,10 +204,12 @@ authority, then call `recover_create` or `recover_lifecycle_action`. Recovery
 requires the same source and registry revision and revalidates the original
 request against that authority before returning the request/action and original
 key for an explicitly initiated send. Never replace an uncertain action with a
-newly advertised action. Lifecycle recovery retains the original record evidence,
-so an applied request whose current record no longer advertises Apply can still
-replay the original precondition and body. The runtime remains responsible for
-current authorization, preconditions, and exact idempotency replay.
+newly advertised action. Lifecycle recovery retains the original record and
+action binding, so an applied request whose current record no longer advertises
+Apply can still replay the original precondition and body. A recovered action
+does not retain the descriptive review preview; use a current authorized read
+for display. The runtime remains responsible for current authorization,
+preconditions, and exact idempotency replay.
 
 These APIs do not authenticate saved evidence or bind a token provider to a
 principal. The application must protect its state and bind attempts to its exact

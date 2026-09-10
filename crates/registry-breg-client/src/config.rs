@@ -10,6 +10,7 @@ use crate::{
 };
 
 /// Transport policy for one Base Registry Engine deployment.
+#[derive(Clone)]
 pub struct BaseRegistryClientConfig {
     pub(crate) base_url: Url,
     pub(crate) token_provider: Option<Arc<dyn TokenProvider>>,
