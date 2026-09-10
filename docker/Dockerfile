@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Adopter and development images for the `mint` and `evidence` services.
+# Adopter and development images for the `mint`, `evidence`, and `casework` services.
 #
 # These are not release evidence. Release images are assembled from
 # release/docker with binaries produced outside Docker by
@@ -12,12 +12,13 @@
 #
 #   docker build -f docker/Dockerfile --target mint -t registry-mint .
 #   docker build -f docker/Dockerfile --target evidence -t registry-evidence .
+#   docker build -f docker/Dockerfile --target casework -t registry-casework .
 #
 # cargo-chef turns dependency compilation into an ordinary image layer keyed
 # on the manifests and lockfile alone, so registry and CI layer caches
 # survive source-only changes. Each binary gets its own recipe, filtered to
 # its transitive dependency closure, so a manifest change in an unrelated
-# workspace member invalidates neither image.
+# workspace member invalidates none of these images.
 
 # Keep the tag for humans and the digest for reproducible pulls.
 FROM rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 AS chef
@@ -32,7 +33,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY products ./products
 RUN cargo chef prepare --recipe-path recipe-mint.json --bin mint \
-    && cargo chef prepare --recipe-path recipe-evidence.json --bin evidence
+    && cargo chef prepare --recipe-path recipe-evidence.json --bin evidence \
+    && cargo chef prepare --recipe-path recipe-casework.json --bin casework
 
 FROM chef AS mint-builder
 COPY --from=planner /workspace/recipe-mint.json recipe.json
@@ -97,3 +99,28 @@ EXPOSE 8080
 # healthcheck subcommand. The service serves GET /health for HTTP probes.
 ENTRYPOINT ["/usr/local/bin/evidence"]
 CMD ["serve"]
+
+FROM chef AS casework-builder
+COPY --from=planner /workspace/recipe-casework.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json --bin casework
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY products ./products
+RUN cargo build --release --locked -p registry-casework --bin casework \
+    && mkdir -p \
+        /workspace/runtime-root/etc/registry-casework \
+        /workspace/runtime-root/var/lib/registry-casework/audit \
+    && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-casework \
+    && chmod 0700 /workspace/runtime-root/var/lib/registry-casework/audit
+
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS casework
+
+COPY --from=casework-builder /workspace/runtime-root/ /
+COPY --from=casework-builder /workspace/target/release/casework /usr/local/bin/casework
+COPY LICENSE /licenses/registry-casework/LICENSE
+
+WORKDIR /var/lib/registry-casework
+EXPOSE 8091
+
+ENTRYPOINT ["/usr/local/bin/casework"]
+CMD ["--config", "/etc/registry-casework/operator.yaml", "serve"]

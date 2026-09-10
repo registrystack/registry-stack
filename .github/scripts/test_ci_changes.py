@@ -718,6 +718,12 @@ class CiChangesTest(unittest.TestCase):
         core = classify(self.workspace, ("crates/registry-casework-core/src/adapter.rs",))
         self.assertTrue(CASEWORK_PACKAGES <= set(core["rust_packages"]))
         self.assertTrue(core["casework_postgres"])
+        python = classify(
+            self.workspace,
+            ("crates/registry-casework-client-py/src/lib.rs",),
+        )
+        self.assertIn("registry-casework-client-py", python["rust_packages"])
+        self.assertTrue(python["casework_postgres"])
 
     def test_breg_paths_select_its_shard_and_product_gate(self) -> None:
         for path in (

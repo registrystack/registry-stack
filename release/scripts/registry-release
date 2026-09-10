@@ -52,6 +52,7 @@ RELAY_V2_ARTIFACT_INVENTORY = {
 }
 DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
 BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
+CASEWORK_RELEASE_MINIMUM_VERSION = (0, 30, 0)
 UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -201,6 +202,14 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
                     "breg",
                     "bregctl",
                     "breg-installer",
+                }
+            )
+        if parsed_version >= CASEWORK_RELEASE_MINIMUM_VERSION:
+            expected_inventory.update(
+                {
+                    "casework",
+                    "caseworkctl",
+                    "casework-installer",
                 }
             )
         missing = sorted(expected_inventory - artifact_names)

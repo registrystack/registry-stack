@@ -37,6 +37,13 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
     if parsed >= (0, 26, 0):
         breg = [f"breg-{tag}-linux-amd64", f"bregctl-{tag}-linux-amd64"]
         image_bins.append(("breg", breg[0]))
+    casework: list[str] = []
+    if parsed >= (0, 30, 0):
+        casework = [
+            f"casework-{tag}-linux-amd64",
+            f"caseworkctl-{tag}-linux-amd64",
+        ]
+        image_bins.append(("casework", casework[0]))
     common = [
         f"evidence-{tag}-linux-amd64",
         f"evidencectl-{tag}-linux-amd64",
@@ -49,7 +56,7 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
     core.extend(common)
     for image_name in ("evidence", "mint", "relay"):
         image_bins.append((image_name, f"{image_name}-{tag}-linux-amd64"))
-    return {"core": core, "breg": breg}, image_bins
+    return {"core": core, "breg": breg, "casework": casework}, image_bins
 
 
 def sha256(path: Path) -> str:
@@ -155,6 +162,7 @@ def merge(
     source_sha: str,
     core: Path,
     breg: Path,
+    casework: Path | None,
     output: Path,
     builder_image: str,
 ) -> None:
@@ -174,11 +182,25 @@ def merge(
             "breg", breg, shard_rosters["breg"], builder_image, version, source_sha
         ),
     }
-    sources = inputs["core"] | inputs["breg"]
+    if casework is None:
+        if shard_rosters["casework"]:
+            raise ShardError("casework shard is required from version 0.30.0")
+        inputs["casework"] = {}
+    else:
+        inputs["casework"] = validate_shard(
+            "casework",
+            casework,
+            shard_rosters["casework"],
+            builder_image,
+            version,
+            source_sha,
+        )
+    sources = inputs["core"] | inputs["breg"] | inputs["casework"]
     final_bin_roster: list[str] = []
     if shard_rosters["core"] and shard_rosters["core"][0].startswith("discovery-"):
         final_bin_roster.append(shard_rosters["core"][0])
     final_bin_roster.extend(shard_rosters["breg"])
+    final_bin_roster.extend(shard_rosters["casework"])
     final_bin_roster.extend(
         asset for asset in shard_rosters["core"] if not asset.startswith("discovery-")
     )
@@ -217,6 +239,7 @@ def main() -> int:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--core", required=True, type=Path)
     parser.add_argument("--breg", required=True, type=Path)
+    parser.add_argument("--casework", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--builder-image", required=True)
     args = parser.parse_args()
@@ -226,6 +249,7 @@ def main() -> int:
             source_sha=args.source_sha,
             core=args.core,
             breg=args.breg,
+            casework=args.casework,
             output=args.output,
             builder_image=args.builder_image,
         )

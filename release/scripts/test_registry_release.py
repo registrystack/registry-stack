@@ -833,6 +833,7 @@ class RegistryReleaseTest(TestCase):
                 "breg-contracts",
                 "relay-client-contracts",
                 "relay-v2-contracts",
+                "casework-postgres",
             },
             set(rust_result["needs"]),
         )
@@ -921,6 +922,7 @@ class RegistryReleaseTest(TestCase):
             "release/docker/Dockerfile.evidence",
             "release/docker/Dockerfile.mint",
             "release/docker/Dockerfile.breg",
+            "release/docker/Dockerfile.casework",
             "release/docker/Dockerfile.relay",
         ]
 
@@ -1072,6 +1074,72 @@ class RegistryReleaseTest(TestCase):
             )
             self.assertEqual(0, result.returncode, result.stderr)
             for binary in ("breg", "bregctl", "mint"):
+                installed = destination / binary
+                self.assertEqual(f"{binary} fixture\n", installed.read_text())
+                self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
+
+    def test_release_builds_installs_and_smokes_casework_from_v0_30(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        installer = ROOT / "crates/registry-casework/install.sh"
+        installer_text = installer.read_text(encoding="utf-8")
+        self.assertIn("release_minor >= 30", workflow)
+        self.assertIn("-p registry-casework --bin casework", workflow)
+        self.assertIn("-p registry-caseworkctl --bin caseworkctl", workflow)
+        self.assertIn("binaries=(casework caseworkctl)", installer_text)
+        self.assertIn("CASEWORK_ASSET_DIR", workflow)
+        self.assertIn("CASEWORK_INSTALL_DIR", workflow)
+        self.assertIn("--template standalone-decision", workflow)
+        self.assertIn('caseworkctl\" check', workflow)
+        self.assertIn('caseworkctl\" test', workflow)
+        self.assertIn('caseworkctl\" package', workflow)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            assets = root / "assets"
+            destination = root / "bin"
+            assets.mkdir()
+            os_name = subprocess.run(
+                ["uname", "-s"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            architecture = subprocess.run(
+                ["uname", "-m"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            if os_name == "Darwin" and architecture in {"arm64", "aarch64"}:
+                platform_name = "macos-arm64"
+            elif os_name == "Linux" and architecture in {"x86_64", "amd64"}:
+                platform_name = "linux-amd64"
+            elif os_name == "Linux" and architecture in {"arm64", "aarch64"}:
+                platform_name = "linux-arm64"
+            else:
+                raise SkipTest(
+                    f"installer has no release asset for {os_name}/{architecture}"
+                )
+            checksums = []
+            for binary in ("casework", "caseworkctl"):
+                name = f"{binary}-v0.30.0-{platform_name}"
+                body = f"{binary} fixture\n".encode()
+                (assets / name).write_bytes(body)
+                checksums.append(f"{hashlib.sha256(body).hexdigest()}  {name}\n")
+            (assets / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "CASEWORK_VERSION": "v0.30.0",
+                    "CASEWORK_ASSET_DIR": str(assets),
+                    "CASEWORK_INSTALL_DIR": str(destination),
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(installer)],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            for binary in ("casework", "caseworkctl"):
                 installed = destination / binary
                 self.assertEqual(f"{binary} fixture\n", installed.read_text())
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
@@ -1383,6 +1451,7 @@ class RegistryReleaseTest(TestCase):
                 "evidence",
                 "mint",
                 "breg",
+                "casework",
                 "relay",
             )
         }
@@ -1407,6 +1476,7 @@ class RegistryReleaseTest(TestCase):
             "evidence",
             "mint",
             "breg",
+            "casework",
             "relay",
         ):
             self.assertIn(
@@ -1418,7 +1488,7 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
-        self.assertIn("discovery|evidence|mint|breg|relay)", image_recipe)
+        self.assertIn("discovery|evidence|mint|breg|casework|relay)", image_recipe)
         self.assertNotIn("registry-relay)", image_recipe)
 
     def test_breg_release_image_keeps_deployment_inputs_external(self) -> None:
@@ -1583,6 +1653,7 @@ class RegistryReleaseTest(TestCase):
             '"bregctl-${tag}-linux-amd64"', recipe
         )
         self.assertIn("image_bin_binaries+=(breg)", recipe)
+
         builder = (ROOT / "release/docker/Dockerfile.builder").read_text(
             encoding="utf-8"
         )
@@ -1598,6 +1669,56 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn('${repo_root}" != "/workspace"', recipe)
         self.assertIn('--user "$(id -u):$(id -g)"', recipe)
+
+    def test_casework_release_surface_begins_after_published_v0_29(self) -> None:
+        module = load_registry_release()
+        published_names = {
+            *module.RELAY_V2_ARTIFACT_INVENTORY,
+            "relay-installer",
+            "registry-docs",
+            "discovery",
+            "breg",
+            "bregctl",
+            "breg-installer",
+            "registry-client-node",
+            "registry-client-python",
+        }
+        published_names.difference_update(
+            {
+                "evidence-client-node",
+                "evidence-client-python",
+                "relay-client-node",
+                "relay-client-python",
+                "discovery-client-node",
+                "discovery-client-python",
+            }
+        )
+        published = {
+            name: "0.29.0"
+            for name in published_names
+        }
+        self.assertEqual([], module.artifact_inventory_errors("0.29.0", published))
+        future = {name: "0.30.0" for name in published}
+        future.update(
+            {
+                "casework": "0.30.0",
+                "caseworkctl": "0.30.0",
+                "casework-installer": "0.30.0",
+            }
+        )
+        self.assertEqual([], module.artifact_inventory_errors("0.30.0", future))
+        del future["caseworkctl"]
+        self.assertNotEqual([], module.artifact_inventory_errors("0.30.0", future))
+
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("RELEASE_INCLUDE_CASEWORK", recipe)
+        self.assertIn("-p registry-casework --bin casework", recipe)
+        self.assertIn("-p registry-caseworkctl --bin caseworkctl", recipe)
+        self.assertIn('"casework-${tag}-linux-amd64"', recipe)
+        self.assertIn('"caseworkctl-${tag}-linux-amd64"', recipe)
+        self.assertIn("image_bin_binaries+=(casework)", recipe)
 
     def test_unified_client_manifest_surface_replaces_individual_clients(self) -> None:
         module = load_registry_release()
@@ -2917,6 +3038,10 @@ def write_manifest(
             artifacts.pop(artifact, None)
         artifacts["registry-client-node"] = version
         artifacts["registry-client-python"] = version
+    if version_tuple >= (0, 30, 0):
+        artifacts["casework"] = version
+        artifacts["caseworkctl"] = version
+        artifacts["casework-installer"] = version
     manifest = {
         "stack": {
             "release": "beta-6",

@@ -60,6 +60,7 @@ SHARDS = {
         "registry-caseworkctl",
         "registry-casework-client",
         "registry-casework-client-node",
+        "registry-casework-client-py",
     ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (

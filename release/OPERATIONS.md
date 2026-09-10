@@ -44,9 +44,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to relay, evidence, mint, discovery, or breg}"
+package="${PACKAGE:?set PACKAGE to relay, evidence, mint, discovery, breg, or casework}"
 case "${package}" in
-  relay|evidence|mint|discovery|breg) ;;
+  relay|evidence|mint|discovery|breg|casework) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -94,11 +94,14 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
    and request the one normal candidate.
 
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
-`mint` packages, joined by `discovery` from `v0.24.0` and `breg` from
-`v0.26.0`. Verify all five final destinations before a normal candidate:
+`mint` packages, joined by `discovery` from `v0.24.0`, `breg` from
+`v0.26.0`, and `casework` from `v0.30.0`. After selecting the candidate
+version, derive its exact image roster and verify each final destination:
 
 ```sh
-for package in relay evidence mint discovery breg; do
+version="${VERSION:?set VERSION to the candidate version without a v prefix}"
+for package in $(python3 release/scripts/release_candidate.py image-names \
+    --version "${version}"); do
   gh api "/orgs/registrystack/packages/container/${package}" \
     --jq '[.name,.package_type,.visibility]'
 done
@@ -112,13 +115,16 @@ not part of later releases.
 Candidate packages have the inverse visibility requirement. A package first
 published by Actions may inherit this public repository's visibility and be
 created public, which is why the classic-PAT bootstrap must create the identity
-first. Check all five candidate destinations before dispatch:
+first. Check the version-selected candidate destinations before dispatch:
 
 ```sh
-for package in relay-candidate evidence-candidate mint-candidate discovery-candidate breg-candidate; do
-  gh api "/orgs/registrystack/packages/container/${package}" \
+version="${VERSION:?set VERSION to the candidate version without a v prefix}"
+for package in $(python3 release/scripts/release_candidate.py image-names \
+    --version "${version}"); do
+  candidate="${package}-candidate"
+  gh api "/orgs/registrystack/packages/container/${candidate}" \
     --jq '[.name,.package_type,.visibility]' 2>/dev/null \
-    || echo "[\"${package}\",\"absent\"]"
+    || echo "[\"${candidate}\",\"absent\"]"
 done
 ```
 
@@ -128,6 +134,12 @@ classic-PAT bootstrap before dispatch. If it reports `public`, change it to
 private in the organization package settings. The package REST API does not
 provide a visibility change. Remove the candidate bootstrap version only after
 the first real candidate tag exists.
+
+Selecting `v0.30.0` or later includes Casework in both checks. The commands do
+not establish that `casework` or `casework-candidate` has already been
+provisioned. Complete the onboarding steps above, add `casework-candidate` to
+the cleanup allowlist only after its private package exists, and merge its
+reviewed advisory baseline before requesting that candidate.
 
 The daily cleanup tolerates one delete failure: GitHub's 400 stating that
 publicly visible package versions with more than 5000 downloads cannot be

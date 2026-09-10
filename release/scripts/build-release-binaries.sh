@@ -5,18 +5,24 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 
 group=all
-if [[ "$#" -eq 3 && "$1" == "--group" ]]; then
-  group="$2"
-  version="$3"
-elif [[ "$#" -eq 1 ]]; then
+include_casework_override=0
+while [[ "$#" -gt 1 ]]; do
+  case "$1" in
+    --group) group="${2:-}"; shift 2 ;;
+    --include-casework) include_casework_override=1; shift ;;
+    *) break ;;
+  esac
+done
+if [[ "$#" -eq 1 ]]; then
   version="$1"
 else
-  printf 'usage: %s [--group core|breg] <release-version>\n' "$0" >&2
+  printf 'usage: %s [--include-casework] [--group core|breg|casework] <release-version>\n' "$0" >&2
   exit 2
 fi
 if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
-      ("${group}" != all && "${group}" != core && "${group}" != breg) ]]; then
-  printf 'usage: %s [--group core|breg] <release-version>\n' "$0" >&2
+      ("${group}" != all && "${group}" != core && "${group}" != breg &&
+       "${group}" != casework) ]]; then
+  printf 'usage: %s [--include-casework] [--group core|breg|casework] <release-version>\n' "$0" >&2
   exit 2
 fi
 tag="v${version}"
@@ -31,6 +37,11 @@ fi
 include_breg=0
 if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
+fi
+include_casework=0
+if ((version_major > 0 || version_minor >= 30)) ||
+   [[ "${include_casework_override}" -eq 1 ]]; then
+  include_casework=1
 fi
 
 # Compile and link every product binary through Zig against the glibc stubs of
@@ -170,6 +181,16 @@ build_payload() {
     cp target/release/breg dist/image-bin/breg
   fi
 
+  if [[ ("${group}" == all || "${group}" == casework) && "${include_casework}" -eq 1 ]]; then
+    cargo build --release --locked \
+      -p registry-casework --bin casework
+    cargo build --release --locked \
+      -p registry-caseworkctl --bin caseworkctl
+    cp target/release/casework "dist/bin/casework-${RELEASE_TAG}-linux-amd64"
+    cp target/release/caseworkctl "dist/bin/caseworkctl-${RELEASE_TAG}-linux-amd64"
+    cp target/release/casework dist/image-bin/casework
+  fi
+
   # Nothing but the staged payload is in these directories yet: the checksum
   # files and the builder image record are written by the outer invocation
   # after this container exits. Every staged binary is checked, so a build that
@@ -237,6 +258,10 @@ mkdir -p "${repo_root}/dist/bin" "${repo_root}/dist/image-bin"
 # when release binaries are stripped. Mount host state at canonical container
 # paths and remap those paths so independent hosts produce identical bytes.
 release_rustflags="--remap-path-prefix=/workspace/.cargo-home=/cargo-home --remap-path-prefix=/workspace=/source"
+casework_args=()
+if [[ "${include_casework_override}" -eq 1 ]]; then
+  casework_args+=(--include-casework)
+fi
 
 docker build \
   --platform linux/amd64 \
@@ -258,12 +283,15 @@ docker run --rm \
   --env HOME=/workspace \
   --env RELEASE_INCLUDE_DISCOVERY="${include_discovery}" \
   --env RELEASE_INCLUDE_BREG="${include_breg}" \
+  --env RELEASE_INCLUDE_CASEWORK="${include_casework}" \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
   --env RELEASE_BUILDER_READY=1 \
   "${release_builder_image}" \
-  /workspace/release/scripts/build-release-binaries.sh --group "${group}" "${version}"
+  /workspace/release/scripts/build-release-binaries.sh \
+    "${casework_args[@]}" \
+    --group "${group}" "${version}"
 
 if [[ "${group}" == all ]]; then
   printf '%s\n' "${default_builder_image}" >"${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
@@ -292,6 +320,13 @@ if [[ ("${group}" == all || "${group}" == breg) && "${include_breg}" -eq 1 ]]; t
     "bregctl-${tag}-linux-amd64"
   )
   image_bin_binaries+=(breg)
+fi
+if [[ ("${group}" == all || "${group}" == casework) && "${include_casework}" -eq 1 ]]; then
+  bin_assets+=(
+    "casework-${tag}-linux-amd64"
+    "caseworkctl-${tag}-linux-amd64"
+  )
+  image_bin_binaries+=(casework)
 fi
 if [[ "${group}" == all || "${group}" == core ]]; then
   bin_assets+=(

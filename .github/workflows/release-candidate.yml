@@ -253,7 +253,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [core, breg]
+        group: [core, breg, casework]
     steps:
       - name: Checkout exact candidate source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -332,6 +332,12 @@ jobs:
           name: canonical-linux-binaries-breg-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/breg
 
+      - name: Download canonical Linux Casework binary shard
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: canonical-linux-binaries-casework-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: binary-shards/casework
+
       - name: Merge and smoke the canonical Linux payload
         run: |
           set -euo pipefail
@@ -340,6 +346,7 @@ jobs:
             --source-sha "${{ needs.validate.outputs.source_sha }}" \
             --core binary-shards/core \
             --breg binary-shards/breg \
+            --casework binary-shards/casework \
             --output dist \
             --builder-image "${RELEASE_BUILDER_IMAGE}"
           test "$("dist/bin/relay-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
@@ -353,6 +360,12 @@ jobs:
               "breg ${{ needs.validate.outputs.version }}"
             test "$("dist/bin/bregctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
               "bregctl ${{ needs.validate.outputs.version }}"
+          fi
+          if (( release_major > 0 || release_minor >= 30 )); then
+            test "$("dist/bin/casework-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+              "casework ${{ needs.validate.outputs.version }}"
+            test "$("dist/bin/caseworkctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+              "caseworkctl ${{ needs.validate.outputs.version }}"
           fi
 
       - name: Set up Docker Buildx
@@ -497,6 +510,16 @@ jobs:
               -p registry-bregctl \
               --target "${{ matrix.target }}"
           fi
+          include_casework=0
+          if (( release_major > 0 || release_minor >= 30 )); then
+            include_casework=1
+            cargo build --release --locked \
+              -p registry-casework --bin casework \
+              --target "${{ matrix.target }}"
+            cargo build --release --locked \
+              -p registry-caseworkctl --bin caseworkctl \
+              --target "${{ matrix.target }}"
+          fi
           mkdir -p platform
           asset="relayctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
           cp "target/${{ matrix.target }}/release/relayctl" "platform/${asset}"
@@ -517,6 +540,16 @@ jobs:
               chmod 0755 "platform/${asset}"
               test "$("platform/${asset}" --version)" = \
                 "${breg_binary} ${{ needs.validate.outputs.version }}"
+            done
+          fi
+          if [[ "${include_casework}" -eq 1 ]]; then
+            for casework_binary in casework caseworkctl; do
+              asset="${casework_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+              cp "target/${{ matrix.target }}/release/${casework_binary}" \
+                "platform/${asset}"
+              chmod 0755 "platform/${asset}"
+              test "$("platform/${asset}" --version)" = \
+                "${casework_binary} ${{ needs.validate.outputs.version }}"
             done
           fi
           mkdir -p candidate-platform
@@ -551,7 +584,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [core, breg, bregctl]
+        group: [core, breg, bregctl, casework]
     steps:
       - name: Checkout exact candidate source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -670,9 +703,16 @@ jobs:
                 (client_minor == 26 && client_patch >= 1) )); then
             unified_client=1
           fi
+          include_casework=0
+          if (( client_major > 0 || client_minor >= 30 )); then
+            include_casework=1
+          fi
           clients=(discovery evidence relay)
           if [[ "${unified_client}" -eq 1 ]]; then
             clients+=(breg)
+          fi
+          if [[ "${include_casework}" -eq 1 ]]; then
+            clients+=(casework)
           fi
           for client in "${clients[@]}"; do
             if [[ "${client}" == discovery ]] &&
@@ -711,6 +751,8 @@ jobs:
             wheel_stem="registry_${client}_client"
             if [[ "${client}" == breg ]]; then
               wheel_stem=registry_breg_client_native
+            elif [[ "${client}" == casework ]]; then
+              wheel_stem=registry_casework_client_native
             fi
             wheel="${wheel_stem}-${CLIENT_VERSION}-${wheel_tag}.whl"
             if [[ ! -f "${built_wheel_dir}/${wheel}" ]]; then
@@ -720,13 +762,21 @@ jobs:
             fi
           done
           if [[ "${unified_client}" -eq 1 ]]; then
+            casework_wheel_args=()
+            if [[ "${include_casework}" -eq 1 ]]; then
+              casework_wheel_args=(
+                --casework-wheel
+                "${built_wheel_dir}/registry_casework_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
+              )
+            fi
             python3 release/scripts/assemble-registry-client-wheel.py \
               --version "${CLIENT_VERSION}" \
               --output-dir "${wheel_dir}" \
               --discovery-wheel "${built_wheel_dir}/registry_discovery_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
               --evidence-wheel "${built_wheel_dir}/registry_evidence_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
               --relay-wheel "${built_wheel_dir}/registry_relay_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
-              --breg-wheel "${built_wheel_dir}/registry_breg_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
+              --breg-wheel "${built_wheel_dir}/registry_breg_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
+              "${casework_wheel_args[@]}"
             expected_wheels=1
           else
             cp "${built_wheel_dir}"/*.whl "${wheel_dir}/"
@@ -792,9 +842,16 @@ jobs:
                 (client_minor == 26 && client_patch >= 1) )); then
             unified_client=1
           fi
+          include_casework=0
+          if (( client_major > 0 || client_minor >= 30 )); then
+            include_casework=1
+          fi
           clients=(discovery evidence relay)
           if [[ "${unified_client}" -eq 1 ]]; then
-            clients+=(breg casework)
+            clients+=(breg)
+          fi
+          if [[ "${include_casework}" -eq 1 ]]; then
+            clients+=(casework)
           fi
           for client in "${clients[@]}"; do
             if [[ "${client}" == discovery ]] &&
@@ -852,7 +909,11 @@ jobs:
           done
           if [[ "${unified_client}" -eq 1 ]]; then
             platform_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node/npm/${{ matrix.napi_platform }}"
-            for client in discovery evidence relay breg casework; do
+            platform_clients=(discovery evidence relay breg)
+            if [[ "${include_casework}" -eq 1 ]]; then
+              platform_clients+=(casework)
+            fi
+            for client in "${platform_clients[@]}"; do
               cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
                 "${platform_dir}/"
             done
@@ -871,6 +932,10 @@ jobs:
           set -euo pipefail
           IFS=. read -r major minor patch <<<"${CLIENT_VERSION}"
           if (( major > 0 || minor > 26 || (minor == 26 && patch >= 1) )); then
+            include_casework=0
+            if (( major > 0 || minor >= 30 )); then
+              include_casework=1
+            fi
             smoke="${RUNNER_TEMP}/node-smoke-registry"
             root_stage="${RUNNER_TEMP}/node-root-registry"
             mkdir -p "${smoke}" "${root_stage}"
@@ -892,8 +957,12 @@ jobs:
                 "${root_package}" "${platform_package}"
               test -z "$(find node_modules/@registrystack/client \
                 -maxdepth 1 -name '*.node' -print -quit)"
+              expected_addons=4
+              if [[ "${include_casework}" -eq 1 ]]; then
+                expected_addons=5
+              fi
               test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
-                -maxdepth 1 -name '*.node' | wc -l)" -eq 5
+                -maxdepth 1 -name '*.node' | wc -l)" -eq "${expected_addons}"
               cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
                 "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" .
               node smoke-registry-client-package.js
@@ -1040,6 +1109,7 @@ jobs:
             --core "inputs/${prefix}-core-${suffix}" \
             --breg "inputs/${prefix}-breg-${suffix}" \
             --bregctl "inputs/${prefix}-bregctl-${suffix}" \
+            --casework "inputs/${prefix}-casework-${suffix}" \
             --output "inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Install pinned candidate inspection tools
@@ -1540,6 +1610,49 @@ jobs:
               init "${breg_project}"
             "${breg_install_dir}/bregctl" \
               check "${breg_project}"
+            rm candidate/bundle-root/SHA256SUMS
+          fi
+          if (( relay_major > 0 || relay_minor >= 30 )); then
+            casework_installer="casework-${{ needs.validate.outputs.tag }}-install.sh"
+            awk -v version="${{ needs.validate.outputs.tag }}" '
+              $0 == "default_version=\"\"" {
+                print "default_version=\"" version "\""
+                rendered = 1
+                next
+              }
+              { print }
+              END { if (!rendered) exit 1 }
+            ' crates/registry-casework/install.sh \
+              > "candidate/bundle-root/${casework_installer}"
+            chmod 0755 "candidate/bundle-root/${casework_installer}"
+            cp "candidate/bundle-root/${casework_installer}" \
+              candidate/bundle-root/casework-install.sh
+            chmod 0755 candidate/bundle-root/casework-install.sh
+            (
+              cd candidate/bundle-root
+              sha256sum -- \
+                "casework-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                "caseworkctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                > SHA256SUMS
+            )
+            casework_install_dir="${RUNNER_TEMP}/candidate-casework-install"
+            CASEWORK_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
+            CASEWORK_INSTALL_DIR="${casework_install_dir}" \
+              bash "candidate/bundle-root/${casework_installer}"
+            for casework_binary in casework caseworkctl; do
+              observed="$("${casework_install_dir}/${casework_binary}" --version)"
+              test "${observed}" = \
+                "${casework_binary} ${{ needs.validate.outputs.version }}"
+            done
+            casework_project="${RUNNER_TEMP}/candidate-casework-project"
+            casework_package="${RUNNER_TEMP}/candidate-casework-package"
+            "${casework_install_dir}/caseworkctl" init \
+              "${casework_project}" --template standalone-decision
+            "${casework_install_dir}/caseworkctl" check "${casework_project}"
+            "${casework_install_dir}/caseworkctl" test "${casework_project}"
+            "${casework_install_dir}/caseworkctl" package \
+              "${casework_project}" --output "${casework_package}"
+            test -f "${casework_package}/package.json"
             rm candidate/bundle-root/SHA256SUMS
           fi
           evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"

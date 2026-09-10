@@ -111,7 +111,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [core, breg]
+        group: [core, breg, casework]
     steps:
       - name: Checkout exact prepared source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -202,6 +202,12 @@ jobs:
           name: release-rehearsal-binaries-breg-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/breg
 
+      - name: Download canonical Linux Casework binary shard
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-rehearsal-binaries-casework-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: binary-shards/casework
+
       - name: Merge and smoke the canonical Linux payload
         env:
           REHEARSAL_VERSION: ${{ inputs.version }}
@@ -213,6 +219,7 @@ jobs:
             --source-sha "${{ github.sha }}" \
             --core binary-shards/core \
             --breg binary-shards/breg \
+            --casework binary-shards/casework \
             --output dist \
             --builder-image "${RELEASE_BUILDER_IMAGE}"
           test "$("dist/bin/breg-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \

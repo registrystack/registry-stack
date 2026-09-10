@@ -35,6 +35,7 @@ PUBLIC_PACKAGES = (
     "evidence",
     "mint",
     "breg",
+    "casework",
     "relay",
 )
 
