@@ -1,0 +1,61 @@
+apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework: {id: regional-review, version: "1"}
+accessProfiles:
+  - {id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}
+  - {id: supervisor, principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
+  - {id: administrator, principalClaim: sub, requiredScopes: [casework:admin], role: administrator}
+queues:
+  - {id: triage, label: Triage}
+  - {id: northern-review, label: Northern review}
+  - {id: overdue-review, label: Overdue review}
+  - {id: corrections, label: Corrections}
+sources:
+  - id: regional-register
+    adapter: breg
+    description: sources/regional-register.json
+    requests:
+      - entity: regional-correction
+        queue: triage
+        projection: [region]
+        clock: review-deadline
+        routing:
+          - id: northern-requests
+            because: The request's governed region is north.
+            when:
+              activity: review
+              stage: technical
+              fields: {region: {equals: north}}
+            queue: northern-review
+  - id: response-register
+    adapter: breg
+    description: sources/response-register.json
+    requests:
+      - entity: response-correction
+        queue: corrections
+        clock: response-budget
+calendars:
+  - id: office
+    timezone: Asia/Bangkok
+    workingWeekdays: [monday, tuesday, wednesday, thursday, friday]
+    holidaySet: office-holidays
+clocks:
+  - id: response-budget
+    scope: subject
+    anchor: firstSubmittedAt
+    completeOn: reviewCompleted
+    after: {elapsed: PT48H}
+    pauseWhile: [awaitingApplicant]
+  - id: review-deadline
+    scope: activity
+    anchor: stageEnteredAt
+    calendar: office
+    after: {workingDays: 5}
+    dueTime: "17:00"
+    atRisk: {workingDaysBefore: 1}
+    reminders: [{id: due-soon, workingDaysBefore: 1}]
+    steps:
+      - id: supervisor-at-deadline
+        because: The review deadline passed while the review remained active.
+        at: due
+        action: {reassign: {queue: overdue-review}}

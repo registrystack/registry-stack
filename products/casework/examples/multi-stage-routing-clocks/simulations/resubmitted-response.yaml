@@ -1,0 +1,18 @@
+id: resubmitted-response
+source: response-register
+subject:
+  entity: response-correction
+  id: request-0042
+  version: "2"
+  activity: review
+  stage: review
+  reviewTiming:
+    firstSubmittedAt: "2026-09-10T09:00:00+07:00"
+    pausedMilliseconds: 86400000
+    pauseStartedAt: null
+    completedAt: null
+now: "2026-09-11T13:00:00+07:00"
+expect:
+  queue: corrections
+  dueAt: "2026-09-13T09:00:00+07:00"
+  remainingMilliseconds: 158400000

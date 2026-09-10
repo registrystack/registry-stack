@@ -25,7 +25,10 @@ ROUTES = {
     "/v1/work-items",
     "/v1/work-items/next",
     "/v1/work-items/{item_id}",
+    "/v1/work-items/{item_id}/clocks",
     "/v1/work-items/{item_id}/claim",
+    "/v1/work-items/{item_id}/assign",
+    "/v1/work-items/{item_id}/delegate",
     "/v1/work-items/{item_id}/release",
     "/v1/work-items/{item_id}/draft",
     "/v1/work-items/{item_id}/decisions",
@@ -36,7 +39,16 @@ ROUTES = {
     "/v1/work-items/{item_id}/history",
     "/v1/holdings",
     "/v1/directory",
+    "/v1/directory/absences",
+    "/v1/directory/absences/{absence_id}",
     "/v1/directory/bootstrap",
+    "/v1/directory/clocks/recompute/apply",
+    "/v1/directory/clocks/recompute/preview",
+    "/v1/directory/holidays",
+    "/v1/directory/holidays/{id}/revisions/{revision}",
+    "/v1/directory/teams/{team_id}",
+    "/v1/directory/caseload/apply",
+    "/v1/directory/caseload/preview",
     "/events/sources/{source_id}",
 }
 HEADERS = {
@@ -57,6 +69,7 @@ DTO_MARKERS = {
     "RecoverAttemptRequest",
     "MutationResponse",
     "BootstrapDirectoryRequest",
+    "DirectoryTeamUpdateRequest",
     "DirectoryResponse",
     "Description",
     "DraftResponse",
@@ -71,6 +84,7 @@ SCHEMA_STRUCTS = {
         "SourceBinding": "SourceBinding",
         "SubjectRef": "SubjectRef",
         "CaseworkAction": "CaseworkAction",
+        "AssignmentContext": "AssignmentContext",
         "WorkItem": "WorkItem",
         "CorrectionRoutingCopy": "CorrectionRoutingCopy",
         "Draft": "Draft",
@@ -87,16 +101,57 @@ SCHEMA_STRUCTS = {
         "RecoverAttemptRequest": "RecoverAttemptRequest",
         "MutationResponse": "MutationResponse",
         "BootstrapDirectoryRequest": "BootstrapDirectoryRequest",
+        "DirectoryTeamUpdateRequest": "DirectoryTeamUpdateRequest",
         "DirectoryResponse": "DirectoryResponse",
         "Description": "Description",
         "DraftResponse": "DraftResponse",
         "HostedHistoryEntry": "HostedHistoryEntry",
     },
+    "crates/registry-casework-core/src/assignment.rs": {
+        "AbsenceRecord": "AbsenceRecord",
+        "AbsenceInput": "AbsenceInput",
+        "AssignmentRequest": "AssignmentRequest",
+        "DelegateRequest": "DelegateRequest",
+        "CaseloadMoveRequest": "CaseloadMoveRequest",
+        "CaseloadItemSelection": "CaseloadItemSelection",
+        "CaseloadApplyRequest": "CaseloadApplyRequest",
+        "CaseloadItemResult": "CaseloadItemResult",
+    },
     "crates/registry-casework-core/src/config.rs": {
+        "CaseworkProject": "CaseworkProject",
+        "CaseworkIdentity": "CaseworkIdentity",
+        "AccessProfile": "AccessProfile",
+        "QueuePolicy": "QueuePolicy",
         "SourcePolicy": "SourcePolicy",
         "SourceRequestPolicy": "SourceRequestPolicy",
         "PassiveTargetPolicy": "PassiveTargetPolicy",
         "ElapsedDuration": "ElapsedDuration",
+        "InboxPolicy": "InboxPolicy",
+    },
+    "crates/registry-casework-core/src/routing.rs": {
+        "RoutingRule": "RoutingRule",
+        "RoutingCondition": "RoutingCondition",
+        "EqualsPredicate": "EqualsPredicate",
+        "OneOfPredicate": "OneOfPredicate",
+    },
+    "crates/registry-casework-core/src/policy.rs": {
+        "CalendarPolicy": "CalendarPolicy",
+        "WorkingDaysAfter": "WorkingDaysAfter",
+        "WorkingDaysBefore": "WorkingDaysBefore",
+        "ClockReminder": "ClockReminder",
+        "ClockStep": "ClockStep",
+        "ClockStepAction": "ClockStepAction",
+        "ClockReassignment": "ClockReassignment",
+        "HolidaySetDocument": "HolidaySetDocument",
+    },
+    "crates/registry-casework-core/src/clock_runtime.rs": {
+        "ClockOccurrenceView": "ClockOccurrenceView",
+        "HolidaySetRevisionInput": "HolidaySetRevisionInput",
+        "ClockRecomputeRequest": "ClockRecomputeRequest",
+        "ClockRecomputeChange": "ClockRecomputeChange",
+        "ClockRecomputePreview": "ClockRecomputePreview",
+        "ClockRecomputeApplyRequest": "ClockRecomputeApplyRequest",
+        "ClockRecomputeResult": "ClockRecomputeResult",
     },
     "crates/registry-casework-core/src/hosted.rs": {
         "HostedRetentionPolicy": "HostedRetentionPolicy",
@@ -125,17 +180,31 @@ OPERATION_IDS = {
     ("POST", "/v1/hosted-items/{item_id}/cancel"): "cancelHostedItem",
     ("GET", "/v1/hosted-accountability/{event_id}"): "getHostedAccountability",
     ("GET", "/v1/directory"): "getDirectory",
+    ("GET", "/v1/directory/absences"): "listAbsences",
+    ("POST", "/v1/directory/absences"): "createAbsence",
+    ("DELETE", "/v1/directory/absences/{absence_id}"): "deleteAbsence",
+    ("PUT", "/v1/directory/absences/{absence_id}"): "updateAbsence",
     ("POST", "/v1/directory/bootstrap"): "bootstrapDirectory",
+    ("POST", "/v1/directory/clocks/recompute/apply"): "applyClockRecompute",
+    ("POST", "/v1/directory/clocks/recompute/preview"): "previewClockRecompute",
+    ("POST", "/v1/directory/holidays"): "createHolidayRevision",
+    ("GET", "/v1/directory/holidays/{id}/revisions/{revision}"): "getHolidayRevision",
+    ("PUT", "/v1/directory/teams/{team_id}"): "updateDirectoryTeam",
+    ("POST", "/v1/directory/caseload/apply"): "applyCaseloadMove",
+    ("POST", "/v1/directory/caseload/preview"): "previewCaseloadMove",
     ("GET", "/v1/holdings"): "getHoldings",
     ("GET", "/v1/work-items"): "listWorkItems",
     ("GET", "/v1/work-items/next"): "getNextWorkItem",
     ("GET", "/v1/work-items/{item_id}"): "getWorkItem",
+    ("GET", "/v1/work-items/{item_id}/clocks"): "getWorkItemClocks",
     ("POST", "/v1/work-items/{item_id}/attempts/recover"): "recoverAttemptByKey",
     ("POST", "/v1/work-items/{item_id}/attempts/{attempt_id}/recover"): "recoverAttempt",
     ("POST", "/v1/work-items/{item_id}/claim"): "claimWorkItem",
+    ("POST", "/v1/work-items/{item_id}/assign"): "assignWorkItem",
     ("POST", "/v1/work-items/{item_id}/decisions"): "decideWorkItem",
     ("POST", "/v1/work-items/{item_id}/hosted-decisions"): "decideHostedWorkItem",
     ("GET", "/v1/work-items/{item_id}/hosted-history"): "getHostedHistory",
+    ("POST", "/v1/work-items/{item_id}/delegate"): "delegateWorkItem",
     ("DELETE", "/v1/work-items/{item_id}/draft"): "deleteDraft",
     ("GET", "/v1/work-items/{item_id}/draft"): "getDraft",
     ("PUT", "/v1/work-items/{item_id}/draft"): "saveDraft",
@@ -175,6 +244,11 @@ def schemas(problem_entries: list[dict]) -> dict:
         "pattern": "^[a-z][a-z0-9_]{0,63}$",
         "maxLength": 64,
     }
+    authored_identifier = {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,63}$",
+        "maxLength": 64,
+    }
     issuer = obj({"issuer": text, "subject": text}, ["issuer", "subject"])
     binding = obj(
         {"sourceRevision": text, "version": text, "integrity": nullable(text), "generation": text},
@@ -199,6 +273,12 @@ def schemas(problem_entries: list[dict]) -> dict:
         "additionalProperties": True,
         "x-maximum-canonical-bytes": 16_384,
         "x-maximum-depth": 16,
+    }
+    reason = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000,
+        "x-maximum-utf8-bytes": 2000,
     }
     hosted_outcome = obj(
         {"id": text, "label": text, "reasonRequired": {"type": "boolean"}},
@@ -233,6 +313,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             "state": {"type": "string", "enum": ["open", "claimed", "waiting_applicant", "waiting_application", "synchronizing", "completed", "superseded", "cancelled"]},
             "queueId": text,
             "holder": nullable(ref("IssuerPrincipal")),
+            "assignment": nullable(ref("AssignmentContext")),
             "revision": integer,
             "firstObservedAt": instant,
             "passiveDueAt": nullable(instant),
@@ -251,6 +332,19 @@ def schemas(problem_entries: list[dict]) -> dict:
         "SourceBinding": binding,
         "SubjectRef": subject,
         "CaseworkAction": action,
+        "StaffingDiagnostic": {
+            "type": "string",
+            "enum": ["no_cover_available"],
+        },
+        "AssignmentContext": obj(
+            {
+                "owner": nullable(ref("IssuerPrincipal")),
+                "assignedBy": nullable(ref("IssuerPrincipal")),
+                "absenceIds": array(uuid),
+                "staffingDiagnostic": nullable(ref("StaffingDiagnostic")),
+            },
+            ["absenceIds"],
+        ),
         "HostedPolicyDigest": policy_digest,
         "OpaqueActorRef": actor_ref,
         "HostedRetentionPolicy": obj(
@@ -369,6 +463,9 @@ def schemas(problem_entries: list[dict]) -> dict:
                     "enum": [
                         "created",
                         "claimed",
+                        "assigned",
+                        "delegated",
+                        "caseload_moved",
                         "released",
                         "note_added",
                         "completed",
@@ -377,6 +474,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 },
                 "occurredAt": instant,
                 "actorRef": nullable(actor_ref),
+                "assignment": nullable(ref("AssignmentContext")),
                 "note": nullable(text),
                 "outcome": nullable(text),
                 "reason": nullable(text),
@@ -475,6 +573,106 @@ def schemas(problem_entries: list[dict]) -> dict:
         ),
         "WorkItem": work_item,
         "WorkItemPage": obj({"items": array(ref("WorkItem")), "nextCursor": nullable(text), "status": page_status}, ["items", "status"]),
+        "AbsenceRecord": obj(
+            {
+                "absenceId": uuid,
+                "person": ref("IssuerPrincipal"),
+                "from": instant,
+                "until": instant,
+                "cover": ref("IssuerPrincipal"),
+                "revision": integer,
+            },
+            ["absenceId", "person", "from", "until", "cover", "revision"],
+        ),
+        "AbsenceRecordList": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": ref("AbsenceRecord"),
+        },
+        "AbsenceInput": obj(
+            {
+                "person": ref("IssuerPrincipal"),
+                "from": instant,
+                "until": instant,
+                "cover": ref("IssuerPrincipal"),
+            },
+            ["person", "from", "until", "cover"],
+        ),
+        "AssignmentRequest": obj(
+            {
+                "assignee": ref("IssuerPrincipal"),
+                "reason": nullable(reason),
+            },
+            ["assignee"],
+        ),
+        "DelegateRequest": obj(
+            {
+                "delegate": ref("IssuerPrincipal"),
+                "reason": nullable(reason),
+            },
+            ["delegate"],
+        ),
+        "CaseloadMoveRequest": obj(
+            {
+                "from": ref("IssuerPrincipal"),
+                "to": ref("IssuerPrincipal"),
+                "queueId": nullable(text),
+                "reason": reason,
+            },
+            ["from", "to", "reason"],
+        ),
+        "CaseloadItemSelection": obj(
+            {
+                "itemId": uuid,
+                "expectedRevision": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 1,
+                },
+            },
+            ["itemId", "expectedRevision"],
+        ),
+        "CaseloadApplyRequest": obj(
+            {
+                "movement": ref("CaseloadMoveRequest"),
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "uniqueItems": True,
+                    "x-unique-by": "itemId",
+                    "items": ref("CaseloadItemSelection"),
+                },
+            },
+            ["movement", "items"],
+        ),
+        "CaseloadItemOutcome": {
+            "type": "string",
+            "enum": [
+                "moved",
+                "not_visible",
+                "not_eligible",
+                "attempt_in_progress",
+                "conflict",
+            ],
+        },
+        "CaseloadItemResult": obj(
+            {
+                "itemId": uuid,
+                "result": ref("CaseloadItemOutcome"),
+                "revision": nullable(integer),
+            },
+            ["itemId", "result"],
+        ),
+        "CaseloadItemResultList": array(ref("CaseloadItemResult")),
+        "CaseloadPreviewPage": obj(
+            {
+                "items": array(ref("WorkItem")),
+                "nextCursor": nullable(text),
+                "status": page_status,
+            },
+            ["items", "status"],
+        ),
         "Draft": obj(
             {"itemId": uuid, "author": ref("IssuerPrincipal"), "binding": ref("SourceBinding"), "reason": text, "flaggedFields": array(text), "revision": integer, "updatedAt": instant},
             ["itemId", "author", "binding", "reason", "flaggedFields", "revision", "updatedAt"],
@@ -507,14 +705,362 @@ def schemas(problem_entries: list[dict]) -> dict:
         "TeamRecord": obj({"id": text, "members": array(ref("IssuerPrincipal")), "supervisors": array(ref("IssuerPrincipal")), "servedQueues": array(text), "revision": integer}, ["id", "members", "supervisors", "servedQueues", "revision"]),
         "DirectoryResponse": obj({"revision": integer, "teams": array(ref("TeamRecord"))}, ["revision", "teams"]),
         "BootstrapDirectoryRequest": obj({"teamId": text, "staff": array(ref("IssuerPrincipal")), "supervisors": array(ref("IssuerPrincipal")), "queueId": text}, ["teamId", "staff", "supervisors", "queueId"]),
+        "DirectoryTeamPrincipal": obj(
+            {
+                "issuer": {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"},
+                "subject": {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"},
+            },
+            ["issuer", "subject"],
+        ),
+        "DirectoryTeamUpdateRequest": obj(
+            {
+                "staff": {"type": "array", "maxItems": 100, "uniqueItems": True, "items": ref("DirectoryTeamPrincipal")},
+                "supervisors": {"type": "array", "maxItems": 100, "uniqueItems": True, "items": ref("DirectoryTeamPrincipal")},
+                "servedQueues": {"type": "array", "maxItems": 100, "uniqueItems": True, "items": {"type": "string", "minLength": 1, "maxLength": 128, "x-maximum-utf8-bytes": 128, "pattern": "^[A-Za-z0-9._-]+$"}},
+            },
+            ["staff", "supervisors", "servedQueues"],
+        ),
+        "CaseworkIdentity": obj({"id": text, "version": text}, ["id", "version"]),
+        "AccessProfile": obj(
+            {
+                "id": text,
+                "principalClaim": text,
+                "requiredScopes": array(text),
+                "role": {
+                    "type": "string",
+                    "enum": ["staff", "supervisor", "administrator", "requester"],
+                },
+                "kinds": array(text),
+            },
+            ["id", "principalClaim", "requiredScopes", "role"],
+        ),
+        "QueuePolicy": obj({"id": text, "label": text}, ["id", "label"]),
+        "InboxPolicy": obj(
+            {
+                "defaultPageSize": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                "maximumCandidateScan": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100},
+                "maximumSourceReads": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 25},
+                "maximumConcurrentSourceReads": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4},
+                "pageDeadlineMilliseconds": {"type": "integer", "minimum": 100, "maximum": 30000, "default": 2000},
+            },
+        ),
+        "RoutingActivity": {"type": "string", "enum": ["review", "apply"]},
+        "EqualsPredicate": obj({"equals": {}}, ["equals"]),
+        "OneOfPredicate": obj(
+            {
+                "oneOf": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "uniqueItems": True,
+                    "items": {},
+                }
+            },
+            ["oneOf"],
+        ),
+        "RoutingPredicate": {
+            "oneOf": [ref("EqualsPredicate"), ref("OneOfPredicate")]
+        },
+        "RoutingCondition": obj(
+            {
+                "activity": nullable(ref("RoutingActivity")),
+                "stage": nullable(text),
+                "fields": {
+                    "type": "object",
+                    "maxProperties": 16,
+                    "additionalProperties": ref("RoutingPredicate"),
+                },
+            },
+        ),
+        "RoutingRule": obj(
+            {
+                "id": authored_identifier,
+                "because": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "x-maximum-utf8-bytes": 256,
+                    "x-non-whitespace": True,
+                },
+                "when": ref("RoutingCondition"),
+                "queue": text,
+            },
+            ["id", "because", "when", "queue"],
+        ),
+        "CalendarPolicy": obj(
+            {
+                "id": authored_identifier,
+                "timezone": {"type": "string", "format": "iana-time-zone"},
+                "workingWeekdays": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 7,
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "monday",
+                            "tuesday",
+                            "wednesday",
+                            "thursday",
+                            "friday",
+                            "saturday",
+                            "sunday",
+                        ],
+                    },
+                },
+                "holidaySet": authored_identifier,
+            },
+            ["id", "timezone", "workingWeekdays", "holidaySet"],
+        ),
+        "WorkingDaysAfter": obj(
+            {"workingDays": {"type": "integer", "minimum": 1, "maximum": 3650}},
+            ["workingDays"],
+        ),
+        "WorkingDaysBefore": obj(
+            {"workingDaysBefore": {"type": "integer", "minimum": 1, "maximum": 3650}},
+            ["workingDaysBefore"],
+        ),
+        "ClockReminder": obj(
+            {
+                "id": authored_identifier,
+                "workingDaysBefore": {"type": "integer", "minimum": 1, "maximum": 3650},
+            },
+            ["id", "workingDaysBefore"],
+        ),
+        "ClockReassignment": obj({"queue": text}, ["queue"]),
+        "ClockStepAction": obj(
+            {"reassign": ref("ClockReassignment")}, ["reassign"]
+        ),
+        "ClockStep": obj(
+            {
+                "id": authored_identifier,
+                "because": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "x-maximum-utf8-bytes": 256,
+                    "x-non-whitespace": True,
+                },
+                "at": {"const": "due"},
+                "action": ref("ClockStepAction"),
+            },
+            ["id", "because", "at", "action"],
+        ),
+        "SubjectClockPolicy": obj(
+            {
+                "id": authored_identifier,
+                "scope": {"const": "subject"},
+                "anchor": {"const": "firstSubmittedAt"},
+                "completeOn": {"const": "reviewCompleted"},
+                "after": ref("ElapsedDuration"),
+                "pauseWhile": {
+                    "type": "array",
+                    "prefixItems": [{"const": "awaitingApplicant"}],
+                    "minItems": 1,
+                    "maxItems": 1,
+                },
+            },
+            ["id", "scope", "anchor", "completeOn", "after", "pauseWhile"],
+        ),
+        "ActivityClockPolicy": obj(
+            {
+                "id": authored_identifier,
+                "scope": {"const": "activity"},
+                "anchor": {"const": "stageEnteredAt"},
+                "calendar": authored_identifier,
+                "after": ref("WorkingDaysAfter"),
+                "dueTime": {
+                    "type": "string",
+                    "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+                },
+                "atRisk": nullable(ref("WorkingDaysBefore")),
+                "reminders": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "uniqueItems": True,
+                    "x-unique-by": "id",
+                    "items": ref("ClockReminder"),
+                },
+                "steps": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "uniqueItems": True,
+                    "x-unique-by": "id",
+                    "items": ref("ClockStep"),
+                },
+            },
+            ["id", "scope", "anchor", "calendar", "after", "dueTime"],
+        ),
+        "ClockPolicy": {
+            "oneOf": [ref("SubjectClockPolicy"), ref("ActivityClockPolicy")],
+            "discriminator": {"propertyName": "scope"},
+        },
+        "HolidaySetDocument": obj(
+            {
+                "holidaySet": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                },
+                "revision": {"type": "integer", "minimum": 1},
+                "dates": {
+                    "type": "array",
+                    "maxItems": 3_660,
+                    "uniqueItems": True,
+                    "items": {"type": "string", "format": "date"},
+                },
+            },
+            ["holidaySet", "revision", "dates"],
+        ),
+        "ClockRuntimeState": {
+            "type": "string",
+            "enum": [
+                "running",
+                "paused",
+                "completed",
+                "cancelled",
+                "verification_pending",
+                "source_facts_missing",
+            ],
+        },
+        "ClockOccurrenceView": obj(
+            {
+                "clockOccurrenceId": uuid,
+                "subject": ref("SubjectRef"),
+                "clockId": text,
+                "state": ref("ClockRuntimeState"),
+                "policyDigest": policy_digest,
+                "calculationGeneration": integer,
+                "recomputeGeneration": integer,
+                "anchorAt": nullable(instant),
+                "startedAt": nullable(instant),
+                "dueAt": nullable(instant),
+                "atRiskAt": nullable(instant),
+                "completedAt": nullable(instant),
+            },
+            [
+                "clockOccurrenceId",
+                "subject",
+                "clockId",
+                "state",
+                "policyDigest",
+                "calculationGeneration",
+                "recomputeGeneration",
+            ],
+        ),
+        "ClockOccurrenceList": {
+            "type": "array",
+            "maxItems": 32,
+            "items": ref("ClockOccurrenceView"),
+        },
+        "HolidaySetRevisionInput": obj(
+            {"document": ref("HolidaySetDocument")}, ["document"]
+        ),
+        "ClockRecomputeRequest": obj(
+            {
+                "clockId": text,
+                "holidaySet": text,
+                "holidayRevision": {"type": "integer", "minimum": 1},
+            },
+            ["clockId", "holidaySet", "holidayRevision"],
+        ),
+        "ClockRecomputeChange": obj(
+            {
+                "clockOccurrenceId": uuid,
+                "itemId": uuid,
+                "expectedCalculationGeneration": integer,
+                "oldDueAt": instant,
+                "proposedDueAt": instant,
+            },
+            [
+                "clockOccurrenceId",
+                "itemId",
+                "expectedCalculationGeneration",
+                "oldDueAt",
+                "proposedDueAt",
+            ],
+        ),
+        "ClockRecomputePreview": obj(
+            {
+                "previewId": uuid,
+                "clockId": text,
+                "holidaySet": text,
+                "holidayRevision": {"type": "integer", "minimum": 1},
+                "expiresAt": instant,
+                "changes": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": ref("ClockRecomputeChange"),
+                },
+            },
+            [
+                "previewId",
+                "clockId",
+                "holidaySet",
+                "holidayRevision",
+                "expiresAt",
+                "changes",
+            ],
+        ),
+        "ClockRecomputeApplyRequest": obj(
+            {"previewId": uuid}, ["previewId"]
+        ),
+        "ClockRecomputeResult": obj(
+            {
+                "previewId": uuid,
+                "appliedOccurrences": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": uuid,
+                },
+            },
+            ["previewId", "appliedOccurrences"],
+        ),
+        "CaseworkProject": obj(
+            {
+                "apiVersion": {"const": "registry.registrystack.org/casework/v1alpha1"},
+                "kind": {"const": "CaseworkProject"},
+                "casework": ref("CaseworkIdentity"),
+                "accessProfiles": array(ref("AccessProfile")),
+                "queues": array(ref("QueuePolicy")),
+                "sources": array(ref("SourcePolicy")),
+                "hostedKinds": array(ref("HostedKindPolicy")),
+                "calendars": {"type": "array", "maxItems": 16, "uniqueItems": True, "x-unique-by": "id", "items": ref("CalendarPolicy")},
+                "clocks": {"type": "array", "maxItems": 32, "uniqueItems": True, "x-unique-by": "id", "items": ref("ClockPolicy")},
+                "inbox": ref("InboxPolicy"),
+            },
+            ["apiVersion", "kind", "casework", "accessProfiles", "queues"],
+        ),
         "ElapsedDuration": obj({"elapsed": text}, ["elapsed"]),
         "PassiveTargetPolicy": obj({"id": text, "after": ref("ElapsedDuration")}, ["id", "after"]),
-        "SourceRequestPolicy": obj({"entity": text, "queue": text, "target": nullable(ref("PassiveTargetPolicy"))}, ["entity", "queue"]),
+        "SourceRequestPolicy": obj(
+            {
+                "entity": text,
+                "queue": text,
+                "projection": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "uniqueItems": True,
+                    "items": text,
+                },
+                "routing": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "uniqueItems": True,
+                    "x-unique-by": "id",
+                    "items": ref("RoutingRule"),
+                },
+                "clock": nullable(authored_identifier),
+                "target": nullable(ref("PassiveTargetPolicy")),
+            },
+            ["entity", "queue"],
+        ),
         "SourcePolicy": obj({"id": text, "adapter": text, "description": text, "requests": array(ref("SourceRequestPolicy"))}, ["id", "adapter", "description", "requests"]),
         "QueueRecord": obj({"id": text, "label": text}, ["id", "label"]),
         "Description": obj(
-            {"projectId": text, "policyVersion": text, "queues": array(ref("QueueRecord")), "sources": array(ref("SourcePolicy")), "hostedKinds": array(ref("HostedKindPolicy"))},
-            ["projectId", "policyVersion", "queues", "sources", "hostedKinds"],
+            {"projectId": text, "policyVersion": text, "queues": array(ref("QueueRecord")), "sources": array(ref("SourcePolicy")), "calendars": array(ref("CalendarPolicy")), "clocks": array(ref("ClockPolicy")), "hostedKinds": array(ref("HostedKindPolicy"))},
+            ["projectId", "policyVersion", "queues", "sources", "calendars", "clocks", "hostedKinds"],
         ),
         "Problem": obj({"type": {"type": "string", "format": "uri"}, "title": text, "status": {"type": "integer"}, "detail": text, "code": {"type": "string", "enum": [entry["code"] for entry in problem_entries]}, "traceId": text}, ["type", "title", "status", "detail", "code", "traceId"]),
     }
@@ -596,6 +1142,10 @@ SHARED_HOSTED_IDEMPOTENCY = parameter(
     IDEMPOTENCY_SCHEMA,
 )
 ITEM_ID = parameter("item_id", "path", "Casework item UUID.", {"type": "string", "format": "uuid"})
+ABSENCE_ID = parameter("absence_id", "path", "Absence UUID.", {"type": "string", "format": "uuid"})
+HOLIDAY_ID = parameter("id", "path", "Configured holiday-set identifier.", {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64})
+HOLIDAY_REVISION = parameter("revision", "path", "Positive immutable holiday-set revision.", {"type": "integer", "minimum": 1})
+TEAM_ID = parameter("team_id", "path", "Directory team identifier.", {"type": "string", "minLength": 1, "maxLength": 128, "x-maximum-utf8-bytes": 128, "pattern": "^[A-Za-z0-9._-]+$"})
 EVENT_ID = parameter("event_id", "path", "Hosted terminal event UUID.", {"type": "string", "format": "uuid"})
 ATTEMPT_ID = parameter("attempt_id", "path", "Original durable attempt UUID.", {"type": "string", "format": "uuid"})
 SOURCE_ID = parameter("source_id", "path", "Configured source identifier.")
@@ -769,7 +1319,7 @@ def document(contract: dict) -> dict:
     paths = {
         "/health": {"get": {"summary": "Liveness", "security": [], "parameters": [TRACEPARENT], "responses": {"200": response(description="Process is live.")}}},
         "/ready": {"get": {"summary": "Database readiness", "security": [], "parameters": [TRACEPARENT], "responses": {"200": response(description="Ready.")}}},
-        "/v1/casework": {"get": operation("Describe the Casework project", "Description", description="Returns the configured queues, BReg sources, and hosted kinds visible to an authenticated profile. Description data grants no item or source authority.")},
+        "/v1/casework": {"get": operation("Describe the Casework project", "Description", description="Returns the configured queues, BReg sources, authored calendars and clocks, and hosted kinds visible to an authenticated profile. Requester profiles receive empty calendar and clock lists. Description data grants no item or source authority.")},
         "/v1/hosted-items": {"post": operation("Create a requester-owned hosted item", "RequesterHostedItem", idempotency=True, idempotency_contract=HOSTED_IDEMPOTENCY, body="HostedCreateRequest", status="201", description="Requester-only. The selected Requester profile and authenticated issuer-qualified service principal own the item and bound kind grant.")},
         "/v1/hosted-items/terminal": {"get": operation("List this Requester's retained terminal results", "HostedTerminalPage", parameters=[
             parameter("cursor", "query", "Opaque 15-minute cursor bound to the authenticated Requester issuer, subject, profile, and terminal feed. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by eventId.", required=False),
@@ -790,7 +1340,10 @@ def document(contract: dict) -> dict:
         ], description="With Registry-Source-Profile, reads BReg-backed work under that separate authority. Without it, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order.")},
         "/v1/work-items/next": {"get": operation("Get the next caller-visible item", "WorkItem", source=True, parameters=[parameter("queue", "query", "Optional queue identifier.", required=False), parameter("cursor", "query", "Opaque cursor.", required=False)])},
         "/v1/work-items/{item_id}": {"get": operation("Read one currently visible item", "WorkItem", source=True, source_required=False, parameters=[ITEM_ID])},
+        "/v1/work-items/{item_id}/clocks": {"get": operation("Read the item's clock occurrences", "ClockOccurrenceList", source=True, parameters=[ITEM_ID], description="Staff or Supervisor read under the same current source visibility as the item. Registry-Source-Profile is required. Returns at most 32 occurrences with pinned policy digest and separate calculation and recompute generations.")},
         "/v1/work-items/{item_id}/claim": {"post": operation("Claim an item", "MutationResponse", source=True, source_required=False, mutation=True, idempotency_contract=SHARED_HOSTED_IDEMPOTENCY, parameters=[ITEM_ID])},
+        "/v1/work-items/{item_id}/assign": {"post": operation("Assign an item", "MutationResponse", source=True, source_required=False, mutation=True, body="AssignmentRequest", parameters=[ITEM_ID], description="Supervisor-only assignment for a currently served queue. Without Registry-Source-Profile the target is a hosted item; a source-backed item requires the source profile. The assignee is resolved through any active absence cover chain. If no eligible cover is available, the item remains open in its queue with staffingDiagnostic no_cover_available.")},
+        "/v1/work-items/{item_id}/delegate": {"post": operation("Delegate a held item", "MutationResponse", source=True, source_required=False, mutation=True, body="DelegateRequest", parameters=[ITEM_ID], description="The current Staff holder delegates an item. Without Registry-Source-Profile the target is a hosted item; a source-backed item requires the source profile. Current item visibility, holder, revision, queue eligibility, and any live source attempt are checked before mutation.")},
         "/v1/work-items/{item_id}/release": {"post": operation("Release an item", "MutationResponse", source=True, source_required=False, mutation=True, idempotency_contract=SHARED_HOSTED_IDEMPOTENCY, parameters=[ITEM_ID])},
         "/v1/work-items/{item_id}/draft": {
             "get": operation("Read the current actor's private draft", "DraftResponse", source=True, parameters=[ITEM_ID]),
@@ -805,7 +1358,22 @@ def document(contract: dict) -> dict:
         "/v1/work-items/{item_id}/history": {"get": operation("Read bounded item history", "HistoryPage", source=True, parameters=[ITEM_ID])},
         "/v1/holdings": {"get": operation("Read current caller-visible bounded holdings", "HoldingsPage", source=True, parameters=[parameter("cursor", "query", "Opaque cursor.", required=False)])},
         "/v1/directory": {"get": operation("Read the current authorized directory", "DirectoryResponse")},
+        "/v1/directory/absences": {
+            "get": operation("List authorized absence records", "AbsenceRecordList", description="Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The bounded result contains at most 1000 records ordered by start time and absenceId."),
+            "post": operation("Record an absence", "AbsenceRecord", mutation=True, allow_zero_revision=True, body="AbsenceInput", status="201", description="Uses the directory revision in If-Match. Staff can manage their own absence with cover from the same team; Supervisors can manage currently supervised staff; Administrators can manage any directory staff. The period is start-inclusive and end-exclusive."),
+        },
+        "/v1/directory/absences/{absence_id}": {
+            "put": operation("Replace an absence", "AbsenceRecord", mutation=True, body="AbsenceInput", parameters=[ABSENCE_ID], description="Replaces one absence under the current positive directory revision and the same authority and validation rules as creation."),
+            "delete": operation("Delete an absence", mutation=True, parameters=[ABSENCE_ID], status="204", description="Deletes one authorized absence under the current positive directory revision."),
+        },
         "/v1/directory/bootstrap": {"post": operation("Bootstrap the directory as an Administrator", "DirectoryResponse", mutation=True, allow_zero_revision=True, body="BootstrapDirectoryRequest")},
+        "/v1/directory/holidays": {"post": operation("Create an immutable holiday-set revision", "HolidaySetDocument", idempotency=True, body="HolidaySetRevisionInput", status="201", description="Administrator-only. Stores one immutable positive revision with at most 3660 distinct ISO dates. Repeating the exact revision is idempotent; different content for an existing holiday-set revision fails its precondition.")},
+        "/v1/directory/holidays/{id}/revisions/{revision}": {"get": operation("Read one holiday-set revision", "HolidaySetDocument", parameters=[HOLIDAY_ID, HOLIDAY_REVISION], description="Administrator-only read of one immutable holiday-set revision.")},
+        "/v1/directory/teams/{team_id}": {"put": operation("Create or replace a directory team", "DirectoryResponse", mutation=True, allow_zero_revision=True, body="DirectoryTeamUpdateRequest", parameters=[TEAM_ID], description="Administrator-only. Replaces the named team's staff, supervisors, and served queues under the loaded directory revision. A queue already served by another team returns precondition.failed; remove it from that team before assigning it here. Authority changes take effect immediately. Casework releases newly ineligible held items through bounded maintenance, while unresolved source attempts remain held for a later retry. The response contains directory state and no work-item identifiers.")},
+        "/v1/directory/clocks/recompute/preview": {"post": operation("Preview clock recalculation", "ClockRecomputePreview", body="ClockRecomputeRequest", description="Administrator-only. Recalculates at most 100 active occurrences against the named immutable holiday revision. The result is bound to the actor and selected profile for 15 minutes and records each expected calculation generation for review before apply.")},
+        "/v1/directory/clocks/recompute/apply": {"post": operation("Apply a reviewed clock recalculation", "ClockRecomputeResult", idempotency=True, body="ClockRecomputeApplyRequest", description="Administrator-only. Applies the actor-bound reviewed preview atomically. An expired preview returns clock.recompute-preview-expired; an already-applied preview or changed calculation generation returns precondition.failed. Create and review a new preview after either response.")},
+        "/v1/directory/caseload/preview": {"post": operation("Preview a caller-visible caseload move", "CaseloadPreviewPage", source=True, source_required=False, body="CaseloadMoveRequest", parameters=[parameter("cursor", "query", "Opaque 15-minute cursor bound to the human principal, selected Casework profile, optional source profile, and exact movement. Malformed or context-mismatched values are cursor.invalid; expired values are cursor.expired.", required=False), parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Supervisor-only preview for currently served queues. The from and to principals must differ. Candidates are held by movement.from and optionally restricted to queueId. Concealed, denied, or missing candidates are omitted without disclosing their count. Without Registry-Source-Profile only hosted candidates are visible; source-backed candidates require it.")},
+        "/v1/directory/caseload/apply": {"post": operation("Apply a reviewed caseload move", "CaseloadItemResultList", source=True, source_required=False, idempotency=True, body="CaseloadApplyRequest", description="Supervisor-only for currently served queues. Applies only the 1 through 100 distinct item selections and expected revisions supplied after preview. There is no global If-Match. Each item is processed atomically and returns moved, not_visible, not_eligible, attempt_in_progress, or conflict; revision is present only for moved. Without Registry-Source-Profile, source-backed selections return not_visible.")},
         "/events/sources/{source_id}": {"post": {
             "summary": "Accept a signed source synchronization hint",
             "description": "Authentication uses the configured BReg webhook signature and timestamp headers. The raw body is bounded to 1 MiB and grants no authority or display content.",
@@ -1010,6 +1578,7 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         "HostedTerminalPage",
         "HostedNotePage",
         "HostedHistoryPage",
+        "CaseloadPreviewPage",
     ):
         if set(openapi_schemas[schema_name]["properties"]) != page_fields:
             raise ValueError(f"OpenAPI page shape drifted for {schema_name}")
@@ -1068,6 +1637,56 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         '"operation name must match [a-z][a-z0-9_]{0,63}"' not in model
     ):
         raise ValueError("Rust OperationName validation markers drifted")
+    assignment = (
+        repository_root / "crates/registry-casework-core/src/assignment.rs"
+    ).read_text(encoding="utf-8")
+    if rust_struct_fields(assignment, "CaseloadPreviewQuery") != {"cursor", "limit"}:
+        raise ValueError("OpenAPI caseload preview query drifted from Rust")
+    if openapi_schemas["CaseloadApplyRequest"]["properties"]["items"] != {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 100,
+        "uniqueItems": True,
+        "x-unique-by": "itemId",
+        "items": ref("CaseloadItemSelection"),
+    }:
+        raise ValueError("OpenAPI reviewed caseload bound drifted from Rust")
+    if set(openapi_schemas["CaseloadItemOutcome"]["enum"]) != {
+        "moved",
+        "not_visible",
+        "not_eligible",
+        "attempt_in_progress",
+        "conflict",
+    }:
+        raise ValueError("OpenAPI caseload result vocabulary drifted from Rust")
+    if set(openapi_schemas["CaseworkProject"]["properties"]) != {
+        "apiVersion",
+        "kind",
+        "casework",
+        "accessProfiles",
+        "queues",
+        "sources",
+        "hostedKinds",
+        "calendars",
+        "clocks",
+        "inbox",
+    }:
+        raise ValueError("OpenAPI authored CaseworkProject shape drifted from Rust")
+    if set(openapi_schemas["Description"]["properties"]) != {
+        "projectId",
+        "policyVersion",
+        "queues",
+        "sources",
+        "calendars",
+        "clocks",
+        "hostedKinds",
+    }:
+        raise ValueError("OpenAPI Description policy projection drifted from Rust")
+    if {
+        variant["$ref"].rsplit("/", 1)[1]
+        for variant in openapi_schemas["ClockPolicy"]["oneOf"]
+    } != {"SubjectClockPolicy", "ActivityClockPolicy"}:
+        raise ValueError("OpenAPI clock policy variants drifted from Rust")
 
 
 def verify_source(repository_root: Path) -> None:
@@ -1079,6 +1698,15 @@ def verify_source(repository_root: Path) -> None:
     )
     client_source = (
         repository_root / "crates/registry-casework-client/src/client.rs"
+    ).read_text(encoding="utf-8")
+    assignment_source = (
+        repository_root / "crates/registry-casework/src/assignment.rs"
+    ).read_text(encoding="utf-8")
+    policy_source = (
+        repository_root / "crates/registry-casework-core/src/policy.rs"
+    ).read_text(encoding="utf-8")
+    routing_source = (
+        repository_root / "crates/registry-casework-core/src/routing.rs"
     ).read_text(encoding="utf-8")
     webhook_crypto_source = (
         repository_root / "crates/registry-platform-crypto/src/breg_webhook.rs"
@@ -1113,6 +1741,50 @@ def verify_source(repository_root: Path) -> None:
         raise ValueError("OpenAPI page limit drifted from the Casework service")
     if "const MAXIMUM_PAGE_SIZE: usize = 100;" not in client_source:
         raise ValueError("OpenAPI page limit drifted from the Casework client")
+    for marker in (
+        "pub const MAXIMUM_DIRECTORY_IDENTIFIER_BYTES: usize = 128;",
+        "pub const MAXIMUM_DIRECTORY_PRINCIPALS: usize = 100;",
+        "pub const MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES: usize = 2_048;",
+        "pub const MAXIMUM_DIRECTORY_SERVED_QUEUES: usize = 100;",
+    ):
+        if marker not in core_http:
+            raise ValueError(f"OpenAPI directory team bound drifted from Rust: {marker}")
+    for marker in (
+        "const MAXIMUM_REASON_BYTES: usize = 2_000;",
+        "request.items.len() > 100",
+        "CaseloadItemOutcome::AttemptInProgress",
+        "StaffingDiagnostic::NoCoverAvailable",
+        "if rows.len() > 1_000",
+        "valid_directory_identifier(team_id)",
+        "valid_directory_people(&request.staff)",
+        "valid_directory_people(&request.supervisors)",
+        "request.served_queues.len() > MAXIMUM_DIRECTORY_SERVED_QUEUES",
+    ):
+        if marker not in assignment_source:
+            raise ValueError(f"OpenAPI assignment contract drifted from Rust: {marker}")
+    for marker in (
+        "pub const MAXIMUM_CLOCKS: usize = 32;",
+        "pub const MAXIMUM_CALENDARS: usize = 16;",
+        "pub const MAXIMUM_CLOCK_REMINDERS: usize = 8;",
+        "pub const MAXIMUM_CLOCK_STEPS: usize = 8;",
+        'tag = "scope"',
+        "FirstSubmittedAt",
+        "ReviewCompleted",
+        "AwaitingApplicant",
+        "StageEnteredAt",
+    ):
+        if marker not in policy_source:
+            raise ValueError(f"OpenAPI authored clock contract drifted from Rust: {marker}")
+    for marker in (
+        "pub const MAXIMUM_ROUTING_RULES: usize = 64;",
+        "pub const MAXIMUM_ROUTING_PROJECTION_FIELDS: usize = 32;",
+        "pub const MAXIMUM_ROUTING_PREDICATES: usize = 16;",
+        "pub const MAXIMUM_ROUTING_VALUES: usize = 32;",
+        "RoutingPredicate::Equals",
+        "RoutingPredicate::OneOf",
+    ):
+        if marker not in routing_source:
+            raise ValueError(f"OpenAPI authored routing contract drifted from Rust: {marker}")
     for marker in (
         "pub const MAXIMUM_CASEWORK_PROFILE_BYTES: usize = 128;",
         "pub const MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES: usize = 128;",

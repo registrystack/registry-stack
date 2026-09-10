@@ -1,0 +1,39 @@
+{
+  "apiVersion": "registry.registrystack.org/casework-source-description/v1alpha1",
+  "kind": "BRegCaseworkSourceDescription",
+  "origin": "bregctl explain change-requests",
+  "authority": "none",
+  "sourceId": "regional-register",
+  "sourceRevision": "sha256:regional-source-revision",
+  "request": {
+    "requestEntity": "regional-correction",
+    "requestRoute": "regional-corrections",
+    "reviewMode": "staged",
+    "stages": [
+      {
+        "id": "technical",
+        "approvals": 2,
+        "excludeSubmitter": true,
+        "excludePreviousReviewers": false
+      },
+      {
+        "id": "authorization",
+        "approvals": 1,
+        "excludeSubmitter": true,
+        "excludePreviousReviewers": true
+      }
+    ],
+    "fields": [
+      {
+        "field": "region",
+        "apiName": "region",
+        "schema": {
+          "type": "string",
+          "enum": ["north", "south", "islands"]
+        }
+      }
+    ],
+    "application": {"mode": "manual"},
+    "contractFingerprint": "sha256:regional-correction-contract"
+  }
+}

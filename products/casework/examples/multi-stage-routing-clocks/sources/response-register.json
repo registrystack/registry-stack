@@ -1,0 +1,24 @@
+{
+  "apiVersion": "registry.registrystack.org/casework-source-description/v1alpha1",
+  "kind": "BRegCaseworkSourceDescription",
+  "origin": "bregctl explain change-requests",
+  "authority": "none",
+  "sourceId": "response-register",
+  "sourceRevision": "sha256:response-source-revision",
+  "request": {
+    "requestEntity": "response-correction",
+    "requestRoute": "response-corrections",
+    "reviewMode": "staged",
+    "stages": [
+      {
+        "id": "review",
+        "approvals": 1,
+        "excludeSubmitter": true,
+        "excludePreviousReviewers": false
+      }
+    ],
+    "fields": [],
+    "contractFingerprint": "sha256:response-correction-contract",
+    "application": {"mode": "manual"}
+  }
+}

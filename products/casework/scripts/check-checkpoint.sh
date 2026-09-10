@@ -29,4 +29,14 @@ trap cleanup EXIT HUP INT TERM
 "$caseworkctl_bin" init "$work/standalone" --template standalone-decision >/dev/null
 "$caseworkctl_bin" check "$work/standalone" >/dev/null
 "$caseworkctl_bin" test "$work/standalone" >/dev/null
+multistage="$repo_root/products/casework/examples/multi-stage-routing-clocks"
+"$caseworkctl_bin" check "$multistage" >/dev/null
+"$caseworkctl_bin" explain "$multistage" >/dev/null
+"$caseworkctl_bin" simulate "$multistage" \
+  --fixture "$multistage/simulations/friday-review.yaml" >/dev/null
+"$caseworkctl_bin" simulate "$multistage" \
+  --fixture "$multistage/simulations/resubmitted-response.yaml" >/dev/null
+"$caseworkctl_bin" test "$multistage" >/dev/null
+"$caseworkctl_bin" package "$multistage" \
+  --output "$work/multistage-package" >/dev/null
 echo "Casework product contracts and offline authoring journey passed."

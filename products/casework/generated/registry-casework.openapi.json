@@ -9,6 +9,250 @@
       }
     },
     "schemas": {
+      "AbsenceInput": {
+        "additionalProperties": false,
+        "properties": {
+          "cover": {
+            "$ref": "#/components/schemas/IssuerPrincipal"
+          },
+          "from": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "person": {
+            "$ref": "#/components/schemas/IssuerPrincipal"
+          },
+          "until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "person",
+          "from",
+          "until",
+          "cover"
+        ],
+        "type": "object"
+      },
+      "AbsenceRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "absenceId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "cover": {
+            "$ref": "#/components/schemas/IssuerPrincipal"
+          },
+          "from": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "person": {
+            "$ref": "#/components/schemas/IssuerPrincipal"
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "absenceId",
+          "person",
+          "from",
+          "until",
+          "cover",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "AbsenceRecordList": {
+        "items": {
+          "$ref": "#/components/schemas/AbsenceRecord"
+        },
+        "maxItems": 1000,
+        "type": "array"
+      },
+      "AccessProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "principalClaim": {
+            "type": "string"
+          },
+          "requiredScopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "role": {
+            "enum": [
+              "staff",
+              "supervisor",
+              "administrator",
+              "requester"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "principalClaim",
+          "requiredScopes",
+          "role"
+        ],
+        "type": "object"
+      },
+      "ActivityClockPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/WorkingDaysAfter"
+          },
+          "anchor": {
+            "const": "stageEnteredAt"
+          },
+          "atRisk": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkingDaysBefore"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "calendar": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          },
+          "dueTime": {
+            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          },
+          "reminders": {
+            "items": {
+              "$ref": "#/components/schemas/ClockReminder"
+            },
+            "maxItems": 8,
+            "type": "array",
+            "uniqueItems": true,
+            "x-unique-by": "id"
+          },
+          "scope": {
+            "const": "activity"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ClockStep"
+            },
+            "maxItems": 8,
+            "type": "array",
+            "uniqueItems": true,
+            "x-unique-by": "id"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "anchor",
+          "calendar",
+          "after",
+          "dueTime"
+        ],
+        "type": "object"
+      },
+      "AssignmentContext": {
+        "additionalProperties": false,
+        "properties": {
+          "absenceIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "assignedBy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssuerPrincipal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssuerPrincipal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "staffingDiagnostic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StaffingDiagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "absenceIds"
+        ],
+        "type": "object"
+      },
+      "AssignmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee": {
+            "$ref": "#/components/schemas/IssuerPrincipal"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string",
+                "x-maximum-utf8-bytes": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "assignee"
+        ],
+        "type": "object"
+      },
       "AttemptStatus": {
         "additionalProperties": false,
         "properties": {
@@ -91,6 +335,203 @@
         ],
         "type": "object"
       },
+      "CalendarPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "holidaySet": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          },
+          "timezone": {
+            "format": "iana-time-zone",
+            "type": "string"
+          },
+          "workingWeekdays": {
+            "items": {
+              "enum": [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday"
+              ],
+              "type": "string"
+            },
+            "maxItems": 7,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "timezone",
+          "workingWeekdays",
+          "holidaySet"
+        ],
+        "type": "object"
+      },
+      "CaseloadApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CaseloadItemSelection"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true,
+            "x-unique-by": "itemId"
+          },
+          "movement": {
+            "$ref": "#/components/schemas/CaseloadMoveRequest"
+          }
+        },
+        "required": [
+          "movement",
+          "items"
+        ],
+        "type": "object"
+      },
+      "CaseloadItemOutcome": {
+        "enum": [
+          "moved",
+          "not_visible",
+          "not_eligible",
+          "attempt_in_progress",
+          "conflict"
+        ],
+        "type": "string"
+      },
+      "CaseloadItemResult": {
+        "additionalProperties": false,
+        "properties": {
+          "itemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/CaseloadItemOutcome"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "itemId",
+          "result"
+        ],
+        "type": "object"
+      },
+      "CaseloadItemResultList": {
+        "items": {
+          "$ref": "#/components/schemas/CaseloadItemResult"
+        },
+        "type": "array"
+      },
+      "CaseloadItemSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedRevision": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "itemId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "itemId",
+          "expectedRevision"
+        ],
+        "type": "object"
+      },
+      "CaseloadMoveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/IssuerPrincipal"
+          },
+          "queueId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string",
+            "x-maximum-utf8-bytes": 2000
+          },
+          "to": {
+            "$ref": "#/components/schemas/IssuerPrincipal"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "CaseloadPreviewPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkItem"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "budget_exhausted",
+              "source_unavailable"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "status"
+        ],
+        "type": "object"
+      },
       "CaseworkAction": {
         "additionalProperties": false,
         "properties": {
@@ -108,6 +549,419 @@
           "operation",
           "href",
           "ifMatch"
+        ],
+        "type": "object"
+      },
+      "CaseworkIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "type": "object"
+      },
+      "CaseworkProject": {
+        "additionalProperties": false,
+        "properties": {
+          "accessProfiles": {
+            "items": {
+              "$ref": "#/components/schemas/AccessProfile"
+            },
+            "type": "array"
+          },
+          "apiVersion": {
+            "const": "registry.registrystack.org/casework/v1alpha1"
+          },
+          "calendars": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarPolicy"
+            },
+            "maxItems": 16,
+            "type": "array",
+            "uniqueItems": true,
+            "x-unique-by": "id"
+          },
+          "casework": {
+            "$ref": "#/components/schemas/CaseworkIdentity"
+          },
+          "clocks": {
+            "items": {
+              "$ref": "#/components/schemas/ClockPolicy"
+            },
+            "maxItems": 32,
+            "type": "array",
+            "uniqueItems": true,
+            "x-unique-by": "id"
+          },
+          "hostedKinds": {
+            "items": {
+              "$ref": "#/components/schemas/HostedKindPolicy"
+            },
+            "type": "array"
+          },
+          "inbox": {
+            "$ref": "#/components/schemas/InboxPolicy"
+          },
+          "kind": {
+            "const": "CaseworkProject"
+          },
+          "queues": {
+            "items": {
+              "$ref": "#/components/schemas/QueuePolicy"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourcePolicy"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "casework",
+          "accessProfiles",
+          "queues"
+        ],
+        "type": "object"
+      },
+      "ClockOccurrenceList": {
+        "items": {
+          "$ref": "#/components/schemas/ClockOccurrenceView"
+        },
+        "maxItems": 32,
+        "type": "array"
+      },
+      "ClockOccurrenceView": {
+        "additionalProperties": false,
+        "properties": {
+          "anchorAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "atRiskAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "calculationGeneration": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "clockId": {
+            "type": "string"
+          },
+          "clockOccurrenceId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "completedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dueAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policyDigest": {
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "recomputeGeneration": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/ClockRuntimeState"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/SubjectRef"
+          }
+        },
+        "required": [
+          "clockOccurrenceId",
+          "subject",
+          "clockId",
+          "state",
+          "policyDigest",
+          "calculationGeneration",
+          "recomputeGeneration"
+        ],
+        "type": "object"
+      },
+      "ClockPolicy": {
+        "discriminator": {
+          "propertyName": "scope"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SubjectClockPolicy"
+          },
+          {
+            "$ref": "#/components/schemas/ActivityClockPolicy"
+          }
+        ]
+      },
+      "ClockReassignment": {
+        "additionalProperties": false,
+        "properties": {
+          "queue": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "queue"
+        ],
+        "type": "object"
+      },
+      "ClockRecomputeApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "previewId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "previewId"
+        ],
+        "type": "object"
+      },
+      "ClockRecomputeChange": {
+        "additionalProperties": false,
+        "properties": {
+          "clockOccurrenceId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expectedCalculationGeneration": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "itemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "oldDueAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "proposedDueAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clockOccurrenceId",
+          "itemId",
+          "expectedCalculationGeneration",
+          "oldDueAt",
+          "proposedDueAt"
+        ],
+        "type": "object"
+      },
+      "ClockRecomputePreview": {
+        "additionalProperties": false,
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/ClockRecomputeChange"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "clockId": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "holidayRevision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "holidaySet": {
+            "type": "string"
+          },
+          "previewId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "previewId",
+          "clockId",
+          "holidaySet",
+          "holidayRevision",
+          "expiresAt",
+          "changes"
+        ],
+        "type": "object"
+      },
+      "ClockRecomputeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "clockId": {
+            "type": "string"
+          },
+          "holidayRevision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "holidaySet": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "clockId",
+          "holidaySet",
+          "holidayRevision"
+        ],
+        "type": "object"
+      },
+      "ClockRecomputeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "appliedOccurrences": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "previewId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "previewId",
+          "appliedOccurrences"
+        ],
+        "type": "object"
+      },
+      "ClockReminder": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          },
+          "workingDaysBefore": {
+            "maximum": 3650,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "workingDaysBefore"
+        ],
+        "type": "object"
+      },
+      "ClockRuntimeState": {
+        "enum": [
+          "running",
+          "paused",
+          "completed",
+          "cancelled",
+          "verification_pending",
+          "source_facts_missing"
+        ],
+        "type": "string"
+      },
+      "ClockStep": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ClockStepAction"
+          },
+          "at": {
+            "const": "due"
+          },
+          "because": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string",
+            "x-maximum-utf8-bytes": 256,
+            "x-non-whitespace": true
+          },
+          "id": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "because",
+          "at",
+          "action"
+        ],
+        "type": "object"
+      },
+      "ClockStepAction": {
+        "additionalProperties": false,
+        "properties": {
+          "reassign": {
+            "$ref": "#/components/schemas/ClockReassignment"
+          }
+        },
+        "required": [
+          "reassign"
         ],
         "type": "object"
       },
@@ -179,9 +1033,46 @@
         ],
         "type": "object"
       },
+      "DelegateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "delegate": {
+            "$ref": "#/components/schemas/IssuerPrincipal"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string",
+                "x-maximum-utf8-bytes": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "delegate"
+        ],
+        "type": "object"
+      },
       "Description": {
         "additionalProperties": false,
         "properties": {
+          "calendars": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarPolicy"
+            },
+            "type": "array"
+          },
+          "clocks": {
+            "items": {
+              "$ref": "#/components/schemas/ClockPolicy"
+            },
+            "type": "array"
+          },
           "hostedKinds": {
             "items": {
               "$ref": "#/components/schemas/HostedKindPolicy"
@@ -212,6 +1103,8 @@
           "policyVersion",
           "queues",
           "sources",
+          "calendars",
+          "clocks",
           "hostedKinds"
         ],
         "type": "object"
@@ -233,6 +1126,69 @@
         "required": [
           "revision",
           "teams"
+        ],
+        "type": "object"
+      },
+      "DirectoryTeamPrincipal": {
+        "additionalProperties": false,
+        "properties": {
+          "issuer": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string",
+            "x-maximum-utf8-bytes": 2048
+          },
+          "subject": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string",
+            "x-maximum-utf8-bytes": 2048
+          }
+        },
+        "required": [
+          "issuer",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "DirectoryTeamUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "servedQueues": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "type": "string",
+              "x-maximum-utf8-bytes": 128
+            },
+            "maxItems": 100,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "staff": {
+            "items": {
+              "$ref": "#/components/schemas/DirectoryTeamPrincipal"
+            },
+            "maxItems": 100,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "supervisors": {
+            "items": {
+              "$ref": "#/components/schemas/DirectoryTeamPrincipal"
+            },
+            "maxItems": 100,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "staff",
+          "supervisors",
+          "servedQueues"
         ],
         "type": "object"
       },
@@ -299,6 +1255,16 @@
         },
         "required": [
           "elapsed"
+        ],
+        "type": "object"
+      },
+      "EqualsPredicate": {
+        "additionalProperties": false,
+        "properties": {
+          "equals": {}
+        },
+        "required": [
+          "equals"
         ],
         "type": "object"
       },
@@ -441,6 +1407,47 @@
         ],
         "type": "object"
       },
+      "HolidaySetDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "dates": {
+            "items": {
+              "format": "date",
+              "type": "string"
+            },
+            "maxItems": 3660,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "holidaySet": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "holidaySet",
+          "revision",
+          "dates"
+        ],
+        "type": "object"
+      },
+      "HolidaySetRevisionInput": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/HolidaySetDocument"
+          }
+        },
+        "required": [
+          "document"
+        ],
+        "type": "object"
+      },
       "HostedAccountabilityRecord": {
         "additionalProperties": false,
         "properties": {
@@ -580,6 +1587,16 @@
               }
             ]
           },
+          "assignment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cancellationReason": {
             "anyOf": [
               {
@@ -606,6 +1623,9 @@
             "enum": [
               "created",
               "claimed",
+              "assigned",
+              "delegated",
+              "caseload_moved",
               "released",
               "note_added",
               "completed",
@@ -1042,6 +2062,42 @@
         ],
         "type": "object"
       },
+      "InboxPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "defaultPageSize": {
+            "default": 25,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maximumCandidateScan": {
+            "default": 100,
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maximumConcurrentSourceReads": {
+            "default": 4,
+            "maximum": 32,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maximumSourceReads": {
+            "default": 25,
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "pageDeadlineMilliseconds": {
+            "default": 2000,
+            "maximum": 30000,
+            "minimum": 100,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "IssuerPrincipal": {
         "additionalProperties": false,
         "properties": {
@@ -1080,6 +2136,22 @@
         ],
         "type": "object"
       },
+      "OneOfPredicate": {
+        "additionalProperties": false,
+        "properties": {
+          "oneOf": {
+            "items": {},
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "oneOf"
+        ],
+        "type": "object"
+      },
       "OpaqueActorRef": {
         "maxLength": 128,
         "minLength": 7,
@@ -1112,7 +2184,12 @@
         "properties": {
           "code": {
             "enum": [
+              "absence.cover-cycle",
+              "absence.invalid-period",
+              "absence.overlap",
+              "absence.self-cover",
               "authentication.refused",
+              "clock.recompute-preview-expired",
               "cursor.expired",
               "cursor.invalid",
               "idempotency.expired",
@@ -1171,6 +2248,114 @@
         ],
         "type": "object"
       },
+      "ProblemAbsenceCoverCycle": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "absence.cover-cycle"
+              },
+              "detail": {
+                "const": "Choose cover assignments that do not return to an earlier person during a shared period."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Absence cover cycle"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/absence/cover-cycle"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemAbsenceInvalidPeriod": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "absence.invalid-period"
+              },
+              "detail": {
+                "const": "Set until later than from."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Invalid absence period"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/absence/invalid-period"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemAbsenceOverlap": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "absence.overlap"
+              },
+              "detail": {
+                "const": "Adjust the period so this person has no overlapping absence."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Absence period overlaps"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/absence/overlap"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemAbsenceSelfCover": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "absence.self-cover"
+              },
+              "detail": {
+                "const": "Choose a different staff member as cover."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Absence self-cover not allowed"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/absence/self-cover"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
       "ProblemAuthenticationRefused": {
         "allOf": [
           {
@@ -1192,6 +2377,33 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemClockRecomputePreviewExpired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "clock.recompute-preview-expired"
+              },
+              "detail": {
+                "const": "Create a new recompute preview and review it before applying."
+              },
+              "status": {
+                "const": 410
+              },
+              "title": {
+                "const": "Clock recompute preview expired"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/clock/recompute-preview-expired"
               }
             },
             "type": "object"
@@ -1954,6 +3166,22 @@
           }
         ]
       },
+      "QueuePolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "type": "object"
+      },
       "QueueRecord": {
         "additionalProperties": false,
         "properties": {
@@ -2046,6 +3274,86 @@
           "kindPolicyDigest",
           "createdAt",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "RoutingActivity": {
+        "enum": [
+          "review",
+          "apply"
+        ],
+        "type": "string"
+      },
+      "RoutingCondition": {
+        "additionalProperties": false,
+        "properties": {
+          "activity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingActivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fields": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RoutingPredicate"
+            },
+            "maxProperties": 16,
+            "type": "object"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RoutingPredicate": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/EqualsPredicate"
+          },
+          {
+            "$ref": "#/components/schemas/OneOfPredicate"
+          }
+        ]
+      },
+      "RoutingRule": {
+        "additionalProperties": false,
+        "properties": {
+          "because": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string",
+            "x-maximum-utf8-bytes": 256,
+            "x-non-whitespace": true
+          },
+          "id": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "when": {
+            "$ref": "#/components/schemas/RoutingCondition"
+          }
+        },
+        "required": [
+          "id",
+          "because",
+          "when",
+          "queue"
         ],
         "type": "object"
       },
@@ -2166,11 +3474,40 @@
       "SourceRequestPolicy": {
         "additionalProperties": false,
         "properties": {
+          "clock": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "entity": {
             "type": "string"
           },
+          "projection": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": "array",
+            "uniqueItems": true
+          },
           "queue": {
             "type": "string"
+          },
+          "routing": {
+            "items": {
+              "$ref": "#/components/schemas/RoutingRule"
+            },
+            "maxItems": 64,
+            "type": "array",
+            "uniqueItems": true,
+            "x-unique-by": "id"
           },
           "target": {
             "anyOf": [
@@ -2186,6 +3523,53 @@
         "required": [
           "entity",
           "queue"
+        ],
+        "type": "object"
+      },
+      "StaffingDiagnostic": {
+        "enum": [
+          "no_cover_available"
+        ],
+        "type": "string"
+      },
+      "SubjectClockPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/ElapsedDuration"
+          },
+          "anchor": {
+            "const": "firstSubmittedAt"
+          },
+          "completeOn": {
+            "const": "reviewCompleted"
+          },
+          "id": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          },
+          "pauseWhile": {
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "awaitingApplicant"
+              }
+            ],
+            "type": "array"
+          },
+          "scope": {
+            "const": "subject"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "anchor",
+          "completeOn",
+          "after",
+          "pauseWhile"
         ],
         "type": "object"
       },
@@ -2255,6 +3639,16 @@
               "$ref": "#/components/schemas/CaseworkAction"
             },
             "type": "array"
+          },
+          "assignment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "binding": {
             "$ref": "#/components/schemas/SourceBinding"
@@ -2406,6 +3800,34 @@
         "required": [
           "items",
           "status"
+        ],
+        "type": "object"
+      },
+      "WorkingDaysAfter": {
+        "additionalProperties": false,
+        "properties": {
+          "workingDays": {
+            "maximum": 3650,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "workingDays"
+        ],
+        "type": "object"
+      },
+      "WorkingDaysBefore": {
+        "additionalProperties": false,
+        "properties": {
+          "workingDaysBefore": {
+            "maximum": 3650,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "workingDaysBefore"
         ],
         "type": "object"
       }
@@ -2882,7 +4304,7 @@
     },
     "/v1/casework": {
       "get": {
-        "description": "Returns the configured queues, BReg sources, and hosted kinds visible to an authenticated profile. Description data grants no item or source authority.",
+        "description": "Returns the configured queues, BReg sources, authored calendars and clocks, and hosted kinds visible to an authenticated profile. Requester profiles receive empty calendar and clock lists. Description data grants no item or source authority.",
         "operationId": "describeCasework",
         "parameters": [
           {
@@ -3199,6 +4621,1081 @@
         "summary": "Read the current authorized directory"
       }
     },
+    "/v1/directory/absences": {
+      "get": {
+        "description": "Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The bounded result contains at most 1000 records ordered by start time and absenceId.",
+        "operationId": "listAbsences",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AbsenceRecordList"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List authorized absence records"
+      },
+      "post": {
+        "description": "Uses the directory revision in If-Match. Staff can manage their own absence with cover from the same team; Supervisors can manage currently supervised staff; Administrators can manage any directory staff. The period is start-inclusive and end-exclusive.",
+        "operationId": "createAbsence",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Quoted nonnegative signed 64-bit Casework item or directory revision.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "maxLength": 21,
+              "pattern": "^\"(0|[1-9][0-9]{0,18})\"$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AbsenceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AbsenceRecord"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAbsenceCoverCycle"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemAbsenceInvalidPeriod"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemAbsenceOverlap"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemAbsenceSelfCover"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Record an absence"
+      }
+    },
+    "/v1/directory/absences/{absence_id}": {
+      "delete": {
+        "description": "Deletes one authorized absence under the current positive directory revision.",
+        "operationId": "deleteAbsence",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Quoted positive signed 64-bit Casework item revision.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "maxLength": 21,
+              "pattern": "^\"[1-9][0-9]{0,18}\"$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Absence UUID.",
+            "in": "path",
+            "name": "absence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Delete an absence"
+      },
+      "put": {
+        "description": "Replaces one absence under the current positive directory revision and the same authority and validation rules as creation.",
+        "operationId": "updateAbsence",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Quoted positive signed 64-bit Casework item revision.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "maxLength": 21,
+              "pattern": "^\"[1-9][0-9]{0,18}\"$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Absence UUID.",
+            "in": "path",
+            "name": "absence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AbsenceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AbsenceRecord"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAbsenceCoverCycle"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemAbsenceInvalidPeriod"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemAbsenceOverlap"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemAbsenceSelfCover"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Replace an absence"
+      }
+    },
     "/v1/directory/bootstrap": {
       "post": {
         "operationId": "bootstrapDirectory",
@@ -3484,6 +5981,1889 @@
           }
         ],
         "summary": "Bootstrap the directory as an Administrator"
+      }
+    },
+    "/v1/directory/caseload/apply": {
+      "post": {
+        "description": "Supervisor-only for currently served queues. Applies only the 1 through 100 distinct item selections and expected revisions supplied after preview. There is no global If-Match. Each item is processed atomically and returns moved, not_visible, not_eligible, attempt_in_progress, or conflict; revision is present only for moved. Without Registry-Source-Profile, source-backed selections return not_visible.",
+        "operationId": "applyCaseloadMove",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaseloadApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseloadItemResultList"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemSourceUnavailable"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable, work-item.source-unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Apply a reviewed caseload move"
+      }
+    },
+    "/v1/directory/caseload/preview": {
+      "post": {
+        "description": "Supervisor-only preview for currently served queues. The from and to principals must differ. Candidates are held by movement.from and optionally restricted to queueId. Concealed, denied, or missing candidates are omitted without disclosing their count. Without Registry-Source-Profile only hosted candidates are visible; source-backed candidates require it.",
+        "operationId": "previewCaseloadMove",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to the human principal, selected Casework profile, optional source profile, and exact movement. Malformed or context-mismatched values are cursor.invalid; expired values are cursor.expired.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaseloadMoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseloadPreviewPage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: cursor.invalid, request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemSourceUnavailable"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable, work-item.source-unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Preview a caller-visible caseload move"
+      }
+    },
+    "/v1/directory/clocks/recompute/apply": {
+      "post": {
+        "description": "Administrator-only. Applies the actor-bound reviewed preview atomically. An expired preview returns clock.recompute-preview-expired; an already-applied preview or changed calculation generation returns precondition.failed. Create and review a new preview after either response.",
+        "operationId": "applyClockRecompute",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClockRecomputeApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClockRecomputeResult"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemClockRecomputePreviewExpired"
+                }
+              }
+            },
+            "description": "Problem response: clock.recompute-preview-expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Apply a reviewed clock recalculation"
+      }
+    },
+    "/v1/directory/clocks/recompute/preview": {
+      "post": {
+        "description": "Administrator-only. Recalculates at most 100 active occurrences against the named immutable holiday revision. The result is bound to the actor and selected profile for 15 minutes and records each expected calculation generation for review before apply.",
+        "operationId": "previewClockRecompute",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClockRecomputeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClockRecomputePreview"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Preview clock recalculation"
+      }
+    },
+    "/v1/directory/holidays": {
+      "post": {
+        "description": "Administrator-only. Stores one immutable positive revision with at most 3660 distinct ISO dates. Repeating the exact revision is idempotent; different content for an existing holiday-set revision fails its precondition.",
+        "operationId": "createHolidayRevision",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HolidaySetRevisionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HolidaySetDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Create an immutable holiday-set revision"
+      }
+    },
+    "/v1/directory/holidays/{id}/revisions/{revision}": {
+      "get": {
+        "description": "Administrator-only read of one immutable holiday-set revision.",
+        "operationId": "getHolidayRevision",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured holiday-set identifier.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9-]{0,63}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Positive immutable holiday-set revision.",
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HolidaySetDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Read one holiday-set revision"
+      }
+    },
+    "/v1/directory/teams/{team_id}": {
+      "put": {
+        "description": "Administrator-only. Replaces the named team's staff, supervisors, and served queues under the loaded directory revision. A queue already served by another team returns precondition.failed; remove it from that team before assigning it here. Authority changes take effect immediately. Casework releases newly ineligible held items through bounded maintenance, while unresolved source attempts remain held for a later retry. The response contains directory state and no work-item identifiers.",
+        "operationId": "updateDirectoryTeam",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Quoted nonnegative signed 64-bit Casework item or directory revision.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "maxLength": 21,
+              "pattern": "^\"(0|[1-9][0-9]{0,18})\"$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Directory team identifier.",
+            "in": "path",
+            "name": "team_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "type": "string",
+              "x-maximum-utf8-bytes": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectoryTeamUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryResponse"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human, operation.not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Create or replace a directory team"
       }
     },
     "/v1/holdings": {
@@ -6361,6 +10741,368 @@
         "summary": "Read one currently visible item"
       }
     },
+    "/v1/work-items/{item_id}/assign": {
+      "post": {
+        "description": "Supervisor-only assignment for a currently served queue. Without Registry-Source-Profile the target is a hosted item; a source-backed item requires the source profile. The assignee is resolved through any active absence cover chain. If no eligible cover is available, the item remains open in its queue with staffingDiagnostic no_cover_available.",
+        "operationId": "assignWorkItem",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Quoted positive signed 64-bit Casework item revision.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "maxLength": 21,
+              "pattern": "^\"[1-9][0-9]{0,18}\"$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Casework item UUID.",
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationResponse"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemRecoveryPending"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused, work-item.recovery-pending",
+            "headers": {
+              "Registry-Casework-Attempt": {
+                "description": "Original attempt UUID, present only when the entitled recovery-pending response can disclose it.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "x-required-for-problem-code": "work-item.recovery-pending"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemSourceUnavailable"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable, work-item.source-unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Assign an item"
+      }
+    },
     "/v1/work-items/{item_id}/attempts/recover": {
       "post": {
         "operationId": "recoverAttemptByKey",
@@ -7303,6 +12045,257 @@
         "summary": "Claim an item"
       }
     },
+    "/v1/work-items/{item_id}/clocks": {
+      "get": {
+        "description": "Staff or Supervisor read under the same current source visibility as the item. Registry-Source-Profile is required. Returns at most 32 occurrences with pinned policy digest and separate calculation and recompute generations.",
+        "operationId": "getWorkItemClocks",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Casework item UUID.",
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClockOccurrenceList"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemProposalChanged"
+                }
+              }
+            },
+            "description": "Problem response: work-item.proposal-changed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemSourceUnavailable"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable, work-item.source-unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Read the item's clock occurrences"
+      }
+    },
     "/v1/work-items/{item_id}/decisions": {
       "post": {
         "operationId": "decideWorkItem",
@@ -7671,6 +12664,368 @@
           }
         ],
         "summary": "Perform a freshly authorized source action"
+      }
+    },
+    "/v1/work-items/{item_id}/delegate": {
+      "post": {
+        "description": "The current Staff holder delegates an item. Without Registry-Source-Profile the target is a hosted item; a source-backed item requires the source profile. Current item visibility, holder, revision, queue eligibility, and any live source attempt are checked before mutation.",
+        "operationId": "delegateWorkItem",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit Casework access profile. It never selects BReg authority.",
+            "in": "header",
+            "name": "Registry-Casework-Profile",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Quoted positive signed 64-bit Casework item revision.",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "maxLength": 21,
+              "pattern": "^\"[1-9][0-9]{0,18}\"$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Casework item UUID.",
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DelegateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationResponse"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemRecoveryPending"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused, work-item.recovery-pending",
+            "headers": {
+              "Registry-Casework-Attempt": {
+                "description": "Original attempt UUID, present only when the entitled recovery-pending response can disclose it.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "x-required-for-problem-code": "work-item.recovery-pending"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemSourceUnavailable"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable, work-item.source-unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Delegate a held item"
       }
     },
     "/v1/work-items/{item_id}/draft": {

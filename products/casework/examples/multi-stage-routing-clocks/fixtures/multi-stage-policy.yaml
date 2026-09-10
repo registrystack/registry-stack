@@ -1,0 +1,11 @@
+apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+kind: CaseworkFixture
+name: multistage-routing-clocks-offline
+source:
+  id: regional-register
+  requestEntity: regional-correction
+  reviewStage: technical
+expect:
+  queue: triage
+  applicationMode: manual
+  targetElapsed:

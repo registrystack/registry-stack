@@ -1,0 +1,19 @@
+id: friday-review
+source: regional-register
+holidayRevisions: {office-holidays: 7}
+subject:
+  entity: regional-correction
+  id: request-0042
+  version: "1"
+  activity: review
+  stage: technical
+  fields: {region: north}
+  stageEnteredAt: "2026-09-04T15:00:00+07:00"
+now: "2026-09-11T17:00:00+07:00"
+expect:
+  queue: northern-review
+  ruleId: northern-requests
+  dueAt: "2026-09-14T17:00:00+07:00"
+  dueState: atRisk
+  eligibleReminders: [due-soon]
+  eligibleSteps: []

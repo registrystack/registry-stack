@@ -101,6 +101,122 @@ the original operation; a changed request under the same key remains
 `idempotency.key-reused`. After the accountability deadline, Casework forgets
 the tombstone and the key may be reused.
 
+## Absence cover and explicit assignment
+
+The authenticated directory API lists and mutates absence records. Staff can
+manage their own absence when the cover is staff in the same team. Supervisors
+can manage staff they currently supervise, and Administrators can manage any
+directory staff. The ordered list is bounded to 1000 records. Every record uses
+a start-inclusive, end-exclusive UTC period.
+Casework refuses an invalid period, self-cover, overlapping absences for one
+person, or a cover cycle with a value-free 422 problem. Writes require the
+loaded directory revision in `If-Match` and an `Idempotency-Key`.
+
+Administrators create or replace one team's staff, supervisors, and served
+queues under the loaded directory revision. A served queue can belong to only
+one team; remove it from the current team before assigning it elsewhere.
+Authority changes take effect immediately. Bounded maintenance releases held
+items whose holder is no longer eligible and records visible lifecycle events.
+Items with unresolved source attempts remain held for a later retry. The
+directory response contains no work-item identifiers, and Administrator status
+does not grant item payload access.
+
+Supervisor profiles can assign visible work in a queue they currently serve. A
+current Staff holder can delegate it. Casework resolves
+active absence cover at mutation time and records the assignment owner, acting
+person, and traversed absence ids. If the chain ends without an eligible staff
+member, the item remains open in its serving queue with
+`staffingDiagnostic: no_cover_available`; this staffing state is returned on
+the item rather than as a problem response. A source-backed item requires
+`Registry-Source-Profile`. Omitting that header selects hosted work.
+
+Caseload movement is a review-then-apply operation for Supervisor profiles in
+currently served queues. Preview returns only caller-visible items held by the
+named person, optionally limited to one queue, and silently omits concealed or
+denied source items. Its 15-minute cursor is bound to the actor, selected
+Casework profile, optional source profile, and exact movement. Apply accepts 1
+through 100 distinct reviewed item ids with their expected revisions and one
+`Idempotency-Key`; it has no global
+`If-Match`. Each selection is processed atomically and returns `moved`,
+`not_visible`, `not_eligible`, `attempt_in_progress`, or `conflict`, so one
+item cannot turn an undisclosed or stale item into a request-wide disclosure.
+
+## Authored routing and clocks
+
+A source request can name up to 32 projected logical fields, up to 64 ordered
+routing rules, and one clock. A rule records an id and operator-facing
+`because`, matches review or apply activity, an optional review stage, and up to
+16 field predicates, then selects a declared queue. Predicates are closed to
+`equals` or `oneOf`; a `oneOf` list contains at most 32 distinct JSON values.
+The first matching rule wins, and the request's queue remains the fallback.
+
+`caseworkctl source add` validates projected logical field ids and predicate
+values against source-owned field schemas. Its generated BReg reader retains
+only `get` and `list`. The record reference is always readable; only the exact
+configured projection fields and `review_state` are added to request reads.
+Lifecycle event projection remains record-only. Projection supplies bounded
+routing facts to Casework. It does not grant display, mutation, decision, or
+application authority to a Casework caller.
+
+`CaseworkProject` accepts at most 16 named calendars and 32 named clocks. A
+calendar declares an IANA timezone, one or more distinct working weekdays, and
+a holiday-set id. Holiday dates and their immutable revision are supplied as a
+separate live document; they are not embedded in deployed policy. A subject
+clock uses `firstSubmittedAt`, completes on `reviewCompleted`, and pauses only
+while `awaitingApplicant`. An activity clock uses `stageEnteredAt`, a calendar,
+1 through 3650 working days, a local `HH:MM` due time, and optional at-risk,
+reminder, and due-step policies. Each reminder and at-risk offset selects an
+earlier working date at the same local due time. The due-date count excludes
+the anchor's local date and skips non-working weekdays and holiday dates.
+
+Activity clocks accept at most eight reminders and eight due steps. A due step
+records a bounded reason and reassigns to a declared queue. These authored
+types and their calendar evaluator are maintained independently of runtime
+scheduling, so a deployment must not infer that a configured clock ran without
+a recorded runtime occurrence.
+
+The authenticated service description includes authored calendars and clocks
+for Staff, Supervisor, and Administrator profiles so an operator can inspect
+the policy referenced by source requests and live occurrences. Requester
+profiles receive empty calendar and clock lists. Description data grants no
+item or source authority.
+
+Staff and Supervisor profiles can read up to 32 clock occurrences for one
+currently visible source-backed item through
+`GET /v1/work-items/{itemId}/clocks`. This read requires the matching
+`Registry-Source-Profile`. Each occurrence exposes its state, pinned policy
+digest, and separate calculation and recompute generations.
+
+Administrator profiles publish immutable holiday-set revisions with an
+`Idempotency-Key` and can read a named revision. An exact repeat is idempotent;
+different content for an existing revision returns `precondition.failed`.
+Changing a holiday revision does not silently rewrite active clock deadlines.
+The Administrator first previews at most 100 changes. The preview records each
+expected calculation generation and is bound to the actor and selected profile
+for 15 minutes. Applying the reviewed preview requires an `Idempotency-Key` and
+checks all generations atomically. An expired preview returns
+`clock.recompute-preview-expired`; create and review a new preview before
+applying. An already-applied preview or changed generation returns
+`precondition.failed`.
+
+The maintained `examples/multi-stage-routing-clocks` project keeps this full
+authoring path source-controlled without changing either starter. It contains
+the exact imported source descriptions, a governed `region` projection and
+two-stage routing rule, subject and activity clocks, a pinned external holiday
+revision, and controlled fixtures. Run its offline checks with:
+
+```sh
+caseworkctl check products/casework/examples/multi-stage-routing-clocks
+caseworkctl explain products/casework/examples/multi-stage-routing-clocks
+caseworkctl simulate products/casework/examples/multi-stage-routing-clocks \
+  --fixture products/casework/examples/multi-stage-routing-clocks/simulations/friday-review.yaml
+caseworkctl simulate products/casework/examples/multi-stage-routing-clocks \
+  --fixture products/casework/examples/multi-stage-routing-clocks/simulations/resubmitted-response.yaml
+caseworkctl test products/casework/examples/multi-stage-routing-clocks
+caseworkctl package products/casework/examples/multi-stage-routing-clocks \
+  --output ./casework-policy-package
+```
+
 ## BReg change-request checkpoint
 
 The original BReg starter supports one source, one review stage with one
@@ -130,10 +246,31 @@ imported metadata. Existing authored content is retained and conflicting ids
 are refused.
 
 `check` and `test` are offline. Check prints effective inbox limits and the
-passive target default. When source metadata has been imported, it also refuses
-anything except the supported single-stage, one-approval, manual-application
-contract. Test evaluates the maintained synthetic fixture against those same
-effective inputs.
+passive target default. When source metadata has been imported, it checks the
+complete ordered staged-review policy, routing field schemas, and manual
+application contract. Test evaluates maintained synthetic fixtures against the
+same effective inputs.
+
+Package reviewed production policy into a new directory:
+
+```sh
+caseworkctl package ./casework --output ./casework-policy-package
+```
+
+The package contains only `casework.yaml`, its exact declared source
+descriptions, and `casework.package.json`. The v1alpha1 manifest records the
+policy digest and a sorted path, SHA-256 digest, and byte count for every
+included file. Keep operator bindings and secrets outside the package. In the
+production operator configuration, set `project` to
+`./casework-policy-package/casework.yaml`. The service requires and verifies
+the adjacent manifest when `tlsTermination` is
+`operator-controlled-upstream`. Local `development-loopback` can use the
+authored project directly. `source add --apply` updates reviewed authoring
+inputs; it does not activate a production package. The deployment operator
+installs and atomically selects the reviewed package, then restarts or rolls out
+Casework. Activating a new package does not rewrite running clock occurrences;
+each keeps its pinned clock policy and calculation. Holiday changes use the
+Administrator preview-and-apply flow described above.
 
 After the operator supplies the separate runtime configuration and credentials,
 the local workflow is:
@@ -179,10 +316,11 @@ and names a directory member. Casework does not infer a human actor from a
 subject, client identifier, or scope. This boundary relies on the configured
 trusted issuer to classify sessions correctly.
 
-The generated source reader has only BReg `get` and `list`, reads only the
-target record reference, requests no reviewer reason fields, and carries no
-decision or application operation. Human review and application calls use the
-person's token and explicitly selected BReg profile.
+The generated source reader has only BReg `get` and `list`, reads the target
+record reference plus explicitly configured routing projection, requests no
+reviewer reason fields, and carries no decision or application operation.
+Human review and application calls use the person's token and explicitly
+selected BReg profile.
 
 Synchronization orders observations by the physical BReg record revision. At
 the same revision, a changed HTTP representation ETag refreshes the existing

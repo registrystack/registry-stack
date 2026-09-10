@@ -42,6 +42,7 @@ client version is not evidence that the new Casework facade is available. Keep
 runtime state, generated credentials, and verification logs out of product
 commits.
 
-This demo stops at the first checkpoint. It does not implement the subsequent
-standalone hosted workflow, absence cover, routing rules, calendar timers, bulk
-decisions, or outbound delivery.
+This demo stops at the original BReg checkpoint. It does not exercise the
+standalone hosted, absence-cover, assignment, or caseload APIs. Routing rules,
+calendar-driven runtime timers, bulk decisions, and outbound delivery remain
+outside this demo.

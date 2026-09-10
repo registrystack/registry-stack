@@ -15,6 +15,29 @@ STANDALONE_FIXTURE = (
     / "products/casework/examples/standalone-decision/fixtures/standalone-decision.yaml"
 )
 BREG_EXAMPLE = ROOT / "products/casework/examples/professional-review/casework.yaml"
+MULTISTAGE_EXAMPLE = (
+    ROOT / "products/casework/examples/multi-stage-routing-clocks/casework.yaml"
+)
+MULTISTAGE_SOURCE = (
+    ROOT
+    / "products/casework/examples/multi-stage-routing-clocks/sources/regional-register.json"
+)
+MULTISTAGE_RESPONSE_SOURCE = (
+    ROOT
+    / "products/casework/examples/multi-stage-routing-clocks/sources/response-register.json"
+)
+MULTISTAGE_SIMULATION = (
+    ROOT
+    / "products/casework/examples/multi-stage-routing-clocks/simulations/friday-review.yaml"
+)
+MULTISTAGE_RESPONSE_SIMULATION = (
+    ROOT
+    / "products/casework/examples/multi-stage-routing-clocks/simulations/resubmitted-response.yaml"
+)
+MULTISTAGE_HOLIDAYS = (
+    ROOT
+    / "products/casework/examples/multi-stage-routing-clocks/simulations/holiday-sets/office-holidays-7.yaml"
+)
 
 
 def references(text: str) -> set[tuple[str, str]]:
@@ -35,6 +58,32 @@ class ProductContractTests(unittest.TestCase):
         self.assertRegex(fixture, r"(?m)^\s+outcomes: \[confirmed, rejected\]$")
         self.assertRegex(breg, r"(?m)^sources:")
         self.assertNotRegex(breg, r"(?m)^hostedKinds:")
+
+    def test_multistage_example_pins_routing_and_both_clock_contracts(self):
+        policy = MULTISTAGE_EXAMPLE.read_text(encoding="utf-8")
+        source = MULTISTAGE_SOURCE.read_text(encoding="utf-8")
+        response_source = MULTISTAGE_RESPONSE_SOURCE.read_text(encoding="utf-8")
+        simulation = MULTISTAGE_SIMULATION.read_text(encoding="utf-8")
+        response_simulation = MULTISTAGE_RESPONSE_SIMULATION.read_text(
+            encoding="utf-8"
+        )
+        holidays = MULTISTAGE_HOLIDAYS.read_text(encoding="utf-8")
+
+        self.assertIn("projection: [region]", policy)
+        self.assertIn("id: northern-requests", policy)
+        self.assertIn("scope: subject", policy)
+        self.assertIn("scope: activity", policy)
+        self.assertIn("after: {workingDays: 5}", policy)
+        self.assertIn('"reviewMode": "staged"', source)
+        self.assertIn('"id": "authorization"', source)
+        self.assertIn('"field": "region"', source)
+        self.assertIn('"requestEntity": "response-correction"', response_source)
+        self.assertIn('dueAt: "2026-09-14T17:00:00+07:00"', simulation)
+        self.assertIn("eligibleReminders: [due-soon]", simulation)
+        self.assertIn("remainingMilliseconds: 158400000", response_simulation)
+        self.assertIn('dueAt: "2026-09-13T09:00:00+07:00"', response_simulation)
+        self.assertIn("revision: 7", holidays)
+        self.assertIn("dates: [2026-09-07]", holidays)
 
     def test_security_contracts_are_scoped_and_do_not_claim_execution(self):
         matrix = MATRIX.read_text(encoding="utf-8")

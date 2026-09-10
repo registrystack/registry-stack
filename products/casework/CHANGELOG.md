@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add directory-scoped absence cover, explicit assignment and delegation for
+  hosted or source-backed work, and bounded review-then-apply caseload moves
+  with per-item visibility, eligibility, attempt, and revision results. Add
+  Administrator-managed team membership and served-queue replacement with
+  immediate authority changes and bounded ineligible-holding release.
+- Add bounded, source-validated routing projections and ordered queue rules,
+  plus named subject and working-day activity clock policies with revisioned
+  external holiday-set inputs, immutable Administrator-published holiday
+  revisions, bounded occurrence reads, and reviewed atomic deadline
+  recomputation.
 - Add source-free hosted decisions with declared bounded display schemas and
   outcomes, Requester-owned create/read/notes/cancel/terminal polling, human
   decisions under a configured profile, pinned kind policy, opaque actor references,

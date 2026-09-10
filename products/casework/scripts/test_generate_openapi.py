@@ -119,6 +119,332 @@ class GeneratedOpenApiTests(unittest.TestCase):
         )
         self.assertEqual(100, limit["schema"]["maximum"])
 
+    def test_assignment_routes_preserve_authority_and_preconditions(self) -> None:
+        def names(method: str, path: str) -> set[str]:
+            return {
+                parameter["name"]
+                for parameter in self.openapi["paths"][path][method]["parameters"]
+            }
+
+        self.assertNotIn(
+            "Registry-Source-Profile", names("get", "/v1/directory/absences")
+        )
+        self.assertEqual(
+            {"traceparent", "Registry-Casework-Profile", "If-Match", "Idempotency-Key"},
+            names("post", "/v1/directory/absences"),
+        )
+        for method in ("put", "delete"):
+            self.assertEqual(
+                {
+                    "traceparent",
+                    "Registry-Casework-Profile",
+                    "If-Match",
+                    "Idempotency-Key",
+                    "absence_id",
+                },
+                names(method, "/v1/directory/absences/{absence_id}"),
+            )
+
+        for path in (
+            "/v1/work-items/{item_id}/assign",
+            "/v1/work-items/{item_id}/delegate",
+        ):
+            operation = self.openapi["paths"][path]["post"]
+            source = next(
+                parameter
+                for parameter in operation["parameters"]
+                if parameter["name"] == "Registry-Source-Profile"
+            )
+            self.assertFalse(source["required"])
+            self.assertIn("If-Match", names("post", path))
+            self.assertIn("Idempotency-Key", names("post", path))
+
+        preview = "/v1/directory/caseload/preview"
+        apply = "/v1/directory/caseload/apply"
+        for path in (preview, apply):
+            source = next(
+                parameter
+                for parameter in self.openapi["paths"][path]["post"]["parameters"]
+                if parameter["name"] == "Registry-Source-Profile"
+            )
+            self.assertFalse(source["required"])
+        self.assertNotIn("If-Match", names("post", preview))
+        self.assertNotIn("Idempotency-Key", names("post", preview))
+        self.assertEqual({"cursor", "limit"}, names("post", preview) - {
+            "traceparent",
+            "Registry-Casework-Profile",
+            "Registry-Source-Profile",
+        })
+        self.assertNotIn("If-Match", names("post", apply))
+        self.assertIn("Idempotency-Key", names("post", apply))
+
+        team_path = "/v1/directory/teams/{team_id}"
+        self.assertEqual(
+            {
+                "traceparent",
+                "Registry-Casework-Profile",
+                "If-Match",
+                "Idempotency-Key",
+                "team_id",
+            },
+            names("put", team_path),
+        )
+        team_responses = self.openapi["paths"][team_path]["put"]["responses"]
+        self.assertIn("precondition.failed", problem_codes(self.openapi, team_responses["412"]))
+        self.assertNotIn("Registry-Source-Profile", names("put", team_path))
+
+    def test_directory_team_update_replaces_only_directory_membership(self) -> None:
+        schema = self.openapi["components"]["schemas"][
+            "DirectoryTeamUpdateRequest"
+        ]
+        self.assertEqual(
+            {"staff", "supervisors", "servedQueues"}, set(schema["properties"])
+        )
+        for field in ("staff", "supervisors", "servedQueues"):
+            self.assertEqual(100, schema["properties"][field]["maxItems"])
+            self.assertTrue(schema["properties"][field]["uniqueItems"])
+        principal = self.openapi["components"]["schemas"]["DirectoryTeamPrincipal"]
+        self.assertEqual(2048, principal["properties"]["issuer"]["x-maximum-utf8-bytes"])
+        self.assertEqual(2048, principal["properties"]["subject"]["x-maximum-utf8-bytes"])
+        operation = self.openapi["paths"]["/v1/directory/teams/{team_id}"][
+            "put"
+        ]
+        self.assertEqual(
+            "#/components/schemas/DirectoryResponse",
+            operation["responses"]["200"]["content"]["application/json"][
+                "schema"
+            ]["$ref"],
+        )
+        self.assertIn("no work-item identifiers", operation["description"])
+
+    def test_assignment_schemas_are_bounded_and_report_per_item_results(self) -> None:
+        schemas = self.openapi["components"]["schemas"]
+        self.assertIn("assignment", schemas["WorkItem"]["properties"])
+        self.assertEqual(
+            {"owner", "assignedBy", "absenceIds", "staffingDiagnostic"},
+            set(schemas["AssignmentContext"]["properties"]),
+        )
+        self.assertEqual(
+            ["no_cover_available"], schemas["StaffingDiagnostic"]["enum"]
+        )
+        self.assertEqual(1000, schemas["AbsenceRecordList"]["maxItems"])
+        selections = schemas["CaseloadApplyRequest"]["properties"]["items"]
+        self.assertEqual(1, selections["minItems"])
+        self.assertEqual(100, selections["maxItems"])
+        self.assertEqual("itemId", selections["x-unique-by"])
+        self.assertEqual(
+            {
+                "moved",
+                "not_visible",
+                "not_eligible",
+                "attempt_in_progress",
+                "conflict",
+            },
+            set(schemas["CaseloadItemOutcome"]["enum"]),
+        )
+        apply_schema = self.openapi["paths"]["/v1/directory/caseload/apply"][
+            "post"
+        ]["responses"]["200"]["content"]["application/json"]["schema"]
+        self.assertEqual("#/components/schemas/CaseloadItemResultList", apply_schema["$ref"])
+        self.assertIn(
+            "Each item",
+            self.openapi["paths"]["/v1/directory/caseload/apply"]["post"][
+                "description"
+            ],
+        )
+
+    def test_absence_validation_problems_are_value_free_and_route_scoped(self) -> None:
+        absence_codes = {
+            "absence.invalid-period",
+            "absence.self-cover",
+            "absence.overlap",
+            "absence.cover-cycle",
+        }
+        actual = set()
+        for path, path_item in self.openapi["paths"].items():
+            for method, operation in path_item.items():
+                response = operation["responses"].get("422")
+                if response is None:
+                    continue
+                codes = problem_codes(self.openapi, response)
+                if absence_codes & codes:
+                    self.assertTrue(absence_codes <= codes)
+                    actual.add((method, path))
+        self.assertEqual(
+            {
+                ("post", "/v1/directory/absences"),
+                ("put", "/v1/directory/absences/{absence_id}"),
+            },
+            actual,
+        )
+        for code in absence_codes:
+            component = self.openapi["components"]["schemas"][
+                GENERATOR.problem_component_name(code)
+            ]
+            properties = component["allOf"][1]["properties"]
+            self.assertNotIn("value", properties["detail"]["const"].lower())
+
+    def test_authored_routing_and_clock_shapes_are_closed_and_bounded(self) -> None:
+        schemas = self.openapi["components"]["schemas"]
+        request = schemas["SourceRequestPolicy"]
+        self.assertEqual(
+            {"entity", "queue", "projection", "routing", "clock", "target"},
+            set(request["properties"]),
+        )
+        self.assertEqual(32, request["properties"]["projection"]["maxItems"])
+        self.assertEqual(64, request["properties"]["routing"]["maxItems"])
+        condition = schemas["RoutingCondition"]["properties"]
+        self.assertEqual({"activity", "stage", "fields"}, set(condition))
+        self.assertEqual(16, condition["fields"]["maxProperties"])
+        self.assertEqual(
+            {"EqualsPredicate", "OneOfPredicate"},
+            {
+                variant["$ref"].rsplit("/", 1)[1]
+                for variant in schemas["RoutingPredicate"]["oneOf"]
+            },
+        )
+        self.assertEqual(32, schemas["OneOfPredicate"]["properties"]["oneOf"]["maxItems"])
+
+        project = schemas["CaseworkProject"]["properties"]
+        self.assertEqual(16, project["calendars"]["maxItems"])
+        self.assertEqual(32, project["clocks"]["maxItems"])
+        weekdays = schemas["CalendarPolicy"]["properties"]["workingWeekdays"]
+        self.assertEqual(7, weekdays["maxItems"])
+        self.assertTrue(weekdays["uniqueItems"])
+        self.assertEqual(
+            {"SubjectClockPolicy", "ActivityClockPolicy"},
+            {
+                variant["$ref"].rsplit("/", 1)[1]
+                for variant in schemas["ClockPolicy"]["oneOf"]
+            },
+        )
+        subject = schemas["SubjectClockPolicy"]["properties"]
+        self.assertEqual("firstSubmittedAt", subject["anchor"]["const"])
+        self.assertEqual("reviewCompleted", subject["completeOn"]["const"])
+        activity = schemas["ActivityClockPolicy"]["properties"]
+        self.assertEqual("stageEnteredAt", activity["anchor"]["const"])
+        self.assertEqual(8, activity["reminders"]["maxItems"])
+        self.assertEqual(8, activity["steps"]["maxItems"])
+        self.assertNotIn("holidaySet", project)
+
+    def test_clock_runtime_shapes_are_bounded_and_generation_explicit(self) -> None:
+        schemas = self.openapi["components"]["schemas"]
+        self.assertEqual(
+            {
+                "running",
+                "paused",
+                "completed",
+                "cancelled",
+                "verification_pending",
+                "source_facts_missing",
+            },
+            set(schemas["ClockRuntimeState"]["enum"]),
+        )
+        occurrence = schemas["ClockOccurrenceView"]
+        self.assertIn("policyDigest", occurrence["properties"])
+        self.assertIn("calculationGeneration", occurrence["required"])
+        self.assertIn("recomputeGeneration", occurrence["required"])
+        self.assertEqual(32, schemas["ClockOccurrenceList"]["maxItems"])
+        self.assertEqual(
+            100,
+            schemas["ClockRecomputePreview"]["properties"]["changes"][
+                "maxItems"
+            ],
+        )
+        self.assertEqual(
+            100,
+            schemas["ClockRecomputeResult"]["properties"][
+                "appliedOccurrences"
+            ]["maxItems"],
+        )
+        self.assertEqual(
+            1,
+            schemas["HolidaySetDocument"]["properties"]["revision"]["minimum"],
+        )
+        dates = schemas["HolidaySetDocument"]["properties"]["dates"]
+        self.assertEqual(3660, dates["maxItems"])
+        self.assertTrue(dates["uniqueItems"])
+
+        description = schemas["Description"]
+        self.assertIn("calendars", description["required"])
+        self.assertIn("clocks", description["required"])
+
+    def test_clock_routes_preserve_source_and_administrator_boundaries(self) -> None:
+        def operation(method: str, path: str) -> dict:
+            return self.openapi["paths"][path][method]
+
+        def names(method: str, path: str) -> set[str]:
+            return {
+                parameter["name"]
+                for parameter in operation(method, path)["parameters"]
+            }
+
+        clocks_path = "/v1/work-items/{item_id}/clocks"
+        clocks = operation("get", clocks_path)
+        source = next(
+            parameter
+            for parameter in clocks["parameters"]
+            if parameter["name"] == "Registry-Source-Profile"
+        )
+        self.assertTrue(source["required"])
+        self.assertNotIn("If-Match", names("get", clocks_path))
+        self.assertNotIn("Idempotency-Key", names("get", clocks_path))
+        self.assertEqual(
+            "#/components/schemas/ClockOccurrenceList",
+            clocks["responses"]["200"]["content"]["application/json"]["schema"][
+                "$ref"
+            ],
+        )
+
+        create_path = "/v1/directory/holidays"
+        read_path = "/v1/directory/holidays/{id}/revisions/{revision}"
+        preview_path = "/v1/directory/clocks/recompute/preview"
+        apply_path = "/v1/directory/clocks/recompute/apply"
+        for method, path in (
+            ("post", create_path),
+            ("get", read_path),
+            ("post", preview_path),
+            ("post", apply_path),
+        ):
+            self.assertNotIn("Registry-Source-Profile", names(method, path))
+            self.assertNotIn("If-Match", names(method, path))
+
+        self.assertIn("Idempotency-Key", names("post", create_path))
+        self.assertIn("201", operation("post", create_path)["responses"])
+        self.assertIn("412", operation("post", create_path)["responses"])
+        self.assertNotIn("Idempotency-Key", names("get", read_path))
+        self.assertNotIn("Idempotency-Key", names("post", preview_path))
+        self.assertIn("Idempotency-Key", names("post", apply_path))
+
+    def test_clock_preview_expiry_is_apply_only_and_actionable(self) -> None:
+        expired = "clock.recompute-preview-expired"
+        actual = set()
+        for path, path_item in self.openapi["paths"].items():
+            for method, operation in path_item.items():
+                response = operation["responses"].get("410")
+                if response is not None and expired in problem_codes(self.openapi, response):
+                    actual.add((method, path))
+        self.assertEqual(
+            {("post", "/v1/directory/clocks/recompute/apply")}, actual
+        )
+        component = self.openapi["components"]["schemas"][
+            GENERATOR.problem_component_name(expired)
+        ]
+        detail = component["allOf"][1]["properties"]["detail"]["const"]
+        self.assertEqual(
+            "Create a new recompute preview and review it before applying.", detail
+        )
+        apply_responses = self.openapi["paths"][
+            "/v1/directory/clocks/recompute/apply"
+        ]["post"]["responses"]
+        self.assertIn("precondition.failed", problem_codes(self.openapi, apply_responses["412"]))
+        holiday_responses = self.openapi["paths"]["/v1/directory/holidays"][
+            "post"
+        ]["responses"]
+        self.assertIn(
+            "precondition.failed", problem_codes(self.openapi, holiday_responses["412"])
+        )
+
     def test_hosted_routes_preserve_roles_and_source_profile_selection(self) -> None:
         requester_routes = {
             ("post", "/v1/hosted-items"),
@@ -309,6 +635,9 @@ class GeneratedOpenApiTests(unittest.TestCase):
             {
                 "created",
                 "claimed",
+                "assigned",
+                "delegated",
+                "caseload_moved",
                 "released",
                 "note_added",
                 "completed",
@@ -368,12 +697,17 @@ class GeneratedOpenApiTests(unittest.TestCase):
 
         positive_revision_routes = {
             ("post", "/v1/work-items/{item_id}/claim"),
+            ("post", "/v1/work-items/{item_id}/assign"),
+            ("post", "/v1/work-items/{item_id}/delegate"),
             ("post", "/v1/work-items/{item_id}/release"),
             ("put", "/v1/work-items/{item_id}/draft"),
             ("delete", "/v1/work-items/{item_id}/draft"),
+            ("put", "/v1/directory/absences/{absence_id}"),
+            ("delete", "/v1/directory/absences/{absence_id}"),
         }
         nonnegative_revision_routes = {
             ("post", "/v1/work-items/{item_id}/decisions"),
+            ("post", "/v1/directory/absences"),
             ("post", "/v1/directory/bootstrap"),
         }
         for method, path in positive_revision_routes:
