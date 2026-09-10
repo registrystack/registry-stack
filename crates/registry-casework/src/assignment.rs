@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{TimeDelta, Utc};
 use registry_casework_core::{
-    resolve_absence_cover, validate_absence, AbsenceInput, AbsenceRecord, ActorContext,
-    AssignmentContext, AssignmentRequest, CaseloadApplyRequest, CaseloadItemOutcome,
+    resolve_absence_cover, validate_absence, AbsenceInput, AbsenceList, AbsenceRecord,
+    ActorContext, AssignmentContext, AssignmentRequest, CaseloadApplyRequest, CaseloadItemOutcome,
     CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage, CaseworkRole, DelegateRequest,
     DirectoryTargetPage, DirectoryTargetPurpose, DirectoryTeamUpdateRequest, HistoryKind,
     IssuerPrincipal, Page, PageStatus, SourceAdapterError, StaffingDiagnostic, WorkItem,
@@ -340,22 +340,38 @@ impl PostgresStore {
         Ok(next)
     }
 
-    pub async fn absences(&self, actor: &ActorContext) -> Result<Vec<AbsenceRecord>, StoreError> {
+    pub(crate) async fn absences(
+        &self,
+        actor: &ActorContext,
+    ) -> Result<(i64, Vec<AbsenceRecord>), StoreError> {
         if !matches!(
             actor.role,
             CaseworkRole::Staff | CaseworkRole::Supervisor | CaseworkRole::Administrator
         ) {
             return Err(StoreError::Forbidden);
         }
-        let client = self.client().await?;
-        let rows = client.query(
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let directory_revision = transaction
+            .query_one(
+                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
+                &[],
+            )
+            .await?
+            .get(0);
+        let rows = transaction.query(
             "SELECT a.absence_id,a.person_issuer,a.person_subject,a.starts_at,a.ends_at,a.cover_issuer,a.cover_subject,a.revision FROM casework_absences a WHERE $1='administrator' OR ($1='staff' AND a.person_issuer=$2 AND a.person_subject=$3 AND EXISTS(SELECT 1 FROM casework_memberships self_membership WHERE self_membership.issuer=$2 AND self_membership.subject=$3 AND self_membership.membership_kind='staff')) OR ($1='supervisor' AND EXISTS(SELECT 1 FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.issuer=a.person_issuer AND person.subject=a.person_subject AND person.membership_kind='staff' AND lead.issuer=$2 AND lead.subject=$3 AND lead.membership_kind='supervisor')) ORDER BY a.starts_at,a.absence_id LIMIT 1001",
             &[&role_name(actor.role),&actor.principal.issuer,&actor.principal.subject],
         ).await?;
         if rows.len() > 1_000 {
             return Err(StoreError::Invalid);
         }
-        rows.into_iter().map(absence_from_row).collect()
+        let records = rows
+            .into_iter()
+            .map(absence_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        transaction.commit().await?;
+        Ok((directory_revision, records))
     }
 
     pub async fn create_absence(
@@ -1215,8 +1231,12 @@ impl CaseworkService {
             .map_err(ServiceError::from)
     }
 
-    pub async fn absences(&self, actor: &ActorContext) -> Result<Vec<AbsenceRecord>, ServiceError> {
-        self.store.absences(actor).await.map_err(ServiceError::from)
+    pub async fn absences(&self, actor: &ActorContext) -> Result<AbsenceList, ServiceError> {
+        let (directory_revision, items) = self.store.absences(actor).await?;
+        Ok(AbsenceList {
+            directory_revision,
+            items,
+        })
     }
     pub async fn create_absence(
         &self,

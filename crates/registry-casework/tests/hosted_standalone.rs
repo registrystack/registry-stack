@@ -196,14 +196,13 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
             .value,
         absence
     );
-    assert_eq!(
-        client
-            .absences(CaseworkAuth::new(&admin, "administrator"))
-            .await
-            .unwrap()
-            .value,
-        vec![absence.clone()]
-    );
+    let listed = client
+        .absences(CaseworkAuth::new(&admin, "administrator"))
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(listed.directory_revision, absence.revision);
+    assert_eq!(listed.items, vec![absence.clone()]);
     let mut invalid_absence = absence_input.clone();
     invalid_absence.until = invalid_absence.from;
     assert!(matches!(
@@ -249,6 +248,7 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
         .await
         .unwrap()
         .value
+        .items
         .is_empty());
 
     let holiday = HolidaySetRevisionInput {

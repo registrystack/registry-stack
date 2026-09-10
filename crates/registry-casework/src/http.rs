@@ -12,9 +12,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_casework_core::{
-    AbsenceInput, AbsenceRecord, AssignmentRequest, AttemptPath, BootstrapDirectoryRequest,
-    CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage,
-    CaseloadPreviewQuery, CaseworkProject, CaseworkRole, ClockOccurrenceView,
+    AbsenceInput, AbsenceList, AbsenceRecord, AssignmentRequest, AttemptPath,
+    BootstrapDirectoryRequest, CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest,
+    CaseloadPreviewPage, CaseloadPreviewQuery, CaseworkProject, CaseworkRole, ClockOccurrenceView,
     ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
     DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
     DirectoryTargetsQuery, DraftResponse, EventRequest, HistoryPage, HoldingsQuery,
@@ -914,7 +914,7 @@ async fn apply_clock_recompute(
 async fn absences(
     State(state): State<HttpState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<AbsenceRecord>>, HttpError> {
+) -> Result<Json<AbsenceList>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
     Ok(Json(state.service.absences(&actor).await?))
 }

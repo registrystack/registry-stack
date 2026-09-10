@@ -1030,6 +1030,13 @@ async fn caseload_apply_is_per_item_and_source_live_attempt_blocks_assignment() 
 #[tokio::test]
 async fn absence_update_preserves_owner_and_delete_replay_rechecks_current_authority() {
     let fixture = fixture([]).await;
+    let empty = fixture
+        .service
+        .absences(&fixture.staff_a)
+        .await
+        .expect("staff reads current empty absence list");
+    assert_eq!(empty.directory_revision, 1);
+    assert!(empty.items.is_empty());
     let initial = AbsenceInput {
         person: fixture.staff_a.principal.clone(),
         from: Utc::now() + TimeDelta::hours(1),
@@ -1038,7 +1045,12 @@ async fn absence_update_preserves_owner_and_delete_replay_rechecks_current_autho
     };
     let absence = fixture
         .service
-        .create_absence(&fixture.staff_a, 1, &initial, "absence-owner")
+        .create_absence(
+            &fixture.staff_a,
+            empty.directory_revision,
+            &initial,
+            "absence-owner",
+        )
         .await
         .expect("staff records own absence");
     let replacement_owner = AbsenceInput {
@@ -1063,8 +1075,69 @@ async fn absence_update_preserves_owner_and_delete_replay_rechecks_current_autho
         .absences(&fixture.staff_a)
         .await
         .expect("owner reads absence");
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].person, fixture.staff_a.principal);
+    assert_eq!(stored.directory_revision, absence.revision);
+    assert_eq!(stored.items.len(), 1);
+    assert_eq!(stored.items[0].person, fixture.staff_a.principal);
+
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    let directory_revision = fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            stored.directory_revision,
+            "review-team",
+            &DirectoryTeamUpdateRequest {
+                staff: vec![
+                    fixture.staff_a.principal.clone(),
+                    fixture.staff_b.principal.clone(),
+                    fixture.staff_c.principal.clone(),
+                ],
+                supervisors: vec![fixture.supervisor.principal.clone()],
+                served_queues: vec![QUEUE.to_owned()],
+            },
+            "unrelated-directory-change",
+        )
+        .await
+        .expect("advance directory revision without changing absence");
+    let current = fixture
+        .service
+        .absences(&fixture.staff_a)
+        .await
+        .expect("absence refresh carries current directory revision");
+    assert_eq!(current.directory_revision, directory_revision);
+    assert_eq!(current.items[0].revision, absence.revision);
+    let revised = AbsenceInput {
+        until: initial.until + TimeDelta::hours(1),
+        ..initial.clone()
+    };
+    assert!(matches!(
+        fixture
+            .service
+            .update_absence(
+                &fixture.staff_a,
+                absence.absence_id,
+                absence.revision,
+                &revised,
+                "stale-directory-revision",
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Conflict))
+    ));
+    let absence = fixture
+        .service
+        .update_absence(
+            &fixture.staff_a,
+            absence.absence_id,
+            current.directory_revision,
+            &revised,
+            "current-directory-revision",
+        )
+        .await
+        .expect("current list revision permits absence update");
 
     let deleted_revision = fixture
         .service
