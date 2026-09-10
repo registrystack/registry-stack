@@ -45,7 +45,8 @@ commits.
 The default `--fixture checkpoint` runs the original one-stage BReg checkpoint
 and its direct App Kit lifecycle comparison. Select `--fixture full-mvp` to run
 the two-stage composition with independent final approval, stage routing,
-absence cover, assignment, caseload moves, and working-day clocks. Each mode
+absence cover, assignment, caseload moves, working-day clocks, and a hosted
+decision created and polled by a Requester and decided through the Kit host. Each mode
 uses isolated state and records its selected fixture in the evidence.
 
 The full MVP journey publishes the fixture's holiday revision before observing
@@ -53,5 +54,5 @@ work. It checks the authored reminder and reassignment previews and clock
 stability across restart. Future working-day escalation is covered by the
 runtime's focused PostgreSQL tests; the browser journey does not wait a working
 day. The one-stage direct comparison is not run against the two-stage fixture.
-Standalone hosted work, bulk decisions, and outbound delivery are outside this
-composition demo.
+A BReg-free deployment is verified separately through the maintained client.
+Bulk decisions and outbound delivery are outside this composition demo.
