@@ -6,9 +6,9 @@ use registry_casework_core::{
     HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest, HostedHistoryEntry,
     HostedHistoryKind, HostedHistoryPage, HostedKindPolicySnapshot, HostedNote, HostedNoteRequest,
     HostedPolicyDigest, HostedTerminalPage, HostedTerminalResult, HostedTerminalState,
-    HostedValidationError, HostedValidationReason, HostedWorkItemContext, IssuerPrincipal,
-    OccurrenceKind, OccurrenceState, OpaqueActorRef, Page, PageStatus, RequesterHostedItem,
-    SourceBinding, StaffingDiagnostic, SubjectRef, WorkItem, WorkItemPage,
+    HostedValidationError, HostedValidationReason, HostedWorkItemContext, InboxView,
+    IssuerPrincipal, OccurrenceKind, OccurrenceState, OpaqueActorRef, Page, PageStatus,
+    RequesterHostedItem, SourceBinding, StaffingDiagnostic, SubjectRef, WorkItem, WorkItemPage,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -24,6 +24,15 @@ pub const HOSTED_STAFF_INBOX_CURSOR_CONTEXT: &str = "hosted-staff-inbox";
 const MAXIMUM_IDEMPOTENCY_KEY_BYTES: usize = 128;
 const HOSTED_CURSOR_SECONDS: i64 = 15 * 60;
 const RETENTION_BATCH_SIZE: i64 = 100;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostedStaffCursorContext<'a> {
+    feed: &'a str,
+    view: InboxView,
+    queue: Option<&'a str>,
+    ordering: &'static str,
+}
 
 #[derive(Clone, Debug)]
 struct StoredHostedItem {
@@ -636,26 +645,32 @@ impl PostgresStore {
     pub async fn hosted_staff_inbox(
         &self,
         actor: &ActorContext,
+        view: InboxView,
         limit: usize,
+        queue: Option<&str>,
+        cursor_context: &str,
         cursor: Option<&str>,
     ) -> Result<Page<WorkItem>, StoreError> {
         let membership_kind = membership_kind(actor.role)?;
         let limit = limit.clamp(1, 100);
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let after = resolve_hosted_cursor(
-            &transaction,
-            actor,
-            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
-            cursor,
-        )
-        .await?;
+        let after = resolve_hosted_cursor(&transaction, actor, cursor_context, cursor).await?;
         let has_after = after.is_some();
         let (after_at, after_id) = after.unwrap_or((Utc::now(), Uuid::nil()));
         let query_limit = i64::try_from(limit + 1).map_err(|_| StoreError::Invalid)?;
+        let view = match view {
+            InboxView::Mine => "mine",
+            InboxView::MyTeams => "my_teams",
+            InboxView::TeamHoldings => "team_holdings",
+            InboxView::Overdue => "overdue",
+            InboxView::CompletedByMe => "completed_by_me",
+        };
+        // Hosted kinds currently define neither passive targets nor clock policies. An overdue
+        // hosted view is therefore truthfully empty instead of treating item age as a deadline.
         let rows = transaction.query(
-            "SELECT i.* FROM casework_hosted_items i WHERE i.state IN ('open','claimed') AND ($3='supervisor' OR i.kind_policy->'decidingProfiles' ? $4) AND EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=$1 AND m.subject=$2 AND m.membership_kind=$3) AND (NOT $5 OR (i.created_at,i.item_id)>($6,$7)) ORDER BY i.created_at,i.item_id LIMIT $8",
-            &[&actor.principal.issuer,&actor.principal.subject,&membership_kind,&actor.profile_id,&has_after,&after_at,&after_id,&query_limit],
+            "SELECT i.* FROM casework_hosted_items i WHERE (i.terminal_retained_until IS NULL OR i.terminal_retained_until>now()) AND ($3='supervisor' OR i.kind_policy->'decidingProfiles' ? $4) AND EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=$1 AND m.subject=$2 AND m.membership_kind=$3) AND ($5::text IS NULL OR i.queue_id=$5) AND (($6='mine' AND i.state='claimed' AND i.holder_issuer=$1 AND i.holder_subject=$2) OR ($6='my_teams' AND i.state IN ('open','claimed')) OR ($6='team_holdings' AND i.state='claimed' AND i.holder_issuer IS NOT NULL) OR ($6='overdue' AND FALSE) OR ($6='completed_by_me' AND i.state='completed' AND EXISTS(SELECT 1 FROM casework_hosted_history h WHERE h.item_id=i.item_id AND h.kind='completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND (NOT $7 OR (i.created_at,i.item_id)>($8,$9)) ORDER BY i.created_at,i.item_id LIMIT $10 FOR SHARE OF i",
+            &[&actor.principal.issuer,&actor.principal.subject,&membership_kind,&actor.profile_id,&queue,&view,&has_after,&after_at,&after_id,&query_limit],
         ).await?;
         let more = rows.len() > limit;
         let stored_items = rows
@@ -682,7 +697,7 @@ impl PostgresStore {
                 issue_hosted_cursor(
                     &transaction,
                     actor,
-                    HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+                    cursor_context,
                     last.ok_or(StoreError::Corrupt)?,
                 )
                 .await?,
@@ -1330,16 +1345,19 @@ impl CaseworkService {
     pub async fn hosted_staff_inbox(
         &self,
         actor: &ActorContext,
+        view: InboxView,
         limit: usize,
+        queue: Option<&str>,
         cursor_context: &str,
         cursor: Option<&str>,
     ) -> Result<WorkItemPage, ServiceError> {
         if cursor_context != HOSTED_STAFF_INBOX_CURSOR_CONTEXT {
             return Err(ServiceError::Store(StoreError::CursorInvalid));
         }
+        let cursor_context = hosted_staff_cursor_context(cursor_context, view, queue)?;
         let mut page = self
             .store
-            .hosted_staff_inbox(actor, limit, cursor)
+            .hosted_staff_inbox(actor, view, limit, queue, &cursor_context, cursor)
             .await
             .map_err(ServiceError::from)?;
         let served_queues = self.store.served_queues(actor).await?;
@@ -1450,6 +1468,20 @@ impl CaseworkService {
             .await
             .map_err(ServiceError::from)
     }
+}
+
+fn hosted_staff_cursor_context(
+    feed: &str,
+    view: InboxView,
+    queue: Option<&str>,
+) -> Result<String, ServiceError> {
+    serde_json::to_string(&HostedStaffCursorContext {
+        feed,
+        view,
+        queue,
+        ordering: "created-at-v1",
+    })
+    .map_err(|_| ServiceError::Configuration)
 }
 
 impl PostgresStore {

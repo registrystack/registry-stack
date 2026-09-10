@@ -10,7 +10,7 @@ use registry_casework_core::{
     AccessProfile, ActorContext, BootstrapDirectoryRequest, CaseworkIdentity, CaseworkProject,
     CaseworkRole, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
     HostedKindPolicy, HostedNoteRequest, HostedOutcomePolicy, HostedRetentionPolicy, InboxPolicy,
-    IssuerPrincipal, OccurrenceState, QueuePolicy,
+    InboxView, IssuerPrincipal, OccurrenceState, QueuePolicy,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -253,6 +253,248 @@ async fn ten_creates_and_two_retries_remain_one_item_per_key_and_requester() {
 }
 
 #[tokio::test]
+async fn hosted_inbox_applies_view_queue_cursor_and_current_authority() {
+    let fixture = fixture().await;
+    let first = fixture
+        .service
+        .hosted_create(
+            &fixture.requester,
+            &create_request("view-open-first"),
+            "create-view-open-first",
+        )
+        .await
+        .expect("create first open item");
+    let to_claim = fixture
+        .service
+        .hosted_create(
+            &fixture.requester,
+            &create_request("view-claimed"),
+            "create-view-claimed",
+        )
+        .await
+        .expect("create item to claim");
+    let claimed = fixture
+        .service
+        .hosted_claim(
+            &fixture.staff,
+            to_claim.item_id,
+            to_claim.revision,
+            "claim-view-item",
+        )
+        .await
+        .expect("claim hosted item");
+    let last = fixture
+        .service
+        .hosted_create(
+            &fixture.requester,
+            &create_request("view-open-last"),
+            "create-view-open-last",
+        )
+        .await
+        .expect("create last open item");
+
+    let first_page = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.staff,
+            InboxView::MyTeams,
+            1,
+            None,
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("first team page");
+    assert_eq!(first_page.items.len(), 1);
+    let cursor = first_page.next_cursor.expect("more team items");
+    assert!(matches!(
+        fixture
+            .service
+            .hosted_staff_inbox(
+                &fixture.staff,
+                InboxView::Mine,
+                10,
+                None,
+                HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+                Some(&cursor),
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .hosted_staff_inbox(
+                &fixture.staff,
+                InboxView::MyTeams,
+                10,
+                Some("batch-review"),
+                HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+                Some(&cursor),
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+
+    let mine = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.staff,
+            InboxView::Mine,
+            10,
+            None,
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("personal hosted inbox");
+    assert_eq!(mine.items.len(), 1);
+    assert_eq!(mine.items[0].item_id, claimed.item_id);
+    let holdings = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.supervisor,
+            InboxView::TeamHoldings,
+            10,
+            None,
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("hosted team holdings");
+    assert_eq!(holdings.items.len(), 1);
+    assert_eq!(holdings.items[0].item_id, claimed.item_id);
+
+    let matching_queue = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.staff,
+            InboxView::MyTeams,
+            10,
+            Some("batch-review"),
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("matching hosted queue");
+    assert_eq!(matching_queue.items.len(), 3);
+    let other_queue = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.staff,
+            InboxView::MyTeams,
+            10,
+            Some("other-review"),
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("nonmatching hosted queue");
+    assert!(other_queue.items.is_empty());
+    assert_eq!(other_queue.served_queues, ["batch-review"]);
+
+    let overdue = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.staff,
+            InboxView::Overdue,
+            10,
+            None,
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("hosted work has no deadline model");
+    assert!(overdue.items.is_empty());
+
+    fixture
+        .service
+        .hosted_decide(
+            &fixture.staff,
+            claimed.item_id,
+            claimed.revision,
+            &HostedDecisionRequest {
+                outcome: "confirmed".to_owned(),
+                reason: None,
+            },
+            "complete-view-item",
+        )
+        .await
+        .expect("complete hosted item");
+    let completed = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.staff,
+            InboxView::CompletedByMe,
+            10,
+            None,
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("completed-by-me hosted inbox");
+    assert_eq!(completed.items.len(), 1);
+    assert_eq!(completed.items[0].item_id, claimed.item_id);
+    assert_eq!(completed.items[0].state, OccurrenceState::Completed);
+    let supervisor_completed = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.supervisor,
+            InboxView::CompletedByMe,
+            10,
+            None,
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("supervisor did not complete the item");
+    assert!(supervisor_completed.items.is_empty());
+    let active = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.staff,
+            InboxView::MyTeams,
+            10,
+            None,
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("active hosted inbox after completion");
+    assert_eq!(
+        active
+            .items
+            .iter()
+            .map(|item| item.item_id)
+            .collect::<Vec<_>>(),
+        [first.item_id, last.item_id]
+    );
+
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_memberships WHERE team_id='batch-team' AND issuer=$1 AND subject=$2 AND membership_kind='staff'",
+            &[&fixture.staff.principal.issuer, &fixture.staff.principal.subject],
+        )
+        .await
+        .expect("revoke current staff membership");
+    let revoked = fixture
+        .service
+        .hosted_staff_inbox(
+            &fixture.staff,
+            InboxView::CompletedByMe,
+            10,
+            None,
+            HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
+            None,
+        )
+        .await
+        .expect("revoked membership is an empty current view");
+    assert!(revoked.items.is_empty());
+    assert!(revoked.served_queues.is_empty());
+}
+
+#[tokio::test]
 async fn supervisor_force_release_and_held_since_follow_current_queue_authority() {
     let fixture = fixture().await;
     let created = fixture
@@ -318,7 +560,9 @@ async fn supervisor_force_release_and_held_since_follow_current_queue_authority(
         .service
         .hosted_staff_inbox(
             &fixture.supervisor,
+            InboxView::MyTeams,
             10,
+            None,
             HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
             None,
         )

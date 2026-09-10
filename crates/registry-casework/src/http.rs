@@ -417,7 +417,9 @@ async fn list_items(
             .service
             .hosted_staff_inbox(
                 &actor,
+                query.view,
                 limit,
+                query.queue.as_deref(),
                 crate::HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
                 query.cursor.as_deref(),
             )
