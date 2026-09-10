@@ -178,6 +178,28 @@ test('directory target discovery preserves its exact purpose context without sou
   });
 });
 
+test('absence list carries the current directory revision for a following write', async (context) => {
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({ directoryRevision: 12, items: [] }));
+    });
+  });
+  await listen(server);
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
+  const absences = await client.absences('one-call-secret', 'staff');
+
+  assert.equal(absences.value.directoryRevision, 12);
+  assert.deepEqual(absences.value.items, []);
+});
+
 test('native client preserves the optional held timestamp', async (context) => {
   const itemId = '00000000-0000-4000-8000-000000000001';
   const heldSince = '2026-09-11T03:04:05Z';

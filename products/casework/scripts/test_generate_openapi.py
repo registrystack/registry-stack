@@ -339,7 +339,15 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertEqual(
             ["no_cover_available"], schemas["StaffingDiagnostic"]["enum"]
         )
-        self.assertEqual(1000, schemas["AbsenceRecordList"]["maxItems"])
+        absence_list = schemas["AbsenceList"]
+        self.assertEqual(
+            {"directoryRevision", "items"}, set(absence_list["properties"])
+        )
+        self.assertEqual(1000, absence_list["properties"]["items"]["maxItems"])
+        self.assertIn(
+            "current global directoryRevision",
+            self.openapi["paths"]["/v1/directory/absences"]["get"]["description"],
+        )
         selections = schemas["CaseloadApplyRequest"]["properties"]["items"]
         self.assertEqual(1, selections["minItems"])
         self.assertEqual(100, selections["maxItems"])

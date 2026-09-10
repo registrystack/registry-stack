@@ -109,6 +109,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "nextCursor": "target-next",
                 "status": "complete",
             })
+        elif self.path == "/tenant/v1/directory/absences":
+            self.respond({"directoryRevision": 12, "items": []})
         elif self.path.startswith("/tenant/v1/work-items"):
             self.respond({
                 "items": [],
@@ -399,6 +401,12 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(observation["profile"], "supervisor")
         self.assertEqual(observation["source_profile"], "")
+
+    def test_absence_list_carries_current_directory_revision(self) -> None:
+        absences = self.client.absences("staff-token", "staff")
+
+        self.assertEqual(absences["value"], {"directoryRevision": 12, "items": []})
+        self.assertEqual(_Handler.observations[0]["source_profile"], "")
 
     def test_clock_calls_preserve_source_profile_revision_and_explicit_keys(self) -> None:
         clocks = self.client.work_item_clocks(

@@ -112,6 +112,7 @@ SCHEMA_STRUCTS = {
         "HostedHistoryEntry": "HostedHistoryEntry",
     },
     "crates/registry-casework-core/src/assignment.rs": {
+        "AbsenceList": "AbsenceList",
         "AbsenceRecord": "AbsenceRecord",
         "AbsenceInput": "AbsenceInput",
         "AssignmentRequest": "AssignmentRequest",
@@ -616,11 +617,13 @@ def schemas(problem_entries: list[dict]) -> dict:
             },
             ["absenceId", "person", "from", "until", "cover", "revision"],
         ),
-        "AbsenceRecordList": {
-            "type": "array",
-            "maxItems": 1000,
-            "items": ref("AbsenceRecord"),
-        },
+        "AbsenceList": obj(
+            {
+                "directoryRevision": integer,
+                "items": {"type": "array", "maxItems": 1000, "items": ref("AbsenceRecord")},
+            },
+            ["directoryRevision", "items"],
+        ),
         "AbsenceInput": obj(
             {
                 "person": ref("IssuerPrincipal"),
@@ -1436,7 +1439,7 @@ def document(contract: dict) -> dict:
             parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
         ], description="Returns only issuer-qualified principals currently eligible for the requested use. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence_person lists people the caller may currently manage; absence_cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and names, teams, and absence details are never returned.")},
         "/v1/directory/absences": {
-            "get": operation("List authorized absence records", "AbsenceRecordList", description="Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The bounded result contains at most 1000 records ordered by start time and absenceId."),
+            "get": operation("List authorized absence records", "AbsenceList", description="Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The response carries the current global directoryRevision required in If-Match for a following absence write. Its items contain at most 1000 caller-authorized records ordered by start time and absenceId."),
             "post": operation("Record an absence", "AbsenceRecord", mutation=True, allow_zero_revision=True, body="AbsenceInput", status="201", description="Uses the directory revision in If-Match. Staff can manage their own absence with cover from the same team; Supervisors can manage currently supervised staff; Administrators can manage any directory staff. The period is start-inclusive and end-exclusive."),
         },
         "/v1/directory/absences/{absence_id}": {

@@ -399,6 +399,44 @@ async fn capture_directory_targets(
 }
 
 #[tokio::test]
+async fn absence_list_carries_the_current_directory_revision() {
+    let app = Router::new().route(
+        "/v1/directory/absences",
+        get(|| async {
+            (
+                StatusCode::OK,
+                [
+                    ("content-type", "application/json"),
+                    ("traceparent", TRACEPARENT),
+                ],
+                r#"{"directoryRevision":12,"items":[]}"#,
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let absences = client
+        .absences(CaseworkAuth::new(&token, "staff"))
+        .await
+        .expect("absence list");
+
+    assert_eq!(absences.value.directory_revision, 12);
+    assert!(absences.value.items.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
 async fn invalid_mutation_input_fails_before_network_io() {
     let client = CaseworkClient::new(CaseworkClientConfig::new(
         Url::parse("http://127.0.0.1:1/").expect("fixture URL"),

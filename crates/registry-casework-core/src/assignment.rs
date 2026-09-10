@@ -23,6 +23,13 @@ pub struct AbsenceRecord {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AbsenceList {
+    pub directory_revision: i64,
+    pub items: Vec<AbsenceRecord>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AbsenceInput {
     pub person: IssuerPrincipal,
     pub from: DateTime<Utc>,

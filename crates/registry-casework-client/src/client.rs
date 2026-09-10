@@ -2,7 +2,7 @@ use registry_casework_core::DirectoryTeamUpdateRequest;
 use std::fmt;
 
 use registry_casework_core::{
-    AbsenceInput, AbsenceRecord, AssignmentRequest, BootstrapDirectoryRequest,
+    AbsenceInput, AbsenceList, AbsenceRecord, AssignmentRequest, BootstrapDirectoryRequest,
     CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage,
     CaseloadPreviewQuery, CaseworkAction, ClaimRequest, ClockOccurrenceView,
     ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
@@ -536,7 +536,7 @@ impl CaseworkClient {
     pub async fn absences(
         &self,
         auth: CaseworkAuth<'_>,
-    ) -> Result<CaseworkComplete<Vec<AbsenceRecord>>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<AbsenceList>, CaseworkClientError> {
         self.get_json(&auth, &["v1", "directory", "absences"], &[])
             .await
     }

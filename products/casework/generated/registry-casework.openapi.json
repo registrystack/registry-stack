@@ -35,6 +35,27 @@
         ],
         "type": "object"
       },
+      "AbsenceList": {
+        "additionalProperties": false,
+        "properties": {
+          "directoryRevision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AbsenceRecord"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          }
+        },
+        "required": [
+          "directoryRevision",
+          "items"
+        ],
+        "type": "object"
+      },
       "AbsenceRecord": {
         "additionalProperties": false,
         "properties": {
@@ -70,13 +91,6 @@
           "revision"
         ],
         "type": "object"
-      },
-      "AbsenceRecordList": {
-        "items": {
-          "$ref": "#/components/schemas/AbsenceRecord"
-        },
-        "maxItems": 1000,
-        "type": "array"
       },
       "AccessProfile": {
         "additionalProperties": false,
@@ -4812,7 +4826,7 @@
     },
     "/v1/directory/absences": {
       "get": {
-        "description": "Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The bounded result contains at most 1000 records ordered by start time and absenceId.",
+        "description": "Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The response carries the current global directoryRevision required in If-Match for a following absence write. Its items contain at most 1000 caller-authorized records ordered by start time and absenceId.",
         "operationId": "listAbsences",
         "parameters": [
           {
@@ -4842,7 +4856,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AbsenceRecordList"
+                  "$ref": "#/components/schemas/AbsenceList"
                 }
               }
             },

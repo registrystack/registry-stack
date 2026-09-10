@@ -48,6 +48,12 @@ void client.directoryTargets(token, profile, {
 void client.directoryTargets(token, profile, { purpose: 'assignment' })
 // @ts-expect-error absence cover discovery requires the complete person identity
 void client.directoryTargets(token, profile, { purpose: 'absence_cover', personIssuer: 'https://idp.example' })
+client.absences(token, profile).then((result) => {
+  const directoryRevision: number = result.value.directoryRevision
+  const absenceCount: number = result.value.items.length
+  void directoryRevision
+  void absenceCount
+})
 
 const hostedCreate: HostedCreateRequest = {
   kind: 'decision',
