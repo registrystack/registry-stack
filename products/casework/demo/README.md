@@ -1,4 +1,4 @@
-# First Casework technical checkpoint demo
+# Casework composition demo
 
 Run the complete professional-registry review journey with a matching Registry
 App Kit checkout. Install Docker, Rust, Node.js and Python 3, and use the pnpm
@@ -42,7 +42,16 @@ client version is not evidence that the new Casework facade is available. Keep
 runtime state, generated credentials, and verification logs out of product
 commits.
 
-This demo stops at the original BReg checkpoint. It does not exercise the
-standalone hosted, absence-cover, assignment, or caseload APIs. Routing rules,
-calendar-driven runtime timers, bulk decisions, and outbound delivery remain
-outside this demo.
+The default `--fixture checkpoint` runs the original one-stage BReg checkpoint
+and its direct App Kit lifecycle comparison. Select `--fixture full-mvp` to run
+the two-stage composition with independent final approval, stage routing,
+absence cover, assignment, caseload moves, and working-day clocks. Each mode
+uses isolated state and records its selected fixture in the evidence.
+
+The full MVP journey publishes the fixture's holiday revision before observing
+work. It checks the authored reminder and reassignment previews and clock
+stability across restart. Future working-day escalation is covered by the
+runtime's focused PostgreSQL tests; the browser journey does not wait a working
+day. The one-stage direct comparison is not run against the two-stage fixture.
+Standalone hosted work, bulk decisions, and outbound delivery are outside this
+composition demo.
