@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Closed operator binding and offline construction of the BReg adapter.
 
-use crate::{valid_stage_identifier, BregAdapter, BregReviewStage, BregSourceConfig};
+use crate::{
+    valid_source_identifier, valid_stage_identifier, BregAdapter, BregReviewStage, BregSourceConfig,
+};
 use registry_breg_client::{
     decode_exact_json, BaseRegistryClient, BaseRegistryClientConfig, PrivateKeyJwt,
     PrivateKeyJwtConfig, MAX_BREG_REVIEW_STAGES,
@@ -252,6 +254,7 @@ fn validate_description(
         || root["kind"] != DESCRIPTION_KIND
         || root["authority"] != "none"
         || root["origin"] != DESCRIPTION_ORIGIN
+        || !valid_source_identifier(&source.id)
         || root["sourceId"] != source.id
         || !root["sourceRevision"]
             .as_str()
@@ -542,6 +545,18 @@ mod tests {
         wrong_mode["request"]["application"]["mode"] = json!("automatic");
         assert!(
             validate_description(&source(), &serde_json::to_vec(&wrong_mode).unwrap()).is_err()
+        );
+    }
+
+    #[test]
+    fn imported_description_refuses_a_source_id_the_adapter_cannot_use() {
+        let mut source = source();
+        source.id = "source:primary".into();
+        let mut imported: Value = serde_json::from_slice(&description("correction")).unwrap();
+        imported["sourceId"] = json!(source.id);
+
+        assert!(
+            validate_description_input(&source, &serde_json::to_vec(&imported).unwrap()).is_err()
         );
     }
 

@@ -59,7 +59,6 @@ impl BregAdapter {
         webhook_key: Vec<u8>,
     ) -> Result<Self, SourceAdapterError> {
         if [
-            &config.source_id,
             &config.entity,
             &config.route,
             &config.binding_generation,
@@ -112,10 +111,7 @@ impl BregAdapter {
         {
             return Err(SourceAdapterError::Invalid);
         }
-        if !config
-            .source_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        if !valid_source_identifier(&config.source_id)
             || !config
                 .event_source
                 .starts_with("urn:registrystack:registry:")
@@ -484,6 +480,14 @@ fn terminal_decision_stage(
         .filter(|decision| decision.kind() == expected)
         .map(|decision| decision.stage_id().to_owned())
         .ok_or(SourceAdapterError::Invalid)
+}
+
+fn valid_source_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn valid_stage_identifier(value: &str) -> bool {
