@@ -273,8 +273,9 @@ jwksSource:
 ```
 
 Tokens signed with a key absent from the pinned document are refused with the value-free
-`authentication.refused`. On the `registry_breg::auth` target, the server warns that a token's
-key identifier is unknown or disallowed, at most once per minute per authenticator. This warning
+`authentication.refused`. Search the server's JSON logs for `unknown or disallowed key identifier`
+in `fields.message`, with logging set to `warn` or `info`. The server emits this warning
+at most once per minute per authenticator. This warning
 applies to both static and discovery sources. An arbitrary token or a deliberately denied key
 can cause the same warning, so the warning alone does not establish provider key rotation.
 
@@ -289,19 +290,41 @@ current keys through its trusted configuration and operator before replacing the
 1. Fetch the provider's current JWKS document from its published `jwks_uri` over TLS, the same
    way the initial pinning did. Confirm the keys with the provider operator if the rotation was
    not announced.
-2. Replace the secret that `documentRef` names. For `secret:file/<jwks-document>`, replace the
+2. Prepare and review a compatible public-key subset of that document. Keep only signing keys
+   for your configured `allowedAlgorithm`, with unique `kid` values absent from `deniedKids`.
+   Preserve their public key material and identifiers. Do not relabel algorithms or turn
+   encryption keys into signing keys. The document must contain only a `keys` array with 1 to
+   128 keys and fit within both the 65536-byte secret limit and `jwksCache.maxDocumentBytes`
+   (65536 bytes by default). Each key must
+   use the matching public-key shape and only the members `kty`, `kid`, `alg`, `use`, `key_ops`,
+   `crv`, `x`, `y`, `n`, and `e` that apply to that shape. Remove certificate metadata such as
+   `x5c`; never include private key material. If present, `use` must be `sig` and `key_ops` must
+   be exactly `["verify"]`. Review the resulting subset with the provider operator before use.
+3. Replace the secret that `documentRef` names. For `secret:file/<jwks-document>`, replace the
    file while keeping the [secret-file rules](#create-the-secret-files). For
    `secret:env/<NAME>`, when `secretProviders.environment` is enabled, replace the injected
    environment value in your service configuration with the document bytes. Keep the value out
    of command arguments and logs.
-3. Restart `breg`; the static document is read only at startup.
-4. Verify with a fresh provider login that authentication succeeds again, and that tokens
+4. Restart `breg`; the static document is read only at startup. If startup refuses the document,
+   recheck its members, key shapes, algorithm, denied keys, and size before retrying.
+5. Verify with a fresh provider login that authentication succeeds again, and that tokens
    signed by the removed keys are still refused.
+
+If fresh logins are still refused, confirm that every serving instance restarted with the intended
+`documentRef`, then check the issuer, audience, algorithm, token type, and key policy with the
+provider operator. Keep verification enabled. Restore a previous pin only if its keys remain
+trusted and the provider confirms they are still valid; never restore a revoked key to end an outage.
+
+If a token signed by a removed key is accepted, stop routing protected traffic to the affected
+instance. Check for an old process or another serving instance using the previous configuration,
+and escalate the trust discrepancy to the deployment and identity-provider operators. Resume
+traffic only after the intended pin accepts current keys and refuses removed keys.
 
 With `kind: discovery`, the runtime reads the issuer's discovery document and caches its JWKS
 under the optional `jwksCache` bounds.
 
-{/* Evidence: crates/registry-breg/src/runtime_config.rs, RuntimeConfig;
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, RuntimeConfig and validate_static_jwks();
+    crates/registry-breg/src/main.rs, initialize_logging_filter();
     crates/registry-breg/tests/runtime_config.rs;
     crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate;
     crates/registry-breg/tests/http_auth.rs,
