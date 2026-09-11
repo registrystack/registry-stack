@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use registry_casework_client::{
-    BearerToken, CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
+    AbsencesQuery, BearerToken, CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
     CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure, DecideRequest,
     DirectoryTargetPurpose, DirectoryTargetsQuery, HoldingsQuery, HostedDecisionRequest,
     HostedValidationReason, RecoverAttemptRequest, SourceBinding,
@@ -573,20 +573,11 @@ async fn capture_directory_targets(
 }
 
 #[tokio::test]
-async fn absence_list_carries_the_current_directory_revision() {
-    let app = Router::new().route(
-        "/v1/directory/absences",
-        get(|| async {
-            (
-                StatusCode::OK,
-                [
-                    ("content-type", "application/json"),
-                    ("traceparent", TRACEPARENT),
-                ],
-                r#"{"directoryRevision":12,"items":[]}"#,
-            )
-        }),
-    );
+async fn absence_list_propagates_pagination_and_decodes_the_next_cursor() {
+    let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
+    let app = Router::new()
+        .route("/v1/directory/absences", get(capture_absences))
+        .with_state(observations.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind fixture");
@@ -601,13 +592,66 @@ async fn absence_list_carries_the_current_directory_revision() {
     .expect("client");
     let token = BearerToken::new("one-call-secret").expect("fixture token");
     let absences = client
-        .absences(CaseworkAuth::new(&token, "staff"))
+        .absences_page(
+            CaseworkAuth::new(&token, "staff"),
+            &AbsencesQuery {
+                cursor: Some("opaque-absence-cursor".into()),
+                limit: Some(1000),
+            },
+        )
         .await
         .expect("absence list");
 
     assert_eq!(absences.value.directory_revision, 12);
     assert!(absences.value.items.is_empty());
+    assert_eq!(absences.value.next_cursor.as_deref(), Some("absence-next"));
+    client
+        .absences(CaseworkAuth::new(&token, "staff"))
+        .await
+        .expect("default absence list");
+    let invalid = client
+        .absences_page(
+            CaseworkAuth::new(&token, "staff"),
+            &AbsencesQuery {
+                cursor: None,
+                limit: Some(1001),
+            },
+        )
+        .await
+        .expect_err("oversized absence page must be rejected");
+    assert!(matches!(
+        invalid,
+        CaseworkClientError::InvalidRequest { .. }
+    ));
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 2);
+    assert_eq!(
+        observations[0].0,
+        "/v1/directory/absences?cursor=opaque-absence-cursor&limit=1000"
+    );
+    assert_eq!(observations[1].0, "/v1/directory/absences");
+    assert_eq!(observations[0].1["registry-casework-profile"], "staff");
+    assert!(!observations[0].1.contains_key("registry-source-profile"));
     server.abort();
+}
+
+async fn capture_absences(
+    State(observations): State<HistoryObservations>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    observations
+        .lock()
+        .expect("observations")
+        .push((uri.to_string(), headers));
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        r#"{"directoryRevision":12,"items":[],"nextCursor":"absence-next"}"#,
+    )
 }
 
 #[tokio::test]

@@ -520,7 +520,7 @@ const DIRECTORY: &[ProblemCode] = &[
     ProblemCode::ServiceUnavailable,
     ProblemCode::RuntimeFailure,
 ];
-const DIRECTORY_TARGETS: &[ProblemCode] = &[
+const DIRECTORY_PAGE: &[ProblemCode] = &[
     ProblemCode::AuthenticationRefused,
     ProblemCode::CursorExpired,
     ProblemCode::CursorInvalid,
@@ -775,16 +775,16 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: DIRECTORY_TARGETS,
+        problems: DIRECTORY_PAGE,
     },
     OperationContract {
         method: "GET",
         path: "/v1/directory/absences",
         success_statuses: &[200],
         extracts_path: false,
-        extracts_query: false,
+        extracts_query: true,
         accepts_json: false,
-        problems: DIRECTORY,
+        problems: DIRECTORY_PAGE,
     },
     OperationContract {
         method: "POST",

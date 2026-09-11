@@ -32,7 +32,7 @@ export declare class CaseworkClient {
   directory(token: string, profile: string): Promise<CaseworkOutcome>
   directoryTargets(token: string, profile: string, query: any): Promise<CaseworkOutcome>
   bootstrapDirectory(token: string, profile: string, expectedRevision: number, idempotencyKey: string, bootstrap: any): Promise<CaseworkOutcome>
-  absences(token: string, profile: string): Promise<CaseworkOutcome>
+  absences(token: string, profile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   createAbsence(token: string, profile: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   updateAbsence(token: string, profile: string, absenceId: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   deleteAbsence(token: string, profile: string, absenceId: string, expectedRevision: number, idempotencyKey: string): Promise<CaseworkOutcome>

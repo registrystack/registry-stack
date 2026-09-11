@@ -2,9 +2,9 @@ use registry_casework_core::DirectoryTeamUpdateRequest;
 use std::fmt;
 
 use registry_casework_core::{
-    AbsenceInput, AbsenceList, AbsenceRecord, AssignmentRequest, BootstrapDirectoryRequest,
-    CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage,
-    CaseloadPreviewQuery, CaseworkAction, ClaimRequest, ClockOccurrenceView,
+    AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, AssignmentRequest,
+    BootstrapDirectoryRequest, CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest,
+    CaseloadPreviewPage, CaseloadPreviewQuery, CaseworkAction, ClaimRequest, ClockOccurrenceView,
     ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
     DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
     DirectoryTargetsQuery, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery,
@@ -42,6 +42,7 @@ const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
 const MAXIMUM_CURSOR_BYTES: usize = 4096;
 const MAXIMUM_PAGE_SIZE: usize = 100;
+const MAXIMUM_ABSENCES_PAGE_SIZE: usize = 1000;
 const ORIGINAL_ATTEMPT_HEADER: &str = "registry-casework-attempt";
 
 pub struct CaseworkClient {
@@ -558,8 +559,22 @@ impl CaseworkClient {
         &self,
         auth: CaseworkAuth<'_>,
     ) -> Result<CaseworkComplete<AbsenceList>, CaseworkClientError> {
-        self.get_json(&auth, &["v1", "directory", "absences"], &[])
-            .await
+        self.absences_page(auth, &AbsencesQuery::default()).await
+    }
+
+    pub async fn absences_page(
+        &self,
+        auth: CaseworkAuth<'_>,
+        query: &AbsencesQuery,
+    ) -> Result<CaseworkComplete<AbsenceList>, CaseworkClientError> {
+        validate_page_with_max(
+            query.cursor.as_deref(),
+            query.limit,
+            MAXIMUM_ABSENCES_PAGE_SIZE,
+        )?;
+        let url = self.url(&["v1", "directory", "absences"])?;
+        let request = self.authorized(self.http.get(url).query(query), &auth)?;
+        self.send_json(request, StatusCode::OK).await
     }
 
     pub async fn create_absence(
@@ -1283,12 +1298,20 @@ fn action_segments<'a>(
 }
 
 fn validate_page(cursor: Option<&str>, limit: Option<usize>) -> Result<(), CaseworkClientError> {
+    validate_page_with_max(cursor, limit, MAXIMUM_PAGE_SIZE)
+}
+
+fn validate_page_with_max(
+    cursor: Option<&str>,
+    limit: Option<usize>,
+    maximum_page_size: usize,
+) -> Result<(), CaseworkClientError> {
     if cursor.is_some_and(|value| value.is_empty() || value.len() > MAXIMUM_CURSOR_BYTES) {
         return Err(CaseworkClientError::invalid_request(
             "the cursor is invalid",
         ));
     }
-    if limit.is_some_and(|value| value == 0 || value > MAXIMUM_PAGE_SIZE) {
+    if limit.is_some_and(|value| value == 0 || value > maximum_page_size) {
         return Err(CaseworkClientError::invalid_request(
             "the page size is outside the accepted range",
         ));

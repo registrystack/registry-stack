@@ -354,38 +354,103 @@ impl PostgresStore {
         Ok(next)
     }
 
-    pub(crate) async fn absences(
+    pub(crate) async fn absences_page(
         &self,
         actor: &ActorContext,
-    ) -> Result<(i64, Vec<AbsenceRecord>), StoreError> {
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<AbsenceList, StoreError> {
         if !matches!(
             actor.role,
             CaseworkRole::Staff | CaseworkRole::Supervisor | CaseworkRole::Administrator
         ) {
             return Err(StoreError::Forbidden);
         }
+        if !(1..=1_000).contains(&limit) {
+            return Err(StoreError::Invalid);
+        }
+        let context_hash = assignment_hash(&(role_name(actor.role), limit))?;
+        let query_limit = i64::try_from(limit + 1).map_err(|_| StoreError::Invalid)?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let directory_revision = transaction
+        let directory_revision: i64 = transaction
             .query_one(
                 "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
                 &[],
             )
             .await?
             .get(0);
-        let rows = transaction.query(
-            "SELECT a.absence_id,a.person_issuer,a.person_subject,a.starts_at,a.ends_at,a.cover_issuer,a.cover_subject,a.revision FROM casework_absences a WHERE $1='administrator' OR ($1='staff' AND a.person_issuer=$2 AND a.person_subject=$3 AND EXISTS(SELECT 1 FROM casework_memberships self_membership WHERE self_membership.issuer=$2 AND self_membership.subject=$3 AND self_membership.membership_kind='staff')) OR ($1='supervisor' AND EXISTS(SELECT 1 FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.issuer=a.person_issuer AND person.subject=a.person_subject AND person.membership_kind='staff' AND lead.issuer=$2 AND lead.subject=$3 AND lead.membership_kind='supervisor')) ORDER BY a.starts_at,a.absence_id LIMIT 1001",
-            &[&role_name(actor.role),&actor.principal.issuer,&actor.principal.subject],
-        ).await?;
-        if rows.len() > 1_000 {
-            return Err(StoreError::Invalid);
-        }
-        let records = rows
+        let after: Option<(chrono::DateTime<Utc>, Uuid)> = if let Some(cursor) = cursor {
+            let cursor_id = Uuid::parse_str(cursor).map_err(|_| StoreError::CursorInvalid)?;
+            let row = transaction
+                .query_opt(
+                    "SELECT issuer,subject,profile_id,context_hash,directory_revision,last_starts_at,last_absence_id,expires_at FROM casework_absence_cursors WHERE cursor_id=$1 FOR UPDATE",
+                    &[&cursor_id],
+                )
+                .await?
+                .ok_or(StoreError::CursorInvalid)?;
+            if row.get::<_, String>(0) != actor.principal.issuer
+                || row.get::<_, String>(1) != actor.principal.subject
+                || row.get::<_, String>(2) != actor.profile_id
+                || row.get::<_, String>(3) != context_hash
+            {
+                return Err(StoreError::CursorInvalid);
+            }
+            if row.get::<_, chrono::DateTime<Utc>>(7) <= Utc::now() {
+                return Err(StoreError::CursorExpired);
+            }
+            if row.get::<_, i64>(4) != directory_revision {
+                return Err(StoreError::CursorInvalid);
+            }
+            Some((row.get(5), row.get(6)))
+        } else {
+            None
+        };
+        let after_starts_at = after.as_ref().map(|position| position.0);
+        let after_absence_id = after.as_ref().map(|position| position.1);
+        let rows = transaction
+            .query(
+                "SELECT a.absence_id,a.person_issuer,a.person_subject,a.starts_at,a.ends_at,a.cover_issuer,a.cover_subject,a.revision FROM casework_absences a WHERE ($1='administrator' OR ($1='staff' AND a.person_issuer=$2 AND a.person_subject=$3 AND EXISTS(SELECT 1 FROM casework_memberships self_membership WHERE self_membership.issuer=$2 AND self_membership.subject=$3 AND self_membership.membership_kind='staff')) OR ($1='supervisor' AND EXISTS(SELECT 1 FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.issuer=a.person_issuer AND person.subject=a.person_subject AND person.membership_kind='staff' AND lead.issuer=$2 AND lead.subject=$3 AND lead.membership_kind='supervisor'))) AND ($4::timestamptz IS NULL OR (a.starts_at,a.absence_id)>($4,$5)) ORDER BY a.starts_at,a.absence_id LIMIT $6",
+                &[&role_name(actor.role), &actor.principal.issuer, &actor.principal.subject, &after_starts_at, &after_absence_id, &query_limit],
+            )
+            .await?;
+        let more = rows.len() > limit;
+        let items = rows
             .into_iter()
+            .take(limit)
             .map(absence_from_row)
             .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = if more {
+            let last = items.last().ok_or(StoreError::Corrupt)?;
+            let cursor_id = Uuid::new_v4();
+            let expires_at = Utc::now() + TimeDelta::minutes(15);
+            transaction
+                .execute(
+                    "INSERT INTO casework_absence_cursors(cursor_id,issuer,subject,profile_id,context_hash,directory_revision,last_starts_at,last_absence_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                    &[&cursor_id, &actor.principal.issuer, &actor.principal.subject, &actor.profile_id, &context_hash, &directory_revision, &last.from, &last.absence_id, &expires_at],
+                )
+                .await?;
+            Some(cursor_id.to_string())
+        } else {
+            None
+        };
         transaction.commit().await?;
-        Ok((directory_revision, records))
+        Ok(AbsenceList {
+            directory_revision,
+            items,
+            next_cursor,
+        })
+    }
+
+    pub async fn erase_expired_absence_cursors(&self) -> Result<usize, StoreError> {
+        let client = self.client().await?;
+        let affected = client
+            .execute(
+                "WITH due AS (SELECT cursor_id FROM casework_absence_cursors WHERE expires_at<=now() ORDER BY expires_at,cursor_id LIMIT 100 FOR UPDATE SKIP LOCKED) DELETE FROM casework_absence_cursors c USING due WHERE c.cursor_id=due.cursor_id",
+                &[],
+            )
+            .await?;
+        usize::try_from(affected).map_err(|_| StoreError::Corrupt)
     }
 
     pub async fn create_absence(
@@ -1275,11 +1340,19 @@ impl CaseworkService {
     }
 
     pub async fn absences(&self, actor: &ActorContext) -> Result<AbsenceList, ServiceError> {
-        let (directory_revision, items) = self.store.absences(actor).await?;
-        Ok(AbsenceList {
-            directory_revision,
-            items,
-        })
+        self.absences_page(actor, 1_000, None).await
+    }
+
+    pub async fn absences_page(
+        &self,
+        actor: &ActorContext,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<AbsenceList, ServiceError> {
+        self.store
+            .absences_page(actor, limit, cursor)
+            .await
+            .map_err(ServiceError::from)
     }
     pub async fn create_absence(
         &self,
@@ -1698,6 +1771,13 @@ impl CaseworkService {
     pub async fn erase_expired_directory_target_cursors(&self) -> Result<usize, ServiceError> {
         self.store
             .erase_expired_directory_target_cursors()
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    pub async fn erase_expired_absence_cursors(&self) -> Result<usize, ServiceError> {
+        self.store
+            .erase_expired_absence_cursors()
             .await
             .map_err(ServiceError::from)
     }

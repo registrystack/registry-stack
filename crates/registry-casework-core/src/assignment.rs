@@ -26,6 +26,8 @@ pub struct AbsenceRecord {
 pub struct AbsenceList {
     pub directory_revision: i64,
     pub items: Vec<AbsenceRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

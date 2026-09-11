@@ -256,15 +256,17 @@ test('directory target discovery preserves its exact purpose context without sou
   });
 });
 
-test('absence list carries the current directory revision for a following write', async (context) => {
+test('absence list carries caller pagination and the next cursor', async (context) => {
+  let observed;
   const server = http.createServer((request, response) => {
     request.resume();
     request.on('end', () => {
+      observed = { path: request.url, headers: request.headers };
       response.writeHead(200, {
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({ directoryRevision: 12, items: [] }));
+      response.end(JSON.stringify({ directoryRevision: 12, items: [], nextCursor: 'absence-next' }));
     });
   });
   await listen(server);
@@ -272,10 +274,19 @@ test('absence list carries the current directory revision for a following write'
 
   const { CaseworkClient } = require('../client');
   const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
-  const absences = await client.absences('one-call-secret', 'staff');
+  const absences = await client.absences(
+    'one-call-secret',
+    'staff',
+    { cursor: 'opaque-absence-cursor', limit: 1000 },
+  );
 
   assert.equal(absences.value.directoryRevision, 12);
   assert.deepEqual(absences.value.items, []);
+  assert.equal(absences.value.nextCursor, 'absence-next');
+  assert.equal(observed.path, '/v1/directory/absences?cursor=opaque-absence-cursor&limit=1000');
+  assert.equal(observed.headers.authorization, 'Bearer one-call-secret');
+  assert.equal(observed.headers['registry-casework-profile'], 'staff');
+  assert.equal(observed.headers['registry-source-profile'], undefined);
 });
 
 test('native client preserves the optional held timestamp', async (context) => {

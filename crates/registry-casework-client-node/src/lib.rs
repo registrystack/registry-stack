@@ -9,8 +9,8 @@ use std::time::Duration;
 use napi::{Error as NapiError, Result};
 use napi_derive::napi;
 use registry_casework_client::{
-    AbsenceInput, AssignmentRequest, BootstrapDirectoryRequest, CaseloadApplyRequest,
-    CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
+    AbsenceInput, AbsencesQuery, AssignmentRequest, BootstrapDirectoryRequest,
+    CaseloadApplyRequest, CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
     CaseworkClient as CoreClient, CaseworkClientConfig as CoreConfig, CaseworkClientError,
     ClockRecomputeApplyRequest, ClockRecomputeRequest, DecideRequest, DelegateRequest,
     DirectoryTargetsQuery, HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest,
@@ -673,11 +673,17 @@ impl CaseworkClient {
 #[napi]
 impl CaseworkClient {
     #[napi]
-    pub async fn absences(&self, token: String, profile: String) -> Result<CaseworkOutcome> {
+    pub async fn absences(
+        &self,
+        token: String,
+        profile: String,
+        query: Option<Value>,
+    ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let query: AbsencesQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
-                .absences(CaseworkAuth::new(&token, &profile))
+                .absences_page(CaseworkAuth::new(&token, &profile), &query)
                 .await,
         )
     }

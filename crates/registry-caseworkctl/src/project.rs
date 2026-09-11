@@ -563,11 +563,12 @@ pub(super) fn doctor(project: &Path, operator: Option<&Path>) -> Result<Value> {
     runtime
         .block_on(config.oidc_verifier(&resolver))
         .context("the configured OIDC issuer is unavailable or incompatible")?;
+    let expected_queue_ids: Vec<_> = policy.queues.iter().map(|queue| queue.id.clone()).collect();
     if !runtime
-        .block_on(store.directory_ready())
+        .block_on(store.directory_ready(&expected_queue_ids))
         .context("checking Casework directory readiness")?
     {
-        bail!("the Casework directory has no team serving the default queue; authenticate as an Administrator and create the team and queue assignment before retrying doctor");
+        bail!("the Casework directory does not have a team serving every declared queue; authenticate as an Administrator and complete the queue assignments before retrying doctor");
     }
     Ok(json!({
         "ok": true,

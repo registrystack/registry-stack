@@ -9,8 +9,8 @@
 use std::time::Duration;
 
 use casework_client_sdk::{
-    AbsenceInput, AssignmentRequest, BearerToken, BootstrapDirectoryRequest, CaseloadApplyRequest,
-    CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
+    AbsenceInput, AbsencesQuery, AssignmentRequest, BearerToken, BootstrapDirectoryRequest,
+    CaseloadApplyRequest, CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
     CaseworkClient as RustClient, CaseworkClientConfig, CaseworkClientError as RustClientError,
     CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, ClockRecomputeApplyRequest,
     ClockRecomputeRequest, DecideRequest, DelegateRequest, DirectoryTargetsQuery,
@@ -1059,20 +1059,24 @@ impl CaseworkClient {
         )
     }
 
-    #[pyo3(signature = (token, profile, source_profile=None))]
+    #[pyo3(signature = (token, profile, source_profile=None, query=None))]
     fn absences<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
         source_profile: Option<&str>,
+        query: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let query: AbsencesQuery = optional_input(py, query)?;
         let token = bearer(py, token)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime
-                    .block_on(self.inner.absences(auth(&token, profile, source_profile)))
+                self.runtime.block_on(
+                    self.inner
+                        .absences_page(auth(&token, profile, source_profile), &query),
+                )
             }),
         )
     }

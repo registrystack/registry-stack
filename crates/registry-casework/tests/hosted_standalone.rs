@@ -10,12 +10,12 @@ use registry_casework_client::{
     CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError, CaseworkProblemCode,
 };
 use registry_casework_core::{
-    AbsenceInput, AssignmentRequest, BootstrapDirectoryRequest, CaseloadApplyRequest,
-    CaseloadItemOutcome, CaseloadItemSelection, CaseloadMoveRequest, CaseloadPreviewQuery,
-    CaseworkAction, CaseworkProject, DelegateRequest, HolidaySetDocument, HolidaySetRevisionInput,
-    HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest, HostedHistoryKind,
-    HostedNoteRequest, HostedPageQuery, HostedTerminalQuery, HostedTerminalState, InboxView,
-    IssuerPrincipal, ListWorkItemsQuery, SourceAdapter, WorkItem,
+    AbsenceInput, AbsencesQuery, AssignmentRequest, BootstrapDirectoryRequest,
+    CaseloadApplyRequest, CaseloadItemOutcome, CaseloadItemSelection, CaseloadMoveRequest,
+    CaseloadPreviewQuery, CaseworkAction, CaseworkProject, DelegateRequest, HolidaySetDocument,
+    HolidaySetRevisionInput, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
+    HostedHistoryKind, HostedNoteRequest, HostedPageQuery, HostedTerminalQuery,
+    HostedTerminalState, InboxView, IssuerPrincipal, ListWorkItemsQuery, SourceAdapter, WorkItem,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::{client::BearerToken, FetchUrlPolicy};
@@ -250,6 +250,86 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
         .value
         .items
         .is_empty());
+
+    let mut page_revision = client
+        .directory(CaseworkAuth::new(&admin, "administrator"))
+        .await
+        .unwrap()
+        .value
+        .revision;
+    let mut paged_absences = Vec::new();
+    for day in [4, 6] {
+        let mut input = absence_input.clone();
+        input.from = format!("2020-01-{day:02}T00:00:00Z").parse().unwrap();
+        input.until = format!("2020-01-{:02}T00:00:00Z", day + 1).parse().unwrap();
+        let record = client
+            .create_absence(
+                CaseworkAuth::new(&admin, "administrator"),
+                page_revision,
+                &format!("absence-page-{day}"),
+                &input,
+            )
+            .await
+            .unwrap()
+            .value;
+        page_revision = record.revision;
+        paged_absences.push(record);
+    }
+    let first = client
+        .absences_page(
+            CaseworkAuth::new(&admin, "administrator"),
+            &AbsencesQuery {
+                limit: Some(1),
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(first.items, paged_absences[..1]);
+    let continuation = AbsencesQuery {
+        limit: Some(1),
+        cursor: Some(
+            first
+                .next_cursor
+                .expect("the second absence has a continuation"),
+        ),
+    };
+    let second = client
+        .absences_page(CaseworkAuth::new(&admin, "administrator"), &continuation)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(second.items, paged_absences[1..]);
+    assert_eq!(second.directory_revision, page_revision);
+    assert!(second.next_cursor.is_none());
+    for (index, record) in paged_absences.iter().enumerate() {
+        let current_revision = client
+            .directory(CaseworkAuth::new(&admin, "administrator"))
+            .await
+            .unwrap()
+            .value
+            .revision;
+        client
+            .delete_absence(
+                CaseworkAuth::new(&admin, "administrator"),
+                record.absence_id,
+                current_revision,
+                &format!("absence-page-delete-{index}"),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        client
+            .absences_page(CaseworkAuth::new(&admin, "administrator"), &continuation)
+            .await,
+        Err(CaseworkClientError::Problem {
+            status: 400,
+            code: CaseworkProblemCode::CursorInvalid,
+            ..
+        })
+    ));
 
     let holiday = HolidaySetRevisionInput {
         document: HolidaySetDocument {

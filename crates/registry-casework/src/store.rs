@@ -37,9 +37,10 @@ const REFERENCE_LOOKUP_AND_SORT_MIGRATION: &str =
     include_str!("../migrations/0010_reference_lookup_and_sort.sql");
 const SOURCE_RECONCILIATION_PROGRESS_MIGRATION: &str =
     include_str!("../migrations/0011_source_reconciliation_progress.sql");
+const ABSENCE_CURSORS_MIGRATION: &str = include_str!("../migrations/0012_absence_cursors.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 11] = [
+const MIGRATIONS: [(i64, &str); 12] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -51,6 +52,7 @@ const MIGRATIONS: [(i64, &str); 11] = [
     (9, DIRECTORY_DISPLAY_NAMES_MIGRATION),
     (10, REFERENCE_LOOKUP_AND_SORT_MIGRATION),
     (11, SOURCE_RECONCILIATION_PROGRESS_MIGRATION),
+    (12, ABSENCE_CURSORS_MIGRATION),
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
@@ -229,12 +231,12 @@ impl PostgresStore {
         }
     }
 
-    pub async fn directory_ready(&self) -> Result<bool, StoreError> {
+    pub async fn directory_ready(&self, expected_queue_ids: &[String]) -> Result<bool, StoreError> {
         let client = self.client().await?;
         Ok(client
             .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_teams t ON t.team_id=q.team_id)",
-                &[],
+                "SELECT cardinality($1::text[]) > 0 AND NOT EXISTS(SELECT 1 FROM unnest($1::text[]) expected(queue_id) WHERE NOT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_teams t ON t.team_id=q.team_id WHERE q.queue_id=expected.queue_id))",
+                &[&expected_queue_ids],
             )
             .await?
             .get(0))
@@ -555,16 +557,12 @@ impl PostgresStore {
         let mut result = None;
         let terminal = matches!(
             observation.state,
-            OccurrenceState::Completed | OccurrenceState::Cancelled
+            OccurrenceState::Completed | OccurrenceState::Superseded | OccurrenceState::Cancelled
         );
         if terminal {
             for row in active_rows {
                 let item = row_to_item(&row)?;
-                let event = if observation.state == OccurrenceState::Cancelled {
-                    OccurrenceEvent::Cancel
-                } else {
-                    OccurrenceEvent::Complete
-                };
+                let event = observation_event(observation.state)?;
                 result =
                     Some(update_observed_item(&transaction, &item, event, observation, now).await?);
             }

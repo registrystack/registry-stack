@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::sync::Arc;
 
@@ -1875,6 +1875,271 @@ async fn assignment_cursor_retention_deletes_expired_rows_in_bounded_batches() {
             .expect("second bounded target cursor sweep"),
         1
     );
+
+    for index in 0..101_i32 {
+        fixture.database.execute(
+            "INSERT INTO casework_absence_cursors(cursor_id,issuer,subject,profile_id,context_hash,directory_revision,last_starts_at,last_absence_id,expires_at) VALUES($1,'issuer','subject','profile',$2,1,now(),$3,now()-interval '1 minute')",
+            &[&Uuid::new_v4(), &format!("absence-context-{index}"), &Uuid::new_v4()],
+        ).await.expect("insert expired absence cursor");
+    }
+    assert_eq!(
+        fixture
+            .service
+            .erase_expired_absence_cursors()
+            .await
+            .expect("first bounded absence cursor sweep"),
+        100
+    );
+    let remaining: i64 = fixture
+        .database
+        .query_one("SELECT count(*) FROM casework_absence_cursors", &[])
+        .await
+        .expect("count retained absence cursors")
+        .get(0);
+    assert_eq!(remaining, 1);
+    assert_eq!(
+        fixture
+            .service
+            .erase_expired_absence_cursors()
+            .await
+            .expect("second bounded absence cursor sweep"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn absence_pages_are_complete_unique_and_bounded() {
+    let fixture = fixture([]).await;
+    insert_absences(&fixture, &fixture.staff_a.principal, 1_001, "complete").await;
+
+    let first = fixture
+        .service
+        .absences(&fixture.staff_a)
+        .await
+        .expect("compatibility method returns the first bounded page");
+    assert_eq!(first.items.len(), 1_000);
+    let cursor = first.next_cursor.expect("first page cursor");
+    let second = fixture
+        .service
+        .absences_page(&fixture.staff_a, 1_000, Some(&cursor))
+        .await
+        .expect("final absence page");
+    assert_eq!(second.items.len(), 1);
+    assert!(second.next_cursor.is_none());
+    assert_eq!(first.directory_revision, second.directory_revision);
+    let unique = first
+        .items
+        .iter()
+        .chain(&second.items)
+        .map(|absence| absence.absence_id)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(unique.len(), 1_001);
+
+    let small = fixture
+        .service
+        .absences_page(&fixture.staff_a, 7, None)
+        .await
+        .expect("smaller absence page");
+    assert_eq!(small.items.len(), 7);
+    assert!(small.next_cursor.is_some());
+    assert!(matches!(
+        fixture
+            .service
+            .absences_page(&fixture.staff_a, 0, None)
+            .await,
+        Err(ServiceError::Store(StoreError::Invalid))
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .absences_page(&fixture.staff_a, 1_001, None)
+            .await,
+        Err(ServiceError::Store(StoreError::Invalid))
+    ));
+}
+
+#[tokio::test]
+async fn absence_cursors_refuse_changed_or_expired_context() {
+    let fixture = fixture([]).await;
+    insert_absences(&fixture, &fixture.staff_a.principal, 3, "context").await;
+
+    let page = fixture
+        .service
+        .absences_page(&fixture.staff_a, 1, None)
+        .await
+        .expect("issue absence cursor");
+    let cursor = page.next_cursor.expect("cursor");
+    assert!(matches!(
+        fixture
+            .service
+            .absences_page(&fixture.staff_a, 1, Some("tampered"))
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .absences_page(&fixture.staff_b, 1, Some(&cursor))
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+    let mut other_profile = fixture.staff_a.clone();
+    other_profile.profile_id = "other-staff-profile".to_owned();
+    assert!(matches!(
+        fixture
+            .service
+            .absences_page(&other_profile, 1, Some(&cursor))
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+    let mut other_role = fixture.staff_a.clone();
+    other_role.role = CaseworkRole::Supervisor;
+    assert!(matches!(
+        fixture
+            .service
+            .absences_page(&other_role, 1, Some(&cursor))
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .absences_page(&fixture.staff_a, 2, Some(&cursor))
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_absence_cursors SET expires_at=now()-interval '1 minute' WHERE cursor_id=$1",
+            &[&Uuid::parse_str(&cursor).expect("opaque UUID cursor")],
+        )
+        .await
+        .expect("expire cursor");
+    assert!(matches!(
+        fixture
+            .service
+            .absences_page(&fixture.staff_a, 1, Some(&cursor))
+            .await,
+        Err(ServiceError::Store(StoreError::CursorExpired))
+    ));
+
+    let fresh = fixture
+        .service
+        .absences_page(&fixture.staff_a, 1, None)
+        .await
+        .expect("issue fresh cursor")
+        .next_cursor
+        .expect("fresh cursor");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_meta SET directory_revision=directory_revision+1 WHERE singleton=true",
+            &[],
+        )
+        .await
+        .expect("advance directory revision");
+    assert!(matches!(
+        fixture
+            .service
+            .absences_page(&fixture.staff_a, 1, Some(&fresh))
+            .await,
+        Err(ServiceError::Store(StoreError::CursorInvalid))
+    ));
+    assert_eq!(
+        fixture
+            .service
+            .absences_page(&fixture.staff_a, 1, None)
+            .await
+            .expect("restart after directory change")
+            .items
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn absence_pages_reapply_staff_and_supervisor_visibility() {
+    let fixture = fixture([]).await;
+    insert_absences(&fixture, &fixture.staff_a.principal, 2, "staff-a").await;
+    insert_absences(&fixture, &fixture.staff_b.principal, 2, "staff-b").await;
+
+    let staff = fixture
+        .service
+        .absences_page(&fixture.staff_a, 10, None)
+        .await
+        .expect("staff absence view");
+    assert_eq!(staff.items.len(), 2);
+    assert!(staff
+        .items
+        .iter()
+        .all(|absence| absence.person == fixture.staff_a.principal));
+    let staff_cursor = fixture
+        .service
+        .absences_page(&fixture.staff_a, 1, None)
+        .await
+        .expect("staff first page")
+        .next_cursor
+        .expect("staff cursor");
+    let supervisor = fixture
+        .service
+        .absences_page(&fixture.supervisor, 1, None)
+        .await
+        .expect("supervisor absence view");
+    assert_eq!(supervisor.items.len(), 1);
+    let supervisor_cursor = supervisor.next_cursor.expect("supervisor cursor");
+
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            staff.directory_revision,
+            "review-team",
+            &DirectoryTeamUpdateRequest {
+                staff: vec![
+                    member(&fixture.staff_b.principal),
+                    member(&fixture.staff_c.principal),
+                ],
+                supervisors: Vec::new(),
+                served_queues: vec![QUEUE.to_owned()],
+            },
+            "revoke-absence-page-access",
+        )
+        .await
+        .expect("revoke staff and supervisor memberships");
+    for (actor, cursor) in [
+        (&fixture.staff_a, staff_cursor.as_str()),
+        (&fixture.supervisor, supervisor_cursor.as_str()),
+    ] {
+        assert!(matches!(
+            fixture.service.absences_page(actor, 1, Some(cursor)).await,
+            Err(ServiceError::Store(StoreError::CursorInvalid))
+        ));
+        assert!(fixture
+            .service
+            .absences_page(actor, 10, None)
+            .await
+            .expect("fresh page reapplies current membership")
+            .items
+            .is_empty());
+    }
+}
+
+async fn insert_absences(fixture: &Fixture, person: &IssuerPrincipal, count: i32, seed: &str) {
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_absences(absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision) SELECT md5($1 || series::text)::uuid,$2,$3,timestamptz '2030-01-01 00:00:00+00' + series * interval '1 minute',timestamptz '2030-01-01 00:00:30+00' + series * interval '1 minute',$2,'cover',1 FROM generate_series(0,$4-1) series",
+            &[&seed, &person.issuer, &person.subject, &count],
+        )
+        .await
+        .expect("insert absence page fixtures");
 }
 
 #[tokio::test]

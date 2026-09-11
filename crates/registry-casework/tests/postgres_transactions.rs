@@ -188,6 +188,23 @@ async fn transactional_checkpoint_invariants_hold_in_postgresql() {
         )
         .await
         .expect("proposal v2 supersedes the prior occurrence");
+    let superseded_subject = client
+        .query_one(
+            "SELECT active,sync_pending FROM casework_subjects WHERE source_id='source-cycle' AND subject_kind='request-a' AND subject_id='proposal-cycle-subject'",
+            &[],
+        )
+        .await
+        .expect("superseded subject reconciliation state");
+    assert!(!superseded_subject.get::<_, bool>(0));
+    assert!(!superseded_subject.get::<_, bool>(1));
+    assert!(
+        runtime
+            .local_active_subjects("source-cycle", 10)
+            .await
+            .expect("scan active subjects after supersession")
+            .is_empty(),
+        "the next local reconciliation cycle must not re-enqueue a superseded subject"
+    );
     let proposal_v2 = runtime
         .apply_observation(
             &observation_for_subject(
@@ -765,7 +782,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=11).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=12).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -845,6 +862,51 @@ async fn readiness_rejects_an_unsupported_migration_version() {
     assert!(
         matches!(store.ready().await, Err(StoreError::Corrupt)),
         "an unsupported migration version must fail readiness"
+    );
+}
+
+#[tokio::test]
+async fn directory_readiness_requires_service_for_every_expected_queue() {
+    let (store, client, _schema) = isolated_schema("directory_ready").await;
+    store.migrate().await.expect("migrate");
+    let expected = vec!["default".to_owned(), "appeals".to_owned()];
+    let admin = actor("admin", CaseworkRole::Administrator, "administrator");
+    store
+        .bootstrap_directory(
+            &admin,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team-a".to_owned(),
+                staff: Vec::new(),
+                supervisors: Vec::new(),
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap-directory-ready",
+        )
+        .await
+        .expect("assign the first expected queue");
+
+    assert!(
+        !store
+            .directory_ready(&expected)
+            .await
+            .expect("check partial directory readiness"),
+        "one assigned queue must not make a multi-queue project ready"
+    );
+
+    client
+        .batch_execute(
+            "INSERT INTO casework_teams(team_id,revision) VALUES('team-b',2); \
+             INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('appeals','team-b',2);",
+        )
+        .await
+        .expect("assign the second expected queue");
+    assert!(
+        store
+            .directory_ready(&expected)
+            .await
+            .expect("check complete directory readiness"),
+        "every expected queue has a serving team"
     );
 }
 

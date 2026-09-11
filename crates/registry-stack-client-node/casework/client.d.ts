@@ -288,7 +288,8 @@ export interface DirectoryTeamUpdateRequest { staff: ReadonlyArray<DirectoryMemb
 export interface DirectoryResponse { revision: SafeInteger; teams: ReadonlyArray<TeamRecord> }
 export interface AbsenceInput { person: IssuerPrincipal; from: string; until: string; cover: IssuerPrincipal }
 export interface AbsenceRecord extends AbsenceInput { absenceId: string; revision: SafeInteger }
-export interface AbsenceList { directoryRevision: SafeInteger; items: ReadonlyArray<AbsenceRecord> }
+export interface AbsencesQuery { cursor?: string; limit?: SafeInteger }
+export interface AbsenceList { directoryRevision: SafeInteger; items: ReadonlyArray<AbsenceRecord>; nextCursor?: string }
 export interface AssignmentContext { owner?: IssuerPrincipal; assignedBy?: IssuerPrincipal; absenceIds: ReadonlyArray<string>; staffingDiagnostic?: 'no_cover_available' }
 export interface AssignmentRequest { assignee: IssuerPrincipal; reason?: string }
 export interface DelegateRequest { delegate: IssuerPrincipal; reason?: string }
@@ -423,7 +424,7 @@ export class CaseworkClient {
   createHolidayRevision(token: string, profile: string, idempotencyKey: string, request: HolidaySetRevisionInput): Promise<CaseworkOutcome<HolidaySetDocument>>
   previewClockRecompute(token: string, profile: string, request: ClockRecomputeRequest): Promise<CaseworkOutcome<ClockRecomputePreview>>
   applyClockRecompute(token: string, profile: string, idempotencyKey: string, request: ClockRecomputeApplyRequest): Promise<CaseworkOutcome<ClockRecomputeResult>>
-  absences(token: string, profile: string): Promise<CaseworkOutcome<AbsenceList>>
+  absences(token: string, profile: string, query?: AbsencesQuery | null): Promise<CaseworkOutcome<AbsenceList>>
   createAbsence(token: string, profile: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AbsenceInput): Promise<CaseworkOutcome<AbsenceRecord>>
   updateAbsence(token: string, profile: string, absenceId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AbsenceInput): Promise<CaseworkOutcome<AbsenceRecord>>
   deleteAbsence(token: string, profile: string, absenceId: string, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<null>>

@@ -131,7 +131,7 @@ for (const [method, jsonIndexes] of [
   ['createHolidayRevision', [3]],
   ['previewClockRecompute', [2]],
   ['applyClockRecompute', [3]],
-  ['absences', []],
+  ['absences', [2]],
   ['createAbsence', [4]],
   ['updateAbsence', [5]],
   ['deleteAbsence', []],

@@ -13,8 +13,8 @@ pub use config::CaseworkClientConfig;
 pub use error::{CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure};
 pub use model::{CaseworkAuth, CaseworkComplete};
 pub use registry_casework_core::{
-    AbsenceInput, AbsenceList, AbsenceRecord, ActivityClockAnchor, AssignmentContext,
-    AssignmentRequest, AttemptState, AttemptStatus, BootstrapDirectoryRequest, CalendarPolicy,
+    AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, ActivityClockAnchor,
+    AssignmentContext, AssignmentRequest, AttemptState, AttemptStatus, BootstrapDirectoryRequest,
     CallerSubjectView, CaseloadApplyRequest, CaseloadItemOutcome, CaseloadItemResult,
     CaseloadItemSelection, CaseloadMoveRequest, CaseloadPreviewPage, CaseloadPreviewQuery,
     CaseworkAction, ClaimRequest, ClockNextEffect, ClockOccurrenceView, ClockPolicy,
