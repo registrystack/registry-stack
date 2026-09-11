@@ -22,7 +22,7 @@ Evidencectl is outside the frozen Evidence Gateway Version 1 runtime contract. I
 change before a compatibility promise covers it. Evidencectl compiles editable authoring input into
 a closed bundle. The `evidence` runtime remains the authority for bundle validation and semantic
 acceptance, fixture evaluation, secret validation, and startup acceptance.
-The canonical adopter commands do not change the numeric Evidence Version 1
+The canonical adopter commands do not change the numeric Evidence Gateway Version 1
 `runtime.yaml` grammar or the existing `evidence-project.yaml` marker.
 
 ## Project workflow
@@ -52,7 +52,7 @@ An ordinary `check` can succeed with `status: incomplete` and visible findings. 
 
 The workflow exit classes are `0` for success, `1` for a domain refusal or denied finding, `2` for
 command-line usage, and `3` for an operational failure. These classes belong to adopter tooling;
-they do not change the Evidence runtime verifier's frozen exit contract.
+they do not change the Evidence Gateway runtime verifier's frozen exit contract.
 
 {/* Evidence: crates/registry-evidencectl/src/lib.rs, Cli, Command, OutputFormat,
     run_check_command(), and run_explain_command();
@@ -63,7 +63,7 @@ they do not change the Evidence runtime verifier's frozen exit contract.
 
 The released `new`, `fixtures run`, and `build` spellings remain available during the command
 transition. New projects, examples, and current procedures use `init`, `test`, and `package`.
-The hidden `doctor --project <candidate>` compatibility form retains artifact inspection;
+The `doctor --project <candidate>` compatibility form retains artifact inspection;
 use `artifact inspect <candidate>` for that operation and reserve `doctor --runtime-config` for
 live startup dependency checks. Do not combine a canonical positional project with its former
 `--project` flag; conflicting old and new forms are usage errors.

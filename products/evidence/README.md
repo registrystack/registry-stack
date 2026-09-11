@@ -105,8 +105,8 @@ Mint, caller, and holder keys so the local happy path needs no key ceremony.
 
 `evidencectl init <dir> --transport sqlite-extract --profile local` needs no
 OpenAPI document. It creates a source-neutral synthetic statement source,
-question, derivation, schemas, and 13-case fixture. First run `evidencectl check
-<dir>`, then `evidencectl test <dir> --explain`, which compiles a private
+question, derivation, schemas, and 13-case fixture. First run
+`evidencectl check <dir>`, then `evidencectl test <dir> --explain`, which compiles a private
 bundle and delegates bundle validation and fixture evaluation to `evidence`.
 The starter creates no real extract, runtime, production target, or deployable
 bundle.
@@ -153,13 +153,13 @@ finding. Add `--target <environment-target>` to validate that explicit target's
 governance, runtime structure, public keys, source connections, and governed
 bundle. Adding `--production` requires the target itself to declare
 `production` or `evidence-grade` assurance. The check does not resolve secrets,
-contact dependencies, or run fixtures. `evidencectl explain <editable-project>
-[--target <environment-target>]` applies the same authoring validation, reports
-its status, findings, and revision with the authored inventory, and includes
-target governance only when selected.
+contact dependencies, or run fixtures. `evidencectl explain <editable-project>`
+applies the same authoring validation and reports its status, findings, and
+revision with the authored inventory. Add `--target <environment-target>` to
+include that target's governance.
 
-`evidencectl package <editable-project> --target <environment-target>
---output <new-candidate-directory>` is create-only. It reads regular files
+`evidencectl package <editable-project> --target <environment-target> --output <new-candidate-directory>`
+is create-only. It reads regular files
 without following symlinks, compiles one closed bundle, and delegates its
 internal bundle-only check and every referenced fixture to the real `evidence`
 binary. No temporary signing key or other validation secret is generated. The

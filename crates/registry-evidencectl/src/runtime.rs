@@ -22,7 +22,7 @@ const MAX_DIAGNOSTIC_BYTES: u64 = 1024 * 1024;
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("selection").multiple(false).args(["runtime_config", "project"])))]
 pub(crate) struct DoctorArgs {
-    /// Absolute Evidence runtime configuration file to inspect.
+    /// Absolute Evidence Gateway runtime configuration file to inspect.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
     /// Also prove that the audit destination resolves below this persistent root.
