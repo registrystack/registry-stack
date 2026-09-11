@@ -417,13 +417,23 @@ impl CaseworkService {
         };
         item.live_attempt = live_attempt;
         item.display_reference = view.display_reference.clone();
-        if view.binding.generation != item.binding.generation {
+        if view.binding != item.binding {
             if item.live_attempt.is_some() {
                 item.routing = routing;
                 item.clock_occurrences = clock_occurrences;
                 return Ok(item);
             }
-            return Err(ServiceError::BindingMoved);
+            // Terminal occurrences are historical, read-only records. Within
+            // one source generation, the disclosed subject may have advanced
+            // since that occurrence ended.
+            if item.state.is_active() || view.binding.generation != item.binding.generation {
+                return Err(ServiceError::BindingMoved);
+            }
+            item.routing = routing;
+            item.clock_occurrences = clock_occurrences;
+            item.routing_copy = routing_copy;
+            item.actions.clear();
+            return Ok(item);
         }
         item.routing = routing;
         item.clock_occurrences = clock_occurrences;

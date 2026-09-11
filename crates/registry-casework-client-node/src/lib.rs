@@ -1031,6 +1031,12 @@ fn safe_revision(value: i64) -> Result<()> {
 }
 
 fn input<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
+    if contains_unsafe_integer(&value) {
+        return Err(binding_error(
+            "invalid_request",
+            "Casework client arguments are invalid",
+        ));
+    }
     serde_json::from_value(value)
         .map_err(|_| binding_error("invalid_request", "Casework client arguments are invalid"))
 }
@@ -1050,33 +1056,33 @@ fn outcome<T: Serialize>(
 }
 
 fn ensure_safe_integers(value: &Value) -> Result<()> {
+    if contains_unsafe_integer(value) {
+        return Err(binding_error(
+            "protocol",
+            "Casework returned an integer outside the JavaScript safe range",
+        ));
+    }
+    Ok(())
+}
+
+fn contains_unsafe_integer(value: &Value) -> bool {
     match value {
         Value::Number(number)
             if number.as_i64().is_some_and(|value| {
                 value.unsigned_abs() > MAXIMUM_JAVASCRIPT_SAFE_INTEGER as u64
             }) || number
                 .as_u64()
-                .is_some_and(|value| value > MAXIMUM_JAVASCRIPT_SAFE_INTEGER as u64) =>
+                .is_some_and(|value| value > MAXIMUM_JAVASCRIPT_SAFE_INTEGER as u64)
+                || number.as_f64().is_some_and(|value| {
+                    value.fract() == 0.0 && value.abs() > MAXIMUM_JAVASCRIPT_SAFE_INTEGER as f64
+                }) =>
         {
-            return Err(binding_error(
-                "protocol",
-                "Casework returned an integer outside the JavaScript safe range",
-            ));
+            true
         }
-        Value::Number(_) => {}
-        Value::Array(values) => {
-            for value in values {
-                ensure_safe_integers(value)?;
-            }
-        }
-        Value::Object(values) => {
-            for value in values.values() {
-                ensure_safe_integers(value)?;
-            }
-        }
-        _ => {}
+        Value::Array(values) => values.iter().any(contains_unsafe_integer),
+        Value::Object(values) => values.values().any(contains_unsafe_integer),
+        _ => false,
     }
-    Ok(())
 }
 
 fn client_error(error: CaseworkClientError) -> NapiError {
