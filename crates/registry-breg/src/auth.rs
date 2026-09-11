@@ -322,7 +322,7 @@ fn validate_verifier_profile(
 /// Exactly one admitted access-token type semantics: a single valid
 /// `typ` value, or the two RFC 9068 spellings of the access-token media
 /// type, which name the same type and must be accepted together
-/// (RFC 9068 §4). Any other shape admits more than one token type.
+/// (RFC 9068 §4). This profile rejects every other list shape.
 fn admits_one_access_token_type(allowed_typ: &[String]) -> bool {
     (allowed_typ.len() == 1 && valid_config_value(&allowed_typ[0]))
         || is_access_token_typ_pair(allowed_typ)

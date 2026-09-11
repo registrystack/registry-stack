@@ -930,9 +930,8 @@ pub fn access_token_typ_set(configured: &str) -> Vec<String> {
 }
 
 /// Whether `values` is exactly the two RFC 9068 spellings of the one
-/// access-token media type, in either order and casing. This is the only
-/// multi-element `allowed_typ` shape that still names a single
-/// access-token type; every other shape admits more than one.
+/// access-token media type, in either order and casing. Returns false for
+/// every other list shape.
 #[must_use]
 pub fn is_access_token_typ_pair(values: &[String]) -> bool {
     values.len() == 2
