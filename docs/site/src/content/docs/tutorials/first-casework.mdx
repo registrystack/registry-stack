@@ -181,8 +181,8 @@ Success prints nothing.
 way an application would; the token carries the `casework:request` scope and lasts five minutes.
 
 :::caution[Header files hold live tokens]
-`tutorial-work/requester.header` and the three header files after it each hold a bearer token that
-acts as that client until it expires.
+`tutorial-work/requester.header` and the other header files written later each hold a bearer token
+that acts as that client until it expires.
 `umask 077` makes them readable only by your user.
 Keep them out of version control, screenshots, and support messages.
 :::
@@ -351,6 +351,16 @@ An empty `actions` array means the item is visible and no operation is open to y
 
 A [claim](../../reference/glossary/#claim) makes one Staff member the holder, so two people do not
 decide the same item twice.
+Renew the Staff token before you act, so time spent reading the inbox cannot turn this request into
+an authentication refusal:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/staff/client-id")" \
+  --key "$credentials/staff/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+```
+
 Take the identifier and the offered `ifMatch` value from the inbox rather than typing them:
 
 ```sh
@@ -425,6 +435,15 @@ new `ifMatch`: claiming an item is what opens deciding it.
     crates/registry-caseworkctl/tests/dev_lifecycle.rs. */}
 
 ## Decide the item
+
+Renew the Staff token again before the two decision attempts:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/staff/client-id")" \
+  --key "$credentials/staff/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+```
 
 Try to confirm the renewal with the `ifMatch` value the inbox offered before the claim:
 
@@ -505,7 +524,17 @@ template marks that outcome `reasonRequired`.
 ## Read the outcome as the Requester
 
 The Requester never sees the inbox, the claim, or the caseworker.
-It reads its own [terminal feed](../../reference/glossary/#terminal-feed):
+Renew the Requester token before reading its own
+[terminal feed](../../reference/glossary/#terminal-feed):
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/requester/client-id")" \
+  --key "$credentials/requester/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/requester.header
+```
+
+Read the feed:
 
 ```sh
 curl --silent --show-error \
@@ -611,6 +640,16 @@ accountability outlives the feed.
 ## Requests Casework refuses
 
 Three refusals show where the boundaries are.
+Renew the Requester token so the first refusal proves the profile boundary rather than token
+expiry:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/requester/client-id")" \
+  --key "$credentials/requester/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/requester.header
+```
+
 Ask for the Staff inbox with the Requester token:
 
 ```sh
@@ -629,7 +668,14 @@ operation.not-authorized
 
 The Requester profile carries no authority over the queue, whatever it asks for.
 
-Now ask for the same inbox with the Staff token, selecting the `supervisor` profile:
+Renew the Staff token, then ask for the same inbox while selecting the `supervisor` profile:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/staff/client-id")" \
+  --key "$credentials/staff/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+```
 
 ```sh
 curl --silent --show-error \

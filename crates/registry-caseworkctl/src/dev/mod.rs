@@ -380,6 +380,41 @@ struct Captured {
     reported: Vec<ReportedClient>,
 }
 
+/// Catch terminal interruption while the foreground command waits for its
+/// detached supervisor. Registrations are scoped to this one start attempt so
+/// later commands in the same process keep their ordinary signal behavior.
+struct StartInterruption {
+    requested: Arc<AtomicBool>,
+    registrations: Vec<signal_hook::SigId>,
+}
+
+impl StartInterruption {
+    fn install() -> Result<Self> {
+        let mut interruption = Self {
+            requested: Arc::new(AtomicBool::new(false)),
+            registrations: Vec::new(),
+        };
+        for signal in [
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGHUP,
+        ] {
+            let registration =
+                signal_hook::flag::register(signal, Arc::clone(&interruption.requested))?;
+            interruption.registrations.push(registration);
+        }
+        Ok(interruption)
+    }
+}
+
+impl Drop for StartInterruption {
+    fn drop(&mut self) {
+        for registration in self.registrations.drain(..) {
+            signal_hook::low_level::unregister(registration);
+        }
+    }
+}
+
 fn capture(project: &Path, client_bytes: &[u8]) -> Result<Captured> {
     let policy = crate::project::load_and_check_policy(project)?;
     if !policy.sources.is_empty() {
@@ -535,6 +570,7 @@ fn start(args: StartArgs) -> Result<Value> {
     state.status = Status::Starting;
     state.failure = None;
     state.save()?;
+    let interruption = StartInterruption::install()?;
     let log = private::append(&root.join("logs/supervisor.log"))?;
     let mut supervisor = Command::new(std::env::current_exe()?)
         .arg("__dev-supervisor")
@@ -551,21 +587,28 @@ fn start(args: StartArgs) -> Result<Value> {
         .stderr(Stdio::from(log))
         .spawn()
         .context("cannot launch native local supervisor")?;
+    wait_for_start(&root, &mut supervisor, &interruption.requested)
+}
+
+fn wait_for_start(root: &Path, supervisor: &mut Child, interrupted: &AtomicBool) -> Result<Value> {
     loop {
-        let state = read_state(&root)?;
+        if interrupted.load(Ordering::Relaxed) {
+            return interrupted_start(root, supervisor);
+        }
+        let state = read_state(root)?;
         if matches!(state.status, Status::Ready)
-            && control(&root, "status").is_ok_and(|status| status == "ready")
+            && control(root, "status").is_ok_and(|status| status == "ready")
         {
             return Ok(state.report());
         }
         if supervisor.try_wait()?.is_some() || matches!(state.status, Status::Failed) {
             // Read once more: a supervisor that exited between this poll's
             // read and its own last save has the recorded cause on disk.
-            let mut failed = read_state(&root)?;
+            let mut failed = read_state(root)?;
             let cause = failed.failure.clone();
             failed.status = Status::Failed;
             failed.save()?;
-            return Err(start_failure(cause.as_deref(), &root));
+            return Err(start_failure(cause.as_deref(), root));
         }
         // Each prerequisite command and readiness probe owns its documented
         // deadline. Do not put a shorter aggregate deadline over a valid slow
@@ -666,7 +709,7 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
 }
 
 fn service_ports_must_be_free(status: &Status) -> bool {
-    !matches!(status, Status::Stopped)
+    !matches!(status, Status::Stopped | Status::Failed)
 }
 
 /// Remove the owned container and its named data volume, then forget them in
@@ -824,13 +867,6 @@ fn control_response_deadline(message: &str) -> Duration {
 }
 
 pub(crate) fn run_supervisor(args: SupervisorArgs) -> Result<()> {
-    rustix::process::setsid().context("cannot detach local supervisor")?;
-    let root = fs::canonicalize(&args.dev_root)?;
-    let _lock = private::lock(&root.join("supervisor.lock"))?;
-    let mut state = read_state(&root)?;
-    if !matches!(state.status, Status::Starting) {
-        bail!("supervisor requires a pending owned start");
-    }
     let terminate = Arc::new(AtomicBool::new(false));
     for signal in [
         signal_hook::consts::SIGTERM,
@@ -838,6 +874,16 @@ pub(crate) fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         signal_hook::consts::SIGHUP,
     ] {
         signal_hook::flag::register(signal, Arc::clone(&terminate))?;
+    }
+    // Install cleanup signals before detaching. A terminal signal delivered in
+    // the small interval between process creation and `setsid` then requests
+    // owned cleanup instead of terminating the supervisor by default.
+    rustix::process::setsid().context("cannot detach local supervisor")?;
+    let root = fs::canonicalize(&args.dev_root)?;
+    let _lock = private::lock(&root.join("supervisor.lock"))?;
+    let mut state = read_state(&root)?;
+    if !matches!(state.status, Status::Starting) {
+        bail!("supervisor requires a pending owned start");
     }
     let clients: Clients =
         serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
@@ -1060,6 +1106,30 @@ fn signal(child: &mut Child) -> Result<()> {
     }
     Ok(())
 }
+
+fn terminate_and_reap(child: &mut Child) -> Result<()> {
+    signal(child)?;
+    child.wait()?;
+    Ok(())
+}
+
+fn interrupted_start(root: &Path, supervisor: &mut Child) -> Result<Value> {
+    terminate_and_reap(supervisor)?;
+    let mut state = read_state(root)?;
+    if matches!(state.status, Status::Starting | Status::Stopping) {
+        state.status = Status::Failed;
+        state.failure = Some("local start interrupted before it became ready".to_owned());
+        state.save()?;
+    }
+    if matches!(state.status, Status::Failed) {
+        return Err(start_failure(
+            state.failure.as_deref().or(Some("local start interrupted")),
+            root,
+        ));
+    }
+    bail!("local start interrupted; the owned supervisor stopped and retained data is preserved")
+}
+
 fn stop_child(child: &mut Child) -> Result<()> {
     signal(child)?;
     let deadline = Instant::now() + Duration::from_secs(35);

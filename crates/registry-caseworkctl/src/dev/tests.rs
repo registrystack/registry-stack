@@ -148,6 +148,51 @@ fn binding_refuses_a_client_missing_one_required_profile_scope() {
 }
 
 #[test]
+fn binding_accepts_directory_members_with_matching_roles() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+
+    let bound = config::bind(&clients, &policy).unwrap();
+    let roles: BTreeMap<&str, CaseworkRole> = bound
+        .iter()
+        .map(|entry| (entry.client.id.as_str(), entry.role))
+        .collect();
+    assert_eq!(
+        roles[clients.directory[0].staff[0].as_str()],
+        CaseworkRole::Staff
+    );
+    assert_eq!(
+        roles[clients.directory[0].supervisors[0].as_str()],
+        CaseworkRole::Supervisor
+    );
+}
+
+#[test]
+fn binding_refuses_directory_members_with_mismatched_roles() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+
+    for (from, to, expected) in [
+        ("staff: [staff]", "staff: [supervisor]", "Staff profile"),
+        (
+            "supervisors: [supervisor]",
+            "supervisors: [staff]",
+            "Supervisor profile",
+        ),
+        ("staff: [staff]", "staff: [requester]", "Requester client"),
+    ] {
+        let text = STANDALONE_DEV_CLIENTS.replace(from, to);
+        assert_ne!(text, STANDALONE_DEV_CLIENTS);
+        let clients = config::clients(text.as_bytes()).unwrap();
+        let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
+        assert!(refusal.contains(expected), "{refusal}");
+    }
+}
+
+#[test]
 fn binding_refuses_an_unserved_queue_and_a_missing_administrator() {
     let root = tempfile::tempdir().unwrap();
     let project = standalone(root.path());
@@ -488,12 +533,45 @@ fn stop_control_waits_for_the_complete_sequential_cleanup_budget() {
 }
 
 #[test]
-fn a_stopped_session_can_be_reclaimed_after_its_ports_are_reused() {
+fn a_completed_session_can_be_reclaimed_after_its_ports_are_reused() {
     assert!(!service_ports_must_be_free(&Status::Stopped));
+    assert!(!service_ports_must_be_free(&Status::Failed));
     assert!(service_ports_must_be_free(&Status::Starting));
     assert!(service_ports_must_be_free(&Status::Ready));
     assert!(service_ports_must_be_free(&Status::Stopping));
-    assert!(service_ports_must_be_free(&Status::Failed));
+}
+
+#[test]
+fn foreground_interruption_terminates_and_reaps_its_owned_supervisor() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = standalone(workspace.path());
+    let mut state = session(&project);
+    state.status = Status::Starting;
+    fs::create_dir_all(state.root()).unwrap();
+    fs::set_permissions(project.join(".casework"), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(state.root(), fs::Permissions::from_mode(0o700)).unwrap();
+    state.save().unwrap();
+    let mut supervisor = Command::new("/bin/sh")
+        .args(["-c", "while :; do :; done"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let interrupted = AtomicBool::new(true);
+
+    let refusal = format!(
+        "{:#}",
+        wait_for_start(&state.root(), &mut supervisor, &interrupted).unwrap_err()
+    );
+
+    assert!(refusal.contains("local start interrupted"), "{refusal}");
+    assert!(supervisor.try_wait().unwrap().is_some());
+    let retained = read_state(&state.root()).unwrap();
+    assert!(matches!(retained.status, Status::Failed));
+    assert!(retained
+        .failure
+        .is_some_and(|failure| failure.contains("interrupted")));
 }
 
 #[test]

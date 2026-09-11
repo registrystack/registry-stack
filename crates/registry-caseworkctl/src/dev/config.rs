@@ -200,7 +200,7 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
                 team.queue
             );
         }
-        for member in team.staff.iter().chain(&team.supervisors) {
+        for member in &team.staff {
             let entry = bound
                 .iter()
                 .find(|entry| &entry.client.id == member)
@@ -208,6 +208,30 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
             if entry.role == CaseworkRole::Requester {
                 bail!(
                     "local directory team {} names Requester client {member}; only a person serves a queue",
+                    team.team
+                );
+            }
+            if entry.role != CaseworkRole::Staff {
+                bail!(
+                    "local directory team {} names client {member} as staff, but that client does not bind a Staff profile",
+                    team.team
+                );
+            }
+        }
+        for member in &team.supervisors {
+            let entry = bound
+                .iter()
+                .find(|entry| &entry.client.id == member)
+                .context("directory member must be a declared client")?;
+            if entry.role == CaseworkRole::Requester {
+                bail!(
+                    "local directory team {} names Requester client {member}; only a person serves a queue",
+                    team.team
+                );
+            }
+            if entry.role != CaseworkRole::Supervisor {
+                bail!(
+                    "local directory team {} names client {member} as a supervisor, but that client does not bind a Supervisor profile",
                     team.team
                 );
             }
