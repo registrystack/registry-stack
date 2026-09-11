@@ -83,6 +83,9 @@ the public source model.
 # Base Registry Engine: breg, bregctl, and mint
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 
+# Registry Casework: casework, caseworkctl, and mint
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
+
 # Registry Relay: relay and relayctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
 
@@ -92,12 +95,13 @@ curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/downl
 
 Each installer verifies the binaries against the published `SHA256SUMS` before
 writing them to `$HOME/.local/bin`, or to the directory `BREG_INSTALL_DIR`,
-`RELAY_INSTALL_DIR`, or `EVIDENCECTL_INSTALL_DIR` names. Registry Discovery and
-Registry Manifest publish a binary and no installer: download
-`discovery-<tag>-linux-amd64` or `registry-manifest-<tag>-linux-amd64` from the
+`CASEWORK_INSTALL_DIR`, `RELAY_INSTALL_DIR`, or `EVIDENCECTL_INSTALL_DIR`
+names. Registry Discovery and Registry Manifest publish a binary and no
+installer: download `discovery-<tag>-linux-amd64` or
+`registry-manifest-<tag>-linux-amd64` from the
 [release page](https://github.com/registrystack/registry-stack/releases) and
 check it against the release checksum chain. Container images for `breg`,
-`relay`, `evidence`, `mint`, and `discovery` are published as
+`casework`, `relay`, `evidence`, `mint`, and `discovery` are published as
 `ghcr.io/registrystack/<name>:<tag>`. Which platforms each artifact supports,
 and what is not supported, is recorded in
 [known limitations](https://docs.registrystack.org/dev/explanation/known-limitations/#platform-support).
@@ -130,11 +134,13 @@ flowchart LR
 ## Repository Layout
 
 - `crates/`: Rust crates and runnable binaries for Base Registry Engine,
-  Registry Relay, Evidence Gateway, Registry Discovery, Registry Manifest,
-  Registry Mint, Registry Platform, and the `bregctl`, `relayctl`,
-  `evidencectl`, and `discoveryctl` adopter tools. Base Registry Engine lives in
-  `crates/registry-breg` with one `breg` binary, and Evidence Gateway in
-  `crates/registry-evidence` with one `evidence` binary.
+  Registry Relay, Evidence Gateway, Registry Casework, Registry Discovery,
+  Registry Manifest, Registry Mint, Registry Platform, and the `bregctl`,
+  `caseworkctl`, `relayctl`, `evidencectl`, and `discoveryctl` adopter tools.
+  Base Registry Engine lives in `crates/registry-breg` with one `breg`
+  binary, Evidence Gateway in `crates/registry-evidence` with one `evidence`
+  binary, and Registry Casework in `crates/registry-casework` with one
+  `casework` binary.
 - `products/`: product-owned docs, examples, Docker inputs, specs, security
   material, scripts, performance harnesses, and fixtures that are not normal
   workspace crates.
