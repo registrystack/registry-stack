@@ -343,6 +343,14 @@ Project validation requires unique source IDs. Each required scope is a
 1–256 byte OAuth scope token using the RFC 6749 character set; empty scope
 values and embedded whitespace are refused before packaging.
 
+Each access profile must also require a scope unavailable from the combined
+scopes of every other profile at the same or a lower role. Profiles may share
+common scopes when each has its own scope discriminator. This keeps a token
+with several valid lower or peer grants from selecting another profile's
+identity or authority, including authority pinned to an existing hosted item
+under an earlier policy. A higher-role credential may explicitly include a
+lower profile's required scopes when it is intended to select that profile.
+
 Casework accepts Administrator, Supervisor, and Staff credentials only when
 the trusted issuer asserts the configured human identity claim. The operator
 binding defaults to `humanIdentity: {claim: registry_actor_kind, value: human}`.

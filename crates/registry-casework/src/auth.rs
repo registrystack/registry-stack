@@ -18,6 +18,8 @@ pub struct CaseworkAuthenticator {
 }
 
 impl CaseworkAuthenticator {
+    /// Constructs an authenticator from a project already validated by
+    /// [`CaseworkProject::load`] or [`CaseworkProject::check`].
     #[must_use]
     pub fn new(
         project: &CaseworkProject,

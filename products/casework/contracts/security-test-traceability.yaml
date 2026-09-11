@@ -2,7 +2,7 @@ contract: registry.casework.security-test-traceability/v1
 scope: first-full-mvp
 executionStatus: not-recorded
 entries:
-  - {id: CASEWORK-SEC-01, tests: [{file: crates/registry-casework/tests/human_identity_auth.rs, name: trusted_human_assertion_gates_human_profiles_and_requester_accepts_service_identity}]}
+  - {id: CASEWORK-SEC-01, tests: [{file: crates/registry-casework/tests/human_identity_auth.rs, name: trusted_human_assertion_gates_human_profiles_and_requester_accepts_service_identity}, {file: crates/registry-casework/tests/human_identity_auth.rs, name: same_role_profiles_with_distinct_principals_require_distinct_scopes}, {file: crates/registry-casework-core/src/config.rs, name: one_profile_cannot_be_selected_by_combining_lower_and_same_role_scopes}]}
   - {id: CASEWORK-SEC-02, tests: [{file: crates/registry-casework/tests/service_visibility.rs, name: http_authentication_and_directory_authority_are_enforced}]}
   - {id: CASEWORK-SEC-03, tests: [{file: crates/registry-casework-breg/tests/source_boundary.rs, name: caller_disclosure_never_reuses_reader_content_or_another_persons_reason}, {file: crates/registry-casework-breg/tests/source_boundary.rs, name: current_caller_disclosure_controls_the_display_reference}, {file: crates/registry-casework/tests/inbox_ordering_postgres.rs, name: reference_lookup_rechecks_caller_disclosure_and_binds_stable_sort_cursors}, {file: crates/registry-casework/tests/service_visibility.rs, name: source_outage_is_distinct_from_empty_inbox_and_holdings}]}
   - {id: CASEWORK-SEC-04, tests: [{file: crates/registry-casework/tests/service_visibility.rs, name: service_visibility_boundaries}]}
