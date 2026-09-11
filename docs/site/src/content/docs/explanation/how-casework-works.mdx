@@ -208,7 +208,7 @@ What a clock does when it fires is narrow and local.
 It records a reminder in the item's history, and a due step appends its own history entry, releases the holder, and moves the item to the queue the step names, with a system actor rather than a person.
 An effect commits only after a fresh authoritative read confirms the item the clock was computed against, so an unanswering registry makes the effect wait rather than fire on stale state, and the pinned calculation generation keeps a restart from repeating one.
 A clock reads the source and changes nothing there, decides no outcome, and sends nothing to anyone: its effect is a visible change to the item, and a person still has to open it.
-[Configure a Casework project](../../configure/casework/) carries the grammar for routing rules, calendars, and clocks.
+[Author a Casework policy](../../configure/casework/) carries the grammar for routing rules, calendars, and clocks.
 
 {/* Evidence: crates/registry-casework/src/clocks.rs, process_due_clocks, defer_clock_claim, apply_clock_claim, and ClockStepApplied;
     crates/registry-casework-core/src/clock_runtime.rs, ClockNextEffect;
@@ -265,7 +265,7 @@ A pending or uncertain attempt blocks that erasure until the attempt is recovere
 
 ## Next
 
-- [Configure a Casework project](../../configure/casework/): hosted kinds, sources, routing rules, calendars, and clocks.
+- [Author a Casework policy](../../configure/casework/): hosted kinds, sources, routing rules, calendars, and clocks.
 - [Deploy Registry Casework](../../operate/casework/): database setup, the operator file, directory bootstrap, and the operator paths for recovery.
 - [Retention in Registry Casework](../../operate/casework-retention/): what each retention period removes and what survives it.
 - [Registry Casework API](../../reference/apis/registry-casework/): every route, header, and problem code.
