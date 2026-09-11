@@ -71,6 +71,47 @@ pub enum CaseworkProblemCode {
 }
 
 impl CaseworkProblemCode {
+    /// Every code this client recognizes, in code-string order.
+    ///
+    /// `Unknown` is absent: it carries whatever a newer Casework service
+    /// answered, so it names no registered code.
+    pub const ALL: [Self; 34] = [
+        Self::AbsenceCoverCycle,
+        Self::AbsenceInvalidPeriod,
+        Self::AbsenceOverlap,
+        Self::AbsenceSelfCover,
+        Self::AuthenticationRefused,
+        Self::ClockRecomputePreviewExpired,
+        Self::CursorExpired,
+        Self::CursorInvalid,
+        Self::IdempotencyExpired,
+        Self::IdempotencyKeyReused,
+        Self::OperationNotAuthorized,
+        Self::PreconditionFailed,
+        Self::PreconditionRequired,
+        Self::ProfileNotAuthorized,
+        Self::ProfileNotHuman,
+        Self::RequestBodyTooLarge,
+        Self::RequestInvalid,
+        Self::RequestMethodNotAllowed,
+        Self::RequestNotFound,
+        Self::RequestUnprocessable,
+        Self::RequestUnsupportedMediaType,
+        Self::RuntimeFailure,
+        Self::ServiceUnavailable,
+        Self::SourceBadGateway,
+        Self::SourceNotFound,
+        Self::SourceSignatureInvalid,
+        Self::WorkItemAlreadyClaimed,
+        Self::WorkItemNotHolder,
+        Self::WorkItemNotOffered,
+        Self::WorkItemNotVisible,
+        Self::WorkItemProposalChanged,
+        Self::WorkItemRecoveryPending,
+        Self::WorkItemSourceUnavailable,
+        Self::WorkItemSuperseded,
+    ];
+
     #[must_use]
     pub fn code(&self) -> &str {
         match self {
@@ -152,7 +193,10 @@ impl CaseworkProblemCode {
         }
     }
 
-    pub(crate) fn expected_status(&self) -> Option<u16> {
+    /// The one status Casework answers this code under, or `None` for a code
+    /// this client does not recognize.
+    #[must_use]
+    pub fn expected_status(&self) -> Option<u16> {
         Some(match self {
             Self::AbsenceCoverCycle
             | Self::AbsenceInvalidPeriod

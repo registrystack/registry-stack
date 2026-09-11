@@ -11,7 +11,7 @@ mod model;
 pub use client::CaseworkClient;
 pub use config::CaseworkClientConfig;
 pub use error::{CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure};
-pub use model::*;
+pub use model::{CaseworkAuth, CaseworkComplete};
 pub use registry_casework_core::{
     AbsenceInput, AbsenceList, AbsenceRecord, ActivityClockAnchor, AssignmentContext,
     AssignmentRequest, AttemptState, AttemptStatus, BootstrapDirectoryRequest, CalendarPolicy,
@@ -39,3 +39,6 @@ pub use registry_casework_core::{
     WorkingWeekday,
 };
 pub use registry_platform_httputil::client::BearerToken;
+/// The identifier type every item, attempt, and event argument carries, so a
+/// caller names it through this crate rather than a second `uuid` dependency.
+pub use uuid::Uuid;

@@ -12,11 +12,12 @@ use casework_client_sdk::{
     AbsenceInput, AssignmentRequest, BearerToken, BootstrapDirectoryRequest, CaseloadApplyRequest,
     CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
     CaseworkClient as RustClient, CaseworkClientConfig, CaseworkClientError as RustClientError,
-    CaseworkComplete, CaseworkProtocolFailure, ClockRecomputeApplyRequest, ClockRecomputeRequest,
-    DecideRequest, DelegateRequest, DirectoryTargetsQuery, DirectoryTeamUpdateRequest,
-    HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest, HostedCreateRequest,
-    HostedDecisionRequest, HostedNoteRequest, HostedPageQuery, HostedTerminalQuery,
-    ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest, SaveDraftRequest,
+    CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, ClockRecomputeApplyRequest,
+    ClockRecomputeRequest, DecideRequest, DelegateRequest, DirectoryTargetsQuery,
+    DirectoryTeamUpdateRequest, HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest,
+    HostedCreateRequest, HostedDecisionRequest, HostedNoteRequest, HostedPageQuery,
+    HostedTerminalQuery, ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest,
+    SaveDraftRequest,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -251,6 +252,24 @@ fn auth<'a>(
         None => CaseworkAuth::new(token, profile),
     }
 }
+
+/// Every validation reason the binding can answer, in the order the mapping
+/// below names them. A reason the client adds stops that mapping compiling, so
+/// a new reason is named here before it can reach a caller.
+const VALIDATION_REASONS: [casework_client_sdk::HostedValidationReason; 9] = {
+    use casework_client_sdk::HostedValidationReason;
+    [
+        HostedValidationReason::KindNotAllowed,
+        HostedValidationReason::ReferenceInvalid,
+        HostedValidationReason::ObjectRequired,
+        HostedValidationReason::MaximumBytesExceeded,
+        HostedValidationReason::MaximumDepthExceeded,
+        HostedValidationReason::SchemaMismatch,
+        HostedValidationReason::OutcomeNotDeclared,
+        HostedValidationReason::ReasonRequired,
+        HostedValidationReason::TextInvalid,
+    ]
+};
 
 fn validation_reason(value: casework_client_sdk::HostedValidationReason) -> &'static str {
     use casework_client_sdk::HostedValidationReason;
@@ -1366,6 +1385,22 @@ fn registry_casework_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
         "CaseworkClientError",
         module.py().get_type::<CaseworkClientError>(),
+    )?;
+    // The two closed catalogues a caller can match on, read from the Rust
+    // client so the typing stub is checked against one list, not a copy.
+    module.add(
+        "PROBLEM_CODES",
+        CaseworkProblemCode::ALL
+            .iter()
+            .map(CaseworkProblemCode::code)
+            .collect::<Vec<_>>(),
+    )?;
+    module.add(
+        "VALIDATION_REASONS",
+        VALIDATION_REASONS
+            .into_iter()
+            .map(validation_reason)
+            .collect::<Vec<_>>(),
     )?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

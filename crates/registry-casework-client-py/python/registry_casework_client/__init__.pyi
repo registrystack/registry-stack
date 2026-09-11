@@ -621,14 +621,72 @@ class Page(_PageOptional, Generic[T]):
 
 DirectoryTargetPage: TypeAlias = Page[IssuerPrincipal]
 
+CaseworkErrorKind: TypeAlias = Literal[
+    "configuration", "invalid_request", "transport", "problem", "protocol",
+]
+KnownCaseworkProblemCode: TypeAlias = Literal[
+    "absence.cover-cycle",
+    "absence.invalid-period",
+    "absence.overlap",
+    "absence.self-cover",
+    "authentication.refused",
+    "clock.recompute-preview-expired",
+    "cursor.expired",
+    "cursor.invalid",
+    "idempotency.expired",
+    "idempotency.key-reused",
+    "operation.not-authorized",
+    "precondition.failed",
+    "precondition.required",
+    "profile.not-authorized",
+    "profile.not-human",
+    "request.body-too-large",
+    "request.invalid",
+    "request.method-not-allowed",
+    "request.not-found",
+    "request.unprocessable",
+    "request.unsupported-media-type",
+    "runtime.failure",
+    "service.unavailable",
+    "source.bad-gateway",
+    "source.not-found",
+    "source.signature-invalid",
+    "work-item.already-claimed",
+    "work-item.not-holder",
+    "work-item.not-offered",
+    "work-item.not-visible",
+    "work-item.proposal-changed",
+    "work-item.recovery-pending",
+    "work-item.source-unavailable",
+    "work-item.superseded",
+]
+# A newer Casework service can answer a code this release does not name, so the
+# attribute widens the closed catalogue the way the Node typings do.
+CaseworkProblemCode: TypeAlias = KnownCaseworkProblemCode | str
+HostedValidationReason: TypeAlias = Literal[
+    "kind_not_allowed",
+    "reference_invalid",
+    "object_required",
+    "maximum_bytes_exceeded",
+    "maximum_depth_exceeded",
+    "schema_mismatch",
+    "outcome_not_declared",
+    "reason_required",
+    "text_invalid",
+]
+
+class ValidationDetail(TypedDict):
+    path: str
+    reason: HostedValidationReason
+
 class CaseworkClientError(Exception):
-    kind: str
-    code: str | None
+    kind: CaseworkErrorKind
+    code: CaseworkProblemCode | None
     detail: str | None
     status: int | None
     trace_id: str | None
     original_attempt_id: str | None
-    validation: dict[str, str] | None
+    validation: ValidationDetail | None
     transport_kind: str | None
     protocol_failure: str | None
 
