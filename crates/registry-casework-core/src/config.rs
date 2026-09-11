@@ -10,6 +10,8 @@ use crate::{check_clock_policies, check_routing_policy, CalendarPolicy, ClockPol
 
 pub const CASEWORK_API_VERSION: &str = "registry.registrystack.org/casework/v1alpha1";
 pub const CASEWORK_KIND: &str = "CaseworkProject";
+// Matches the maintained Mint issuer's bounded RFC 6749 scope-token contract.
+const MAXIMUM_REQUIRED_SCOPE_BYTES: usize = 256;
 
 fn default_page_size() -> usize {
     25
@@ -33,6 +35,14 @@ fn valid_profile_identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+fn valid_required_scope(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAXIMUM_REQUIRED_SCOPE_BYTES
+        && value.bytes().all(|byte| {
+            byte == 0x21 || (0x23..=0x5b).contains(&byte) || (0x5d..=0x7e).contains(&byte)
+        })
 }
 
 /// Whether an identifier can be stored and selected by the Casework directory.
@@ -101,7 +111,12 @@ impl CaseworkProject {
         let profiles: BTreeSet<_> = self.access_profiles.iter().map(|p| &p.id).collect();
         if profiles.len() != self.access_profiles.len()
             || self.access_profiles.iter().any(|profile| {
-                profile.principal_claim.is_empty() || profile.required_scopes.is_empty()
+                profile.principal_claim.is_empty()
+                    || profile.required_scopes.is_empty()
+                    || profile
+                        .required_scopes
+                        .iter()
+                        .any(|scope| !valid_required_scope(scope))
             })
             || !self
                 .access_profiles
@@ -175,6 +190,10 @@ impl CaseworkProject {
             .iter()
             .map(ClockPolicy::id)
             .collect::<BTreeSet<_>>();
+        let source_ids: BTreeSet<_> = self.sources.iter().map(|source| &source.id).collect();
+        if source_ids.len() != self.sources.len() {
+            return Err(ConfigError::Identifier);
+        }
         for source in &self.sources {
             if source.id.is_empty()
                 || source.adapter.is_empty()
@@ -518,6 +537,43 @@ mod tests {
         let mut candidate = project();
         candidate.access_profiles[2].kinds = vec!["decision".to_owned()];
         assert_eq!(candidate.check(), Err(ConfigError::HostedKinds));
+    }
+
+    #[test]
+    fn required_scopes_use_bounded_rfc_6749_scope_tokens() {
+        for valid in [
+            "!#$%&'()*+,-./012:;<=>?@AZ[]^_`az{|}~".to_owned(),
+            "x".repeat(MAXIMUM_REQUIRED_SCOPE_BYTES),
+        ] {
+            let mut candidate = project();
+            candidate.access_profiles[0].required_scopes = vec![valid];
+            assert_eq!(candidate.check(), Ok(()));
+        }
+
+        for invalid in [
+            String::new(),
+            "x".repeat(MAXIMUM_REQUIRED_SCOPE_BYTES + 1),
+            "casework:staff review".to_owned(),
+            "casework:staff\"review".to_owned(),
+            "casework:staff\\review".to_owned(),
+            "casework:staff\u{1f}review".to_owned(),
+            "casework:staff\u{7f}review".to_owned(),
+            "casework:réview".to_owned(),
+        ] {
+            let mut candidate = project();
+            candidate.access_profiles[0].required_scopes = vec![invalid];
+            assert_eq!(candidate.check(), Err(ConfigError::AccessProfiles));
+        }
+    }
+
+    #[test]
+    fn source_ids_are_unique_independently_of_their_description_files() {
+        let mut candidate = project_with_source_queue("decisions");
+        let mut duplicate = candidate.sources[0].clone();
+        duplicate.adapter = "other-adapter".to_owned();
+        duplicate.description = "other-description.json".to_owned();
+        candidate.sources.push(duplicate);
+        assert_eq!(candidate.check(), Err(ConfigError::Identifier));
     }
 
     #[test]
