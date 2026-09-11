@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document the static `authentication.oidc.jwksSource` alternative to issuer
+  discovery, when to prefer it, and that it performs no rotation of its own.
 - Name `GET /v1/work-items/{itemId}/hosted-history` as the staff hosted
   lifecycle history read, and say that `GET /v1/work-items/{itemId}/history` is
   the source-scoped variant that requires a `Registry-Source-Profile` header.

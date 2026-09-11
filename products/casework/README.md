@@ -364,6 +364,25 @@ and names a directory member. Casework does not infer a human actor from a
 subject, client identifier, or scope. This boundary relies on the configured
 trusted issuer to classify sessions correctly.
 
+`authentication.oidc.jwksSource` defaults to discovery: Casework reads the
+issuer's metadata document at startup and follows its `jwks_uri`. Declare the
+static alternative instead when the runtime cannot reach that document, when the
+deployment is air-gapped, or when a test issuer's keys are pinned by hand:
+
+```yaml
+authentication:
+  oidc:
+    jwksSource:
+      kind: static
+      documentRef: secret:file/jwks.json
+```
+
+The referenced document is an ordinary JWKS holding uniquely named asymmetric
+keys. A symmetric key, an empty key set, a missing or repeated `kid`, and a
+document that is not JSON are all refused at startup. A static source performs
+no rotation of its own, so rolling a signing key means replacing the referenced
+document and restarting Casework.
+
 The generated source reader has only BReg `get` and `list`, reads the target
 record reference plus explicitly configured routing and display reference
 fields, requests no reviewer reason fields, and carries no decision or
