@@ -87,6 +87,69 @@ fn clients_file_refuses_unknown_keys_and_repeated_identity() {
 }
 
 #[test]
+fn clients_file_refuses_duplicate_and_non_rfc6749_scopes() {
+    for scopes in [
+        "[casework:staff, casework:staff]",
+        "['casework:\"staff']",
+        r"['casework:\staff']",
+        "[casework:stáff]",
+    ] {
+        let invalid = STANDALONE_DEV_CLIENTS
+            .replace("scopes: [casework:staff]", &format!("scopes: {scopes}"));
+        assert_ne!(invalid, STANDALONE_DEV_CLIENTS);
+
+        let refusal = format!("{:#}", config::clients(invalid.as_bytes()).unwrap_err());
+        assert!(refusal.contains("unique"), "{refusal}");
+        assert!(refusal.contains("RFC 6749 scope-tokens"), "{refusal}");
+    }
+}
+
+#[test]
+fn clients_file_refuses_invalid_and_mint_reserved_claim_names() {
+    let invalid_name = STANDALONE_DEV_CLIENTS.replace(
+        "registry_actor_kind: human",
+        r"'registry\actor_kind': human",
+    );
+    assert_ne!(invalid_name, STANDALONE_DEV_CLIENTS);
+    let refusal = format!(
+        "{:#}",
+        config::clients(invalid_name.as_bytes()).unwrap_err()
+    );
+    assert!(refusal.contains("claim names"), "{refusal}");
+    assert!(refusal.contains("RFC 6749 scope-tokens"), "{refusal}");
+
+    // `aud` was previously accepted here, then rejected when `dev` copied it
+    // into Mint's closed client-registration contract.
+    let reserved = STANDALONE_DEV_CLIENTS.replace("registry_actor_kind: human", "aud: human");
+    assert_ne!(reserved, STANDALONE_DEV_CLIENTS);
+    let refusal = format!("{:#}", config::clients(reserved.as_bytes()).unwrap_err());
+    assert!(
+        refusal.contains("registered access-token claims"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn clients_file_refuses_repeated_members_within_each_team_role() {
+    for (members, repeated, expected) in [
+        ("staff: [staff]", "staff: [staff, staff]", "staff list"),
+        (
+            "supervisors: [supervisor]",
+            "supervisors: [supervisor, supervisor]",
+            "supervisors list",
+        ),
+    ] {
+        let invalid = STANDALONE_DEV_CLIENTS.replace(members, repeated);
+        assert_ne!(invalid, STANDALONE_DEV_CLIENTS);
+
+        let refusal = format!("{:#}", config::clients(invalid.as_bytes()).unwrap_err());
+        assert!(refusal.contains("decisions-team"), "{refusal}");
+        assert!(refusal.contains(expected), "{refusal}");
+        assert!(refusal.contains("at most once"), "{refusal}");
+    }
+}
+
+#[test]
 fn clients_file_refuses_two_teams_assigned_to_one_queue() {
     let duplicate_queue = STANDALONE_DEV_CLIENTS.replace(
         "  - team: decisions-team\n",
@@ -591,6 +654,42 @@ fn foreground_interruption_terminates_and_reaps_its_owned_supervisor() {
 }
 
 #[test]
+fn failed_start_waits_for_the_supervisor_lock_to_be_released() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = standalone(workspace.path());
+    let mut state = session(&project);
+    state.status = Status::Failed;
+    state.failure = Some("injected supervisor failure".to_owned());
+    fs::create_dir_all(state.root()).unwrap();
+    fs::set_permissions(project.join(".casework"), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(state.root(), fs::Permissions::from_mode(0o700)).unwrap();
+    state.save().unwrap();
+    let lock = private::lock(&state.root().join("supervisor.lock")).unwrap();
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        drop(lock);
+    });
+    let mut supervisor = Command::new("/bin/sleep").arg("0.2").spawn().unwrap();
+    let interrupted = AtomicBool::new(false);
+    let started = Instant::now();
+
+    let refusal = format!(
+        "{:#}",
+        wait_for_start(&state.root(), &mut supervisor, &interrupted).unwrap_err()
+    );
+    let elapsed = started.elapsed();
+    release.join().unwrap();
+
+    assert!(refusal.contains("injected supervisor failure"), "{refusal}");
+    assert!(supervisor.try_wait().unwrap().is_some());
+    assert!(
+        elapsed >= Duration::from_millis(150),
+        "elapsed: {elapsed:?}"
+    );
+    assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+}
+
+#[test]
 fn migration_failures_use_the_bounded_native_diagnostic_stream() {
     let root = tempfile::tempdir().unwrap();
     private::directory(&root.path().join("logs")).unwrap();
@@ -795,6 +894,97 @@ fn retained_service_journal_stays_bounded_and_keeps_latest_diagnostics() {
     let metadata = fs::symlink_metadata(&path).unwrap();
     assert_eq!(metadata.permissions().mode() & 0o077, 0);
     assert_eq!(metadata.nlink(), 1);
+}
+
+#[test]
+fn supervisor_log_stays_bounded_and_resists_path_swaps_and_links() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("logs");
+    private::directory(&logs).unwrap();
+    let path = logs.join("supervisor.log");
+    let old_marker = b"latest-previous-supervisor-failure\n";
+    let mut oversized = vec![b'o'; MAX_BYTES as usize + 1024];
+    oversized.extend_from_slice(old_marker);
+    private::create(&path, &oversized).unwrap();
+    let new_error = anyhow::anyhow!(
+        "latest-current-supervisor-failure:{}",
+        "\u{1f980}".repeat(MAX_REFUSAL)
+    );
+    let bounded = bounded_supervisor_error(&new_error);
+
+    let mut log = supervisor_log(root.path()).unwrap();
+    writeln!(log, "{bounded}").unwrap();
+    drop(log);
+
+    let retained = fs::read(&path).unwrap();
+    assert!(retained.len() <= MAX_BYTES as usize);
+    assert!(retained
+        .windows(old_marker.len())
+        .any(|window| window == old_marker));
+    assert!(String::from_utf8_lossy(&retained).contains("latest-current-supervisor-failure"));
+    assert_eq!(bounded.chars().count(), MAX_REFUSAL);
+    let maximum_width =
+        bounded_supervisor_error(&anyhow::anyhow!("{}", "\u{1f980}".repeat(MAX_REFUSAL + 1)));
+    // `main_entry` writes this string directly with `eprintln!("{error:#}")`:
+    // no prefix, and exactly one framing newline.
+    assert_eq!(maximum_width.len() + 1, MAX_SUPERVISOR_ERROR_BYTES as usize);
+    let metadata = fs::symlink_metadata(&path).unwrap();
+    assert_eq!(metadata.permissions().mode() & 0o077, 0);
+    assert_eq!(metadata.nlink(), 1);
+
+    let swap_root = tempfile::tempdir().unwrap();
+    let swap_logs = swap_root.path().join("logs");
+    let moved_logs = swap_root.path().join("original-logs");
+    let replacement_logs = swap_root.path().join("replacement-logs");
+    private::directory(&swap_logs).unwrap();
+    private::directory(&replacement_logs).unwrap();
+    private::create(
+        &swap_logs.join("supervisor.log"),
+        b"original recent failure\n",
+    )
+    .unwrap();
+    private::create(
+        &replacement_logs.join("supervisor.log"),
+        b"replacement must stay unchanged\n",
+    )
+    .unwrap();
+    let mut log = supervisor_log_with_open(swap_root.path(), || {
+        fs::rename(&swap_logs, &moved_logs).unwrap();
+        fs::rename(&replacement_logs, &swap_logs).unwrap();
+    })
+    .unwrap();
+    writeln!(log, "current failure").unwrap();
+    drop(log);
+    assert_eq!(
+        fs::read(swap_logs.join("supervisor.log")).unwrap(),
+        b"replacement must stay unchanged\n"
+    );
+    assert_eq!(
+        fs::read(moved_logs.join("supervisor.log")).unwrap(),
+        b"original recent failure\ncurrent failure\n"
+    );
+
+    let hardlink_root = tempfile::tempdir().unwrap();
+    let hardlink_logs = hardlink_root.path().join("logs");
+    private::directory(&hardlink_logs).unwrap();
+    let target = hardlink_logs.join("target.log");
+    private::create(&target, b"preserve me").unwrap();
+    let linked = hardlink_logs.join("supervisor.log");
+    fs::hard_link(&target, &linked).unwrap();
+    let refusal = format!("{:#}", supervisor_log(hardlink_root.path()).unwrap_err());
+    assert!(refusal.contains("single-link"), "{refusal}");
+    assert_eq!(fs::read(&target).unwrap(), b"preserve me");
+
+    let symlink_root = tempfile::tempdir().unwrap();
+    let symlink_logs = symlink_root.path().join("logs");
+    private::directory(&symlink_logs).unwrap();
+    let target = symlink_logs.join("target.log");
+    private::create(&target, b"preserve me too").unwrap();
+    let linked = symlink_logs.join("supervisor.log");
+    std::os::unix::fs::symlink(&target, &linked).unwrap();
+    let refusal = format!("{:#}", supervisor_log(symlink_root.path()).unwrap_err());
+    assert!(refusal.contains("supervisor journal"), "{refusal}");
+    assert_eq!(fs::read(&target).unwrap(), b"preserve me too");
 }
 
 #[test]

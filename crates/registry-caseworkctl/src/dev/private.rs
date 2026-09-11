@@ -130,24 +130,3 @@ pub(super) fn validate_tree(root: &Path) -> Result<()> {
     }
     Ok(())
 }
-
-/// Open the retained runtime journal for appending, creating it owner-only.
-/// The supervised services append to one stable path so `dev events` has a
-/// journal to tail across restarts.
-pub(super) fn append(path: &Path) -> Result<File> {
-    if path.exists() {
-        check(path, false)?;
-    } else {
-        check(
-            path.parent()
-                .context("local output needs a parent directory")?,
-            true,
-        )?;
-    }
-    OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .open(path)
-        .context("cannot open the retained local journal")
-}

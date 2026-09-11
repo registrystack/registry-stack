@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Seek, SeekFrom, Write},
     net::TcpListener,
     os::unix::{
@@ -64,6 +64,9 @@ const MAX_VERSION: usize = 200;
 const SECRET_RUN: usize = 8;
 /// Longest refusal carried out of a native child or out of the supervisor.
 const MAX_REFUSAL: usize = 400;
+/// Maximum bytes the supervisor entry point can add to its retained log when
+/// it reports one bounded error plus its terminating newline.
+const MAX_SUPERVISOR_ERROR_BYTES: u64 = MAX_REFUSAL as u64 * 4 + 1;
 /// Bound on the journal tail `dev events` reports, in bytes and in lines.
 const MAX_JOURNAL_BYTES: u64 = 256 * 1024;
 const MAX_JOURNAL_LINES: usize = 512;
@@ -72,6 +75,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 /// bounded by `MAX_BYTES`; rotating the oldest before each new command also
 /// bounds diagnostics across retained starts while keeping the newest run.
 const MAX_PREREQUISITE_LOGS: usize = 64;
+const SUPERVISOR_RELEASE_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -576,7 +580,7 @@ fn start(args: StartArgs) -> Result<Value> {
     state.failure = None;
     state.save()?;
     let interruption = StartInterruption::install()?;
-    let log = private::append(&root.join("logs/supervisor.log"))?;
+    let log = supervisor_log(&root)?;
     let mut supervisor = Command::new(std::env::current_exe()?)
         .arg("__dev-supervisor")
         .arg("--dev-root")
@@ -606,7 +610,15 @@ fn wait_for_start(root: &Path, supervisor: &mut Child, interrupted: &AtomicBool)
         {
             return Ok(state.report());
         }
-        if supervisor.try_wait()?.is_some() || matches!(state.status, Status::Failed) {
+        let supervisor_exited = supervisor.try_wait()?.is_some();
+        if supervisor_exited || matches!(state.status, Status::Failed) {
+            // A failed state is durable before the supervisor finishes its
+            // cleanup and releases its owner lock. Keep this foreground start
+            // alive for the same bounded grace used by retry and stop.
+            let _supervisor_lock = completed_supervisor_lock(root, &state.status)?;
+            if !supervisor_exited {
+                reap_failed_supervisor(supervisor)?;
+            }
             // Read once more: a supervisor that exited between this poll's
             // read and its own last save has the recorded cause on disk.
             let mut failed = read_state(root)?;
@@ -619,6 +631,22 @@ fn wait_for_start(root: &Path, supervisor: &mut Child, interrupted: &AtomicBool)
         // deadline. Do not put a shorter aggregate deadline over a valid slow
         // first start whose bounded phases run sequentially.
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn reap_failed_supervisor(supervisor: &mut Child) -> Result<()> {
+    let deadline = Instant::now() + SUPERVISOR_RELEASE_GRACE;
+    loop {
+        if supervisor.try_wait()?.is_some() {
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            supervisor.kill()?;
+            supervisor.wait()?;
+            bail!("failed local supervisor did not exit after releasing its owner lock");
+        }
+        thread::sleep(Duration::from_millis(20).min(remaining));
     }
 }
 
@@ -800,8 +828,8 @@ fn events(project_path: &Path) -> Result<Value> {
 
 fn completed_supervisor_lock(root: &Path, status: &Status) -> Result<private::Lock> {
     let deadline = Instant::now()
-        + if matches!(status, Status::Stopped | Status::Stopping) {
-            Duration::from_secs(5)
+        + if matches!(status, Status::Stopped | Status::Stopping | Status::Failed) {
+            SUPERVISOR_RELEASE_GRACE
         } else {
             Duration::ZERO
         };
@@ -872,6 +900,10 @@ fn control_response_deadline(message: &str) -> Duration {
 }
 
 pub(crate) fn run_supervisor(args: SupervisorArgs) -> Result<()> {
+    run_supervisor_inner(args).map_err(|error| anyhow::anyhow!(bounded_supervisor_error(&error)))
+}
+
+fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
     let terminate = Arc::new(AtomicBool::new(false));
     for signal in [
         signal_hook::consts::SIGTERM,
@@ -1024,6 +1056,10 @@ pub(crate) fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         stream.write_all(b"stopped\n")?;
     }
     Ok(())
+}
+
+fn bounded_supervisor_error(error: &anyhow::Error) -> String {
+    format!("{error:#}").chars().take(MAX_REFUSAL).collect()
 }
 
 /// Read one client control command from `stream`, stopping at the first
@@ -1391,7 +1427,7 @@ impl RetainedJournal {
         }
         private::check(path, false)?;
         let before = fs::symlink_metadata(path)?;
-        let mut file = OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
@@ -1407,6 +1443,62 @@ impl RetainedJournal {
             file: Arc::new(Mutex::new(file)),
         })
     }
+}
+
+fn supervisor_log(root: &Path) -> Result<File> {
+    supervisor_log_with_open(root, || {})
+}
+
+fn supervisor_log_with_open(root: &Path, after_directory_open: impl FnOnce()) -> Result<File> {
+    use rustix::{
+        fs::{statat, AtFlags, Mode, OFlags},
+        io::Errno,
+    };
+
+    let directory = File::from(
+        rustix::fs::open(
+            root.join("logs"),
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::DIRECTORY,
+            Mode::empty(),
+        )
+        .context("cannot open private supervisor log directory")?,
+    );
+    private::check_metadata(&directory.metadata()?, true)?;
+    after_directory_open();
+    let name = "supervisor.log";
+    let before = match statat(&directory, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(metadata) => Some(metadata),
+        Err(Errno::NOENT) => None,
+        Err(error) => return Err(error.into()),
+    };
+    let descriptor = match before {
+        Some(_) => rustix::fs::openat(
+            &directory,
+            name,
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        ),
+        None => rustix::fs::openat(
+            &directory,
+            name,
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::from_bits_truncate(0o600),
+        ),
+    }
+    .context("cannot open retained supervisor journal")?;
+    let mut file = File::from(descriptor);
+    let opened = file.metadata()?;
+    private::check_metadata(&opened, false)?;
+    if before.is_some_and(|metadata| {
+        metadata.st_ino != opened.ino() || metadata.st_dev as u64 != opened.dev()
+    }) {
+        bail!("local state changed while opening it");
+    }
+    compact_journal(
+        &mut file,
+        MAX_BYTES.saturating_sub(MAX_SUPERVISOR_ERROR_BYTES),
+    )?;
+    Ok(file)
 }
 
 impl Write for RetainedJournal {

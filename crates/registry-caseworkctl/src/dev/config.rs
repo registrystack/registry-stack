@@ -20,6 +20,17 @@ use zeroize::Zeroizing;
 /// the clients file into every token it issues for that client.
 pub(super) const HUMAN_CLAIM: &str = "registry_actor_kind";
 pub(super) const HUMAN_VALUE: &str = "human";
+const RESERVED_ACCESS_TOKEN_CLAIMS: [&str; 9] = [
+    "iss",
+    "aud",
+    "exp",
+    "iat",
+    "nbf",
+    "jti",
+    "client_id",
+    "sub",
+    "scope",
+];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -58,6 +69,19 @@ pub(super) fn identifier(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
 
+// Keep these predicates aligned with registry-mint's client authorization contract:
+// `dev` writes these scopes and claims into Mint registrations before requesting tokens.
+fn valid_scope_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte == 0x21 || (0x23..=0x5b).contains(&byte) || (0x5d..=0x7e).contains(&byte)
+        })
+}
+
+fn valid_authorization_claim_name(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && valid_scope_token(value)
+}
+
 /// Parse and check the clients file against the closed local clients v1
 /// format, without reading the authored project. Everything here holds for
 /// any project; `bind` adds the checks that need the authored policy.
@@ -77,28 +101,30 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         if !identifier(&client.access_profile) || !profiles.insert(&client.access_profile) {
             bail!("each local access profile must bind to exactly one teaching client");
         }
+        let unique_scopes = client.scopes.iter().collect::<BTreeSet<_>>();
         if client.scopes.is_empty()
             || client.scopes.len() > 32
+            || unique_scopes.len() != client.scopes.len()
             || client
                 .scopes
                 .iter()
-                .any(|s| s.is_empty() || s.len() > 256 || s.chars().any(char::is_whitespace))
+                .any(|scope| scope.len() > 256 || !valid_scope_token(scope))
         {
-            bail!("each local client needs 1..32 bounded scopes without whitespace");
+            bail!("each local client needs 1..32 unique 1..=256 byte RFC 6749 scope-tokens");
         }
-        if client.claims.len() > 32
-            || client.claims.iter().any(|(name, value)| {
-                name.is_empty()
-                    || name.len() > 128
-                    || name == "sub"
-                    || name == "scope"
-                    || name == "iss"
-                    || value.is_empty()
-                    || value.len() > 256
-                    || value.chars().any(char::is_control)
-            })
-        {
-            bail!("local client claims are bounded strings and may not redefine sub, scope or iss");
+        if client.claims.len() > 32 {
+            bail!("a local client may declare at most 32 claims");
+        }
+        for (name, value) in &client.claims {
+            if !valid_authorization_claim_name(name) {
+                bail!("local client claim names must be 1..=128 byte RFC 6749 scope-tokens");
+            }
+            if RESERVED_ACCESS_TOKEN_CLAIMS.contains(&name.as_str()) {
+                bail!("local client claims may not redefine registered access-token claims");
+            }
+            if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+                bail!("local client claim values must be 1..=256 bytes without control characters");
+            }
         }
     }
     if clients.directory.len() > 8 {
@@ -118,6 +144,18 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         }
         if team.staff.is_empty() || team.staff.len() > 32 || team.supervisors.len() > 32 {
             bail!("a local directory team needs 1..32 staff and at most 32 supervisors");
+        }
+        if team.staff.iter().collect::<BTreeSet<_>>().len() != team.staff.len() {
+            bail!(
+                "local directory team {} staff list must name each client at most once",
+                team.team
+            );
+        }
+        if team.supervisors.iter().collect::<BTreeSet<_>>().len() != team.supervisors.len() {
+            bail!(
+                "local directory team {} supervisors list must name each client at most once",
+                team.team
+            );
         }
         for member in team.staff.iter().chain(&team.supervisors) {
             if !clients.clients.iter().any(|client| &client.id == member) {
