@@ -1,11 +1,11 @@
 ---
 title: Registry Stack documentation
-description: Answer bounded questions with Evidence Gateway, publish existing records with Registry Relay, or build a writable registry with Base Registry Engine.
+description: Answer bounded questions with Evidence Gateway, publish existing records with Registry Relay, build a writable registry with Base Registry Engine, or give a team a coordinated inbox with Registry Casework.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-11"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -69,6 +69,22 @@ from an application.
     crates/registry-breg/src/compiler.rs; crates/registry-breg/src/api/mod.rs;
     products/breg/README.md. */}
 
+## Give a team a coordinated inbox with Registry Casework
+
+Use Registry Casework when authorized people must claim, draft, and decide work that a source
+system owns, or bounded decisions a calling service submits. A policy declares access profiles,
+queues, hosted kinds, routing, and clocks; the runtime keeps assignment, private drafts,
+accountable attempts, and recovery, while eligibility, visibility, and the registry mutation stay
+with the source. Staff, Supervisors, and Administrators are human roles the token issuer asserts;
+a Requester is a service.
+[Registry Casework overview](start/casework/) explains what runs where and which path fits your
+role. Continue with [decide your first work item](tutorials/first-casework/) to run a local
+Casework with its database and token issuer, then [author a Casework policy](configure/casework/)
+and [deploy Registry Casework](operate/casework/).
+
+{/* Evidence: crates/registry-casework-core/src/model.rs; crates/registry-casework/src/http.rs, router;
+    crates/registry-caseworkctl/src/dev/mod.rs; products/casework/README.md. */}
+
 ## Keep the product boundaries clear
 
 Registry Relay owns source access and protected record surfaces.
@@ -81,7 +97,9 @@ Registry Platform primitives. Relay responses are not signed: portable signed mi
 is what Evidence Gateway is for. BReg owns its PostgreSQL records; it does not publish them
 through Relay or configure Evidence Gateway on your behalf.
 
-Registry Stack is not a workflow, eligibility, ranking, or case-management engine. It does not
+Registry Stack is not an eligibility, ranking, or automatic-decision engine. Registry Casework
+coordinates the people who decide; it does not decide for them, and the source system keeps the
+mutation. Registry Stack does not
 decide legal authority, data ownership, or institutional approval, and it is not a publisher of
 unrestricted open data. It makes those boundaries visible; the responsible institutions still make
 the decisions.
@@ -93,8 +111,8 @@ the decisions.
 
 - The assertion provider is the institution that answers requests with signed facts through
   Evidence Gateway.
-- The data publisher is the institution that exposes records through Registry Relay or
-  maintains a registry through Base Registry Engine.
+- The data publisher is the institution that exposes records through Registry Relay,
+  maintains a registry through Base Registry Engine, or decides work through Registry Casework.
 - The consumer or verifier is the relying service that calls a product's API and verifies the
   answers it receives.
 - The operator is whoever runs the deployment.

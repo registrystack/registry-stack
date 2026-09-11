@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-09-09"
+last_reviewed: "2026-09-11"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -17,6 +17,34 @@ Per-product release notes live in each product repository; the entries below lin
 relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
+
+- Registry Casework ships with Registry Stack 0.30.0 and has a documentation set
+  of its own: an [overview](../start/casework/), the
+  [decide your first work item](../tutorials/first-casework/) tutorial that a
+  CI gate replays, [how Casework works](../explanation/how-casework-works/),
+  [author a Casework policy](../configure/casework/),
+  [deploy Registry Casework](../operate/casework/),
+  [retain, erase, and settle](../operate/casework-retention/), the
+  [API contract](../reference/apis/registry-casework/), and a Casework section
+  in the [client API reference](../reference/client-api/). The installer
+  `casework-install.sh` installs `casework`, `caseworkctl`, and `mint` together,
+  and `caseworkctl dev` starts a retained local runtime with its PostgreSQL
+  container, token issuer, and seeded directory.
+
+{/* Evidence: crates/registry-casework/install.sh; crates/registry-caseworkctl/src/dev/mod.rs;
+    docs/site/scripts/check-casework-tutorial.sh. */}
+
+- Registry Casework names the failing secret reference and the rule it broke
+  when a database, audit, or static JWKS secret cannot be resolved, without
+  echoing the value; the operator file accepts
+  `authentication.oidc.jwksSource: {kind: static, documentRef: …}` beside
+  issuer discovery; and the two work-item history routes are documented
+  separately: `hosted-history` for hosted work and `history` for source-scoped
+  reads under `Registry-Source-Profile`. See
+  [deploy Registry Casework](../operate/casework/).
+
+{/* Evidence: crates/registry-casework/src/config.rs, describe_secret_failure;
+    crates/registry-casework/tests/secret_diagnostics.rs; products/casework/README.md. */}
 
 - Base Registry Engine warns about unknown or disallowed access-token key
   identifiers in its JSON log messages, at most once per minute

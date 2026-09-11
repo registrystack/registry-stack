@@ -128,8 +128,11 @@ const caseworkOpenApiSchema = {
 };
 const caseworkCurrentOnlyRoutes = [
   '/start/casework/',
+  '/tutorials/first-casework/',
+  '/explanation/how-casework-works/',
   '/configure/casework/',
   '/operate/casework/',
+  '/operate/casework-retention/',
   '/reference/apis/registry-casework/',
 ];
 
@@ -512,10 +515,14 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'start/casework' },
-            { label: 'Configure policy and authority', slug: 'configure/casework' },
-            { label: 'Run the source candidate', slug: 'operate/casework' },
-            { label: 'API overview', slug: 'reference/apis/registry-casework' },
+            { label: 'Decide your first work item', slug: 'tutorials/first-casework' },
+            { label: 'How Casework works', slug: 'explanation/how-casework-works' },
+            { label: 'Author a policy', slug: 'configure/casework' },
+            { label: 'Deploy Casework', slug: 'operate/casework' },
+            { label: 'Retain, erase, and settle', slug: 'operate/casework-retention' },
+            { label: 'API contract', slug: 'reference/apis/registry-casework' },
             ...openAPISidebarGroups.slice(1, 2),
+            { label: 'Client API reference', slug: 'reference/client-api' },
           ],
         }]),
         {

@@ -617,15 +617,19 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
   );
 });
 
-test('keeps the unreleased Casework journey in one product lane', () => {
+test('keeps the Casework journey in one product lane', () => {
   const casework = topLevelSection(sidebarSource, 'Registry Casework');
   assert.ok(casework, 'could not isolate the Registry Casework section');
   const slugs = [...casework.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(slugs, [
     'start/casework',
+    'tutorials/first-casework',
+    'explanation/how-casework-works',
     'configure/casework',
     'operate/casework',
+    'operate/casework-retention',
     'reference/apis/registry-casework',
+    'reference/client-api',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Casework journey`);

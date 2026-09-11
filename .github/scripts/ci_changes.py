@@ -220,6 +220,22 @@ BREG_TUTORIAL_INPUTS = (
     "products/breg/scripts/test-request-attachments.py",
 )
 
+# Every input the Registry Casework tutorial gate replays or is built from. The
+# gate starts the all-in-one local runtime the page tells a reader to run, and
+# that runtime starts Registry Mint from the project's own client declarations,
+# so the page and the gate are inputs to the replay exactly as the toolset is.
+# The project template the page initializes is written by registry-caseworkctl,
+# so package routing already carries it.
+CASEWORK_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/check-casework-tutorial.sh",
+    "docs/site/scripts/check-casework-tutorial.test.mjs",
+    "docs/site/src/content/docs/tutorials/first-casework.mdx",
+)
+
 # This guide explains the authoring form across three intentionally separate
 # enforcement layers: the shared form model, the evidencectl compiler, and the
 # frozen bundle validator. Keep the routing list at module ownership rather
@@ -376,6 +392,14 @@ ASSEMBLED_PYTHON_CLIENT_PACKAGES = frozenset(
 BREG_TUTORIAL_PACKAGES = frozenset({"registry-breg", "registry-bregctl"}) | frozenset(
     SHARDS["mint"]
 )
+
+# The gate builds and runs exactly these: the Casework runtime, the tool that
+# starts and seeds the local session, and Registry Mint, because every call the
+# reader makes carries a token that session issued. The clients in the Casework
+# shard are not on the replayed path.
+CASEWORK_TUTORIAL_PACKAGES = frozenset(
+    {"registry-casework", "registry-caseworkctl"}
+) | frozenset(SHARDS["mint"])
 
 # The offline proof of the native BReg to Evidence composition drives bregctl,
 # evidencectl and the Evidence runtime over the reviewed teaching inputs. It
@@ -859,6 +883,12 @@ def classify(
         or bool(affected & BREG_TUTORIAL_PACKAGES)
     )
 
+    casework_tutorial = (
+        complete
+        or any(matches(path, *CASEWORK_TUTORIAL_INPUTS) for path in paths)
+        or bool(affected & CASEWORK_TUTORIAL_PACKAGES)
+    )
+
     breg_evidence_composition = (
         complete
         or any(matches(path, *BREG_EVIDENCE_COMPOSITION_INPUTS) for path in paths)
@@ -907,6 +937,7 @@ def classify(
         "release_linux_node_clients": release_linux_node_clients,
         "evidence_tutorial": evidence_tutorial,
         "breg_tutorial": breg_tutorial,
+        "casework_tutorial": casework_tutorial,
         "breg_evidence_composition": breg_evidence_composition,
         "identifiers": identifiers,
     }

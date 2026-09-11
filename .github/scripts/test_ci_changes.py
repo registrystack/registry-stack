@@ -15,6 +15,7 @@ import yaml
 
 from ci_changes import (
     BREG_TUTORIAL_INPUTS,
+    CASEWORK_TUTORIAL_INPUTS,
     CLI_REFERENCE_INPUTS,
     DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS,
     DISCOVERY_PROVIDER_INPUTS,
@@ -284,6 +285,9 @@ class CiChangesTest(unittest.TestCase):
                 "needs.changes.outputs.release_source_proof == 'true'"
             ),
             "breg-tutorial": "needs.changes.outputs.breg_tutorial == 'true'",
+            "casework-tutorial": (
+                "needs.changes.outputs.casework_tutorial == 'true'"
+            ),
             "breg-evidence-composition": (
                 "needs.changes.outputs.breg_evidence_composition == 'true'"
             ),
@@ -338,6 +342,7 @@ class CiChangesTest(unittest.TestCase):
             "release-source-proof-required",
             "evidence-tutorials",
             "breg-tutorial",
+            "casework-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -389,6 +394,7 @@ class CiChangesTest(unittest.TestCase):
                 "release-source-proof",
                 "evidence-tutorials",
                 "breg-tutorial",
+                "casework-tutorial",
                 "breg-evidence-composition",
                 "evidence-anchors",
                 "docs",
@@ -427,6 +433,7 @@ class CiChangesTest(unittest.TestCase):
             "release-source-proof",
             "evidence-tutorials",
             "breg-tutorial",
+            "casework-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -438,7 +445,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(27, len(final_needs))
+        self.assertEqual(28, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]
@@ -995,6 +1002,70 @@ class CiChangesTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertFalse(classify(self.workspace, (path,))["breg_tutorial"])
+
+    def test_casework_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
+        # The gate's registry is the source of truth for which tutorials it
+        # replays. A tutorial missing here would not trigger the job that
+        # replays it, so it could break without any pull request noticing.
+        gate = (
+            Path(__file__).resolve().parents[2]
+            / "docs/site/scripts/check-casework-tutorial.sh"
+        )
+        registry = re.search(
+            r"^CASEWORK_TUTORIALS=\((.*?)^\)",
+            gate.read_text(),
+            re.DOTALL | re.MULTILINE,
+        )
+        if registry is None:
+            self.fail("the gate must declare CASEWORK_TUTORIALS")
+        slugs = registry.group(1).split()
+        self.assertTrue(slugs, "the gate must register at least one tutorial")
+        for slug in slugs:
+            with self.subTest(slug=slug):
+                page = f"docs/site/src/content/docs/{slug}.mdx"
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in CASEWORK_TUTORIAL_INPUTS
+                    )
+                )
+
+    def test_casework_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/check-casework-tutorial.sh",
+            "docs/site/scripts/check-casework-tutorial.test.mjs",
+            "docs/site/src/content/docs/tutorials/first-casework.mdx",
+            "docs/site/package.json",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["casework_tutorial"])
+        # The replay builds and runs these three: the runtime the reader calls,
+        # the tool that starts and seeds the local session, and Registry Mint,
+        # which issues every token the reader's calls carry.
+        for path in (
+            "crates/registry-casework/src/http.rs",
+            "crates/registry-caseworkctl/src/dev/mod.rs",
+            "crates/registry-mint/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["casework_tutorial"])
+        # The source-neutral core is linked by the runtime, so a change to the
+        # transition rules reaches the replay through reverse dependencies.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-casework-core/src/lib.rs",))[
+                "casework_tutorial"
+            ]
+        )
+        # Pages that share the tutorials directory and reach none of the
+        # Registry Casework replay.
+        for path in (
+            "docs/site/src/content/docs/tutorials/first-breg.mdx",
+            "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
+            "docs/site/scripts/check-breg-tutorial.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["casework_tutorial"])
 
     def test_breg_evidence_composition_routing(self) -> None:
         # The proof drives bregctl, evidencectl and the Evidence runtime over
