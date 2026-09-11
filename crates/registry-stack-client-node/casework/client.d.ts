@@ -402,7 +402,7 @@ export class CaseworkClient {
   releaseHostedWorkItem(token: string, profile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
   decideHostedWorkItem(token: string, profile: string, action: CaseworkAction, idempotencyKey: string, decision: HostedDecisionRequest): Promise<CaseworkOutcome<HostedTerminalResult>>
   listWorkItems(token: string, profile: string, sourceProfile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<WorkItemPage>>
-  nextWorkItem(token: string, profile: string, sourceProfile: string, query?: NextWorkItemQuery | null): Promise<CaseworkOutcome<WorkItem | null>>
+  nextWorkItem(token: string, profile: string, sourceProfile: string, query?: NextWorkItemQuery | null): Promise<CaseworkOutcome<WorkItemPage>>
   getWorkItem(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<WorkItem>>
   claimWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
   releaseWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
