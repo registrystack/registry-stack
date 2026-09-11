@@ -16,7 +16,7 @@ use registry_casework::{
     PostgresStore, ServiceError, StoreError,
 };
 use registry_casework_core::{
-    AccessProfile, ActiveSubjectsPage, ActorContext, AuthoritativeObservation,
+    AccessProfile, ActiveSubjectsPage, ActorContext, AttemptState, AuthoritativeObservation,
     BootstrapDirectoryRequest, CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole,
     DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy,
     InboxView, IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PageStatus,
@@ -100,6 +100,7 @@ struct MockSource {
     verify_diagnostic_events: bool,
     execute_calls: Arc<AtomicUsize>,
     execute_succeeds: bool,
+    advance_binding_on_success: bool,
     definitive_refusal_after: Option<usize>,
     approve_reads: HashSet<String>,
 }
@@ -128,6 +129,7 @@ impl MockSource {
             verify_diagnostic_events: false,
             execute_calls: Arc::new(AtomicUsize::new(0)),
             execute_succeeds: false,
+            advance_binding_on_success: false,
             definitive_refusal_after: None,
             approve_reads: HashSet::new(),
         }
@@ -142,6 +144,13 @@ impl MockSource {
         source.approve_reads.insert(id.to_string());
         let prepare_calls = Arc::clone(&source.prepare_calls);
         let execute_calls = Arc::clone(&source.execute_calls);
+        (source, prepare_calls, execute_calls)
+    }
+
+    fn with_successful_binding_change(id: Uuid) -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let (mut source, prepare_calls, execute_calls) =
+            Self::with_successful_action(id, CallerRead::Visible("authorized"));
+        source.advance_binding_on_success = true;
         (source, prepare_calls, execute_calls)
     }
 
@@ -426,6 +435,15 @@ impl SourceAdapter for MockSource {
         if credential == "concealed-token" {
             return Err(SourceAdapterError::Concealed);
         }
+        if credential == "unavailable-token" {
+            return Err(SourceAdapterError::Unavailable);
+        }
+        if credential == "original-binding-token" {
+            let mut view = Self::visible(subject, "original-binding");
+            view.permitted_operations
+                .push(OperationName::parse("approve").expect("approve operation"));
+            return Ok(view);
+        }
         if credential == "moved-generation-token" {
             let mut view = Self::visible(subject, "moved-generation");
             view.binding.generation = "generation-2".into();
@@ -448,6 +466,11 @@ impl SourceAdapter for MockSource {
             view.binding.source_revision = "3".into();
             view.binding.version = "2".into();
             view.binding.integrity = Some("sha256:advanced".into());
+            return Ok(view);
+        }
+        if self.advance_binding_on_success && self.execute_calls.load(Ordering::SeqCst) > 0 {
+            let mut view = Self::visible(subject, "advanced-by-action");
+            view.binding = advanced_action_binding();
             return Ok(view);
         }
         if let Some((id, verified)) = &self.attachment_verification {
@@ -518,10 +541,14 @@ impl SourceAdapter for MockSource {
         if !self.execute_succeeds {
             return Err(SourceAdapterError::Invalid);
         }
+        let mut resulting_binding = request.prepared.source_binding.clone();
+        if self.advance_binding_on_success {
+            resulting_binding = advanced_action_binding();
+        }
         Ok(SourceReceipt {
             source_revision: "2".into(),
             resulting_state: "needs_changes".into(),
-            binding: request.prepared.source_binding.clone(),
+            binding: resulting_binding,
             actor_reference: None,
             metadata: BTreeMap::new(),
         })
@@ -728,6 +755,15 @@ fn binding() -> SourceBinding {
         source_revision: "1".into(),
         version: "1".into(),
         integrity: None,
+        generation: GENERATION.into(),
+    }
+}
+
+fn advanced_action_binding() -> SourceBinding {
+    SourceBinding {
+        source_revision: "2".into(),
+        version: "2".into(),
+        integrity: Some("sha256:action-result".into()),
         generation: GENERATION.into(),
     }
 }
@@ -2927,6 +2963,216 @@ async fn terminal_attempt_replays_do_not_repeat_source_execution() {
     assert_eq!(by_id.0, attempt);
     assert_eq!(by_key.0, attempt);
     assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(execute_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn completed_action_binding_is_returned_and_replayable_before_reconciliation() {
+    let _database = DATABASE.lock().await;
+    let subject_id = Uuid::from_u128(36);
+    let (source, prepare_calls, execute_calls) =
+        MockSource::with_successful_binding_change(subject_id);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    add_item(&fixture.service, subject_id, Some(1)).await;
+    let item = fixture
+        .service
+        .store()
+        .inbox_candidates(&fixture.staff, 1, None, None)
+        .await
+        .unwrap()
+        .items
+        .pop()
+        .unwrap();
+    let claimed = fixture
+        .service
+        .store()
+        .claim(
+            &fixture.staff,
+            item.item_id,
+            item.revision,
+            "claim-advanced-binding",
+        )
+        .await
+        .unwrap();
+    let operation = OperationName::parse("approve").expect("approve operation");
+
+    let completed = fixture
+        .service
+        .decide_mutation(
+            &fixture.staff,
+            claimed.item_id,
+            claimed.revision,
+            "reader",
+            operation.clone(),
+            None,
+            &[],
+            &claimed.binding,
+            "advanced-binding-key",
+            "token",
+        )
+        .await
+        .expect("the successful action returns before reconciliation");
+    let attempt = completed.attempt.expect("completed attempt is returned");
+    assert_eq!(attempt.state, AttemptState::Completed);
+    assert_eq!(
+        attempt.receipt.as_ref().map(|receipt| &receipt.binding),
+        Some(&advanced_action_binding())
+    );
+    assert_eq!(completed.item.state, OccurrenceState::Synchronizing);
+    assert_eq!(completed.item.binding, claimed.binding);
+    assert!(completed.item.actions.is_empty());
+    assert!(completed.item.live_attempt.is_none());
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(execute_calls.load(Ordering::SeqCst), 1);
+
+    assert!(matches!(
+        fixture
+            .service
+            .caller_item(&fixture.staff, claimed.item_id, "reader", "token")
+            .await,
+        Err(ServiceError::BindingMoved)
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .recover_mutation(
+                &fixture.staff,
+                claimed.item_id,
+                attempt.attempt_id,
+                "other-reader",
+                "original-binding-token",
+            )
+            .await,
+        Err(ServiceError::NotFound)
+    ));
+    let changed_role = ActorContext {
+        role: CaseworkRole::Administrator,
+        ..fixture.staff.clone()
+    };
+    assert!(fixture
+        .service
+        .decide_mutation(
+            &changed_role,
+            claimed.item_id,
+            claimed.revision,
+            "reader",
+            OperationName::parse("approve").expect("approve operation"),
+            None,
+            &[],
+            &claimed.binding,
+            "advanced-binding-key",
+            "original-binding-token",
+        )
+        .await
+        .is_err());
+
+    let repeated = fixture
+        .service
+        .decide_mutation(
+            &fixture.staff,
+            claimed.item_id,
+            claimed.revision,
+            "reader",
+            operation,
+            None,
+            &[],
+            &claimed.binding,
+            "advanced-binding-key",
+            "token",
+        )
+        .await
+        .expect("an idempotent retry returns the original result");
+    let recovered_by_id = fixture
+        .service
+        .recover_mutation(
+            &fixture.staff,
+            claimed.item_id,
+            attempt.attempt_id,
+            "reader",
+            "token",
+        )
+        .await
+        .expect("the completed attempt is recoverable by id");
+    let recovered_by_key = fixture
+        .service
+        .recover_mutation_by_key(
+            &fixture.staff,
+            claimed.item_id,
+            "reader",
+            "advanced-binding-key",
+            "token",
+        )
+        .await
+        .expect("the completed attempt is recoverable by key");
+    for response in [&repeated, &recovered_by_id, &recovered_by_key] {
+        assert_eq!(response.item.binding, claimed.binding);
+        assert!(response.item.actions.is_empty());
+        assert!(response.item.live_attempt.is_none());
+        assert_eq!(response.attempt.as_ref(), Some(&attempt));
+    }
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(execute_calls.load(Ordering::SeqCst), 1);
+
+    for token in ["advanced-terminal-binding", "moved-generation-token"] {
+        assert!(matches!(
+            fixture
+                .service
+                .recover_mutation(
+                    &fixture.staff,
+                    claimed.item_id,
+                    attempt.attempt_id,
+                    "reader",
+                    token,
+                )
+                .await,
+            Err(ServiceError::BindingMoved)
+        ));
+    }
+    assert!(matches!(
+        fixture
+            .service
+            .recover_mutation(
+                &fixture.staff,
+                claimed.item_id,
+                attempt.attempt_id,
+                "reader",
+                "concealed-token",
+            )
+            .await,
+        Err(ServiceError::Adapter(SourceAdapterError::Concealed))
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .recover_mutation(
+                &fixture.staff,
+                claimed.item_id,
+                attempt.attempt_id,
+                "reader",
+                "unavailable-token",
+            )
+            .await,
+        Err(ServiceError::Adapter(SourceAdapterError::Unavailable))
+    ));
+    for actor in [
+        actor("other-staff", CaseworkRole::Staff),
+        ActorContext {
+            profile_id: "other-casework-profile".into(),
+            ..fixture.staff.clone()
+        },
+    ] {
+        assert!(fixture
+            .service
+            .recover_mutation(
+                &actor,
+                claimed.item_id,
+                attempt.attempt_id,
+                "reader",
+                "token",
+            )
+            .await
+            .is_err());
+    }
     assert_eq!(execute_calls.load(Ordering::SeqCst), 1);
 }
 
