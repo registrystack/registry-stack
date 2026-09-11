@@ -910,14 +910,14 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
                 code: "question-parse",
                 path: authored_member_path(
-                    &project_relative_path(&project_root, &question_path),
+                    &project_relative_path(project_root, &question_path),
                     &error.path().to_string(),
                 ),
                 message: "question does not match the closed authored question shape".to_owned(),
             })?;
         first_finding(
             validate_question(&question),
-            &project_relative_path(&project_root, &question_path),
+            &project_relative_path(project_root, &question_path),
         )?;
         if question_path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
             bail!("question id must match its questions/<id>.yaml filename");
@@ -939,7 +939,7 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             String::from_utf8(derivation_bytes).context("authored derivation must be UTF-8")?;
         first_finding(
             validate_authored_answer(&derivation),
-            &project_relative_path(&project_root, &derivation_path),
+            &project_relative_path(project_root, &derivation_path),
         )?;
         questions.push(AuthoredQuestion {
             question,

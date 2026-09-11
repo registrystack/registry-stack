@@ -667,7 +667,7 @@ fn doctor_source_check(source_id: &str) -> Value {
 pub(super) fn db_migrate(project: &Path, runtime_config: Option<&Path>) -> Result<Value> {
     let selected = load_runtime(project, runtime_config)?;
     let config = &selected.config;
-    let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let resolver = secret_resolver(config).context("configuring Casework secret providers")?;
     let store = PostgresStore::connect_migration(&config.database, &resolver)
         .context("the Casework migration database configuration is invalid")?;
     async_runtime()?
@@ -692,7 +692,7 @@ pub(super) fn retention_erase(
 ) -> Result<Value> {
     let selected = load_runtime(project, runtime_config)?;
     let config = &selected.config;
-    let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let resolver = secret_resolver(config).context("configuring Casework secret providers")?;
     let store = PostgresStore::connect_migration(&config.database, &resolver)
         .context("the Casework migration database configuration is invalid")?;
     let selector = SourceRetentionSelector {
@@ -736,7 +736,7 @@ pub(super) fn attempt_settle(
 ) -> Result<Value> {
     let selected = load_runtime(project, runtime_config)?;
     let config = &selected.config;
-    let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let resolver = secret_resolver(config).context("configuring Casework secret providers")?;
     let store = PostgresStore::connect_migration(&config.database, &resolver)
         .context("the Casework migration database configuration is invalid")?;
     let runtime = async_runtime()?;

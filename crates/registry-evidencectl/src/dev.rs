@@ -1133,6 +1133,10 @@ fn clean_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the one caller keeps authored paths, tool overrides, and lifecycle controls explicit"
+)]
 fn prepare_and_start(
     project: &Path,
     dev_root: &Path,

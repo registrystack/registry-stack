@@ -153,10 +153,10 @@ fn invoke_check(
     let mut stdout = tempfile::tempfile().context("creating private Evidence doctor output")?;
     let mut stderr =
         tempfile::tempfile().context("creating private Evidence doctor diagnostics")?;
-    let mut command = Command::new(&evidence);
+    let mut command = Command::new(evidence);
     command
         .arg("--runtime")
-        .arg(&runtime_config)
+        .arg(runtime_config)
         .arg("check")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout.try_clone()?))
@@ -233,7 +233,7 @@ fn render_refusal(
                 "Evidence runtime dependency preflight refused {}",
                 runtime_config.display()
             );
-            std::io::stderr().write_all(&runtime_diagnostic)?;
+            std::io::stderr().write_all(runtime_diagnostic)?;
             eprintln!(
                 "Next: correct the selected runtime artifact or dependency and rerun doctor."
             );

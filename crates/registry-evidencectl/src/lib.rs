@@ -380,18 +380,17 @@ pub fn main_entry() -> ExitCode {
 }
 
 fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
-    arguments
-        .iter()
-        .enumerate()
-        .any(|(index, argument)| {
-            argument == "--format=json"
-                || (argument == "--format"
-                    && arguments
-                        .get(index + 1)
-                        .is_some_and(|value| value == "json"))
-        })
-        .then_some(OutputFormat::Json)
-        .unwrap_or(OutputFormat::Human)
+    if arguments.iter().enumerate().any(|(index, argument)| {
+        argument == "--format=json"
+            || (argument == "--format"
+                && arguments
+                    .get(index + 1)
+                    .is_some_and(|value| value == "json"))
+    }) {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Human
+    }
 }
 
 fn usage_failure_json() -> serde_json::Value {
