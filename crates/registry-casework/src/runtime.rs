@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use clap::{Arg, Command};
 use registry_casework_core::{CaseworkProject, SourceAdapter};
-use registry_platform_audit::{AuditProfile, ChainState, JsonlFileSink};
+use registry_platform_audit::{AuditEnvelope, AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::Value;
 use thiserror::Error;
@@ -103,12 +103,23 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         audit_secret.expose_secret().to_vec(),
     ))
     .map_err(|_| RuntimeError::Audit)?;
-    let audit_sink = Arc::new(JsonlFileSink::new(&config.audit.path));
+    let audit_sink = Arc::new(
+        JsonlFileSink::new_single_writer(&config.audit.path).map_err(|_| RuntimeError::Audit)?,
+    );
     let audit_chain = Arc::new(
         audit_profile
             .bootstrap_or_start_empty(audit_sink.as_ref())
             .await
             .map_err(|_| RuntimeError::Audit)?,
+    );
+    // The keyed bootstrap above authenticates the retained chain before its
+    // tail identity is used to reconcile a possible append/mark crash gap.
+    let mut audit_publication_state = AuditPublicationState::from_verified_tail(
+        audit_sink
+            .last_envelope()
+            .await
+            .map_err(|_| RuntimeError::Audit)?
+            .as_ref(),
     );
 
     let (worker_stopped, worker_stops) = mpsc::channel(WORKER_STOP_CAPACITY);
@@ -185,7 +196,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             update_audit_health(
                 &audit_health,
                 &mut failed_stage,
-                publish_audit_pass(&audit_publisher).await,
+                publish_audit_pass(&audit_publisher, &mut audit_publication_state).await,
             );
         }
     }));
@@ -276,6 +287,7 @@ struct RuntimeAuditPublisher {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AuditPublicationFailure {
     PendingRead,
+    RecordIdentity,
     SinkAppend,
     PublishedMark,
 }
@@ -284,6 +296,7 @@ impl AuditPublicationFailure {
     const fn as_str(self) -> &'static str {
         match self {
             Self::PendingRead => "pending-read",
+            Self::RecordIdentity => "record-identity",
             Self::SinkAppend => "sink-append",
             Self::PublishedMark => "published-mark",
         }
@@ -295,6 +308,22 @@ trait AuditPublicationBackend: Send + Sync {
     async fn pending(&self, maximum: i64) -> Result<Vec<(Uuid, Value)>, ()>;
     async fn append(&self, record: Value) -> Result<(), ()>;
     async fn mark_published(&self, event_id: Uuid) -> Result<(), ()>;
+}
+
+#[derive(Default)]
+struct AuditPublicationState {
+    unconfirmed: Option<Uuid>,
+}
+
+impl AuditPublicationState {
+    fn from_verified_tail(tail: Option<&AuditEnvelope>) -> Self {
+        let unconfirmed = tail
+            .and_then(|envelope| envelope.record.as_object())
+            .and_then(|record| record.get("eventId"))
+            .and_then(Value::as_str)
+            .and_then(|event_id| Uuid::parse_str(event_id).ok());
+        Self { unconfirmed }
+    }
 }
 
 #[async_trait]
@@ -321,22 +350,47 @@ impl AuditPublicationBackend for RuntimeAuditPublisher {
 
 async fn publish_audit_pass(
     publisher: &impl AuditPublicationBackend,
+    state: &mut AuditPublicationState,
 ) -> Result<(), AuditPublicationFailure> {
+    if let Some(event_id) = state.unconfirmed {
+        publisher
+            .mark_published(event_id)
+            .await
+            .map_err(|()| AuditPublicationFailure::PublishedMark)?;
+        state.unconfirmed = None;
+    }
     let records = publisher
         .pending(100)
         .await
         .map_err(|()| AuditPublicationFailure::PendingRead)?;
     for (event_id, record) in records {
+        let record = audit_record_with_event_id(event_id, record)
+            .map_err(|()| AuditPublicationFailure::RecordIdentity)?;
         publisher
             .append(record)
             .await
             .map_err(|()| AuditPublicationFailure::SinkAppend)?;
+        state.unconfirmed = Some(event_id);
         publisher
             .mark_published(event_id)
             .await
             .map_err(|()| AuditPublicationFailure::PublishedMark)?;
+        state.unconfirmed = None;
     }
     Ok(())
+}
+
+fn audit_record_with_event_id(event_id: Uuid, mut record: Value) -> Result<Value, ()> {
+    let fields = record.as_object_mut().ok_or(())?;
+    let event_id = event_id.to_string();
+    match fields.get("eventId") {
+        Some(Value::String(existing)) if existing == &event_id => {}
+        Some(_) => return Err(()),
+        None => {
+            fields.insert("eventId".to_owned(), Value::String(event_id));
+        }
+    }
+    Ok(record)
 }
 
 fn update_audit_health(
@@ -378,38 +432,97 @@ mod tests {
     struct FakeAuditPublisherState {
         failure: Option<AuditPublicationFailure>,
         pending: Option<(Uuid, Value)>,
+        pending_read_count: usize,
+        append_count: usize,
     }
 
     impl FakeAuditPublisher {
         fn failing_at(failure: AuditPublicationFailure) -> Self {
+            let record = if failure == AuditPublicationFailure::RecordIdentity {
+                Value::Null
+            } else {
+                serde_json::json!({"synthetic": true})
+            };
             Self {
                 state: Mutex::new(FakeAuditPublisherState {
                     failure: Some(failure),
-                    pending: Some((Uuid::new_v4(), serde_json::json!({"synthetic": true}))),
+                    pending: Some((Uuid::new_v4(), record)),
+                    pending_read_count: 0,
+                    append_count: 0,
                 }),
             }
         }
 
         async fn recover(&self) {
-            self.state.lock().await.failure = None;
+            let mut state = self.state.lock().await;
+            if state.failure == Some(AuditPublicationFailure::RecordIdentity) {
+                if let Some((_, record)) = state.pending.as_mut() {
+                    *record = serde_json::json!({"synthetic": true});
+                }
+            }
+            state.failure = None;
+        }
+    }
+
+    struct FileAuditPublisher {
+        database: Arc<Mutex<FileAuditState>>,
+        chain: Arc<ChainState>,
+        sink: Arc<JsonlFileSink>,
+    }
+
+    struct FileAuditState {
+        fail_marks: bool,
+        pending: Vec<(Uuid, Value)>,
+    }
+
+    #[async_trait]
+    impl AuditPublicationBackend for FileAuditPublisher {
+        async fn pending(&self, _maximum: i64) -> Result<Vec<(Uuid, Value)>, ()> {
+            let state = self.database.lock().await;
+            Ok(state.pending.clone())
+        }
+
+        async fn append(&self, record: Value) -> Result<(), ()> {
+            self.chain
+                .append(self.sink.as_ref(), record)
+                .await
+                .map(|_| ())
+                .map_err(|_| ())
+        }
+
+        async fn mark_published(&self, event_id: Uuid) -> Result<(), ()> {
+            let mut state = self.database.lock().await;
+            if state.fail_marks {
+                return Err(());
+            }
+            if let Some(index) = state
+                .pending
+                .iter()
+                .position(|(pending_id, _)| *pending_id == event_id)
+            {
+                state.pending.remove(index);
+            }
+            Ok(())
         }
     }
 
     #[async_trait]
     impl AuditPublicationBackend for FakeAuditPublisher {
         async fn pending(&self, _maximum: i64) -> Result<Vec<(Uuid, Value)>, ()> {
-            let state = self.state.lock().await;
+            let mut state = self.state.lock().await;
             if state.failure == Some(AuditPublicationFailure::PendingRead) {
                 return Err(());
             }
+            state.pending_read_count += 1;
             Ok(state.pending.clone().into_iter().collect())
         }
 
         async fn append(&self, _record: Value) -> Result<(), ()> {
-            let state = self.state.lock().await;
+            let mut state = self.state.lock().await;
             if state.failure == Some(AuditPublicationFailure::SinkAppend) {
                 return Err(());
             }
+            state.append_count += 1;
             Ok(())
         }
 
@@ -466,26 +579,151 @@ mod tests {
     async fn audit_publication_failure_degrades_health_until_a_pass_recovers() {
         for failure in [
             AuditPublicationFailure::PendingRead,
+            AuditPublicationFailure::RecordIdentity,
             AuditPublicationFailure::SinkAppend,
             AuditPublicationFailure::PublishedMark,
         ] {
             let publisher = FakeAuditPublisher::failing_at(failure);
             let health = AuditPublisherHealth::default();
             let mut failed_stage = None;
+            let mut publication_state = AuditPublicationState::default();
 
-            let failed = publish_audit_pass(&publisher).await;
+            let failed = publish_audit_pass(&publisher, &mut publication_state).await;
             assert_eq!(failed, Err(failure));
             update_audit_health(&health, &mut failed_stage, failed);
             assert!(!health.is_ready());
             assert_eq!(failed_stage, Some(failure));
 
+            if failure == AuditPublicationFailure::PublishedMark {
+                assert_eq!(
+                    publish_audit_pass(&publisher, &mut publication_state).await,
+                    Err(AuditPublicationFailure::PublishedMark)
+                );
+                let state = publisher.state.lock().await;
+                assert_eq!(state.append_count, 1);
+                assert_eq!(state.pending_read_count, 1);
+            }
+
             publisher.recover().await;
-            let recovered = publish_audit_pass(&publisher).await;
+            let recovered = publish_audit_pass(&publisher, &mut publication_state).await;
             recovered.expect("recovered publication pass");
             update_audit_health(&health, &mut failed_stage, recovered);
             assert!(health.is_ready());
             assert_eq!(failed_stage, None);
+            let state = publisher.state.lock().await;
+            assert_eq!(state.append_count, 1);
         }
+    }
+
+    #[tokio::test]
+    async fn audit_publication_reconciles_a_real_file_tail_after_restart() {
+        let directory = tempfile::tempdir().expect("audit directory");
+        let path = directory.path().join("casework.jsonl");
+        let event_id =
+            Uuid::parse_str("ffffffff-ffff-4fff-8fff-ffffffffffff").expect("high event id");
+        let earlier_event_id =
+            Uuid::parse_str("00000000-0000-4000-8000-000000000000").expect("low event id");
+        let database = Arc::new(Mutex::new(FileAuditState {
+            fail_marks: true,
+            pending: vec![(event_id, serde_json::json!({"event":"casework.synthetic"}))],
+        }));
+        let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"casework-audit-restart-secret-32-bytes".to_vec(),
+        ))
+        .expect("audit profile");
+
+        let sink = Arc::new(JsonlFileSink::new_single_writer(&path).expect("first writer lock"));
+        let chain = Arc::new(
+            profile
+                .bootstrap_or_start_empty(sink.as_ref())
+                .await
+                .expect("first keyed bootstrap"),
+        );
+        let publisher = FileAuditPublisher {
+            database: Arc::clone(&database),
+            chain,
+            sink: Arc::clone(&sink),
+        };
+        let mut publication_state = AuditPublicationState::default();
+
+        assert_eq!(
+            publish_audit_pass(&publisher, &mut publication_state).await,
+            Err(AuditPublicationFailure::PublishedMark)
+        );
+        assert_eq!(publication_state.unconfirmed, Some(event_id));
+        assert!(matches!(
+            JsonlFileSink::new_single_writer(&path),
+            Err(registry_platform_audit::AuditError::SinkLocked { .. })
+        ));
+        drop(publisher);
+        drop(sink);
+
+        {
+            let mut database = database.lock().await;
+            database.fail_marks = false;
+            database.pending.insert(
+                0,
+                (
+                    earlier_event_id,
+                    serde_json::json!({"event":"casework.earlier"}),
+                ),
+            );
+        }
+        let sink = Arc::new(JsonlFileSink::new_single_writer(&path).expect("restart writer lock"));
+        let chain = Arc::new(
+            profile
+                .bootstrap_or_start_empty(sink.as_ref())
+                .await
+                .expect("restart keyed bootstrap"),
+        );
+        let tail = sink.last_envelope().await.expect("verified file tail");
+        let mut publication_state = AuditPublicationState::from_verified_tail(tail.as_ref());
+        let publisher = FileAuditPublisher {
+            database: Arc::clone(&database),
+            chain,
+            sink,
+        };
+
+        publish_audit_pass(&publisher, &mut publication_state)
+            .await
+            .expect("restart reconciles without append");
+        assert_eq!(publication_state.unconfirmed, None);
+        assert!(database.lock().await.pending.is_empty());
+        let envelopes = std::fs::read_to_string(&path)
+            .expect("audit journal")
+            .lines()
+            .map(|line| serde_json::from_str::<AuditEnvelope>(line).expect("audit envelope"))
+            .collect::<Vec<_>>();
+        assert_eq!(envelopes.len(), 2);
+        assert_eq!(envelopes[0].record["eventId"], event_id.to_string());
+        assert_eq!(envelopes[1].record["eventId"], earlier_event_id.to_string());
+    }
+
+    #[test]
+    fn audit_publication_owns_and_checks_the_event_identity() {
+        let event_id = Uuid::new_v4();
+        let populated =
+            audit_record_with_event_id(event_id, serde_json::json!({"event":"casework.synthetic"}))
+                .expect("publisher adds the authoritative identity");
+        assert_eq!(populated["eventId"], event_id.to_string());
+
+        assert!(audit_record_with_event_id(
+            event_id,
+            serde_json::json!({"eventId":Uuid::new_v4()})
+        )
+        .is_err());
+        assert!(audit_record_with_event_id(event_id, Value::Null).is_err());
+
+        let legacy_tail = AuditEnvelope::new_with_hasher(
+            serde_json::json!({"event":"casework.legacy"}),
+            None,
+            &registry_platform_audit::AuditChainHasher::unkeyed_dev_only(),
+        )
+        .expect("legacy envelope");
+        assert_eq!(
+            AuditPublicationState::from_verified_tail(Some(&legacy_tail)).unconfirmed,
+            None
+        );
     }
 }
 

@@ -781,6 +781,116 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     );
 }
 
+#[tokio::test]
+async fn readiness_accepts_the_current_migration_ledger() {
+    let (store, _client, _schema) = isolated_schema("ready_current").await;
+    store
+        .migrate()
+        .await
+        .expect("migrate to the current schema");
+
+    store
+        .ready()
+        .await
+        .expect("the complete current migration ledger is ready");
+}
+
+#[tokio::test]
+async fn readiness_rejects_an_unmigrated_schema() {
+    let (store, _client, _schema) = isolated_schema("ready_unmigrated").await;
+
+    assert!(
+        matches!(store.ready().await, Err(StoreError::Postgres(_))),
+        "a schema without the migration ledger must fail readiness"
+    );
+}
+
+#[tokio::test]
+async fn readiness_rejects_a_partial_schema_missing_hosted_tables() {
+    let (store, client, _schema) = isolated_schema("ready_partial").await;
+    store
+        .migrate()
+        .await
+        .expect("migrate before simulating drift");
+    client
+        .batch_execute(
+            "DROP TABLE casework_hosted_notes; \
+             DELETE FROM casework_schema_migrations WHERE version = 2;",
+        )
+        .await
+        .expect("simulate a partial schema without the hosted migration");
+
+    assert!(
+        matches!(store.ready().await, Err(StoreError::Corrupt)),
+        "a partial migration ledger must fail readiness"
+    );
+}
+
+#[tokio::test]
+async fn readiness_rejects_an_unsupported_migration_version() {
+    let (store, client, _schema) = isolated_schema("ready_unsupported").await;
+    store
+        .migrate()
+        .await
+        .expect("migrate to the current schema");
+    client
+        .execute(
+            "INSERT INTO casework_schema_migrations(version,applied_at) \
+             SELECT max(version) + 1, now() FROM casework_schema_migrations",
+            &[],
+        )
+        .await
+        .expect("simulate a schema created by a newer runtime");
+
+    assert!(
+        matches!(store.ready().await, Err(StoreError::Corrupt)),
+        "an unsupported migration version must fail readiness"
+    );
+}
+
+#[tokio::test]
+async fn retrying_an_audit_publication_preserves_its_original_timestamp() {
+    let (store, client, _schema) = isolated_schema("audit_publication_retry").await;
+    store.migrate().await.expect("migrate");
+    let event_id = uuid::Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
+            &[&event_id, &serde_json::json!({"event": "casework.test"})],
+        )
+        .await
+        .expect("insert a pending audit record");
+
+    store
+        .mark_audit_published(event_id)
+        .await
+        .expect("mark the pending audit record as published");
+    let published_at: chrono::DateTime<chrono::Utc> = client
+        .query_one(
+            "SELECT published_at FROM casework_audit_outbox WHERE event_id=$1",
+            &[&event_id],
+        )
+        .await
+        .expect("read the original publication timestamp")
+        .get(0);
+
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    store
+        .mark_audit_published(event_id)
+        .await
+        .expect("retry marking the audit record as published");
+    let retried_at: chrono::DateTime<chrono::Utc> = client
+        .query_one(
+            "SELECT published_at FROM casework_audit_outbox WHERE event_id=$1",
+            &[&event_id],
+        )
+        .await
+        .expect("read the publication timestamp after the retry")
+        .get(0);
+
+    assert_eq!(retried_at, published_at);
+}
+
 const SETTLEMENT_REASON: &str =
     "The source refused the saved evidence version; the registrar confirmed no change was made.";
 const SETTLEMENT_DECIDED_BY: &str = "Registrar duty officer, ticket OPS-4411";

@@ -207,8 +207,26 @@ impl PostgresStore {
     }
 
     pub async fn ready(&self) -> Result<(), StoreError> {
-        self.client().await?.simple_query("SELECT 1").await?;
-        Ok(())
+        let client = self.client().await?;
+        let applied = client
+            .query(
+                "SELECT version FROM casework_schema_migrations ORDER BY version",
+                &[],
+            )
+            .await?;
+        let schema_is_current = applied.len() == MIGRATIONS.len()
+            && applied
+                .iter()
+                .zip(MIGRATIONS.iter())
+                .all(|(row, (expected, _))| {
+                    row.try_get::<_, i64>(0)
+                        .is_ok_and(|version| version == *expected)
+                });
+        if schema_is_current {
+            Ok(())
+        } else {
+            Err(StoreError::Corrupt)
+        }
     }
 
     pub async fn directory_ready(&self) -> Result<bool, StoreError> {
@@ -2716,7 +2734,7 @@ impl PostgresStore {
         let client = self.client().await?;
         client
             .execute(
-                "UPDATE casework_audit_outbox SET published_at=now() WHERE event_id=$1",
+                "UPDATE casework_audit_outbox SET published_at=now() WHERE event_id=$1 AND published_at IS NULL",
                 &[&event_id],
             )
             .await?;
