@@ -81,11 +81,12 @@ const ES256_CLIENT_KEY_ID: &str = "client-suite-client-key-es256";
 /// refresh margin case needs a margin wider than a whole credential's life.
 const ISSUED_TOKEN_LIFETIME_SECONDS: i64 = 60;
 
-/// Serialize the narrow handoff from a held ephemeral port to a real service.
+/// Serialize loopback allocation and the narrow handoff from a held ephemeral
+/// port to a real service.
 ///
 /// The services under test have to know their configured port before binding it.
-/// Without this guard, another parallel case in this test binary can reserve the
-/// just-released port before the spawned service reaches `bind`.
+/// Every listener allocation in this test binary uses this guard, so none can
+/// reserve a just-released port before the spawned service reaches `bind`.
 static LOOPBACK_PORT_HANDOFF: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Prefix the runtime gives every published subject binding.
@@ -453,7 +454,7 @@ async fn a_response_under_the_wrong_media_type_is_refused() {
         let response = client.send(&prepared).await?;
         client.verify(&prepared, &response)?;
 
-        let replay = MockServer::start().await;
+        let replay = start_mock_server().await;
         Mock::given(method("POST"))
             .and(path("/v1/evidence"))
             .respond_with(
@@ -1027,13 +1028,55 @@ fn selector_value(field: &SelectorField, subject_label: &str) -> SelectorValue {
 /// The caller has to know the port before it authors the deployment that will
 /// be served on it, so the listener is returned rather than dropped here. Hold
 /// it until immediately before the real service binds the same port.
-fn reserve_loopback_port() -> (TcpListener, u16) {
+async fn reserve_loopback_port() -> (TcpListener, u16) {
+    let _allocation = LOOPBACK_PORT_HANDOFF.lock().await;
     let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve a loopback port");
     let port = reservation
         .local_addr()
         .expect("read the reserved address")
         .port();
     (reservation, port)
+}
+
+/// Start a mock server without letting it claim a port another service is
+/// handing off from its reservation to its configured listener.
+async fn start_mock_server() -> MockServer {
+    let _allocation = LOOPBACK_PORT_HANDOFF.lock().await;
+    MockServer::start().await
+}
+
+#[tokio::test]
+async fn loopback_allocations_wait_for_an_active_port_handoff() {
+    let handoff = LOOPBACK_PORT_HANDOFF.lock().await;
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let mut allocation = tokio::spawn(async move {
+        started_tx
+            .send(())
+            .expect("the allocation observer remains present");
+        reserve_loopback_port().await
+    });
+    started_rx
+        .await
+        .expect("the allocation task reaches the guarded helper");
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut allocation)
+            .await
+            .is_err(),
+        "a new allocation waits while a reserved port is being handed off"
+    );
+
+    drop(handoff);
+    let (reservation, port) = allocation
+        .await
+        .expect("the allocation task completes after the handoff");
+    assert_eq!(
+        reservation
+            .local_addr()
+            .expect("the reservation retains its address")
+            .port(),
+        port
+    );
 }
 
 /// Ask a spawned service to stop and abandon its task.
@@ -1186,7 +1229,7 @@ async fn start_trusting_with_request_burst(
     external_issuer: Option<&str>,
     request_burst: u32,
 ) -> Deployment {
-    let source = MockServer::start().await;
+    let source = start_mock_server().await;
     let auth_key = generate_key(AUTH_KEY_ID);
     let issuer = match external_issuer {
         Some(origin) => origin.to_owned(),
@@ -1217,7 +1260,7 @@ async fn start_trusting_with_request_burst(
 
     // Hold the allocation while the matching deployment is authored, and
     // release it only immediately before the service binds it.
-    let (reservation, port) = reserve_loopback_port();
+    let (reservation, port) = reserve_loopback_port().await;
 
     let directory = tempfile::tempdir().expect("temporary deployment root");
     let bundle_root = directory.path().join("bundle");
@@ -1293,7 +1336,7 @@ async fn start_trusting_with_request_burst(
         .await
     });
 
-    let deployment = Deployment {
+    let mut deployment = Deployment {
         _source: source,
         issuer,
         auth_key,
@@ -1311,7 +1354,7 @@ async fn start_trusting_with_request_burst(
             .base_url
             .join("ready")
             .expect("the readiness URL resolves"),
-        &deployment.server,
+        &mut deployment.server,
     )
     .await;
     drop(port_handoff);
@@ -1336,7 +1379,7 @@ fn rewrite_request_burst(bundle_root: &Path, request_burst: u32) {
 async fn await_readiness(
     label: &str,
     ready: Url,
-    server: &tokio::task::JoinHandle<std::io::Result<()>>,
+    server: &mut tokio::task::JoinHandle<std::io::Result<()>>,
 ) {
     let probe = reqwest::Client::builder()
         .no_proxy()
@@ -1345,17 +1388,23 @@ async fn await_readiness(
         .expect("the readiness probe client builds");
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            assert!(
-                !server.is_finished(),
-                "{label} stopped before it reported readiness"
-            );
-            if probe
-                .get(ready.clone())
-                .send()
-                .await
-                .is_ok_and(|response| response.status().is_success())
-            {
-                return;
+            tokio::select! {
+                biased;
+
+                result = &mut *server => match result {
+                    Ok(Ok(())) => panic!("{label} stopped before it reported readiness"),
+                    Ok(Err(error)) => {
+                        panic!("{label} stopped before it reported readiness: {error}")
+                    }
+                    Err(error) => {
+                        panic!("{label} task stopped before it reported readiness: {error}")
+                    }
+                },
+                response = probe.get(ready.clone()).send() => {
+                    if response.is_ok_and(|response| response.status().is_success()) {
+                        return;
+                    }
+                }
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -1457,7 +1506,7 @@ async fn start_token_issuer() -> TokenIssuer {
     // Hold the allocation while the matching deployment is authored, and release
     // it only immediately before the service binds it. The issuer identity is
     // part of that deployment, so the port has to be known first.
-    let (reservation, port) = reserve_loopback_port();
+    let (reservation, port) = reserve_loopback_port().await;
     let origin = format!("http://127.0.0.1:{port}");
     let token_endpoint = Url::parse(&format!("{origin}/token")).expect("the token endpoint parses");
 
@@ -1570,7 +1619,7 @@ clients:
         .await
     });
 
-    let issuer = TokenIssuer {
+    let mut issuer = TokenIssuer {
         origin,
         token_endpoint,
         client_key,
@@ -1583,7 +1632,7 @@ clients:
     await_readiness(
         "the token issuer",
         Url::parse(&format!("{}/ready", issuer.origin)).expect("the readiness URL parses"),
-        &issuer.server,
+        &mut issuer.server,
     )
     .await;
     drop(port_handoff);
