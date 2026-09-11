@@ -1487,10 +1487,11 @@ fn supervisor_log_with_open(root: &Path, after_directory_open: impl FnOnce()) ->
     }
     .context("cannot open retained supervisor journal")?;
     let mut file = File::from(descriptor);
+    let opened_stat = rustix::fs::fstat(&file)?;
     let opened = file.metadata()?;
     private::check_metadata(&opened, false)?;
     if before.is_some_and(|metadata| {
-        metadata.st_ino != opened.ino() || metadata.st_dev as u64 != opened.dev()
+        metadata.st_ino != opened_stat.st_ino || metadata.st_dev != opened_stat.st_dev
     }) {
         bail!("local state changed while opening it");
     }
