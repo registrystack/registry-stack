@@ -881,8 +881,8 @@ class ReleaseCandidateTest(TestCase):
 
     def test_image_onboarding_at_0_30_0_needs_only_the_casework_baseline(self) -> None:
         # casework-candidate is allowlisted in CANDIDATE_PACKAGES, so onboarding
-        # gets past every other check and stops at the one thing genuinely
-        # missing today: the reviewed casework advisory baseline (E4-08).
+        # gets past every other check and stops only at the missing reviewed
+        # casework advisory baseline.
         self.assertEqual(
             self.module._candidate_image_names("0.30.0"),
             self.module.check_image_onboarding(
