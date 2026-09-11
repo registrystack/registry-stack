@@ -699,8 +699,8 @@ A receiver compares the signature in constant time, validates the expected sourc
 and payload, bounds the skew of `X-Registry-Delivery-Time` (not `ce-time`), and deduplicates
 before it acts. The accepted skew is receiver policy, not a BReg limit.
 
-{/* Evidence: crates/registry-breg/src/webhook.rs, webhook_signature(), append_length_prefixed(),
-    and hmac_sha256_v1_binds_every_header_and_exact_canonical_body();
+{/* Evidence: crates/registry-platform-crypto/src/breg_webhook.rs, SignatureFields, sign_v1(),
+    and v1_binds_every_field_and_exact_body();
     crates/registry-breg/src/event_destination.rs, MIN_HMAC_SHA256_KEY_BYTES;
     crates/registry-platform-config/src/secrets.rs, resolve_reference() and read_secret_file();
     products/breg/demo/support/demo.py, _verify_webhook_request(). */}

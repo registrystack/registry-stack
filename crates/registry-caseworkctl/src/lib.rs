@@ -65,7 +65,7 @@ struct SourceArgs {
 
 #[derive(Debug, Subcommand)]
 enum SourceCommand {
-    /// Preview or apply one local BReg connection.
+    /// Preview or apply one local Base Registry Engine (BReg) connection.
     Add(SourceAddArgs),
 }
 
