@@ -4,6 +4,7 @@ import {
   type ClockNextEffect,
   type CaseworkProblemCode,
   type DecideRequest,
+  type DirectoryMember,
   type HostedCreateRequest,
   type HostedDecisionRequest,
   type HistoryEntry,
@@ -31,6 +32,13 @@ void client.recoverDecisionByKey(
   { sourceProfileId: sourceProfile },
 )
 void client.workItemHistory(token, profile, sourceProfile, item.itemId, { cursor: 'opaque', limit: 25 })
+void client.holdings(token, profile, sourceProfile, { cursor: 'opaque', limit: 25 })
+void client.nextWorkItem(token, profile, sourceProfile, { queue: 'review', cursor: 'opaque' }).then((page) => {
+  const status: string = page.value.status
+  const item: WorkItem | undefined = page.value.items[0]
+  void status
+  void item
+})
 void client.listWorkItems(token, profile, sourceProfile, {
   view: 'my_teams', sourceId: 'source-one', subjectKind: 'resident-record', subjectId: 'human-reference-42',
 }).then((page) => {
@@ -40,6 +48,10 @@ void client.listWorkItems(token, profile, sourceProfile, {
 // @ts-expect-error subject selectors must include all three fields
 void client.listWorkItems(token, profile, sourceProfile, { view: 'my_teams', sourceId: 'source-one' })
 void client.directoryTargets(token, profile, { purpose: 'assignment', queue: 'review', limit: 25 })
+void client.directoryTargets(token, profile, { purpose: 'absence_person' }).then((page) => {
+  const displayName: string | null | undefined = page.value.items[0]?.displayName
+  void displayName
+})
 void client.directoryTargets(token, profile, { purpose: 'absence_person' })
 void client.directoryTargets(token, profile, {
   purpose: 'absence_cover', personIssuer: 'https://idp.example', personSubject: 'officer',
@@ -71,6 +83,7 @@ void client.decideHostedWorkItem(token, profile, item.actions[0], 'decide-42', h
 
 const officer = { issuer: 'https://idp.example', subject: 'officer' }
 const cover = { issuer: 'https://idp.example', subject: 'cover' }
+const namedOfficer: DirectoryMember = { ...officer, displayName: 'Officer One' }
 void client.createAbsence(token, 'administrator', 1, 'absence-1', {
   person: officer, cover, from: '2026-09-14T00:00:00Z', until: '2026-09-19T00:00:00Z',
 })
@@ -124,4 +137,4 @@ void client.createHolidayRevision(token, 'administrator', 'holiday-7', { documen
 void client.previewClockRecompute(token, 'administrator', { clockId: 'review-deadline', holidaySet: 'office', holidayRevision: 7 })
 void client.applyClockRecompute(token, 'administrator', 'apply-preview', { previewId: item.itemId })
 
-void client.updateDirectoryTeam(token, 'administrator', 'review-team', 4, 'team-update', { staff: [officer], supervisors: [cover], servedQueues: ['review'] })
+void client.updateDirectoryTeam(token, 'administrator', 'review-team', 4, 'team-update', { staff: [namedOfficer], supervisors: [cover], servedQueues: ['review'] })

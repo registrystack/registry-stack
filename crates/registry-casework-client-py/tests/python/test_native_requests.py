@@ -100,11 +100,21 @@ class _Handler(BaseHTTPRequestHandler):
             })
         elif self.path.startswith(f"/tenant/v1/work-items/{ITEM_ID}/history?"):
             self.respond({"items": [], "nextCursor": "next-cursor", "status": "complete"})
+        elif self.path.startswith("/tenant/v1/holdings?"):
+            self.respond({"items": [], "nextCursor": "next-holdings", "status": "complete"})
+        elif self.path.startswith("/tenant/v1/work-items/next?"):
+            self.respond({
+                "items": [],
+                "nextCursor": "resume-next",
+                "status": "budget_exhausted",
+                "servedQueues": ["review"],
+            })
         elif self.path.startswith("/tenant/v1/directory/targets?"):
             self.respond({
                 "items": [{
                     "issuer": "https://id.example",
                     "subject": "cover-officer",
+                    "displayName": "Cover Officer",
                 }],
                 "nextCursor": "target-next",
                 "status": "complete",
@@ -307,6 +317,7 @@ class NativeRequestTests(unittest.TestCase):
             parse_qs(urlsplit(staff["path"]).query),
             {
                 "view": ["mine"],
+                "sort": ["due"],
                 "sourceId": ["source-one"],
                 "subjectKind": ["resident-record"],
                 "subjectId": ["human-reference-42"],
@@ -359,6 +370,39 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
 
+    def test_holdings_forwards_page_query_and_returns_continuation(self) -> None:
+        page = self.client.holdings(
+            "staff-token",
+            "staff",
+            "source-one",
+            {"cursor": "opaque-holdings", "limit": 25},
+        )
+        self.assertEqual(page["value"]["nextCursor"], "next-holdings")
+        self.assertEqual(
+            _Handler.observations[0]["path"],
+            "/tenant/v1/holdings?cursor=opaque-holdings&limit=25",
+        )
+        self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
+
+    def test_next_work_item_preserves_empty_budget_page_and_cursor(self) -> None:
+        page = self.client.next_work_item(
+            "staff-token",
+            "staff",
+            "source-one",
+            {"queue": "review", "cursor": "opaque-next"},
+        )
+        self.assertEqual(page["value"], {
+            "items": [],
+            "nextCursor": "resume-next",
+            "status": "budget_exhausted",
+            "servedQueues": ["review"],
+        })
+        self.assertEqual(
+            _Handler.observations[0]["path"],
+            "/tenant/v1/work-items/next?queue=review&cursor=opaque-next",
+        )
+        self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
+
     def test_native_client_preserves_optional_held_timestamp(self) -> None:
         item = self.client.get_work_item(
             "staff-token", "staff", "source-one", ITEM_ID
@@ -384,6 +428,7 @@ class NativeRequestTests(unittest.TestCase):
             "items": [{
                 "issuer": "https://id.example",
                 "subject": "cover-officer",
+                "displayName": "Cover Officer",
             }],
             "nextCursor": "target-next",
             "status": "complete",
@@ -485,7 +530,7 @@ class NativeRequestTests(unittest.TestCase):
 
     def test_directory_team_update_preserves_admin_precondition_and_key(self) -> None:
         request = {
-            "staff": [{"issuer": "issuer", "subject": "staff-one"}],
+            "staff": [{"issuer": "issuer", "subject": "staff-one", "displayName": "Staff One"}],
             "supervisors": [{"issuer": "issuer", "subject": "supervisor-one"}],
             "servedQueues": ["intake", "review"],
         }
@@ -500,6 +545,7 @@ class NativeRequestTests(unittest.TestCase):
 
         self.assertEqual(updated["value"]["revision"], 4)
         self.assertEqual(updated["value"]["teams"][0]["servedQueues"], ["intake", "review"])
+        self.assertEqual(updated["value"]["teams"][0]["members"][0]["displayName"], "Staff One")
         self.assertEqual(len(_Handler.observations), 1)
         observation = _Handler.observations[0]
         self.assertEqual(observation["path"], "/tenant/v1/directory/teams/intake")

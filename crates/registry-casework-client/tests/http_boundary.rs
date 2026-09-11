@@ -8,8 +8,8 @@ use axum::Router;
 use registry_casework_client::{
     BearerToken, CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
     CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure, DecideRequest,
-    DirectoryTargetPurpose, DirectoryTargetsQuery, HostedDecisionRequest, HostedValidationReason,
-    RecoverAttemptRequest, SourceBinding,
+    DirectoryTargetPurpose, DirectoryTargetsQuery, HoldingsQuery, HostedDecisionRequest,
+    HostedValidationReason, RecoverAttemptRequest, SourceBinding,
 };
 use url::Url;
 use uuid::Uuid;
@@ -333,6 +333,176 @@ async fn capture_history_query(
 }
 
 #[tokio::test]
+async fn holdings_forwards_and_validates_its_bounded_page_query() {
+    let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
+    let app = Router::new()
+        .route("/v1/holdings", get(capture_history_query))
+        .with_state(observations.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    client
+        .holdings(
+            CaseworkAuth::new(&token, "supervisor").with_source_profile("reviewer"),
+            &HoldingsQuery {
+                cursor: Some("opaque-holdings-cursor".into()),
+                limit: Some(25),
+            },
+        )
+        .await
+        .expect("holdings page");
+
+    assert!(matches!(
+        client
+            .holdings(
+                CaseworkAuth::new(&token, "supervisor").with_source_profile("reviewer"),
+                &HoldingsQuery {
+                    cursor: None,
+                    limit: Some(101),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(
+        observations[0].0,
+        "/v1/holdings?cursor=opaque-holdings-cursor&limit=25"
+    );
+    assert_eq!(observations[0].1["registry-source-profile"], "reviewer");
+    server.abort();
+}
+
+#[tokio::test]
+async fn next_work_item_preserves_the_page_envelope_and_rejects_multiple_items() {
+    let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
+    let app = Router::new()
+        .route("/v1/work-items/next", get(capture_next_query))
+        .with_state(observations.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let page = client
+        .next_work_item(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            &registry_casework_client::NextWorkItemQuery {
+                queue: Some("review".into()),
+                cursor: Some("opaque-next".into()),
+            },
+        )
+        .await
+        .expect("bounded next page");
+    assert!(page.value.items.is_empty());
+    assert_eq!(
+        page.value.status,
+        registry_casework_client::PageStatus::BudgetExhausted
+    );
+    assert_eq!(page.value.next_cursor.as_deref(), Some("resume-next"));
+    assert_eq!(page.value.served_queues, ["review"]);
+
+    let too_many = client
+        .next_work_item(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            &registry_casework_client::NextWorkItemQuery {
+                queue: Some("review".into()),
+                cursor: Some("too-many".into()),
+            },
+        )
+        .await;
+    assert!(matches!(
+        too_many,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 2);
+    assert_eq!(
+        observations[0].0,
+        "/v1/work-items/next?queue=review&cursor=opaque-next"
+    );
+    assert_eq!(observations[0].1["registry-source-profile"], "reviewer");
+    server.abort();
+}
+
+async fn capture_next_query(
+    State(observations): State<HistoryObservations>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    observations
+        .lock()
+        .expect("observations")
+        .push((uri.to_string(), headers));
+    let item = serde_json::json!({
+        "itemId": "00000000-0000-4000-8000-000000000001",
+        "subject": {"sourceId": "source-one", "kind": "case", "id": "case-one"},
+        "occurrenceKind": "review",
+        "binding": {
+            "sourceRevision": "revision-1",
+            "version": "version-1",
+            "generation": "generation-1"
+        },
+        "bindingReference": "binding-one",
+        "state": "open",
+        "queueId": "review",
+        "revision": 1,
+        "firstObservedAt": "2026-09-11T03:00:00Z",
+        "updatedAt": "2026-09-11T03:00:00Z",
+        "actions": []
+    });
+    let body = if uri
+        .query()
+        .is_some_and(|query| query.contains("cursor=too-many"))
+    {
+        serde_json::json!({
+            "items": [item.clone(), item],
+            "status": "complete",
+            "servedQueues": ["review"]
+        })
+    } else {
+        serde_json::json!({
+            "items": [],
+            "nextCursor": "resume-next",
+            "status": "budget_exhausted",
+            "servedQueues": ["review"]
+        })
+    };
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        body.to_string(),
+    )
+}
+
+#[tokio::test]
 async fn directory_targets_forward_the_exact_context_without_a_source_profile() {
     let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
     let app = Router::new()
@@ -367,6 +537,10 @@ async fn directory_targets_forward_the_exact_context_without_a_source_profile() 
         .expect("directory target page");
 
     assert_eq!(page.value.items[0].subject, "cover-officer");
+    assert_eq!(
+        page.value.items[0].display_name.as_deref(),
+        Some("Cover Officer")
+    );
     assert_eq!(page.value.next_cursor.as_deref(), Some("target-next"));
     let observations = observations.lock().expect("observations");
     assert_eq!(observations.len(), 1);
@@ -394,7 +568,7 @@ async fn capture_directory_targets(
             ("content-type", "application/json"),
             ("traceparent", TRACEPARENT),
         ],
-        r#"{"items":[{"issuer":"https://id.example","subject":"cover-officer"}],"nextCursor":"target-next","status":"complete"}"#,
+        r#"{"items":[{"issuer":"https://id.example","subject":"cover-officer","displayName":"Cover Officer"}],"nextCursor":"target-next","status":"complete"}"#,
     )
 }
 
@@ -470,10 +644,12 @@ async fn invalid_subject_selectors_fail_before_network_io() {
     let token = BearerToken::new("one-call-secret").expect("fixture token");
     let partial = registry_casework_client::ListWorkItemsQuery {
         view: registry_casework_client::InboxView::MyTeams,
+        sort: registry_casework_client::InboxSort::Due,
         queue: None,
         source_id: Some("source-one".into()),
         subject_kind: None,
         subject_id: None,
+        reference: None,
         cursor: None,
         limit: Some(10),
     };
@@ -489,16 +665,60 @@ async fn invalid_subject_selectors_fail_before_network_io() {
 
     let complete = registry_casework_client::ListWorkItemsQuery {
         view: registry_casework_client::InboxView::MyTeams,
+        sort: registry_casework_client::InboxSort::Due,
         queue: None,
         source_id: Some("source-one".into()),
         subject_kind: Some("resident-record".into()),
         subject_id: Some("human-reference-42".into()),
+        reference: None,
         cursor: None,
         limit: Some(10),
     };
     assert!(matches!(
         client
             .list_hosted_work_items(CaseworkAuth::new(&token, "staff"), &complete)
+            .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+
+    let reference_and_subject = registry_casework_client::ListWorkItemsQuery {
+        reference: Some("CASE-42".into()),
+        ..complete.clone()
+    };
+    assert!(matches!(
+        client
+            .list_work_items(
+                CaseworkAuth::new(&token, "staff").with_source_profile("reader"),
+                &reference_and_subject,
+            )
+            .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+
+    let hosted_reference = registry_casework_client::ListWorkItemsQuery {
+        source_id: None,
+        subject_kind: None,
+        subject_id: None,
+        reference: Some("CASE-42".into()),
+        ..complete.clone()
+    };
+    assert!(matches!(
+        client
+            .list_hosted_work_items(CaseworkAuth::new(&token, "staff"), &hosted_reference)
+            .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+
+    let hosted_sort = registry_casework_client::ListWorkItemsQuery {
+        source_id: None,
+        subject_kind: None,
+        subject_id: None,
+        sort: registry_casework_client::InboxSort::Age,
+        ..complete
+    };
+    assert!(matches!(
+        client
+            .list_hosted_work_items(CaseworkAuth::new(&token, "staff"), &hosted_sort)
             .await,
         Err(CaseworkClientError::InvalidRequest { .. })
     ));
@@ -572,10 +792,12 @@ async fn hosted_client_refuses_a_source_profile_before_network_io() {
             CaseworkAuth::new(&token, "staff").with_source_profile("reader"),
             &registry_casework_client::ListWorkItemsQuery {
                 view: registry_casework_client::InboxView::MyTeams,
+                sort: registry_casework_client::InboxSort::Due,
                 queue: None,
                 source_id: None,
                 subject_kind: None,
                 subject_id: None,
+                reference: None,
                 cursor: None,
                 limit: Some(10),
             },

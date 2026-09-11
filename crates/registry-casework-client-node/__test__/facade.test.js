@@ -99,6 +99,84 @@ test('source history forwards cursor and limit and returns the continuation', as
   assert.equal(observed.headers['registry-source-profile'], 'reviewer');
 });
 
+test('holdings forwards cursor and limit and returns the continuation', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({ items: [], nextCursor: 'next-holdings', status: 'complete' }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const page = await client.holdings(
+    'one-call-secret',
+    'staff',
+    'reviewer',
+    { cursor: 'opaque-holdings', limit: 25 },
+  );
+
+  assert.equal(page.value.nextCursor, 'next-holdings');
+  assert.equal(observed.path, '/v1/holdings?cursor=opaque-holdings&limit=25');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+});
+
+test('next work item preserves an empty budget-exhausted page and its cursor', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        items: [],
+        nextCursor: 'resume-next',
+        status: 'budget_exhausted',
+        servedQueues: ['review'],
+      }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const page = await client.nextWorkItem(
+    'one-call-secret',
+    'staff',
+    'reviewer',
+    { queue: 'review', cursor: 'opaque-next' },
+  );
+
+  assert.deepEqual(page.value, {
+    items: [],
+    nextCursor: 'resume-next',
+    status: 'budget_exhausted',
+    servedQueues: ['review'],
+  });
+  assert.equal(observed.path, '/v1/work-items/next?queue=review&cursor=opaque-next');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+});
+
 test('source inbox forwards one complete exact subject selector', async (context) => {
   let observed;
   const server = http.createServer((request, response) => {
@@ -144,7 +222,7 @@ test('directory target discovery preserves its exact purpose context without sou
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
       response.end(JSON.stringify({
-        items: [{ issuer: 'https://id.example', subject: 'cover-officer' }],
+        items: [{ issuer: 'https://id.example', subject: 'cover-officer', displayName: 'Cover Officer' }],
         nextCursor: 'target-next',
         status: 'complete',
       }));
@@ -172,7 +250,7 @@ test('directory target discovery preserves its exact purpose context without sou
   assert.equal(observed.headers['registry-casework-profile'], 'supervisor');
   assert.equal(observed.headers['registry-source-profile'], undefined);
   assert.deepEqual(page.value, {
-    items: [{ issuer: 'https://id.example', subject: 'cover-officer' }],
+    items: [{ issuer: 'https://id.example', subject: 'cover-officer', displayName: 'Cover Officer' }],
     nextCursor: 'target-next',
     status: 'complete',
   });
@@ -304,7 +382,16 @@ test('absence creation and reviewed caseload selection preserve exact mutation c
       });
       response.end(JSON.stringify(creating
         ? { ...body, absenceId: itemId, revision: 3 }
-        : updatingTeam ? { revision: 4, teams: [] } : [{ itemId, result: 'moved', revision: 8 }]));
+        : updatingTeam ? {
+          revision: 4,
+          teams: [{
+            id: 'review-team',
+            members: body.staff,
+            supervisors: body.supervisors,
+            servedQueues: body.servedQueues,
+            revision: 4,
+          }],
+        } : [{ itemId, result: 'moved', revision: 8 }]));
     });
   });
   await listen(server);
@@ -337,8 +424,10 @@ test('absence creation and reviewed caseload selection preserve exact mutation c
     ...request, items: [request.items[0], request.items[0]],
   }), (error) => error.kind === 'invalid_request');
   assert.equal(observed.length, 2, 'ambiguous selections never reach the service');
-  const team = { staff: [person], supervisors: [cover], servedQueues: ['review'] };
-  assert.equal((await client.updateDirectoryTeam('synthetic-token', 'administrator', 'review-team', 3, 'team-update', team)).value.revision, 4);
+  const team = { staff: [{ ...person, displayName: 'Staff Officer' }], supervisors: [cover], servedQueues: ['review'] };
+  const directory = await client.updateDirectoryTeam('synthetic-token', 'administrator', 'review-team', 3, 'team-update', team);
+  assert.equal(directory.value.revision, 4);
+  assert.equal(directory.value.teams[0].members[0].displayName, 'Staff Officer');
   assert.equal(observed.length, 3);
   assert.equal(observed[2].headers['if-match'], '"3"');
   assert.equal(observed[2].headers['idempotency-key'], 'team-update');

@@ -142,7 +142,7 @@ async fn every_casework_method_names_its_types(
     let _: CaseworkComplete<WorkItemPage> = client
         .list_work_items(CaseworkAuth::new(token, profile), list_query)
         .await?;
-    let _: CaseworkComplete<Option<WorkItem>> = client
+    let _: CaseworkComplete<WorkItemPage> = client
         .next_work_item(CaseworkAuth::new(token, profile), next_query)
         .await?;
     let _: CaseworkComplete<WorkItem> = client

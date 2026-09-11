@@ -387,6 +387,7 @@ export interface BRegOperationDescriptor {
   readonly requiredCapabilities: ReadonlyArray<string>
   readonly fields: ReadonlyArray<BRegFieldDescriptor>
   readonly readableFields: ReadonlyArray<string>
+  readonly readableRequestFields: ReadonlyArray<string>
   readonly createWritableFields: ReadonlyArray<string>
   readonly patchWritableFields: ReadonlyArray<string>
   readonly query: BRegQueryDescriptor | null

@@ -68,7 +68,8 @@ consumer does not need it.
 ## Base Registry Engine notes
 
 `breg.BaseRegistryClient.registryContract()` returns caller-filtered
-`operations` with typed field, request, and list-query descriptors; those
+`operations` with typed field, readable request field, request, and list-query
+descriptors; those
 descriptions grant no authority, so select the opaque create, patch, and
 lifecycle authorities from that same contract before executing a mutation.
 Methods ending in `Json` keep values exact across the Node number boundary:

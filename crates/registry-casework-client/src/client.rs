@@ -192,6 +192,16 @@ impl CaseworkClient {
                 "hosted inboxes do not accept a subject selector",
             ));
         }
+        if query
+            .reference()
+            .map_err(|_| CaseworkClientError::invalid_request("the display reference is invalid"))?
+            .is_some()
+            || query.sort != registry_casework_core::InboxSort::Due
+        {
+            return Err(CaseworkClientError::invalid_request(
+                "hosted inboxes do not accept display-reference lookup or source sorting",
+            ));
+        }
         validate_page(query.cursor.as_deref(), query.limit)?;
         let url = self.url_from_constant(WORK_ITEMS_PATH)?;
         let request = self.authorized(self.http.get(url).query(query), &auth)?;
@@ -289,6 +299,9 @@ impl CaseworkClient {
         query
             .subject()
             .map_err(|_| CaseworkClientError::invalid_request("the subject selector is invalid"))?;
+        query.reference().map_err(|_| {
+            CaseworkClientError::invalid_request("the display reference is invalid")
+        })?;
         validate_page(query.cursor.as_deref(), query.limit)?;
         let url = self.url_from_constant(WORK_ITEMS_PATH)?;
         let request = self.authorized(self.http.get(url).query(query), &auth)?;
@@ -299,7 +312,7 @@ impl CaseworkClient {
         &self,
         auth: CaseworkAuth<'_>,
         query: &NextWorkItemQuery,
-    ) -> Result<CaseworkComplete<Option<WorkItem>>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<WorkItemPage>, CaseworkClientError> {
         require_source_profile(&auth)?;
         if let Some(queue) = query.queue.as_deref() {
             validate_identifier(queue, "the queue identifier is invalid")?;
@@ -307,7 +320,15 @@ impl CaseworkClient {
         validate_page(query.cursor.as_deref(), None)?;
         let url = self.url_from_constant(NEXT_WORK_ITEM_PATH)?;
         let request = self.authorized(self.http.get(url).query(query), &auth)?;
-        self.send_optional_json(request).await
+        let page: CaseworkComplete<WorkItemPage> = self.send_json(request, StatusCode::OK).await?;
+        if page.value.items.len() > 1 {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(page.trace_id),
+            ));
+        }
+        Ok(page)
     }
 
     pub async fn get_work_item(
@@ -488,7 +509,7 @@ impl CaseworkClient {
         query: &HoldingsQuery,
     ) -> Result<CaseworkComplete<HoldingsPage>, CaseworkClientError> {
         require_source_profile(&auth)?;
-        validate_page(query.cursor.as_deref(), None)?;
+        validate_page(query.cursor.as_deref(), query.limit)?;
         let url = self.url_from_constant(HOLDINGS_PATH)?;
         let request = self.authorized(self.http.get(url).query(query), &auth)?;
         self.send_json(request, StatusCode::OK).await
@@ -966,64 +987,6 @@ impl CaseworkClient {
                 kind: read_failure_kind(&error),
             })?;
         let value = serde_json::from_slice(&body).map_err(|_| {
-            protocol(
-                status,
-                CaseworkProtocolFailure::Body,
-                Some(trace_id.clone()),
-            )
-        })?;
-        Ok(CaseworkComplete { value, trace_id })
-    }
-
-    async fn send_optional_json<T: DeserializeOwned>(
-        &self,
-        request: RequestBuilder,
-    ) -> Result<CaseworkComplete<Option<T>>, CaseworkClientError> {
-        let response = self.send(request).await?;
-        if response.status() == StatusCode::NO_CONTENT {
-            let trace_id = response_trace(response.status(), response.headers())?;
-            let body = read_bounded(response, 1).await.map_err(|error| {
-                CaseworkClientError::Transport {
-                    kind: read_failure_kind(&error),
-                }
-            })?;
-            if !body.is_empty() {
-                return Err(protocol(
-                    StatusCode::NO_CONTENT,
-                    CaseworkProtocolFailure::Body,
-                    Some(trace_id),
-                ));
-            }
-            return Ok(CaseworkComplete {
-                value: None,
-                trace_id,
-            });
-        }
-        self.decode_optional(response).await
-    }
-
-    async fn decode_optional<T: DeserializeOwned>(
-        &self,
-        response: Response,
-    ) -> Result<CaseworkComplete<Option<T>>, CaseworkClientError> {
-        let status = response.status();
-        if status != StatusCode::OK {
-            return Err(self.problem_or_status(response).await);
-        }
-        let trace_id = response_trace(status, response.headers())?;
-        if !exact_media_type(response.headers(), JSON_MEDIA_TYPE) {
-            return Err(protocol(
-                status,
-                CaseworkProtocolFailure::MediaType,
-                Some(trace_id),
-            ));
-        }
-        let body = read_bounded(response, self.max_response_bytes)
-            .await
-            .map_err(|error| CaseworkClientError::Transport {
-                kind: read_failure_kind(&error),
-            })?;
-        let value = serde_json::from_slice(&body).map(Some).map_err(|_| {
             protocol(
                 status,
                 CaseworkProtocolFailure::Body,

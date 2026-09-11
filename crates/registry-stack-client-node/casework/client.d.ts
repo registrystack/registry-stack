@@ -21,6 +21,7 @@ export type PageStatus = 'complete' | 'budget_exhausted' | 'source_unavailable'
 export type HistoryKind = 'observed' | 'opened' | 'claimed' | 'assigned' | 'delegated' | 'caseload_moved' | 'clock_reminder' | 'clock_step_applied' | 'clock_recomputed' | 'released' | 'draft_saved' | 'attempt_reserved' | 'attempt_uncertain' | 'action_completed' | 'attempt_settled' | 'superseded' | 'completed'
 
 export interface IssuerPrincipal { issuer: string; subject: string }
+export interface DirectoryMember { issuer: string; subject: string; displayName?: string | null }
 export interface SubjectRef { sourceId: string; kind: string; id: string }
 export interface SourceBinding {
   sourceRevision: string
@@ -47,6 +48,7 @@ export interface WorkItem {
   stage?: string
   binding: SourceBinding
   bindingReference: string
+  displayReference?: string
   state: OccurrenceState
   queueId: string
   holder?: IssuerPrincipal
@@ -74,16 +76,19 @@ export type DirectoryTargetsQuery = {
   | { purpose: 'absence_person'; queue?: never; personIssuer?: never; personSubject?: never }
   | { purpose: 'absence_cover'; queue?: never; personIssuer: string; personSubject: string }
 )
-export type DirectoryTargetPage = Page<IssuerPrincipal>
+export type DirectoryTargetPage = Page<DirectoryMember>
 export type ListWorkItemsQuery = {
   view: InboxView
+  sort?: InboxSort
   queue?: string
   cursor?: string
   limit?: SafeInteger
 } & (
-  | { sourceId: string; subjectKind: string; subjectId: string }
-  | { sourceId?: never; subjectKind?: never; subjectId?: never }
+  | { sourceId: string; subjectKind: string; subjectId: string; reference?: never }
+  | { reference: string; sourceId?: never; subjectKind?: never; subjectId?: never }
+  | { reference?: never; sourceId?: never; subjectKind?: never; subjectId?: never }
 )
+export type InboxSort = 'due' | 'age' | 'type'
 export interface NextWorkItemQuery { queue?: string; cursor?: string }
 export interface SaveDraftRequest {
   binding: SourceBinding
@@ -166,7 +171,8 @@ export interface PassiveTargetPolicy { id: string; after: { elapsed: string } }
 export type RoutingPredicate = { equals: JsonValue } | { oneOf: ReadonlyArray<JsonValue> }
 export interface RoutingCondition { activity?: 'review' | 'apply'; stage?: string; fields?: Readonly<Record<string, RoutingPredicate>> }
 export interface RoutingRule { id: string; because: string; when: RoutingCondition; queue: string }
-export interface SourceRequestPolicy { entity: string; queue: string; projection?: ReadonlyArray<string>; routing?: ReadonlyArray<RoutingRule>; clock?: string; target?: PassiveTargetPolicy }
+export interface DisplayReferencePolicy { field: string }
+export interface SourceRequestPolicy { entity: string; queue: string; projection?: ReadonlyArray<string>; routing?: ReadonlyArray<RoutingRule>; displayReference?: DisplayReferencePolicy; clock?: string; target?: PassiveTargetPolicy }
 export type WorkingWeekday = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
 export interface CalendarPolicy { id: string; timezone: string; workingWeekdays: ReadonlyArray<WorkingWeekday>; holidaySet: string }
 export interface ClockReminder { id: string; workingDaysBefore: SafeInteger }
@@ -273,12 +279,12 @@ export interface Description {
 }
 export interface TeamRecord {
   id: string
-  members: ReadonlyArray<IssuerPrincipal>
-  supervisors: ReadonlyArray<IssuerPrincipal>
+  members: ReadonlyArray<DirectoryMember>
+  supervisors: ReadonlyArray<DirectoryMember>
   servedQueues: ReadonlyArray<string>
   revision: SafeInteger
 }
-export interface DirectoryTeamUpdateRequest { staff: ReadonlyArray<IssuerPrincipal>; supervisors: ReadonlyArray<IssuerPrincipal>; servedQueues: ReadonlyArray<string> }
+export interface DirectoryTeamUpdateRequest { staff: ReadonlyArray<DirectoryMember>; supervisors: ReadonlyArray<DirectoryMember>; servedQueues: ReadonlyArray<string> }
 export interface DirectoryResponse { revision: SafeInteger; teams: ReadonlyArray<TeamRecord> }
 export interface AbsenceInput { person: IssuerPrincipal; from: string; until: string; cover: IssuerPrincipal }
 export interface AbsenceRecord extends AbsenceInput { absenceId: string; revision: SafeInteger }
@@ -297,7 +303,7 @@ export interface BootstrapDirectoryRequest {
   supervisors: ReadonlyArray<IssuerPrincipal>
   queueId: string
 }
-export interface HoldingsQuery { cursor?: string }
+export interface HoldingsQuery { cursor?: string; limit?: SafeInteger }
 export interface CaseworkOutcome<T> { kind: 'complete'; value: T; traceId: string }
 
 export type KnownCaseworkProblemCode =

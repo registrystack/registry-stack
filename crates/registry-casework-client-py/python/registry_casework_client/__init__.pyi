@@ -5,6 +5,7 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 InboxView: TypeAlias = Literal["mine", "my_teams", "team_holdings", "overdue", "completed_by_me"]
+InboxSort: TypeAlias = Literal["due", "age", "type"]
 OccurrenceState: TypeAlias = Literal[
     "open", "claimed", "waiting_applicant", "waiting_application", "synchronizing",
     "completed", "superseded", "cancelled",
@@ -18,6 +19,13 @@ HistoryKind: TypeAlias = Literal[
 ]
 
 class IssuerPrincipal(TypedDict):
+    issuer: str
+    subject: str
+
+class _DirectoryMemberOptional(TypedDict, total=False):
+    displayName: str | None
+
+class DirectoryMember(_DirectoryMemberOptional):
     issuer: str
     subject: str
 
@@ -149,6 +157,7 @@ class WorkItemRouting(_WorkItemRoutingOptional):
 
 class _WorkItemOptional(TypedDict, total=False):
     stage: str
+    displayReference: str
     holder: IssuerPrincipal
     heldSince: str
     assignment: AssignmentContext
@@ -226,6 +235,7 @@ class DirectoryAbsenceCoverTargetsQuery(_DirectoryTargetsPageOptional):
 DirectoryTargetsQuery: TypeAlias = DirectoryAssignmentTargetsQuery | DirectoryAbsencePersonTargetsQuery | DirectoryAbsenceCoverTargetsQuery
 
 class _ListWorkItemsQueryOptional(TypedDict, total=False):
+    sort: InboxSort
     queue: str
     cursor: str
     limit: int
@@ -241,7 +251,10 @@ class ListWorkItemsBySubjectQuery(_ListWorkItemsQueryBase):
     subjectKind: str
     subjectId: str
 
-ListWorkItemsQuery: TypeAlias = ListWorkItemsUnfilteredQuery | ListWorkItemsBySubjectQuery
+class ListWorkItemsByReferenceQuery(_ListWorkItemsQueryBase):
+    reference: str
+
+ListWorkItemsQuery: TypeAlias = ListWorkItemsUnfilteredQuery | ListWorkItemsBySubjectQuery | ListWorkItemsByReferenceQuery
 
 class NextWorkItemQuery(TypedDict, total=False):
     queue: str
@@ -249,6 +262,7 @@ class NextWorkItemQuery(TypedDict, total=False):
 
 class HoldingsQuery(TypedDict, total=False):
     cursor: str
+    limit: int
 
 class _SaveDraftRequestOptional(TypedDict, total=False):
     flaggedFields: list[str]
@@ -276,8 +290,8 @@ class BootstrapDirectoryRequest(TypedDict):
     queueId: str
 
 class DirectoryTeamUpdateRequest(TypedDict):
-    staff: list[IssuerPrincipal]
-    supervisors: list[IssuerPrincipal]
+    staff: list[DirectoryMember]
+    supervisors: list[DirectoryMember]
     servedQueues: list[str]
 
 AbsenceInput = TypedDict("AbsenceInput", {
@@ -459,8 +473,8 @@ class HoldingSummary(TypedDict):
 
 class TeamRecord(TypedDict):
     id: str
-    members: list[IssuerPrincipal]
-    supervisors: list[IssuerPrincipal]
+    members: list[DirectoryMember]
+    supervisors: list[DirectoryMember]
     servedQueues: list[str]
     revision: int
 
@@ -503,8 +517,12 @@ class RoutingRule(TypedDict):
 class _SourceRequestPolicyOptional(TypedDict, total=False):
     projection: list[str]
     routing: list[RoutingRule]
+    displayReference: "DisplayReferencePolicy"
     clock: str
     target: PassiveTargetPolicy
+
+class DisplayReferencePolicy(TypedDict):
+    field: str
 
 class SourceRequestPolicy(_SourceRequestPolicyOptional):
     entity: str
@@ -619,7 +637,7 @@ class Page(_PageOptional, Generic[T]):
     items: list[T]
     status: PageStatus
 
-DirectoryTargetPage: TypeAlias = Page[IssuerPrincipal]
+DirectoryTargetPage: TypeAlias = Page[DirectoryMember]
 
 CaseworkErrorKind: TypeAlias = Literal[
     "configuration", "invalid_request", "transport", "problem", "protocol",
@@ -707,7 +725,7 @@ class CaseworkClient:
     def release_hosted_work_item(self, token: str, profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...
     def decide_hosted_work_item(self, token: str, profile: str, action: CaseworkAction, idempotency_key: str, decision: HostedDecisionRequest) -> Complete[HostedTerminalResult]: ...
     def list_work_items(self, token: str, profile: str, source_profile: str, query: ListWorkItemsQuery) -> Complete[WorkItemPage]: ...
-    def next_work_item(self, token: str, profile: str, source_profile: str, query: NextWorkItemQuery | None = None) -> Complete[WorkItem | None]: ...
+    def next_work_item(self, token: str, profile: str, source_profile: str, query: NextWorkItemQuery | None = None) -> Complete[WorkItemPage]: ...
     def get_work_item(self, token: str, profile: str, source_profile: str, item_id: str) -> Complete[WorkItem]: ...
     def claim_work_item(self, token: str, profile: str, source_profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...
     def release_work_item(self, token: str, profile: str, source_profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...
