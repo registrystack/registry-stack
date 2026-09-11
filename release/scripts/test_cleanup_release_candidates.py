@@ -293,11 +293,10 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         self.assertIn("breg-candidate", self.module.CANDIDATE_PACKAGES)
         self.module.assert_candidate_package("breg-candidate")
 
-    def test_casework_candidate_waits_for_external_package_onboarding(self) -> None:
+    def test_casework_candidate_is_allowlisted_after_first_candidate(self) -> None:
         self.assertIn("casework", self.module.PUBLIC_PACKAGES)
-        self.assertNotIn("casework-candidate", self.module.CANDIDATE_PACKAGES)
-        with self.assertRaises(self.module.CleanupError):
-            self.module.assert_candidate_package("casework-candidate")
+        self.assertIn("casework-candidate", self.module.CANDIDATE_PACKAGES)
+        self.module.assert_candidate_package("casework-candidate")
 
     def test_malformed_or_future_timestamp_fails_without_deleting(self) -> None:
         for timestamp in ("not-a-date", "2026-07-25T12:00:01Z"):

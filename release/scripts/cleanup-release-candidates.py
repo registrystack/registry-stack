@@ -22,6 +22,7 @@ CANDIDATE_PACKAGES = (
     # Listing an absent package fails closed, so a candidate name joins this
     # allowlist with the release that first publishes it.
     "breg-candidate",
+    "casework-candidate",
     "discovery-candidate",
     "evidence-candidate",
     "mint-candidate",

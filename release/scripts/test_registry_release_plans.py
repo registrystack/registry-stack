@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import yaml
@@ -14,6 +17,26 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "release/scripts/registry-release"
 CROSSWALK_REF = "1" * 40
+
+
+def _load_registry_release():
+    module_name = "registry_release_module_for_plans_test"
+    loader = SourceFileLoader(module_name, str(TOOL))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    if spec is None:
+        raise ImportError(f"could not load module spec from {TOOL}")
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(TOOL.parent))
+    try:
+        loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
+# Read from the production module so this fixture's Casework threshold can
+# never drift from registry-release's own CASEWORK_RELEASE_MINIMUM_VERSION.
+CASEWORK_RELEASE_MINIMUM_VERSION = _load_registry_release().CASEWORK_RELEASE_MINIMUM_VERSION
 FIXTURE_IDENTIFIER_CATALOG = {
     "version": 1,
     "entries": [{"status": "active"}],
@@ -113,6 +136,12 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
             "breg",
             "bregctl",
             "breg-installer",
+        )
+    if version_tuple >= CASEWORK_RELEASE_MINIMUM_VERSION:
+        inventory += (
+            "casework",
+            "caseworkctl",
+            "casework-installer",
         )
     data = {
         "stack": {

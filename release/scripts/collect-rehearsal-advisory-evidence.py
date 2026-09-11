@@ -19,7 +19,7 @@ from typing import Any, TextIO
 
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE_NAMES = frozenset({"breg", "discovery", "evidence", "mint", "relay"})
+IMAGE_NAMES = frozenset({"breg", "casework", "discovery", "evidence", "mint", "relay"})
 SEMVER_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 REVISION_RE = re.compile(r"[0-9a-f]{40}")
