@@ -63,11 +63,19 @@ rejected values.
 
 A human Staff or Supervisor profile listed by the hosted kind uses the existing
 work-item list, read, claim, and release routes without a source-profile header,
-reads the retained hosted lifecycle history including requester notes, then
-posts a declared outcome to the hosted-decision route. Current team service is
-also required. Casework pins the kind version, policy digest, display, and
-outcome vocabulary when it accepts the item, so a later configuration change
-does not rewrite existing work.
+reads the retained hosted lifecycle history including requester notes through
+`GET /v1/work-items/{itemId}/hosted-history`, then posts a declared outcome to
+the hosted-decision route. Current team service is also required. Casework pins
+the kind version, policy digest, display, and outcome vocabulary when it accepts
+the item, so a later configuration change does not rewrite existing work.
+
+`GET /v1/work-items/{itemId}/history` is the separate source-scoped history
+read. It requires a `Registry-Source-Profile` header and answers from the
+source, so hosted work has no usable answer there and a call without that
+header returns `request.invalid` with HTTP 400. `hosted-history` is the
+staff-readable route for hosted work and refuses a source-profile header for the
+same reason. A profile with no source, such as every profile in the
+`standalone-decision` starter, therefore reads `hosted-history`.
 
 Requester terminal results are ordered by terminal time and stable event id.
 Each result is either a completed outcome with an opaque `actorRef`, or a

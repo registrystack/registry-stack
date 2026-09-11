@@ -1507,6 +1507,96 @@ mod tests {
         http_edge(Router::new().route("/json/{id}", post(json_route)))
     }
 
+    async fn source_scoped_history(headers: HeaderMap) -> Result<StatusCode, HttpError> {
+        source_profile(&headers)?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    async fn hosted_history(headers: HeaderMap) -> Result<StatusCode, HttpError> {
+        reject_source_profile(&headers)?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    /// One header separates the two history reads, and neither route answers
+    /// the other one's callers.
+    ///
+    /// `/history` is source-scoped: without `Registry-Source-Profile` there is
+    /// no source to read from, so it refuses. `/hosted-history` reads Casework's
+    /// own retained lifecycle, so it refuses that header instead. A deployment
+    /// with no sources at all, such as the `standalone-decision` starter, can
+    /// only use the hosted route.
+    #[tokio::test]
+    async fn the_two_history_routes_are_separated_by_the_source_profile_header() {
+        let id = Uuid::nil();
+        let app = http_edge(
+            Router::new()
+                .route(
+                    "/v1/work-items/{item_id}/history",
+                    axum::routing::get(source_scoped_history),
+                )
+                .route(
+                    "/v1/work-items/{item_id}/hosted-history",
+                    axum::routing::get(hosted_history),
+                ),
+        );
+        let cases = [
+            ("history", None, Some(ProblemCode::RequestInvalid)),
+            ("history", Some("reader"), None),
+            ("hosted-history", None, None),
+            (
+                "hosted-history",
+                Some("reader"),
+                Some(ProblemCode::RequestInvalid),
+            ),
+        ];
+
+        for (route, profile, expected) in cases {
+            let mut request = Request::builder()
+                .method("GET")
+                .uri(format!("/v1/work-items/{id}/{route}"));
+            if let Some(profile) = profile {
+                request = request.header(SOURCE_PROFILE_HEADER, profile);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).expect("history request"))
+                .await
+                .expect("history response");
+            let label = format!("{route} with source profile {profile:?}");
+            match expected {
+                None => assert_eq!(response.status(), StatusCode::NO_CONTENT, "{label}"),
+                Some(problem) => {
+                    assert_eq!(response.status(), problem.status(), "{label}");
+                    let body = to_bytes(response.into_body(), 16 * 1024)
+                        .await
+                        .expect("bounded problem");
+                    let body: serde_json::Value =
+                        serde_json::from_slice(&body).expect("problem JSON");
+                    assert_eq!(body["code"], problem.code(), "{label}");
+                }
+            }
+        }
+    }
+
+    /// The published contract keeps both reads, so a client that meets the
+    /// closed 400 on one of them has a documented route to move to.
+    #[test]
+    fn both_history_routes_stay_in_the_published_operation_contract() {
+        for path in [
+            "/v1/work-items/{item_id}/history",
+            "/v1/work-items/{item_id}/hosted-history",
+        ] {
+            let operation = crate::problem::OPERATION_CONTRACTS
+                .iter()
+                .find(|operation| operation.method == "GET" && operation.path == path)
+                .unwrap_or_else(|| panic!("{path} is declared"));
+            assert!(
+                operation.problems.contains(&ProblemCode::RequestInvalid),
+                "{path} does not declare the closed rejection it answers with"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn http_edge_returns_closed_problems_with_request_trace_and_security_headers() {
         let id = Uuid::nil();

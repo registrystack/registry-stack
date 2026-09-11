@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Name `GET /v1/work-items/{itemId}/hosted-history` as the staff hosted
+  lifecycle history read, and say that `GET /v1/work-items/{itemId}/history` is
+  the source-scoped variant that requires a `Registry-Source-Profile` header.
 - Name the failing secret reference and the rule it broke when the database
   connection, the audit journal, or a static OIDC JWKS document cannot resolve
   its secret at startup, and name the source whose binding was refused. The
