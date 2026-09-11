@@ -76,6 +76,14 @@ fn operation(
         .chain(&attachment_writable)
         .cloned()
         .collect::<BTreeSet<_>>();
+    // Request metadata disclosure is a separate grant. The projection repeats
+    // the rule the request read path applies: only a non-anonymous profile on a
+    // change-request entity receives the fields its grant names.
+    let readable_request_fields = if profile.anonymous || surface.entity.change_request.is_none() {
+        BTreeSet::new()
+    } else {
+        profile.readable_request_fields.clone()
+    };
     let query = surface
         .route
         .query_kind
@@ -94,6 +102,7 @@ fn operation(
         "titleFields": title_fields(service, surface),
         "fields": fields.iter().filter_map(|id| field(service, surface, surfaces, id, &patch)).collect::<Vec<_>>(),
         "readableFields": surface.readable_fields,
+        "readableRequestFields": readable_request_fields,
         "createWritableFields": create,
         "patchWritableFields": patch,
         "selectors": selectors(service, surface),

@@ -402,6 +402,14 @@ action, independent of `readableRequestFields`.
 
 {/* Evidence: crates/registry-breg/src/artifacts.rs openapi_request_action_input_schema; crates/registry-breg/src/postgres/request_read.rs decisions_value; crates/registry-breg/src/contract.rs readable_request_fields; crates/registry-breg/src/request_retention.rs; crates/registry-breg/tests/postgres_request_upgrade_retention.rs. */}
 
+`GET /v1/registry` lists the same grant as `readableRequestFields` on each operation, beside
+`readableFields`, so a caller can learn before a read which request fields its selected profile
+receives. The list follows the rule request reads apply: an anonymous profile, or an entity
+without a change request, lists no request fields.
+
+{/* Evidence: crates/registry-breg/src/api/metadata.rs, readable_request_fields;
+    crates/registry-breg/tests/http_read_only.rs, workspace_metadata_projects_request_field_disclosure_per_caller_profile. */}
+
 History returns up to 50 whole proposals per page. The response byte budget can shorten a page
 without splitting a proposal's decisions. To continue, send the returned
 `data.request.history.nextAfterProposalVersion` as `requestHistoryAfterProposalVersion` on the

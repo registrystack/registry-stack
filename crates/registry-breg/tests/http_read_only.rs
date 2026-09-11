@@ -582,6 +582,88 @@ accessProfiles:
         readableFields: [label]
 "#;
 
+const REQUEST_METADATA_GRANT_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry: {id: request-metadata-grants, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
+entities:
+  - id: placement
+    primaryDataset: test-dataset
+    route: placements
+    mutationMode: mutable
+    classification: public
+    changeControl:
+      requiredFor: [patch]
+    fields:
+      - {id: site, type: string, required: true, maxLength: 64, classification: public}
+  - id: placement-correction
+    primaryDataset: test-dataset
+    route: placement-corrections
+    mutationMode: mutable
+    classification: public
+    fields:
+      - {id: target, type: reference, target: placement, required: true, classification: public}
+      - {id: proposed-site, type: string, required: true, maxLength: 64, classification: public}
+    changeRequest:
+      effects:
+        - target: {fromField: target}
+          operation: patch
+          set:
+            site: {fromField: proposed-site}
+      review:
+        stages:
+          - {id: review, approvals: 1, excludeSubmitter: false}
+accessProfiles:
+  - id: public
+    default: true
+    anonymous: true
+    grants:
+      - {entity: placement-correction, rowBoundaries: [], operations: [get, list], readableFields: [target, proposed-site]}
+  - id: correction-officer
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: placement
+        rowBoundaries: []
+        operations: [get]
+        readableFields: [site]
+      - entity: placement-correction
+        rowBoundaries: []
+        operations: [create, get, list, patch, submit_request, approve_request, reject_request, request_revision, apply_request]
+        readableFields: [target, proposed-site]
+        writableFields: [target, proposed-site]
+        reviewStages:
+          - stage: review
+            targets:
+              - {entity: placement, readableFields: [site], rowBoundaries: []}
+        applyTargets:
+          - {entity: placement, rowBoundaries: []}
+  - id: checkpoint-reader
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: placement
+        rowBoundaries: []
+        operations: [get]
+        readableFields: [site]
+      - entity: placement-correction
+        rowBoundaries: []
+        operations: [get, list]
+        readableFields: [target, proposed-site]
+        readableRequestFields: [reason, review_state]
+  - id: narrow-reader
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
+    requiredPurposes: [case-management]
+    grants:
+      - entity: placement-correction
+        rowBoundaries: []
+        operations: [get, list]
+        readableFields: [target, proposed-site]
+"#;
+
 fn snapshot_harness(
     source: &str,
     assets: &[ModuleAssetSource],
@@ -3594,6 +3676,58 @@ fn metadata_operation<'a>(document: &'a Value, id: &str) -> &'a Value {
         .iter()
         .find(|operation| operation["id"] == id)
         .expect("authorized operation")
+}
+
+#[tokio::test]
+async fn workspace_metadata_projects_request_field_disclosure_per_caller_profile() {
+    let harness = Harness::from_project(REQUEST_METADATA_GRANT_PROJECT, true);
+    let granted = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=checkpoint-reader",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(
+        metadata_operation(&granted, "records.placement-correction.get")["readableRequestFields"],
+        json!(["reason", "review_state"])
+    );
+    assert_eq!(
+        metadata_operation(&granted, "records.placement-correction.list")["readableRequestFields"],
+        json!(["reason", "review_state"])
+    );
+    // An entity without a change request never carries request metadata, so the
+    // projection stays empty whatever the profile's default grant holds.
+    assert_eq!(
+        metadata_operation(&granted, "records.placement.get")["readableRequestFields"],
+        json!([])
+    );
+
+    let ungranted = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=narrow-reader",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(
+        metadata_operation(&ungranted, "records.placement-correction.get")["readableRequestFields"],
+        json!(["reason"])
+    );
+
+    let anonymous = body_json(harness.send(Method::GET, "/v1/registry", None).await).await;
+    assert_eq!(
+        metadata_operation(&anonymous, "records.placement-correction.get")["readableRequestFields"],
+        json!([]),
+        "anonymous profiles never receive request metadata"
+    );
+    assert_eq!(harness.records.calls(), 0);
 }
 
 #[tokio::test]

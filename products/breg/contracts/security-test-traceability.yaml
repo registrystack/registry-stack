@@ -61,3 +61,6 @@ traceability:
   - {id: BREG-SEC-58, state: enforced, negativeId: BREG-NEG-58, negativeTest: {path: crates/registry-breg/tests/support/reviewer_reasons.rs, name: real_postgres_http_reviewer_reasons_are_bounded_replayed_and_read_by_permission}}
   - {id: BREG-SEC-59, state: enforced, negativeId: BREG-NEG-59, negativeTest: {path: crates/registry-breg-client/tests/http_boundary.rs, name: caller_scoped_tokens_are_isolated_across_concurrent_requests}}
   - {id: BREG-SEC-60, state: enforced, negativeId: BREG-NEG-60, negativeTest: {path: crates/registry-breg-client/tests/write_http_boundary.rs, name: prepared_lifecycle_recovers_original_apply_after_action_disappears}}
+  - {id: BREG-SEC-61, state: enforced, negativeId: BREG-NEG-61, negativeTest: {path: crates/registry-breg/src/postgres/request_read.rs, name: decision_reason_disclosure_requires_selected_profile_permission_and_authentication}}
+  - {id: BREG-SEC-62, state: enforced, negativeId: BREG-NEG-62, negativeTest: {path: crates/registry-breg/src/postgres/request_read.rs, name: decision_reason_disclosure_requires_selected_profile_permission_and_authentication}}
+  - {id: BREG-SEC-63, state: enforced, negativeId: BREG-NEG-63, negativeTest: {path: crates/registry-breg/src/postgres/request_read.rs, name: request_actor_reference_is_a_keyed_hash_scoped_to_the_source_database}}

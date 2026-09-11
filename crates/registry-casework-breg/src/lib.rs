@@ -193,6 +193,12 @@ impl BregAdapter {
                     .iter()
                     .any(|readable| readable == required)
             })
+            // Observation keys each occurrence by the source review stage, so a
+            // reader whose grant conceals review_state cannot run the adapter.
+            || !operation
+                .readable_request_fields()
+                .iter()
+                .any(|field| field == "review_state")
         {
             return Err(SourceAdapterError::Denied);
         }
@@ -304,18 +310,20 @@ impl BregAdapter {
             .map(import_review_timing)
             .transpose()?;
         let Some(review) = request.review() else {
-            let stage = if self.config.stages.len() == 1 {
-                Some(self.config.stages[0].id.clone())
-            } else if matches!(
+            // The review stage is a source fact, never a Casework guess. A
+            // reader whose grant conceals review_state cannot observe it, so
+            // every state that carries a stage is refused rather than keyed
+            // under a stage the granted read would not agree with.
+            if matches!(
                 request.breg_state(),
-                BRegRequestState::Submitted | BRegRequestState::NeedsChanges
+                BRegRequestState::Submitted
+                    | BRegRequestState::NeedsChanges
+                    | BRegRequestState::Rejected
             ) {
                 return Err(SourceAdapterError::Invalid);
-            } else {
-                None
-            };
+            }
             return Ok(ObservationReviewMetadata {
-                stage,
+                stage: None,
                 submitted_at: None,
                 stage_entered_at: None,
                 review_timing,

@@ -1040,3 +1040,38 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         BRegMetadataSelectionErrorKind::ContractMismatch
     );
 }
+
+#[test]
+fn request_metadata_grants_are_retained_and_an_older_engine_grants_none() {
+    let older = parse(&fixture());
+    assert!(older
+        .operations()
+        .iter()
+        .all(|operation| operation.readable_request_fields().is_empty()));
+
+    let mut granted = fixture();
+    granted["operations"][0]["readableRequestFields"] = json!(["reason", "review_state"]);
+    let metadata = parse(&granted);
+    assert_eq!(
+        metadata.operations()[0].readable_request_fields(),
+        ["reason", "review_state"]
+    );
+
+    let mut duplicate = fixture();
+    duplicate["operations"][0]["readableRequestFields"] = json!(["reason", "reason"]);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&duplicate).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::DuplicateIdentifier
+    );
+
+    let mut unknown = fixture();
+    unknown["operations"][0]["readableRequestFields"] = json!(["reviewer_notes"]);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&unknown).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
+}

@@ -546,7 +546,7 @@ pub(super) fn doctor(project: &Path, operator: Option<&Path>) -> Result<Value> {
             .block_on(adapter.verify_reader_readiness())
             .with_context(|| {
                 format!(
-                    "source {} is unavailable, unready, or its configured reader lacks exact get/list access to the declared request projection",
+                    "source {} is unavailable, unready, or its configured reader lacks exact get/list access to the declared request projection or a readableRequestFields grant naming review_state",
                     source.id
                 )
             })?;

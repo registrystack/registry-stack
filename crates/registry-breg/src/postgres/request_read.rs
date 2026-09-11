@@ -1900,6 +1900,7 @@ mod tests {
 
     use std::collections::{BTreeMap, BTreeSet};
 
+    use registry_platform_audit::AuditProfile;
     use serde_json::{json, Map, Value};
 
     use super::{
@@ -1916,6 +1917,7 @@ mod tests {
     use crate::contract::{parse_project_json, parse_project_yaml, Operation};
     use crate::correlation::RequestCorrelation;
     use crate::model::{CompiledChangeRequestStage, HttpMethod};
+    use crate::mutation::request_actor_reference;
     use crate::request_retention::{
         RetainedRequestDecision, RetainedRequestProposal, RetainedRequestResultLink,
     };
@@ -2327,6 +2329,60 @@ mod tests {
         let erased = decisions_value(std::slice::from_ref(&decision), true, false);
         assert_eq!(erased[0]["reasonPresent"], true);
         assert!(erased[0].get("reason").is_none());
+    }
+
+    #[test]
+    fn request_actor_reference_is_a_keyed_hash_scoped_to_the_source_database() {
+        let project = parse_project_yaml(include_bytes!(
+            "../../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
+        ))
+        .expect("acceptance project parses");
+        let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("acceptance project compiles");
+        let claims = |principal: &str| {
+            ClaimContext::for_compiled(
+                &compiled,
+                "placement-correction-request",
+                Some(principal.to_owned()),
+                "correction-submitter",
+                Some("asset-correction".to_owned()),
+                Vec::new(),
+            )
+            .expect("submitter context is valid")
+        };
+        let keyed = AuditProfile::production_from_secret_bytes(vec![0x4d; 32].into())
+            .expect("test profile is strongly keyed");
+        let rekeyed = AuditProfile::production_from_secret_bytes(vec![0x5e; 32].into())
+            .expect("test profile is strongly keyed");
+        let reference = |profile: &AuditProfile, database_id: &str, claims: &ClaimContext| {
+            request_actor_reference(profile, database_id, claims).expect("actor reference derives")
+        };
+        let submitter = claims("submitter-principal");
+
+        let baseline = reference(&keyed, "database-a", &submitter);
+        assert_eq!(
+            baseline,
+            reference(&keyed, "database-a", &claims("submitter-principal")),
+            "one principal keeps one reference within a source database"
+        );
+        assert!(
+            !baseline.contains("submitter-principal"),
+            "a reference never carries the principal it stands for"
+        );
+        assert_ne!(
+            baseline,
+            reference(&keyed, "database-b", &submitter),
+            "a reference does not link one principal across source databases"
+        );
+        assert_ne!(
+            baseline,
+            reference(&rekeyed, "database-a", &submitter),
+            "a reference cannot be recomputed without the audit key"
+        );
+        assert_ne!(
+            baseline,
+            reference(&keyed, "database-a", &claims("other-principal"))
+        );
     }
 
     #[test]

@@ -908,6 +908,7 @@ pub struct BRegMetadataOperation {
     required_capabilities: Vec<String>,
     fields: Vec<BRegMetadataField>,
     readable_fields: Vec<String>,
+    readable_request_fields: Vec<String>,
     create_writable_fields: Vec<String>,
     patch_writable_fields: Vec<String>,
     request: BRegOperationRequest,
@@ -990,6 +991,14 @@ impl BRegMetadataOperation {
     #[must_use]
     pub fn readable_fields(&self) -> &[String] {
         &self.readable_fields
+    }
+
+    /// Change-request metadata this operation's profile may read, such as
+    /// `review_state`. An engine that predates the grant projection names
+    /// none, so a caller that needs one refuses rather than assumes it.
+    #[must_use]
+    pub fn readable_request_fields(&self) -> &[String] {
+        &self.readable_request_fields
     }
 
     #[must_use]
@@ -3173,6 +3182,11 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         .remove("readPath")
         .map(parse_read_path)
         .transpose()?;
+    let readable_request_fields = operation
+        .remove("readableRequestFields")
+        .map(parse_request_metadata_fields)
+        .transpose()?
+        .unwrap_or_default();
     finish(operation)?;
     Ok(BRegMetadataOperation {
         id,
@@ -3185,6 +3199,7 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         required_capabilities,
         fields,
         readable_fields,
+        readable_request_fields,
         create_writable_fields,
         patch_writable_fields,
         request,
@@ -3194,6 +3209,20 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         selectors,
         read_path,
     })
+}
+
+fn parse_request_metadata_fields(value: Value) -> Result<Vec<String>, BRegMetadataError> {
+    let fields = identifier_array(value)?;
+    ensure_unique(fields.iter().map(String::as_str))?;
+    if fields.iter().any(|field| {
+        !matches!(
+            field.as_str(),
+            "actor_reference" | "reason" | "review_state"
+        )
+    }) {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    Ok(fields)
 }
 
 fn parse_field(value: Value) -> Result<BRegMetadataField, BRegMetadataError> {

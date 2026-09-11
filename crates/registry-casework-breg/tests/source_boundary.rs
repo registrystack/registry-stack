@@ -140,6 +140,14 @@ fn stages() -> (Vec<BregReviewStage>, Value) {
         ]),
     )
 }
+fn pending_review(stage: &str) -> Value {
+    json!({
+        "stages":[{"id":stage,"approvals":1,"excludeSubmitter":false}],
+        "submittedAt":"2026-09-10T02:00:00Z",
+        "pendingStage":stage,
+        "stageEnteredAt":"2026-09-10T02:30:00Z"
+    })
+}
 fn timing(paused_milliseconds: u64, pause_started_at: Option<&str>) -> Value {
     json!({
         "firstSubmittedAt":"2026-09-10T02:00:00Z",
@@ -219,6 +227,7 @@ fn diagnostic_operation(kind: &str, path: &str, fields: &[(&str, &str)]) -> Valu
             .map(|(id, api_name)| diagnostic_field(id, api_name))
             .collect::<Vec<_>>(),
         "readableFields": fields.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        "readableRequestFields": ["reason", "review_state"],
         "createWritableFields": [],
         "patchWritableFields": [],
         "selectors": [],
@@ -376,6 +385,30 @@ async fn reader_diagnostic_refuses_missing_get_or_routing_projection_grants() {
 }
 
 #[tokio::test]
+async fn reader_diagnostic_refuses_a_reader_whose_grant_conceals_review_state() {
+    for concealed in [json!(["reason"]), Value::Null] {
+        let server = MockServer::start().await;
+        let mut metadata = diagnostic_metadata(&["get", "list"], &[("record", "record")]);
+        for operation in metadata["operations"].as_array_mut().unwrap() {
+            if concealed.is_null() {
+                operation
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("readableRequestFields");
+            } else {
+                operation["readableRequestFields"] = concealed.clone();
+            }
+        }
+        mount_reader_diagnostic(&server, metadata, 200, false).await;
+
+        assert_eq!(
+            adapter(&server.uri()).verify_reader_readiness().await,
+            Err(SourceAdapterError::Denied)
+        );
+    }
+}
+
+#[tokio::test]
 async fn reader_diagnostic_refuses_a_registry_revision_that_moved() {
     let server = MockServer::start().await;
     let mut metadata = diagnostic_metadata(&["get", "list"], &[("record", "record")]);
@@ -409,6 +442,7 @@ async fn authoritative_read_retains_representation_etag_at_unchanged_record_revi
         let server = MockServer::start().await;
         mount_metadata(&server, "reader-token", "reader").await;
         let mut representation = record("submitted", None);
+        representation["data"]["request"]["review"] = pending_review("review");
         representation["data"]["domainData"]["attachmentVerification"] = json!(verification);
         Mock::given(method("GET"))
             .and(path(format!("/v1/records/correction/{ID}")))
@@ -432,8 +466,9 @@ async fn authoritative_read_retains_representation_etag_at_unchanged_record_revi
         observations[1].ordered_revision
     );
     assert_eq!(observations[0].binding, observations[1].binding);
-    assert_eq!(observations[0].submitted_at, None);
-    assert_eq!(observations[0].stage_entered_at, None);
+    let first = serde_json::to_value(&observations[0]).unwrap();
+    assert_eq!(first["submittedAt"], "2026-09-10T02:00:00Z");
+    assert_eq!(first["stageEnteredAt"], "2026-09-10T02:30:00Z");
     assert_eq!(observations[0].review_timing, None);
 }
 
@@ -442,6 +477,7 @@ async fn authoritative_read_maps_only_imported_routing_fields_and_redacts_values
     let server = MockServer::start().await;
     mount_metadata(&server, "reader-token", "reader").await;
     let mut representation = record("submitted", None);
+    representation["data"]["request"]["review"] = pending_review("review");
     representation["data"]["domainData"]["serviceRegion"] = json!("north");
     Mock::given(method("GET"))
         .and(path(format!("/v1/records/correction/{ID}")))
@@ -659,6 +695,63 @@ async fn frozen_policy_survives_current_policy_evolution_but_missing_stage_metad
         .and(path(format!("/v1/records/correction/{ID}")))
         .and(header("authorization", "Bearer reader-token"))
         .respond_with(response(record("submitted", None)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert_eq!(
+        adapter_with_stages(&server.uri(), configured)
+            .read_authoritative(&subject())
+            .await
+            .unwrap_err(),
+        SourceAdapterError::Invalid
+    );
+}
+#[tokio::test]
+async fn occurrence_key_uses_the_source_review_stage_and_refuses_a_concealed_one() {
+    let configured = vec![BregReviewStage {
+        id: "review".into(),
+        approvals: 1,
+        exclude_submitter: false,
+        exclude_previous_reviewers: false,
+    }];
+    let frozen = json!([
+        {"id":"review","approvals":1,"excludeSubmitter":false},
+        {"id":"second-review","approvals":1,"excludeSubmitter":false}
+    ]);
+    let server = MockServer::start().await;
+    let granted = authoritative(
+        &server,
+        configured.clone(),
+        review_record(
+            "submitted",
+            2,
+            1,
+            Some(json!({"stages":frozen,"submittedAt":"2026-09-10T02:00:00Z",
+                "pendingStage":"second-review","stageEnteredAt":"2026-09-10T03:00:00Z"})),
+            timing(0, None),
+            vec![],
+        ),
+    )
+    .await;
+    assert_eq!(granted.stage.as_deref(), Some("second-review"));
+
+    // The same subject read by a reader whose grant conceals review_state has
+    // no source stage. One configured stage is not a substitute for it, so the
+    // read is refused rather than keyed under a stage the granted read would
+    // not agree with.
+    let server = MockServer::start().await;
+    mount_metadata(&server, "reader-token", "reader").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(response(review_record(
+            "submitted",
+            2,
+            1,
+            None,
+            timing(0, None),
+            vec![],
+        )))
         .expect(1)
         .mount(&server)
         .await;
