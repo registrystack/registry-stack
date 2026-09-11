@@ -365,7 +365,28 @@ python3 -m unittest discover -s tests/python -v
 cmp ../../LICENSE LICENSE
 ```
 
-The unified Node.js and Python packages are generated from all four product
+Registry Casework product and language bindings:
+
+```bash
+cargo build --locked -p registry-caseworkctl
+products/casework/scripts/check-checkpoint.sh
+cd crates/registry-casework-client-node
+npm ci
+npm run build:debug
+npm test
+npm run check:types
+cd ../registry-casework-client-py
+cargo build --locked -p registry-casework-client-py --lib \
+  --features registry-casework-client-py/extension-module
+python3 -m unittest discover -s tests/python -v
+```
+
+The checkpoint script runs the database-free checks. For PostgreSQL execution,
+follow `products/casework/README.md`: its destructive test suites require
+separate disposable databases and the `postgres-test` feature. A test binary
+that skips because its database URL is absent is not database verification.
+
+The unified Node.js and Python packages are generated from the maintained product
 bindings. After changing a binding or facade, run:
 
 ```bash
