@@ -841,6 +841,155 @@ fn validate_attachment_manifest(
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FrozenApplicationPreconditions {
+    pub contract: crate::model::CompiledChangeRequestPreconditions,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub request_values: BTreeMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<FrozenGuardTargetSnapshot>,
+}
+
+impl FrozenApplicationPreconditions {
+    pub fn validate(&self) -> Result<(), WorkflowError> {
+        if self.contract.is_empty()
+            || self.targets.len() != self.contract.targets.len()
+            || self.targets.len() > MAX_REQUEST_TARGETS
+        {
+            return Err(WorkflowError::InvalidRestoredState);
+        }
+        let expected_ids = self
+            .contract
+            .targets
+            .iter()
+            .map(|target| target.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let actual_ids = self
+            .targets
+            .iter()
+            .map(|target| target.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if expected_ids != actual_ids || actual_ids.len() != self.targets.len() {
+            return Err(WorkflowError::InvalidRestoredState);
+        }
+        let mut expected_request_fields = BTreeSet::new();
+        for predicate in &self.contract.request {
+            expected_request_fields.insert(predicate.field.as_str());
+            if let crate::model::CompiledChangeRequestPredicateExpected::RequestField { field } =
+                &predicate.expected
+            {
+                expected_request_fields.insert(field);
+            }
+        }
+        for target in &self.contract.targets {
+            expected_request_fields.insert(target.from_field.as_str());
+            for predicate in &target.requires {
+                if let crate::model::CompiledChangeRequestPredicateExpected::RequestField {
+                    field,
+                } = &predicate.expected
+                {
+                    expected_request_fields.insert(field);
+                }
+            }
+        }
+        for evidence in &self.contract.evidence {
+            for selector in evidence
+                .subjects
+                .values()
+                .flat_map(|subject| subject.selectors.values())
+            {
+                if let crate::model::CompiledChangeRequestSelector::RequestField { field } =
+                    selector
+                {
+                    expected_request_fields.insert(field);
+                }
+            }
+            for requirement in &evidence.requires {
+                if let crate::model::CompiledChangeRequestEvidenceExpected::RequestField { field } =
+                    &requirement.expected
+                {
+                    expected_request_fields.insert(field);
+                }
+            }
+        }
+        if expected_request_fields
+            != self
+                .request_values
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+        {
+            return Err(WorkflowError::InvalidRestoredState);
+        }
+        for target in &self.targets {
+            target.validate()?;
+            let compiled = self
+                .contract
+                .targets
+                .iter()
+                .find(|candidate| candidate.id == target.id)
+                .ok_or(WorkflowError::InvalidRestoredState)?;
+            if compiled.entity_id != target.entity_id {
+                return Err(WorkflowError::InvalidRestoredState);
+            }
+            let expected_fields = compiled
+                .requires
+                .iter()
+                .map(|predicate| predicate.field.as_str())
+                .chain(
+                    self.contract
+                        .evidence
+                        .iter()
+                        .flat_map(|evidence| evidence.subjects.values())
+                        .flat_map(|subject| subject.selectors.values())
+                        .filter_map(|selector| match selector {
+                            crate::model::CompiledChangeRequestSelector::TargetField {
+                                target: selector_target,
+                                field,
+                            } if selector_target == &target.id => Some(field.as_str()),
+                            _ => None,
+                        }),
+                )
+                .collect::<BTreeSet<_>>();
+            if expected_fields
+                != target
+                    .values
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>()
+            {
+                return Err(WorkflowError::InvalidRestoredState);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FrozenGuardTargetSnapshot {
+    pub id: String,
+    pub entity_id: String,
+    pub record_id: RecordId,
+    pub expected_revision: i64,
+    pub values: BTreeMap<String, serde_json::Value>,
+}
+
+impl FrozenGuardTargetSnapshot {
+    fn validate(&self) -> Result<(), WorkflowError> {
+        if self.id.is_empty()
+            || self.entity_id.is_empty()
+            || self.expected_revision <= 0
+            || self.values.is_empty()
+        {
+            return Err(WorkflowError::InvalidRestoredState);
+        }
+        self.record_id.validate()?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PreparedProposal {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     attachments: BTreeMap<String, AttachmentManifestEntry>,
@@ -854,6 +1003,8 @@ pub struct PreparedProposal {
     planning_binding: Option<FrozenPlanningBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     review_policy: Option<FrozenReviewPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    application_preconditions: Option<FrozenApplicationPreconditions>,
 }
 
 impl PreparedProposal {
@@ -877,6 +1028,7 @@ impl PreparedProposal {
             planning_binding: None,
             review_policy: None,
             attachments: BTreeMap::new(),
+            application_preconditions: None,
         })
     }
 
@@ -908,7 +1060,26 @@ impl PreparedProposal {
             planning_binding: Some(planning_binding),
             review_policy: Some(review_policy),
             attachments: BTreeMap::new(),
+            application_preconditions: None,
         })
+    }
+
+    pub fn with_application_preconditions(
+        mut self,
+        preconditions: FrozenApplicationPreconditions,
+    ) -> Result<Self, WorkflowError> {
+        preconditions.validate()?;
+        let canonical = canonicalize_json(
+            &serde_json::to_value(&preconditions).map_err(|_| WorkflowError::Canonicalization)?,
+        )
+        .map_err(|_| WorkflowError::Canonicalization)?;
+        self.combined_snapshot_bytes = self
+            .combined_snapshot_bytes
+            .checked_add(canonical.len())
+            .filter(|bytes| *bytes <= MAX_REQUEST_SNAPSHOT_BYTES)
+            .ok_or(WorkflowError::SnapshotTooLarge)?;
+        self.application_preconditions = Some(preconditions);
+        Ok(self)
     }
 
     /// Binds exact evidence bytes and media interpretation to this proposal.
@@ -953,6 +1124,10 @@ impl PreparedProposal {
         self.review_policy.unwrap_or(FrozenReviewPolicy::Stages)
     }
 
+    pub fn application_preconditions(&self) -> Option<&FrozenApplicationPreconditions> {
+        self.application_preconditions.as_ref()
+    }
+
     fn freeze(
         self,
         request: &RequestKey,
@@ -971,6 +1146,7 @@ impl PreparedProposal {
             planning_binding: self.planning_binding.as_ref(),
             review_policy: self.review_policy,
             attachments: &self.attachments,
+            application_preconditions: self.application_preconditions.as_ref(),
         })?;
         Ok(ProposalSnapshot {
             version,
@@ -982,6 +1158,7 @@ impl PreparedProposal {
             combined_snapshot_bytes: self.combined_snapshot_bytes,
             planning_binding: self.planning_binding,
             review_policy: self.review_policy,
+            application_preconditions: self.application_preconditions,
             effect_digest,
             attachments: self.attachments,
             submitted_by: context.actor,
@@ -1006,6 +1183,8 @@ pub struct ProposalSnapshot {
     planning_binding: Option<FrozenPlanningBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     review_policy: Option<FrozenReviewPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    application_preconditions: Option<FrozenApplicationPreconditions>,
     effect_digest: ProposalDigest,
     submitted_by: TrustedActorRef,
     submitted_at: TrustedTimestamp,
@@ -1056,6 +1235,10 @@ impl ProposalSnapshot {
         self.review_policy.unwrap_or(FrozenReviewPolicy::Stages)
     }
 
+    pub fn application_preconditions(&self) -> Option<&FrozenApplicationPreconditions> {
+        self.application_preconditions.as_ref()
+    }
+
     pub fn submitted_by(&self) -> &TrustedActorRef {
         &self.submitted_by
     }
@@ -1076,6 +1259,7 @@ impl ProposalSnapshot {
             planning_binding: self.planning_binding.as_ref(),
             review_policy: self.review_policy,
             attachments: &self.attachments,
+            application_preconditions: self.application_preconditions.as_ref(),
         })?;
         if actual.matches(&self.effect_digest) {
             Ok(())
@@ -1097,6 +1281,12 @@ impl ProposalSnapshot {
                 validate_review_policy(review_policy, &self.stages)?;
             }
             _ => return Err(WorkflowError::InvalidRestoredState),
+        }
+        if let Some(preconditions) = &self.application_preconditions {
+            if self.planning_binding.is_none() || self.review_policy.is_none() {
+                return Err(WorkflowError::InvalidRestoredState);
+            }
+            preconditions.validate()?;
         }
         validate_effects(&self.effects, self.combined_snapshot_bytes)?;
         self.effect_digest.validate()?;
@@ -2689,6 +2879,7 @@ struct ProposalDigestInput<'a> {
     effects: &'a [PreparedEffect],
     planning_binding: Option<&'a FrozenPlanningBinding>,
     review_policy: Option<FrozenReviewPolicy>,
+    application_preconditions: Option<&'a FrozenApplicationPreconditions>,
 }
 
 fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, WorkflowError> {
@@ -2703,9 +2894,10 @@ fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, Wor
         effects,
         planning_binding,
         review_policy,
+        application_preconditions,
     } = input;
-    let mut value = match (planning_binding, review_policy) {
-        (None, None) => json!({
+    let mut value = match (planning_binding, review_policy, application_preconditions) {
+        (None, None, None) => json!({
             "schema": "breg.change-request.proposal.v1",
             "request": request,
             "version": version,
@@ -2715,7 +2907,7 @@ fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, Wor
             "stages": stages,
             "effects": effects,
         }),
-        (Some(planning_binding), Some(review_policy)) => json!({
+        (Some(planning_binding), Some(review_policy), None) => json!({
             "schema": "breg.change-request.proposal.v2",
             "request": request,
             "version": version,
@@ -2726,6 +2918,19 @@ fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, Wor
             "planningBinding": planning_binding,
             "stages": stages,
             "effects": effects,
+        }),
+        (Some(planning_binding), Some(review_policy), Some(application_preconditions)) => json!({
+            "schema": "breg.change-request.proposal.v3",
+            "request": request,
+            "version": version,
+            "requestRecordRevision": request_record_revision,
+            "contractFingerprint": contract_fingerprint,
+            "originatingPackage": originating_package,
+            "reviewPolicy": review_policy,
+            "planningBinding": planning_binding,
+            "stages": stages,
+            "effects": effects,
+            "applicationPreconditions": application_preconditions,
         }),
         _ => return Err(WorkflowError::InvalidPlanningBinding),
     };
@@ -2969,6 +3174,51 @@ mod tests {
         tampered.attachments.get_mut("evidence").unwrap().sha256 = "c".repeat(64);
         assert_eq!(
             tampered.verify_digest(frozen.request()),
+            Err(WorkflowError::DigestMismatch)
+        );
+    }
+
+    #[test]
+    fn proposal_v3_digest_binds_frozen_application_contract_and_values() {
+        let preconditions = FrozenApplicationPreconditions {
+            contract: crate::model::CompiledChangeRequestPreconditions {
+                request: vec![crate::model::CompiledChangeRequestPredicate {
+                    field: "valid-through".to_owned(),
+                    expected: crate::model::CompiledChangeRequestPredicateExpected::CurrentDate {
+                        relation: crate::model::CompiledCurrentDateRelation::OnOrAfter,
+                    },
+                }],
+                targets: Vec::new(),
+                evidence: Vec::new(),
+            },
+            request_values: BTreeMap::from([("valid-through".to_owned(), json!("2026-09-12"))]),
+            targets: Vec::new(),
+        };
+        let submitted = workflow()
+            .submit(
+                context("submitter", 1),
+                v2_proposal(
+                    vec![patch_effect("site-b", 3)],
+                    FrozenReviewPolicy::Stages,
+                    one_stage(),
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )
+                .with_application_preconditions(preconditions)
+                .unwrap(),
+            )
+            .unwrap()
+            .into_workflow();
+        let snapshot = submitted.current_proposal().unwrap();
+        snapshot.verify_digest(submitted.request()).unwrap();
+        let mut tampered = snapshot.clone();
+        tampered
+            .application_preconditions
+            .as_mut()
+            .unwrap()
+            .request_values
+            .insert("valid-through".to_owned(), json!("2099-01-01"));
+        assert_eq!(
+            tampered.verify_digest(submitted.request()),
             Err(WorkflowError::DigestMismatch)
         );
     }

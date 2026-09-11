@@ -198,6 +198,10 @@ impl VerifiedAcquisition {
         &self.capability_id
     }
 
+    pub(crate) fn contract_fingerprint(&self) -> &str {
+        &self.contract_fingerprint
+    }
+
     pub fn outputs(&self) -> &BTreeMap<String, Value> {
         &self.outputs
     }
@@ -219,8 +223,15 @@ impl VerifiedAcquisition {
     }
 
     pub fn retained_serialization(&self) -> Result<Value, EvidenceAcquisitionFailure> {
+        self.retained_serialization_for("registry.breg.action-evidence-use/v1")
+    }
+
+    pub(crate) fn retained_serialization_for(
+        &self,
+        schema: &'static str,
+    ) -> Result<Value, EvidenceAcquisitionFailure> {
         Ok(serde_json::json!({
-            "schema": "registry.breg.action-evidence-use/v1",
+            "schema": schema,
             "capability": self.capability_id,
             "contractFingerprint": self.contract_fingerprint,
             "trustBinding": self.trust_binding_id,

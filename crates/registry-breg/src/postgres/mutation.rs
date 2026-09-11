@@ -281,6 +281,16 @@ impl PostgresRecordMutationService {
         input: crate::api::RequestActionInput<'_>,
     ) -> Result<MutationOutcome, MutationError> {
         let claims = strict_claim_context(&self.registry, input.context, input.entity_id)?;
+        let is_evidence_apply = matches!(input.action, crate::api::RequestActionBody::Apply { .. })
+            && self
+                .registry
+                .entities()
+                .get(input.entity_id)
+                .and_then(|entity| entity.change_request.as_ref())
+                .is_some_and(|plan| !plan.application.preconditions.evidence.is_empty());
+        if is_evidence_apply {
+            return self.request_evidence_apply(input, &claims).await;
+        }
         let client = self
             .pool
             .get()
@@ -300,6 +310,8 @@ impl PostgresRecordMutationService {
                 input,
                 &claims,
                 fault,
+                None,
+                false,
             ),
         )
         .await
@@ -312,6 +324,101 @@ impl PostgresRecordMutationService {
                 guard.cancel_and_discard().await;
                 Err(MutationError::Unavailable)
             }
+        }
+    }
+
+    async fn request_evidence_apply(
+        &self,
+        input: crate::api::RequestActionInput<'_>,
+        claims: &ClaimContext,
+    ) -> Result<MutationOutcome, MutationError> {
+        let evaluator = self
+            .evidence_evaluator
+            .as_ref()
+            .ok_or(MutationError::Unavailable)?;
+        let deadline =
+            tokio::time::Instant::now() + self.evidence_timeout.min(REQUEST_ACTION_TIMEOUT);
+        let fault = match self.fault {
+            #[cfg(feature = "postgres-test")]
+            MutationFaultControl::At(point) => crate::mutation::FaultControl::At(point),
+            _ => crate::mutation::FaultControl::Disabled,
+        };
+        let preflight = {
+            let client = self
+                .pool
+                .get()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+            let result = self
+                .coordinator
+                .preflight_request_evidence_apply(
+                    guard.client(),
+                    &self.registry,
+                    &input,
+                    claims,
+                    deadline,
+                )
+                .await;
+            if result.is_err() && tokio::time::Instant::now() < deadline {
+                self.coordinator
+                    .record_request_boundary_refusal(guard.client(), &self.registry, &input, claims)
+                    .await?;
+            }
+            guard.disarm();
+            result?
+        }; // The complete pool checkout is dropped before remote Evidence I/O.
+        let acquisitions = match preflight {
+            crate::mutation::RequestEvidencePreflight::Receipt => None,
+            crate::mutation::RequestEvidencePreflight::Acquire(requests) => Some(
+                evaluator
+                    .acquire_preconditions(requests, deadline.into_std())
+                    .await,
+            ),
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(MutationError::Unavailable);
+        }
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+        // A concurrent committed receipt takes priority over a failed helper.
+        let frozen = acquisitions
+            .as_ref()
+            .and_then(|result| result.as_ref().ok());
+        let result = match tokio::time::timeout_at(
+            deadline,
+            self.coordinator.execute_request_action(
+                guard.client(),
+                &self.registry,
+                input,
+                claims,
+                fault,
+                frozen.map(Vec::as_slice),
+                true,
+            ),
+        )
+        .await
+        {
+            Ok(result) => {
+                guard.disarm();
+                result
+            }
+            Err(_) => {
+                guard.cancel_and_discard().await;
+                return Err(MutationError::Unavailable);
+            }
+        };
+        match (result, acquisitions) {
+            (Ok(outcome), _) => Ok(outcome),
+            (
+                Err(MutationError::PreconditionFailed | MutationError::Conflict),
+                Some(Err(acquisition_error)),
+            ) => Err(acquisition_error),
+            (Err(error), _) => Err(error),
         }
     }
     #[must_use]

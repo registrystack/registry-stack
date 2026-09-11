@@ -26,7 +26,71 @@ fn action_requirements_compile_processing_without_read_or_condition_grants() {
     assert_eq!(action.requires.len(), 1);
     assert_eq!(action.requires[0].entity_id, "parent");
     assert_eq!(action.requires[0].field, "status");
-    assert_eq!(action.requires[0].equals, json!("active"));
+    assert_eq!(action.requires[0].equals, Some(json!("active")));
+    assert_eq!(action.requires[0].equals_input, None);
+}
+
+#[test]
+fn action_requirements_can_compare_a_target_field_to_a_typed_action_input() {
+    let mut source = support::project();
+    source["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "expected-status", "type": "vocabulary-code", "vocabulary": "status",
+            "values": ["active", "inactive"], "required": true, "classification": "restricted"
+        }));
+    source["actions"][0]["requires"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("equals");
+    source["actions"][0]["requires"][0]["equalsInput"] = json!("expected-status");
+    let registry = compile(source).unwrap();
+    let requirement = &registry.actions().actions[0].requires[0];
+    assert_eq!(requirement.equals, None);
+    assert_eq!(requirement.equals_input.as_deref(), Some("expected-status"));
+
+    let mut wrong_type = support::project();
+    wrong_type["actions"][0]["requires"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("equals");
+    wrong_type["actions"][0]["requires"][0]["equalsInput"] = json!("label");
+    let report = format!("{:?}", compile(wrong_type).unwrap_err());
+    assert!(report.contains("action.requires.value_invalid"), "{report}");
+}
+
+#[test]
+fn action_inputs_can_narrow_a_target_vocabulary_for_values_and_requirements() {
+    let mut source = support::project();
+    source["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "expected-status", "type": "vocabulary-code", "vocabulary": "status",
+            "values": ["active"], "required": true, "classification": "restricted"
+        }));
+    source["actions"][0]["requires"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("equals");
+    source["actions"][0]["requires"][0]["equalsInput"] = json!("expected-status");
+    compile(source).unwrap();
+
+    let mut source = support::project();
+    source["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "expected-status", "type": "vocabulary-code", "vocabulary": "other-status",
+            "values": ["active"], "required": true, "classification": "restricted"
+        }));
+    source["actions"][0]["requires"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("equals");
+    source["actions"][0]["requires"][0]["equalsInput"] = json!("expected-status");
+    assert!(format!("{:?}", compile(source).unwrap_err()).contains("action.requires.value_invalid"));
 }
 
 #[test]

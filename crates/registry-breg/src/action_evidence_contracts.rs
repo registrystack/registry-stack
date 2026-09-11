@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Offline, governed Evidence capabilities for immediate actions.
 use crate::{
-    contract::{ModuleAssetSource, RegistryProject},
+    contract::{ChangeRequestEvidenceSource, FieldTypeSource, ModuleAssetSource, RegistryProject},
     diagnostics::Diagnostic,
     model::CompiledActionInventory,
 };
 use registry_evidence_client::{
-    DefinitionResponseFormat, EvidenceDefinition, ReviewedContracts, SelectorValueOrigin,
+    DefinitionResponseFormat, EvidenceDefinition, ExpectedFormDocument, ExpectedScalarFormDocument,
+    ReviewedContracts, SelectorValueOrigin,
 };
 use registry_evidence_verifier::model::SubjectBindingMode;
 use registry_evidence_verifier::AssuranceProfile;
@@ -77,6 +78,209 @@ fn valid_evidence_id(value: &str) -> bool {
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
         })
+}
+
+pub(crate) fn compile_request_evidence(
+    project: &RegistryProject,
+    assets: &[ModuleAssetSource],
+    source: &ChangeRequestEvidenceSource,
+) -> Result<CompiledEvidenceCapability, ()> {
+    let provider = project
+        .evidence_providers
+        .iter()
+        .find(|provider| provider.id == source.provider)
+        .ok_or(())?;
+    let matches = assets
+        .iter()
+        .filter(|asset| asset.module.is_none() && asset.path == provider.contracts)
+        .collect::<Vec<_>>();
+    if !valid_contract_path(&provider.contracts)
+        || matches.len() != 1
+        || matches[0].bytes.len() > MAX_EVIDENCE_CONTRACT_BYTES
+    {
+        return Err(());
+    }
+    let contracts = registry_platform_canonical_json::parse_json_strict(&matches[0].bytes)
+        .ok()
+        .and_then(|value| serde_json::from_value::<ReviewedContracts>(value).ok())
+        .filter(|contract| contract.validate().is_ok())
+        .ok_or(())?;
+    let definitions = contracts
+        .definitions
+        .iter()
+        .filter(|definition| {
+            definition.requirement == source.requirement
+                && definition.subjects.len() == source.subjects.len()
+                && definition.subjects.iter().all(|subject| {
+                    source
+                        .subjects
+                        .get(&subject.role)
+                        .is_some_and(|selected| selected.profile == subject.selector.profile)
+                })
+        })
+        .collect::<Vec<_>>();
+    let definition = definitions.first().copied().ok_or(())?;
+    let outputs = source
+        .requires
+        .iter()
+        .map(|requirement| requirement.output.clone())
+        .collect::<Vec<_>>();
+    let output_ids = outputs.iter().collect::<BTreeSet<_>>();
+    let valid = valid_evidence_id(&source.id)
+        && valid_evidence_id(&provider.id)
+        && definitions.len() == 1
+        && (1..=300).contains(&source.maximum_observation_age_seconds)
+        && !outputs.is_empty()
+        && output_ids.len() == outputs.len()
+        && definition
+            .subject_binding_mode
+            .unwrap_or(SubjectBindingMode::AudienceScoped)
+            == SubjectBindingMode::AudienceScoped
+        && definition
+            .response_formats
+            .contains(&DefinitionResponseFormat::SignedJws)
+        && definition
+            .subjects
+            .iter()
+            .all(|subject| subject.selector.value_origin == SelectorValueOrigin::Request)
+        && source.requires.iter().all(|requirement| {
+            let choices = usize::from(requirement.equals.is_some())
+                + usize::from(requirement.equals_from_request_field.is_some())
+                + usize::from(requirement.at_least.is_some())
+                + usize::from(requirement.at_most.is_some());
+            choices == 1
+                && definition.concepts.iter().any(|concept| {
+                    concept.handle == requirement.output
+                        && concept.scalar_expected_output().is_some_and(|expected| {
+                            requirement.equals.as_ref().is_none_or(|value| {
+                                evidence_requirement_value_valid(value, &expected.form)
+                            }) && if requirement.at_least.is_some() || requirement.at_most.is_some()
+                            {
+                                matches!(
+                                    expected.form,
+                                    ExpectedFormDocument::Scalar(
+                                        ExpectedScalarFormDocument::Integer
+                                    )
+                                )
+                            } else {
+                                true
+                            }
+                        })
+                })
+        });
+    if !valid {
+        return Err(());
+    }
+    let fingerprint = digest_fingerprint(Sha256::digest(
+        registry_platform_canonical_json::canonicalize_json(&serde_json::json!({
+            "capability": source,
+            "provider": provider,
+            "contract": contracts,
+        }))
+        .map_err(|_| ())?,
+    ));
+    Ok(CompiledEvidenceCapability {
+        id: source.id.clone(),
+        provider: provider.id.clone(),
+        contract_fingerprint: fingerprint,
+        assurance_profile: contracts.assurance_profile,
+        audience: contracts.audience.clone(),
+        issued_by: contracts.issued_by.clone(),
+        provided_by: contracts.provided_by.clone(),
+        definition: definition.clone(),
+        outputs,
+        maximum_observation_age_seconds: source.maximum_observation_age_seconds,
+        subject_resolution: provider.subject_resolution,
+    })
+}
+
+fn evidence_requirement_value_valid(
+    value: &serde_json::Value,
+    form: &ExpectedFormDocument,
+) -> bool {
+    match form {
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean) => value.is_boolean(),
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Integer) => value
+            .as_number()
+            .and_then(registry_evidence_verifier::model::safe_json_integer)
+            .is_some(),
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String) => value.is_string(),
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::DateBucket) => {
+            value.get("form").and_then(serde_json::Value::as_str) == Some("date-bucket")
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::TimeBucket) => {
+            value.get("form").and_then(serde_json::Value::as_str) == Some("time-bucket")
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::EntityReference) => {
+            value.get("form").and_then(serde_json::Value::as_str)
+                == Some("audience-scoped-entity-reference")
+        }
+        // Reviewed structured outputs are deliberately outside the finite
+        // equality grammar used by Registry application preconditions.
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Structured)
+        | ExpectedFormDocument::List(_) => false,
+    }
+}
+
+pub(crate) fn evidence_output_matches_field_type(
+    capability: &CompiledEvidenceCapability,
+    output: &str,
+    field_type: &FieldTypeSource,
+) -> bool {
+    capability
+        .definition
+        .concepts
+        .iter()
+        .find(|concept| concept.handle == output)
+        .and_then(|concept| concept.scalar_expected_output())
+        .is_some_and(|expected| {
+            matches!(
+                (&expected.form, field_type),
+                (
+                    ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
+                    FieldTypeSource::Boolean,
+                ) | (
+                    ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Integer),
+                    FieldTypeSource::Int64,
+                ) | (
+                    ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String),
+                    FieldTypeSource::String { .. }
+                        | FieldTypeSource::Text { .. }
+                        | FieldTypeSource::Uuid
+                        | FieldTypeSource::Reference { .. }
+                        | FieldTypeSource::Timestamp,
+                )
+            )
+        })
+}
+
+pub(crate) fn selector_field_matches_field_type(
+    selector: &registry_evidence_client::SelectorField,
+    field_type: &FieldTypeSource,
+) -> bool {
+    matches!(
+        (selector, field_type),
+        (
+            registry_evidence_client::SelectorField::Boolean { .. },
+            FieldTypeSource::Boolean
+        ) | (
+            registry_evidence_client::SelectorField::Integer { .. },
+            FieldTypeSource::Int64
+        ) | (
+            registry_evidence_client::SelectorField::Date { .. },
+            FieldTypeSource::Date
+        ) | (
+            registry_evidence_client::SelectorField::ControlledCode { .. },
+            FieldTypeSource::VocabularyCode { .. }
+        ) | (
+            registry_evidence_client::SelectorField::String { .. },
+            FieldTypeSource::String { .. }
+                | FieldTypeSource::Text { .. }
+                | FieldTypeSource::Uuid
+                | FieldTypeSource::Reference { .. }
+                | FieldTypeSource::Timestamp
+        )
+    )
 }
 
 pub fn valid_contract_path(path: &str) -> bool {

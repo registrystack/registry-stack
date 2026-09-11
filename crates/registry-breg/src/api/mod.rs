@@ -2032,16 +2032,20 @@ fn request_action_target_authority(
     match route.operation {
         Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision => {
             let stage = route.request_stage.as_deref()?;
-            plan.target_entities
+            plan.review_permissions
                 .iter()
+                .filter(|grant| grant.stage == stage)
+                .map(|grant| grant.target_entity_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .map(|target_entity_id| {
                     let grant = plan.review_permissions.iter().find(|grant| {
                         grant.profile_id == context.selected_profile()
                             && grant.stage == stage
-                            && grant.target_entity_id == *target_entity_id
+                            && grant.target_entity_id == target_entity_id
                     })?;
                     Some(RequestActionTargetAuthority {
-                        target_entity_id: target_entity_id.clone(),
+                        target_entity_id,
                         readable_fields: grant.readable_fields.clone(),
                         row_boundaries: verified_row_boundaries_from_sources(
                             &grant.row_boundaries,
@@ -2052,15 +2056,18 @@ fn request_action_target_authority(
                 .collect()
         }
         Operation::ApplyRequest => plan
-            .target_entities
+            .apply_permissions
             .iter()
+            .map(|grant| grant.target_entity_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .map(|target_entity_id| {
                 let grant = plan.apply_permissions.iter().find(|grant| {
                     grant.profile_id == context.selected_profile()
-                        && grant.target_entity_id == *target_entity_id
+                        && grant.target_entity_id == target_entity_id
                 })?;
                 Some(RequestActionTargetAuthority {
-                    target_entity_id: target_entity_id.clone(),
+                    target_entity_id,
                     readable_fields: BTreeSet::new(),
                     row_boundaries: verified_row_boundaries_from_sources(
                         &grant.row_boundaries,
@@ -2081,14 +2088,17 @@ fn request_automatic_apply_authority(
     selected_profile: &str,
     claims: &VerifiedRequestClaims,
 ) -> Option<Vec<RequestActionTargetAuthority>> {
-    plan.target_entities
+    plan.apply_permissions
         .iter()
+        .map(|grant| grant.target_entity_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .map(|target_entity_id| {
             let grant = plan.apply_permissions.iter().find(|grant| {
-                grant.profile_id == selected_profile && grant.target_entity_id == *target_entity_id
+                grant.profile_id == selected_profile && grant.target_entity_id == target_entity_id
             })?;
             Some(RequestActionTargetAuthority {
-                target_entity_id: target_entity_id.clone(),
+                target_entity_id,
                 readable_fields: BTreeSet::new(),
                 row_boundaries: verified_row_boundaries_from_sources(
                     &grant.row_boundaries,

@@ -2251,7 +2251,28 @@ fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String>
         return Vec::new();
     };
     match spec.access_profiles {
-        OpenApiAccessProfiles::All => request.target_entities.iter().cloned().collect(),
+        OpenApiAccessProfiles::All => match spec.route.operation {
+            Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision => {
+                request
+                    .review_permissions
+                    .iter()
+                    .filter(|grant| {
+                        spec.route.request_stage.as_deref() == Some(grant.stage.as_str())
+                    })
+                    .map(|grant| grant.target_entity_id.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect()
+            }
+            Operation::ApplyRequest => request
+                .apply_permissions
+                .iter()
+                .map(|grant| grant.target_entity_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            _ => request.target_entities.iter().cloned().collect(),
+        },
         OpenApiAccessProfiles::Selected(profile) => {
             let mut targets = BTreeSet::new();
             match spec.route.operation {

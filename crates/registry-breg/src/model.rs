@@ -158,12 +158,116 @@ pub struct CompiledChangeRequestApplication {
     pub mode: CompiledChangeRequestApplicationMode,
     pub allowed_dispositions: BTreeSet<CompiledChangeRequestDisposition>,
     pub queue_reasons: BTreeMap<String, String>,
+    #[serde(
+        default,
+        skip_serializing_if = "CompiledChangeRequestPreconditions::is_empty"
+    )]
+    pub preconditions: CompiledChangeRequestPreconditions,
 }
 
 fn is_manual_application(application: &CompiledChangeRequestApplication) -> bool {
     application.mode == CompiledChangeRequestApplicationMode::Manual
         && application.allowed_dispositions.is_empty()
         && application.queue_reasons.is_empty()
+        && application.preconditions.is_empty()
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestPreconditions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request: Vec<CompiledChangeRequestPredicate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<CompiledChangeRequestGuardTarget>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<CompiledChangeRequestEvidence>,
+}
+
+impl CompiledChangeRequestPreconditions {
+    pub fn is_empty(&self) -> bool {
+        self.request.is_empty() && self.targets.is_empty() && self.evidence.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestGuardTarget {
+    pub id: String,
+    pub entity_id: String,
+    pub from_field: String,
+    pub requires: Vec<CompiledChangeRequestPredicate>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestPredicate {
+    pub field: String,
+    pub expected: CompiledChangeRequestPredicateExpected,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
+pub enum CompiledChangeRequestPredicateExpected {
+    Literal {
+        value: serde_json::Value,
+    },
+    RequestField {
+        field: String,
+    },
+    CurrentDate {
+        relation: CompiledCurrentDateRelation,
+    },
+    AtLeast {
+        value: i64,
+    },
+    AtMost {
+        value: i64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledCurrentDateRelation {
+    OnOrAfter,
+    OnOrBefore,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestEvidence {
+    pub capability: crate::action_evidence_contracts::CompiledEvidenceCapability,
+    pub subjects: BTreeMap<String, CompiledChangeRequestEvidenceSubject>,
+    pub requires: Vec<CompiledChangeRequestEvidenceRequirement>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestEvidenceSubject {
+    pub profile: String,
+    pub selectors: BTreeMap<String, CompiledChangeRequestSelector>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "source")]
+pub enum CompiledChangeRequestSelector {
+    RequestField { field: String },
+    TargetField { target: String, field: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestEvidenceRequirement {
+    pub output: String,
+    pub expected: CompiledChangeRequestEvidenceExpected,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
+pub enum CompiledChangeRequestEvidenceExpected {
+    Literal { value: serde_json::Value },
+    RequestField { field: String },
+    AtLeast { value: i64 },
+    AtMost { value: i64 },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -410,7 +514,10 @@ pub struct CompiledActionRequirement {
     pub input: String,
     pub entity_id: String,
     pub field: String,
-    pub equals: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals_input: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

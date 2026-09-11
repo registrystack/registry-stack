@@ -1206,7 +1206,15 @@ impl ChangeRequestTargetContext {
         if require_current_contract && plan.contract_fingerprint != binding.contract_fingerprint {
             return Err(invalid_context());
         }
-        if let Some(planner) = &plan.planner {
+        if let Some(guard) = plan
+            .application
+            .preconditions
+            .targets
+            .iter()
+            .find(|guard| guard.id == binding.effect_id)
+        {
+            validate_guard_binding(plan, guard, &binding, &phase)?;
+        } else if let Some(planner) = &plan.planner {
             validate_planner_effect_binding(planner, &binding, &phase)?;
         } else {
             let effect = plan
@@ -2030,6 +2038,46 @@ fn validate_planner_effect_binding(
         (Operation::Patch, Some(_)) if !matches!(phase, ChangeRequestTargetPhase::Preparation) => {
             Ok(())
         }
+        _ => Err(invalid_context()),
+    }
+}
+
+fn validate_guard_binding(
+    plan: &crate::model::CompiledChangeRequest,
+    guard: &crate::model::CompiledChangeRequestGuardTarget,
+    binding: &ChangeRequestTargetBinding,
+    phase: &ChangeRequestTargetPhase,
+) -> Result<()> {
+    let allowed_fields = guard
+        .requires
+        .iter()
+        .map(|predicate| predicate.field.clone())
+        .chain(
+            plan.application
+                .preconditions
+                .evidence
+                .iter()
+                .flat_map(|evidence| evidence.subjects.values())
+                .flat_map(|subject| subject.selectors.values())
+                .filter_map(|selector| match selector {
+                    crate::model::CompiledChangeRequestSelector::TargetField { target, field }
+                        if target == &guard.id =>
+                    {
+                        Some(field.clone())
+                    }
+                    _ => None,
+                }),
+        )
+        .collect::<BTreeSet<_>>();
+    if binding.target_entity_id != guard.entity_id
+        || binding.operation != Operation::Patch
+        || binding.fields != allowed_fields
+    {
+        return Err(invalid_context());
+    }
+    match (binding.expected_revision, phase) {
+        (None, ChangeRequestTargetPhase::Preparation)
+        | (Some(_), ChangeRequestTargetPhase::Application) => Ok(()),
         _ => Err(invalid_context()),
     }
 }

@@ -65,3 +65,4 @@ traceability:
   - {id: BREG-SEC-62, state: enforced, negativeId: BREG-NEG-62, negativeTest: {path: crates/registry-breg/src/postgres/request_read.rs, name: decision_reason_disclosure_requires_selected_profile_permission_and_authentication}}
   - {id: BREG-SEC-63, state: enforced, negativeId: BREG-NEG-63, negativeTest: {path: crates/registry-breg/src/postgres/request_read.rs, name: request_actor_reference_is_a_keyed_hash_scoped_to_the_source_database}}
   - {id: BREG-SEC-64, state: enforced, negativeId: BREG-NEG-64, negativeTest: {path: crates/registry-breg/tests/postgres_task_grants.rs, name: task_http_to_postgres_preserves_original_authority_and_completed_receipts}}
+  - {id: BREG-SEC-65, state: enforced, negativeId: BREG-NEG-65, negativeTest: {path: crates/registry-breg/tests/change_request_preconditions.rs, name: preconditions_refuse_automatic_apply_incomplete_profiles_and_wrong_types}}

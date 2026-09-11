@@ -73,6 +73,7 @@ fn existing(
             ("target".to_owned(), Uuid::parse_str(TARGET).unwrap()),
             (7, before),
         )]),
+        BTreeMap::new(),
     )
 }
 
@@ -215,6 +216,7 @@ fn declarative_and_rhai_paths_produce_byte_equivalent_canonical_effects() {
                 ("target".to_owned(), Uuid::parse_str(TARGET).unwrap()),
                 (7, before.clone()),
             )]),
+            BTreeMap::new(),
         )
         .expect("candidate prepares through the shared canonical path")
     };
@@ -282,6 +284,7 @@ fn create_references_reuse_reserved_ids_across_preparation_attempts() {
             1,
             PACKAGE,
             &resolved,
+            BTreeMap::new(),
             BTreeMap::new(),
         )
         .unwrap();

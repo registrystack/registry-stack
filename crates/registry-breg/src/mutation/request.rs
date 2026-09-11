@@ -33,6 +33,16 @@ struct AppliedRequest {
     result_revisions: Vec<(String, Uuid, i64)>,
 }
 
+pub(crate) enum RequestEvidencePreflight {
+    Receipt,
+    Acquire(
+        Vec<(
+            crate::action_evidence_contracts::CompiledEvidenceCapability,
+            crate::action_evidence_client::EvidenceSubjects,
+        )>,
+    ),
+}
+
 /// A conditional action is bound to its exact selected operation and authority,
 /// not to the ETag of a record page or a work-queue/list response.
 #[allow(clippy::too_many_arguments)]
@@ -104,6 +114,307 @@ fn request_action_etag_for_revisions(
 }
 
 impl MutationCoordinator {
+    pub(crate) async fn record_request_boundary_refusal(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+    ) -> Result<(), MutationError> {
+        let route = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| route.id == input.route_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        record_pre_io_audit(
+            client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            claims,
+            &self.audit_profile,
+            PreIoAudit {
+                kind: PreIoAuditKind::Refusal,
+                method: route.method,
+                operation_id: &route.id,
+                target_record: Some(input.record_id),
+                refusal_reason: None,
+                correlation: input.correlation,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn preflight_request_evidence_apply(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+        deadline: tokio::time::Instant,
+    ) -> Result<RequestEvidencePreflight, MutationError> {
+        let route = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| route.id == input.route_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        let entity = registry
+            .entities()
+            .get(input.entity_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        let profile = entity
+            .access_profiles
+            .get(claims.access_profile())
+            .ok_or(MutationError::InvalidRequest)?;
+        let plan = entity
+            .change_request
+            .as_ref()
+            .ok_or(MutationError::InvalidRequest)?;
+        let RequestActionBody::Apply {
+            proposal_version,
+            effect_digest,
+        } = &input.action
+        else {
+            return Err(MutationError::InvalidRequest);
+        };
+        if plan.application.preconditions.evidence.is_empty()
+            || plan.application.mode != crate::model::CompiledChangeRequestApplicationMode::Manual
+            || !profile_is_keyed(&self.audit_profile)
+            || route.entity_id != entity.id
+            || claims.entity_id() != entity.id
+            || claims.principal().is_none()
+            || route.method != HttpMethod::Post
+            || !route
+                .access_profiles
+                .iter()
+                .any(|id| id == claims.access_profile())
+            || !profile.operations.contains(&Operation::ApplyRequest)
+            || !input.response_fields.is_subset(&profile.readable_fields)
+            || !valid_uuid(input.record_id)
+        {
+            return Err(MutationError::InvalidRequest);
+        }
+        record_pre_io_audit(
+            client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            claims,
+            &self.audit_profile,
+            PreIoAudit {
+                kind: PreIoAuditKind::Attempt,
+                method: route.method,
+                operation_id: &route.id,
+                target_record: Some(input.record_id),
+                refusal_reason: None,
+                correlation: input.correlation,
+            },
+        )
+        .await?;
+        let binding = resolve_binding(
+            &self.audit_profile,
+            &IdempotencyBinding {
+                key: input.idempotency_key,
+                context: claims,
+                method: route.method,
+                route: &route.path,
+                target_record: Some(input.record_id),
+                package_revision: &self.expected.package_revision,
+                response_fields: &input.response_fields,
+                canonical_request_digest: Sha256::digest(
+                    canonicalize_json(&action_binding_json(input)?)
+                        .map_err(|_| MutationError::InvalidRequest)?,
+                )
+                .into(),
+            },
+        )?;
+        let transaction = begin_record_transaction(
+            client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            claims,
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+        set_transaction_statement_timeout(
+            transaction.transaction(),
+            request_action_statement_timeout(deadline),
+        )
+        .await?;
+        let request_id =
+            Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
+        let actor =
+            request_actor_reference(&self.audit_profile, &self.expected.database_id, claims)?;
+        let header = transaction
+            .transaction()
+            .query_opt(
+                "SELECT proposal_version FROM registry_internal.registry_request_state
+                 WHERE request_entity_id = $1 AND request_id = $2",
+                &[&entity.id, &request_id],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .ok_or(MutationError::PreconditionFailed)?;
+        let action_context = ChangeRequestActionContext::for_route(
+            registry,
+            claims,
+            &route.id,
+            request_id,
+            header.get::<_, i64>(0),
+            &actor,
+            &self.expected.package_revision,
+        )
+        .map_err(|_| MutationError::PreconditionFailed)?;
+        transaction
+            .install_change_request_action_context(&action_context)
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        if transaction
+            .transaction()
+            .query_opt(
+                "SELECT 1 FROM registry_internal.registry_idempotency WHERE key_reference = $1",
+                &[&binding.key_reference],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .is_some()
+        {
+            transaction
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return Ok(RequestEvidencePreflight::Receipt);
+        }
+        let current = load_row(transaction.transaction(), entity, input.record_id, false).await?;
+        let workflow =
+            crate::request_store::load(transaction.transaction(), &entity.id, request_id, false)
+                .await?;
+        let etag = request_action_etag(
+            &self.audit_profile,
+            claims,
+            &self.expected.package_revision,
+            route,
+            input.record_id,
+            current.record_revision,
+            &workflow,
+            &input.response_fields,
+            &input.target_authority,
+            input.automatic_apply_authority.as_deref(),
+        )?;
+        if workflow.state() != RequestState::Approved
+            || etag.as_bytes().ct_eq(input.if_match.as_bytes()).unwrap_u8() != 1
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let proposal = workflow.current_proposal().ok_or(MutationError::Conflict)?;
+        if proposal.version().get() != *proposal_version
+            || proposal.effect_digest().as_str() != effect_digest
+            || proposal.contract_fingerprint().as_str() != plan.contract_fingerprint
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let frozen = proposal
+            .application_preconditions()
+            .filter(|frozen| frozen.contract == plan.application.preconditions)
+            .ok_or(MutationError::PreconditionFailed)?;
+        verify_frozen_request_values(frozen, &current.data)?;
+        let current_date = time::OffsetDateTime::now_utc().date().to_string();
+        verify_compiled_predicates(
+            &frozen.contract.request,
+            &frozen.request_values,
+            &frozen.request_values,
+            &current_date,
+        )?;
+        let targets = crate::request_store::load_targets(
+            transaction.transaction(),
+            &entity.id,
+            request_id,
+            i64::from(*proposal_version),
+        )
+        .await?;
+        self.authorize_targets(registry, input, claims, entity, &workflow, &targets, &actor)?;
+        for guard in &frozen.targets {
+            let compiled = frozen
+                .contract
+                .targets
+                .iter()
+                .find(|candidate| candidate.id == guard.id)
+                .ok_or(MutationError::PreconditionFailed)?;
+            let record_id = Uuid::parse_str(guard.record_id.as_str())
+                .map_err(|_| MutationError::PreconditionFailed)?;
+            let authority = input
+                .target_authority
+                .iter()
+                .find(|authority| authority.target_entity_id == guard.entity_id)
+                .ok_or(MutationError::PreconditionFailed)?;
+            let context = ChangeRequestTargetContext::for_application(
+                registry,
+                claims,
+                request_authority_boundaries(authority)?,
+                guard_target_binding(
+                    entity,
+                    &workflow,
+                    plan,
+                    compiled,
+                    record_id,
+                    Some(guard.expected_revision),
+                    &self.expected.package_revision,
+                    &actor,
+                )?,
+            )
+            .map_err(|_| MutationError::PreconditionFailed)?;
+            transaction
+                .install_change_request_target_context(&context)
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            let row = load_row(
+                transaction.transaction(),
+                &registry.entities()[&guard.entity_id],
+                &record_id.to_string(),
+                false,
+            )
+            .await?;
+            if row.record_revision != guard.expected_revision
+                || guard
+                    .values
+                    .iter()
+                    .any(|(field, value)| row.data.get(field) != Some(value))
+            {
+                return Err(MutationError::PreconditionFailed);
+            }
+            context
+                .authorize_rows(
+                    &registry.entities()[&guard.entity_id],
+                    Some(&row.data),
+                    &row.data,
+                    record_id,
+                )
+                .map_err(|_| MutationError::PreconditionFailed)?;
+            let values = row
+                .data
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            verify_compiled_predicates(
+                &compiled.requires,
+                &values,
+                &frozen.request_values,
+                &current_date,
+            )?;
+        }
+        let requests = request_evidence_subjects(frozen)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        Ok(RequestEvidencePreflight::Acquire(requests))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_request_action(
         &self,
         client: &mut Client,
@@ -111,6 +422,8 @@ impl MutationCoordinator {
         input: RequestActionInput<'_>,
         claims: &ClaimContext,
         fault: FaultControl,
+        frozen_evidence: Option<&[crate::action_evidence_client::VerifiedAcquisition]>,
+        attempt_recorded: bool,
     ) -> Result<MutationOutcome, MutationError> {
         let route = registry
             .routes()
@@ -151,16 +464,18 @@ impl MutationCoordinator {
             refusal_reason,
             correlation: input.correlation,
         };
-        record_pre_io_audit(
-            client,
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
-            claims,
-            &self.audit_profile,
-            audit(PreIoAuditKind::Attempt, None),
-        )
-        .await?;
+        if !attempt_recorded {
+            record_pre_io_audit(
+                client,
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+                claims,
+                &self.audit_profile,
+                audit(PreIoAuditKind::Attempt, None),
+            )
+            .await?;
+        }
         let deadline = tokio::time::Instant::now() + REQUEST_ACTION_TIMEOUT;
         // Capture the exact intake under request RLS, close that transaction,
         // then run the bounded planner exactly once outside retry and target
@@ -213,6 +528,7 @@ impl MutationCoordinator {
                     submission.as_ref(),
                     request_action_statement_timeout(deadline),
                     fault,
+                    frozen_evidence,
                 )
                 .await;
             if tokio::time::Instant::now() >= deadline
@@ -422,6 +738,7 @@ impl MutationCoordinator {
         submission: Option<&SubmissionCandidate>,
         statement_timeout: Duration,
         fault: FaultControl,
+        frozen_evidence: Option<&[crate::action_evidence_client::VerifiedAcquisition]>,
     ) -> Result<MutationOutcome, MutationError> {
         let body = action_binding_json(input)?;
         let digest: [u8; 32] =
@@ -969,6 +1286,7 @@ impl MutationCoordinator {
                         route,
                         entity,
                         workflow,
+                        &current.data,
                         &actor_reference,
                         trusted.clone(),
                         *proposal_version,
@@ -976,6 +1294,7 @@ impl MutationCoordinator {
                         None,
                         &binding,
                         fault,
+                        frozen_evidence,
                     )
                     .await?;
                 application_count = Some(applied.result_count);
@@ -1080,6 +1399,7 @@ impl MutationCoordinator {
                     route,
                     entity,
                     next,
+                    &current.data,
                     &actor_reference,
                     trusted.clone(),
                     proposal_version,
@@ -1087,6 +1407,7 @@ impl MutationCoordinator {
                     prepared_targets.as_deref(),
                     &binding,
                     fault,
+                    None,
                 )
                 .await?;
             application_count = Some(applied.result_count);
@@ -1139,6 +1460,16 @@ impl MutationCoordinator {
                 )
                 .await?;
             }
+        }
+        if let Some(acquisitions) = frozen_evidence {
+            let application = next.application().ok_or(MutationError::Unavailable)?;
+            insert_request_evidence_uses(
+                transaction.transaction(),
+                Uuid::parse_str(application.application_id().as_str())
+                    .map_err(|_| MutationError::Unavailable)?,
+                acquisitions,
+            )
+            .await?;
         }
         crate::request_store::link_request_revision(
             transaction.transaction(),
@@ -1376,6 +1707,50 @@ impl MutationCoordinator {
                 (base.record_revision, base.data),
             );
         }
+        let mut guard_bases = BTreeMap::new();
+        let plan = entity
+            .change_request
+            .as_ref()
+            .ok_or(MutationError::InvalidRequest)?;
+        for guard in &plan.application.preconditions.targets {
+            let record_id = submission
+                .intake
+                .get(&guard.from_field)
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .ok_or(MutationError::InvalidRequest)?;
+            let binding = guard_target_binding(
+                entity,
+                workflow,
+                plan,
+                guard,
+                record_id,
+                None,
+                &self.expected.package_revision,
+                actor_reference,
+            )?;
+            let context = ChangeRequestTargetContext::for_preparation(registry, claims, binding)
+                .map_err(|_| MutationError::PreconditionFailed)?;
+            transaction
+                .install_change_request_target_context(&context)
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            let target_entity = registry
+                .entities()
+                .get(&guard.entity_id)
+                .ok_or(MutationError::InvalidRequest)?;
+            let base = load_row(
+                transaction.transaction(),
+                target_entity,
+                &record_id.to_string(),
+                false,
+            )
+            .await?;
+            guard_bases.insert(
+                guard.id.clone(),
+                (record_id, base.record_revision, base.data),
+            );
+        }
         let prepared = request_prepare::prepare(
             registry,
             entity,
@@ -1384,6 +1759,7 @@ impl MutationCoordinator {
             &self.expected.package_revision,
             resolved,
             bases,
+            guard_bases,
         )?;
         Ok(prepared)
     }
@@ -1398,6 +1774,7 @@ impl MutationCoordinator {
         route: &CompiledRoute,
         entity: &CompiledEntity,
         workflow: RequestWorkflow,
+        request_data: &Map<String, Value>,
         actor_reference: &str,
         trusted: TrustedTransitionContext,
         proposal_version: u32,
@@ -1405,6 +1782,7 @@ impl MutationCoordinator {
         targets_override: Option<&[RequestTargetSnapshot]>,
         binding: &crate::idempotency::ResolvedIdempotencyBinding,
         fault: FaultControl,
+        frozen_evidence: Option<&[crate::action_evidence_client::VerifiedAcquisition]>,
     ) -> Result<AppliedRequest, MutationError> {
         if workflow.state() != RequestState::Approved {
             return Err(MutationError::Conflict);
@@ -1414,6 +1792,9 @@ impl MutationCoordinator {
             .change_request
             .as_ref()
             .ok_or(MutationError::InvalidRequest)?;
+        if !plan.application.preconditions.evidence.is_empty() && frozen_evidence.is_none() {
+            return Err(MutationError::PreconditionFailed);
+        }
         if proposal.contract_fingerprint().as_str() != plan.contract_fingerprint
             || proposal.version().get() != proposal_version
             || proposal.effect_digest().as_str() != effect_digest
@@ -1454,38 +1835,21 @@ impl MutationCoordinator {
             targets,
             actor_reference,
         )?;
-        let mut observed = Vec::new();
-        for target in targets {
-            let context = contexts
-                .get(&(target.entity_id.clone(), target.record_id))
-                .ok_or(MutationError::InvalidRequest)?;
-            transaction
-                .install_change_request_target_context(context)
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            if let Some(expected) = target.expected_revision {
-                let actual = load_row(
-                    transaction.transaction(),
-                    &registry.entities()[&target.entity_id],
-                    &target.record_id.to_string(),
-                    true,
-                )
-                .await?;
-                if actual.record_revision != expected {
-                    return Err(MutationError::PreconditionFailed);
-                }
-                observed.push(ObservedTarget::existing(
-                    EntityId::new(&target.entity_id).map_err(workflow_error)?,
-                    RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
-                    RecordRevision::new(expected).map_err(workflow_error)?,
-                ));
-            } else {
-                observed.push(ObservedTarget::reserved_create(
-                    EntityId::new(&target.entity_id).map_err(workflow_error)?,
-                    RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
-                ));
-            }
-        }
+        let observed = self
+            .lock_and_verify_application_preconditions(
+                transaction,
+                registry,
+                input,
+                claims,
+                entity,
+                &workflow,
+                request_data,
+                targets,
+                &contexts,
+                actor_reference,
+                frozen_evidence,
+            )
+            .await?;
         let mut written = BTreeSet::new();
         let mut links = Vec::new();
         let mut result_revisions = Vec::new();
@@ -1694,6 +2058,178 @@ impl MutationCoordinator {
             return Err(MutationError::PreconditionFailed);
         }
         Ok(contexts)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn lock_and_verify_application_preconditions(
+        &self,
+        transaction: &crate::postgres::GuardedTransaction<'_>,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+        entity: &CompiledEntity,
+        workflow: &RequestWorkflow,
+        request_data: &Map<String, Value>,
+        targets: &[RequestTargetSnapshot],
+        effect_contexts: &BTreeMap<(String, Uuid), ChangeRequestTargetContext>,
+        actor: &str,
+        frozen_evidence: Option<&[crate::action_evidence_client::VerifiedAcquisition]>,
+    ) -> Result<Vec<ObservedTarget>, MutationError> {
+        let plan = entity
+            .change_request
+            .as_ref()
+            .ok_or(MutationError::InvalidRequest)?;
+        let proposal = workflow.current_proposal().ok_or(MutationError::Conflict)?;
+        let frozen = proposal.application_preconditions();
+        if plan.application.preconditions.is_empty() {
+            if frozen.is_some() || frozen_evidence.is_some_and(|items| !items.is_empty()) {
+                return Err(MutationError::PreconditionFailed);
+            }
+        } else if frozen.is_none_or(|frozen| frozen.contract != plan.application.preconditions) {
+            return Err(MutationError::PreconditionFailed);
+        }
+
+        let mut guard_contexts = BTreeMap::new();
+        if let Some(frozen) = frozen {
+            for guard in &frozen.targets {
+                let compiled = plan
+                    .application
+                    .preconditions
+                    .targets
+                    .iter()
+                    .find(|candidate| candidate.id == guard.id)
+                    .ok_or(MutationError::PreconditionFailed)?;
+                let authority = input
+                    .target_authority
+                    .iter()
+                    .find(|authority| authority.target_entity_id == guard.entity_id)
+                    .ok_or(MutationError::PreconditionFailed)?;
+                let boundaries = request_authority_boundaries(authority)?;
+                let record_id = Uuid::parse_str(guard.record_id.as_str())
+                    .map_err(|_| MutationError::PreconditionFailed)?;
+                let binding = guard_target_binding(
+                    entity,
+                    workflow,
+                    plan,
+                    compiled,
+                    record_id,
+                    Some(guard.expected_revision),
+                    &self.expected.package_revision,
+                    actor,
+                )?;
+                let context = ChangeRequestTargetContext::for_application(
+                    registry, claims, boundaries, binding,
+                )
+                .map_err(|_| MutationError::PreconditionFailed)?;
+                guard_contexts.insert((guard.entity_id.clone(), record_id), context);
+            }
+        }
+
+        // Existing effect targets and read-only guard targets share one total
+        // lock order so concurrent applications cannot invert their waits.
+        let lock_keys = targets
+            .iter()
+            .filter_map(|target| {
+                target
+                    .expected_revision
+                    .map(|_| (target.entity_id.clone(), target.record_id))
+            })
+            .chain(guard_contexts.keys().cloned())
+            .collect::<BTreeSet<_>>();
+        let mut locked = BTreeMap::new();
+        for key in lock_keys {
+            let context = guard_contexts
+                .get(&key)
+                .or_else(|| effect_contexts.get(&key))
+                .ok_or(MutationError::PreconditionFailed)?;
+            transaction
+                .install_change_request_target_context(context)
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            let row = load_row(
+                transaction.transaction(),
+                registry
+                    .entities()
+                    .get(&key.0)
+                    .ok_or(MutationError::InvalidRequest)?,
+                &key.1.to_string(),
+                true,
+            )
+            .await?;
+            locked.insert(key, row);
+        }
+
+        let mut observed = Vec::new();
+        for target in targets {
+            if let Some(expected) = target.expected_revision {
+                if locked
+                    .get(&(target.entity_id.clone(), target.record_id))
+                    .is_none_or(|row| row.record_revision != expected)
+                {
+                    return Err(MutationError::PreconditionFailed);
+                }
+                observed.push(ObservedTarget::existing(
+                    EntityId::new(&target.entity_id).map_err(workflow_error)?,
+                    RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
+                    RecordRevision::new(expected).map_err(workflow_error)?,
+                ));
+            } else {
+                observed.push(ObservedTarget::reserved_create(
+                    EntityId::new(&target.entity_id).map_err(workflow_error)?,
+                    RecordId::new(target.record_id.to_string()).map_err(workflow_error)?,
+                ));
+            }
+        }
+
+        if let Some(frozen) = frozen {
+            verify_frozen_request_values(frozen, request_data)?;
+            let current_date = time::OffsetDateTime::now_utc().date().to_string();
+            verify_compiled_predicates(
+                &frozen.contract.request,
+                &frozen.request_values,
+                &frozen.request_values,
+                &current_date,
+            )?;
+            for guard in &frozen.targets {
+                let record_id = Uuid::parse_str(guard.record_id.as_str())
+                    .map_err(|_| MutationError::PreconditionFailed)?;
+                let key = (guard.entity_id.clone(), record_id);
+                let row = locked.get(&key).ok_or(MutationError::PreconditionFailed)?;
+                if row.record_revision != guard.expected_revision
+                    || guard
+                        .values
+                        .iter()
+                        .any(|(field, value)| row.data.get(field) != Some(value))
+                {
+                    return Err(MutationError::PreconditionFailed);
+                }
+                guard_contexts[&key]
+                    .authorize_rows(
+                        &registry.entities()[&guard.entity_id],
+                        Some(&row.data),
+                        &row.data,
+                        record_id,
+                    )
+                    .map_err(|_| MutationError::PreconditionFailed)?;
+                let compiled = frozen
+                    .contract
+                    .targets
+                    .iter()
+                    .find(|candidate| candidate.id == guard.id)
+                    .ok_or(MutationError::PreconditionFailed)?;
+                verify_compiled_predicates(
+                    &compiled.requires,
+                    &row.data
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    &frozen.request_values,
+                    &current_date,
+                )?;
+            }
+            verify_request_evidence(frozen, frozen_evidence.unwrap_or_default())?;
+        }
+        Ok(observed)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1964,6 +2500,62 @@ fn target_binding(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn guard_target_binding(
+    entity: &CompiledEntity,
+    workflow: &RequestWorkflow,
+    plan: &crate::model::CompiledChangeRequest,
+    guard: &crate::model::CompiledChangeRequestGuardTarget,
+    target_record_id: Uuid,
+    expected_revision: Option<i64>,
+    package_revision: &str,
+    actor: &str,
+) -> Result<ChangeRequestTargetBinding, MutationError> {
+    let fields = guard
+        .requires
+        .iter()
+        .map(|predicate| predicate.field.clone())
+        .chain(
+            plan.application
+                .preconditions
+                .evidence
+                .iter()
+                .flat_map(|evidence| evidence.subjects.values())
+                .flat_map(|subject| subject.selectors.values())
+                .filter_map(|selector| match selector {
+                    crate::model::CompiledChangeRequestSelector::TargetField { target, field }
+                        if target == &guard.id =>
+                    {
+                        Some(field.clone())
+                    }
+                    _ => None,
+                }),
+        )
+        .collect();
+    Ok(ChangeRequestTargetBinding {
+        request_entity_id: entity.id.clone(),
+        request_id: Uuid::parse_str(workflow.request().record_id().as_str())
+            .map_err(|_| MutationError::InvalidRequest)?,
+        proposal_version: i64::from(workflow.current_version().get()),
+        contract_fingerprint: plan.contract_fingerprint.clone(),
+        effect_digest: workflow
+            .current_proposal()
+            .map_or(
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                |proposal| proposal.effect_digest().as_str(),
+            )
+            .to_owned(),
+        active_package_revision: package_revision.to_owned(),
+        actor_reference: actor.to_owned(),
+        effect_id: guard.id.clone(),
+        target_entity_id: guard.entity_id.clone(),
+        target_record_id,
+        operation: Operation::Patch,
+        expected_revision,
+        fields,
+    })
+}
+
 fn frozen_target_binding(
     entity: &CompiledEntity,
     workflow: &RequestWorkflow,
@@ -2188,6 +2780,214 @@ fn workflow_error(_: crate::request_workflow::WorkflowError) -> MutationError {
     MutationError::Conflict
 }
 
+fn request_authority_boundaries(
+    authority: &crate::api::RequestActionTargetAuthority,
+) -> Result<Vec<RowBoundaryContext>, MutationError> {
+    authority
+        .row_boundaries
+        .iter()
+        .map(|boundary| match boundary.operator() {
+            ApiBoundaryOperator::Equals if boundary.values().len() == 1 => {
+                Ok(RowBoundaryContext::Equals {
+                    field: boundary.field().to_owned(),
+                    value: boundary
+                        .values()
+                        .iter()
+                        .next()
+                        .ok_or(MutationError::InvalidRequest)?
+                        .clone(),
+                })
+            }
+            ApiBoundaryOperator::In => Ok(RowBoundaryContext::In {
+                field: boundary.field().to_owned(),
+                values: boundary.values().clone(),
+            }),
+            _ => Err(MutationError::InvalidRequest),
+        })
+        .collect()
+}
+
+fn verify_frozen_request_values(
+    frozen: &crate::request_workflow::FrozenApplicationPreconditions,
+    request_data: &Map<String, Value>,
+) -> Result<(), MutationError> {
+    if frozen
+        .request_values
+        .iter()
+        .any(|(field, value)| request_data.get(field) != Some(value))
+    {
+        Err(MutationError::PreconditionFailed)
+    } else {
+        Ok(())
+    }
+}
+
+fn verify_compiled_predicates(
+    predicates: &[crate::model::CompiledChangeRequestPredicate],
+    actual: &BTreeMap<String, Value>,
+    request_values: &BTreeMap<String, Value>,
+    current_date: &str,
+) -> Result<(), MutationError> {
+    for predicate in predicates {
+        let value = actual
+            .get(&predicate.field)
+            .ok_or(MutationError::PreconditionFailed)?;
+        let accepted = match &predicate.expected {
+            crate::model::CompiledChangeRequestPredicateExpected::Literal { value: expected } => {
+                value == expected
+            }
+            crate::model::CompiledChangeRequestPredicateExpected::RequestField { field } => {
+                request_values.get(field) == Some(value)
+            }
+            crate::model::CompiledChangeRequestPredicateExpected::CurrentDate { relation } => {
+                value.as_str().is_some_and(|date| match relation {
+                    crate::model::CompiledCurrentDateRelation::OnOrAfter => date >= current_date,
+                    crate::model::CompiledCurrentDateRelation::OnOrBefore => date <= current_date,
+                })
+            }
+            crate::model::CompiledChangeRequestPredicateExpected::AtLeast { value: minimum } => {
+                value.as_i64().is_some_and(|value| value >= *minimum)
+            }
+            crate::model::CompiledChangeRequestPredicateExpected::AtMost { value: maximum } => {
+                value.as_i64().is_some_and(|value| value <= *maximum)
+            }
+        };
+        if !accepted {
+            return Err(MutationError::PreconditionFailed);
+        }
+    }
+    Ok(())
+}
+
+fn verify_request_evidence(
+    frozen: &crate::request_workflow::FrozenApplicationPreconditions,
+    acquisitions: &[crate::action_evidence_client::VerifiedAcquisition],
+) -> Result<(), MutationError> {
+    if acquisitions.len() != frozen.contract.evidence.len() {
+        return Err(MutationError::PreconditionFailed);
+    }
+    for (evidence, acquisition) in frozen.contract.evidence.iter().zip(acquisitions) {
+        if acquisition.capability_id() != evidence.capability.id
+            || acquisition.contract_fingerprint() != evidence.capability.contract_fingerprint
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        acquisition.validate_acceptance(chrono::Utc::now())?;
+        verify_request_evidence_requirements(
+            &evidence.requires,
+            &frozen.request_values,
+            acquisition.outputs(),
+        )?;
+    }
+    Ok(())
+}
+
+fn verify_request_evidence_requirements(
+    requirements: &[crate::model::CompiledChangeRequestEvidenceRequirement],
+    request_values: &BTreeMap<String, Value>,
+    outputs: &BTreeMap<String, Value>,
+) -> Result<(), MutationError> {
+    for requirement in requirements {
+        let actual = outputs.get(&requirement.output);
+        let accepted = match &requirement.expected {
+            crate::model::CompiledChangeRequestEvidenceExpected::Literal { value } => {
+                actual == Some(value)
+            }
+            crate::model::CompiledChangeRequestEvidenceExpected::RequestField { field } => {
+                actual == request_values.get(field)
+            }
+            crate::model::CompiledChangeRequestEvidenceExpected::AtLeast { value } => actual
+                .and_then(Value::as_i64)
+                .is_some_and(|actual| actual >= *value),
+            crate::model::CompiledChangeRequestEvidenceExpected::AtMost { value } => actual
+                .and_then(Value::as_i64)
+                .is_some_and(|actual| actual <= *value),
+        };
+        if !accepted {
+            return Err(MutationError::PreconditionFailed);
+        }
+    }
+    Ok(())
+}
+
+fn request_evidence_subjects(
+    frozen: &crate::request_workflow::FrozenApplicationPreconditions,
+) -> Result<
+    Vec<(
+        crate::action_evidence_contracts::CompiledEvidenceCapability,
+        crate::action_evidence_client::EvidenceSubjects,
+    )>,
+    MutationError,
+> {
+    let targets = frozen
+        .targets
+        .iter()
+        .map(|target| (target.id.as_str(), target))
+        .collect::<BTreeMap<_, _>>();
+    frozen
+        .contract
+        .evidence
+        .iter()
+        .map(|evidence| {
+            let subjects = evidence
+                .subjects
+                .iter()
+                .map(|(role, subject)| {
+                    let values = subject
+                        .selectors
+                        .iter()
+                        .map(|(selector_field, selector)| {
+                            let value = match selector {
+                                crate::model::CompiledChangeRequestSelector::RequestField {
+                                    field,
+                                } => frozen.request_values.get(field),
+                                crate::model::CompiledChangeRequestSelector::TargetField {
+                                    target,
+                                    field,
+                                } => targets
+                                    .get(target.as_str())
+                                    .and_then(|target| target.values.get(field)),
+                            }
+                            .cloned()
+                            .ok_or(MutationError::PreconditionFailed)?;
+                            Ok((selector_field.clone(), value))
+                        })
+                        .collect::<Result<BTreeMap<_, _>, MutationError>>()?;
+                    Ok((role.clone(), values))
+                })
+                .collect::<Result<BTreeMap<_, _>, MutationError>>()?;
+            Ok((evidence.capability.clone(), subjects))
+        })
+        .collect()
+}
+
+async fn insert_request_evidence_uses(
+    transaction: &Transaction<'_>,
+    application_id: Uuid,
+    acquisitions: &[crate::action_evidence_client::VerifiedAcquisition],
+) -> Result<(), MutationError> {
+    for (ordinal, acquisition) in acquisitions.iter().enumerate() {
+        let ordinal = i16::try_from(ordinal).map_err(|_| MutationError::Unavailable)?;
+        let retained = acquisition
+            .retained_serialization_for("registry.breg.request-application-evidence-use/v1")?;
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_evidence_uses
+                    (application_id, ordinal, retained, expires_at)
+                 VALUES ($1, $2, $3, $4)",
+                &[
+                    &application_id,
+                    &ordinal,
+                    &retained,
+                    &acquisition.retention_expires_at(),
+                ],
+            )
+            .await
+            .map_err(map_database_error)?;
+    }
+    Ok(())
+}
+
 /// Actions only the request owner may take. Submit and revise move the
 /// owner's own draft; cancel is the owner's withdrawal. Reviewers reject a
 /// request, they do not cancel it.
@@ -2275,6 +3075,93 @@ mod attachment_submission_tests {
         slots.clear();
         assert!(validate_submission_attachments(&slots, &attachments).is_err());
         assert!(validate_submission_attachments(&slots, &BTreeMap::new()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod application_precondition_tests {
+    use std::collections::BTreeMap;
+
+    use serde_json::json;
+
+    use crate::model::{
+        CompiledChangeRequestEvidenceExpected, CompiledChangeRequestEvidenceRequirement,
+        CompiledChangeRequestPredicate, CompiledChangeRequestPredicateExpected,
+        CompiledCurrentDateRelation,
+    };
+    use crate::mutation::MutationError;
+
+    #[test]
+    fn runtime_owned_date_window_is_inclusive_and_closed() {
+        let predicates = vec![
+            CompiledChangeRequestPredicate {
+                field: "valid-from".into(),
+                expected: CompiledChangeRequestPredicateExpected::CurrentDate {
+                    relation: CompiledCurrentDateRelation::OnOrBefore,
+                },
+            },
+            CompiledChangeRequestPredicate {
+                field: "valid-through".into(),
+                expected: CompiledChangeRequestPredicateExpected::CurrentDate {
+                    relation: CompiledCurrentDateRelation::OnOrAfter,
+                },
+            },
+        ];
+        let request = BTreeMap::from([
+            ("valid-from".into(), json!("2026-09-12")),
+            ("valid-through".into(), json!("2026-09-12")),
+        ]);
+        assert!(
+            super::verify_compiled_predicates(&predicates, &request, &request, "2026-09-12")
+                .is_ok()
+        );
+        for date in ["2026-09-11", "2026-09-13"] {
+            assert_eq!(
+                super::verify_compiled_predicates(&predicates, &request, &request, date),
+                Err(MutationError::PreconditionFailed)
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_outputs_require_frozen_identity_and_inclusive_thresholds() {
+        let requirements = vec![
+            CompiledChangeRequestEvidenceRequirement {
+                output: "report-reference".into(),
+                expected: CompiledChangeRequestEvidenceExpected::RequestField {
+                    field: "report-reference".into(),
+                },
+            },
+            CompiledChangeRequestEvidenceRequirement {
+                output: "germination".into(),
+                expected: CompiledChangeRequestEvidenceExpected::AtLeast { value: 9000 },
+            },
+            CompiledChangeRequestEvidenceRequirement {
+                output: "purity".into(),
+                expected: CompiledChangeRequestEvidenceExpected::AtLeast { value: 9800 },
+            },
+        ];
+        let frozen = BTreeMap::from([("report-reference".into(), json!("report-v7"))]);
+        let passing = BTreeMap::from([
+            ("report-reference".into(), json!("report-v7")),
+            ("germination".into(), json!(9000)),
+            ("purity".into(), json!(9920)),
+        ]);
+        assert!(
+            super::verify_request_evidence_requirements(&requirements, &frozen, &passing).is_ok()
+        );
+        for (field, wrong) in [
+            ("report-reference", json!("other-report")),
+            ("germination", json!(8999)),
+            ("purity", json!(9799)),
+        ] {
+            let mut outputs = passing.clone();
+            outputs.insert(field.into(), wrong);
+            assert_eq!(
+                super::verify_request_evidence_requirements(&requirements, &frozen, &outputs),
+                Err(MutationError::PreconditionFailed)
+            );
+        }
     }
 }
 
@@ -2378,18 +3265,26 @@ pub(super) async fn admit_submitter_targets(
     let records = plan
         .effects
         .iter()
-        .map(|effect| {
-            let crate::model::CompiledChangeRequestTargetBinding::Existing { from_field } =
-                &effect.target.binding
-            else {
-                return Err(MutationError::InvalidRequest);
-            };
+        .filter_map(|effect| match &effect.target.binding {
+            crate::model::CompiledChangeRequestTargetBinding::Existing { from_field } => {
+                Some((effect.target.entity_id.as_str(), from_field.as_str()))
+            }
+            crate::model::CompiledChangeRequestTargetBinding::ReservedCreate { .. } => None,
+        })
+        .chain(
+            plan.application
+                .preconditions
+                .targets
+                .iter()
+                .map(|target| (target.entity_id.as_str(), target.from_field.as_str())),
+        )
+        .map(|(entity_id, from_field)| {
             let id = intake
                 .get(from_field)
                 .and_then(Value::as_str)
                 .ok_or(MutationError::InvalidRequest)?;
             let id = Uuid::parse_str(id).map_err(|_| MutationError::InvalidRequest)?;
-            Ok((effect.target.entity_id.clone(), id))
+            Ok((entity_id.to_owned(), id))
         })
         .collect::<Result<BTreeSet<_>, MutationError>>()?;
     transaction

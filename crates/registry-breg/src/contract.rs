@@ -541,6 +541,114 @@ pub struct ChangeRequestApplicationSource {
     pub allowed_dispositions: BTreeSet<ChangeRequestDispositionSource>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub queue_reasons: BTreeMap<String, String>,
+    #[serde(
+        default,
+        skip_serializing_if = "ChangeRequestPreconditionsSource::is_empty"
+    )]
+    pub preconditions: ChangeRequestPreconditionsSource,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestPreconditionsSource {
+    /// Predicates over the frozen request intake itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request: Vec<ChangeRequestPredicateSource>,
+    /// Existing records read and revision-bound at proposal preparation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<ChangeRequestGuardTargetSource>,
+    /// Governed Evidence acquisitions required immediately before application.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<ChangeRequestEvidenceSource>,
+}
+
+impl ChangeRequestPreconditionsSource {
+    pub fn is_empty(&self) -> bool {
+        self.request.is_empty() && self.targets.is_empty() && self.evidence.is_empty()
+    }
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestGuardTargetSource {
+    pub id: String,
+    pub entity: String,
+    pub from_field: String,
+    #[serde(default)]
+    pub requires: Vec<ChangeRequestPredicateSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestPredicateSource {
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals_from_request_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_least: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_most: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_date: Option<ChangeRequestCurrentDatePredicateSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeRequestCurrentDatePredicateSource {
+    OnOrAfter,
+    OnOrBefore,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestEvidenceSource {
+    pub id: String,
+    pub provider: String,
+    pub requirement: String,
+    pub subjects: BTreeMap<String, ChangeRequestEvidenceSubjectSource>,
+    #[serde(default)]
+    pub requires: Vec<ChangeRequestEvidenceRequirementSource>,
+    pub maximum_observation_age_seconds: u64,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestEvidenceSubjectSource {
+    pub profile: String,
+    /// Exact governed selector-profile field map. Every profile field must be
+    /// present exactly once and no undeclared field is admitted.
+    pub selectors: BTreeMap<String, ChangeRequestSelectorSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, tag = "source", rename_all = "snake_case")]
+pub enum ChangeRequestSelectorSource {
+    RequestField { field: String },
+    TargetField { target: String, field: String },
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestEvidenceRequirementSource {
+    pub output: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals_from_request_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_least: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_most: Option<i64>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -679,7 +787,10 @@ pub struct ActionHandlerRefusalSource {
 pub struct ActionRequirementSource {
     pub input: String,
     pub field: String,
-    pub equals: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals_input: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

@@ -32,6 +32,49 @@ fn starter() -> registry_breg::CompiledRegistry {
         .expect("holder target admission compiles")
 }
 
+fn create_only_guard_starter() -> registry_breg::CompiledRegistry {
+    let mut source: Value = serde_json::from_slice(include_bytes!(
+        "../../../../products/breg/starters/professional-licences/core/registry.yaml"
+    ))
+    .expect("starter source parses");
+    source["entities"].as_array_mut().unwrap().push(json!({
+        "id":"enrolment", "primaryDataset":"directory", "route":"enrolments",
+        "mutationMode":"create_only", "classification":"restricted",
+        "changeControl":{"requiredFor":["create"]},
+        "fields":[{
+            "id":"supporting-reference", "type":"string", "required":true,
+            "classification":"restricted", "minLength":1, "maxLength":500
+        }]
+    }));
+    source["entities"][1]["changeRequest"]["effects"] = json!([{
+        "id":"create-enrolment", "target":{"entity":"enrolment"}, "operation":"create",
+        "set":{"supporting-reference":{"fromField":"supporting-reference"}}
+    }]);
+    source["entities"][1]["changeRequest"]["application"] = json!({
+        "mode":"manual",
+        "preconditions":{"targets":[{
+            "id":"licence-guard", "entity":"professional-license", "fromField":"record",
+            "requires":[{"field":"person-reference", "equals":"person:a"}]
+        }]}
+    });
+    let reviewer = source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "reviewer")
+        .unwrap();
+    reviewer["grants"][1]["reviewStages"][0]["targets"] = json!([{
+        "entity":"enrolment", "readableFields":["supporting-reference"], "rowBoundaries":[]
+    }]);
+    reviewer["grants"][1]["applyTargets"] = json!([
+        {"entity":"enrolment", "rowBoundaries":[]},
+        {"entity":"professional-license", "rowBoundaries":[]}
+    ]);
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("source parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("create-only request with guarded owner target compiles")
+}
+
 fn actor(
     profile: &str,
     principal: &str,
@@ -82,6 +125,48 @@ async fn create_request(
         .await,
     )
     .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn create_only_request_submitter_target_admits_only_the_owned_guard_record() {
+    let database = TestDatabase::create(8).await;
+    let registry = Arc::new(create_only_guard_starter());
+    let identity = install_registry(&database, &registry, "guard-owner-admission", false).await;
+    let app = change_request_router(&database, registry, identity, "guard-owner-admission", None);
+    let registrar = actor("editor", "registrar", None);
+    let own = create_record(
+        &app,
+        "/v1/records/professional-licenses?accessProfile=editor",
+        registrar.clone(),
+        "guard-own-licence",
+        json!({"localIdentifier":"GA1","personReference":"person:a","regulatorReference":"regulator:synthetic","jurisdictionReference":"jurisdiction:synthetic","professionCode":"example-nursing","licenceStatus":"recorded-active","validFrom":"2026-01-01","licensedActivities":["example-assessment"],"authorizationConditions":"original scope"}),
+    )
+    .await;
+    let other = create_record(
+        &app,
+        "/v1/records/professional-licenses?accessProfile=editor",
+        registrar,
+        "guard-other-licence",
+        json!({"localIdentifier":"GB1","personReference":"person:b","regulatorReference":"regulator:synthetic","jurisdictionReference":"jurisdiction:synthetic","professionCode":"example-nursing","licenceStatus":"recorded-active","validFrom":"2026-01-01","licensedActivities":["example-assessment"],"authorizationConditions":"original scope"}),
+    )
+    .await;
+
+    let admitted = create_request(&app, holder("holder-a", "person:a"), "guard-own", &own.id).await;
+    assert_eq!(admitted.status, StatusCode::CREATED, "{}", admitted.body);
+    let denied = create_request(
+        &app,
+        holder("holder-a", "person:a"),
+        "guard-other",
+        &other.id,
+    )
+    .await;
+    assert_eq!(
+        denied.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        denied.body
+    );
+    database.cleanup().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

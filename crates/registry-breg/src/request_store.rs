@@ -33,6 +33,7 @@ pub(crate) const REQUEST_TABLES: &[(&str, &[&str])] = &[
     ("registry_request_targets", &["INSERT", "SELECT"]),
     ("registry_request_decisions", &["INSERT", "SELECT"]),
     ("registry_request_applications", &["INSERT", "SELECT"]),
+    ("registry_request_evidence_uses", &["INSERT"]),
     ("registry_request_results", &["INSERT", "SELECT"]),
     ("registry_request_idempotency_links", &["INSERT", "SELECT"]),
     ("registry_request_revision_links", &["INSERT", "SELECT"]),
@@ -165,6 +166,17 @@ pub(crate) async fn install(
              PRIMARY KEY (request_entity_id, request_id, proposal_version),
              FOREIGN KEY (request_entity_id, request_id, proposal_version)
                  REFERENCES registry_internal.registry_request_proposals
+         );
+         CREATE TABLE IF NOT EXISTS registry_internal.registry_request_evidence_uses (
+             application_id uuid NOT NULL REFERENCES
+                 registry_internal.registry_request_applications(application_id)
+                 ON DELETE CASCADE,
+             ordinal smallint NOT NULL CHECK (ordinal >= 0 AND ordinal < 2),
+             retained jsonb NOT NULL CHECK (octet_length(retained::text) <= 1048576),
+             expires_at timestamptz NOT NULL,
+             created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+             PRIMARY KEY (application_id, ordinal),
+             CHECK (expires_at > created_at)
          );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_results (
              request_entity_id text NOT NULL,
