@@ -101,6 +101,13 @@ class GeneratedOpenApiTests(unittest.TestCase):
 
     def test_checkpoint_specific_schema_bounds_are_explicit(self) -> None:
         schemas = self.openapi["components"]["schemas"]
+        scopes = schemas["AccessProfile"]["properties"]["requiredScopes"]
+        self.assertEqual(1, scopes["minItems"])
+        self.assertEqual(1, scopes["items"]["minLength"])
+        self.assertEqual(256, scopes["items"]["maxLength"])
+        self.assertRegex("casework:staff/read", scopes["items"]["pattern"])
+        self.assertNotRegex("casework:staff review", scopes["items"]["pattern"])
+        self.assertNotRegex("", scopes["items"]["pattern"])
         self.assertEqual(
             {"items", "nextCursor", "status"},
             set(schemas["HistoryPage"]["properties"]),

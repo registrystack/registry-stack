@@ -119,8 +119,12 @@
           },
           "requiredScopes": {
             "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$",
               "type": "string"
             },
+            "minItems": 1,
             "type": "array"
           },
           "role": {
@@ -4703,6 +4707,7 @@
     },
     "/v1/directory": {
       "get": {
+        "description": "Administrator-only. Returns one consistent snapshot of the directory revision, teams, memberships, and served queues. The serialized JSON response is bounded to 2 MiB.",
         "operationId": "getDirectory",
         "parameters": [
           {
@@ -4882,7 +4887,7 @@
     },
     "/v1/directory/absences": {
       "get": {
-        "description": "Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The response carries the current global directoryRevision required in If-Match for a following absence write. Its items contain at most 1000 caller-authorized records ordered by start time and absenceId. Follow nextCursor until it is absent to enumerate every record.",
+        "description": "Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The response carries the current global directoryRevision required in If-Match for a following absence write. Its items contain at most 1000 caller-authorized records ordered by start time and absenceId. The serialized page is bounded to 2 MiB and may contain fewer records than limit to fit that bound. Follow nextCursor until it is absent to enumerate every record.",
         "operationId": "listAbsences",
         "parameters": [
           {
@@ -6000,6 +6005,7 @@
     },
     "/v1/directory/bootstrap": {
       "post": {
+        "description": "Administrator-only. The resulting directory JSON must fit the 2 MiB aggregate limit; a larger directory returns request.invalid before any change commits.",
         "operationId": "bootstrapDirectory",
         "parameters": [
           {
@@ -8141,7 +8147,7 @@
     },
     "/v1/directory/teams/{team_id}": {
       "put": {
-        "description": "Administrator-only. Replaces the named team's staff, supervisors, and served queues under the loaded directory revision. A queue already served by another team returns precondition.failed; remove it from that team before assigning it here. Authority changes take effect immediately. Casework releases newly ineligible held items through bounded maintenance, while unresolved source attempts remain held for a later retry. The response contains directory state and no work-item identifiers.",
+        "description": "Administrator-only. Replaces the named team's staff, supervisors, and served queues under the loaded directory revision. A queue already served by another team returns precondition.failed; remove it from that team before assigning it here. Authority changes take effect immediately. Casework releases newly ineligible held items through bounded maintenance, while unresolved source attempts remain held for a later retry. The response contains directory state and no work-item identifiers. The resulting directory JSON must fit the 2 MiB aggregate limit; a larger directory returns request.invalid before any change commits.",
         "operationId": "updateDirectoryTeam",
         "parameters": [
           {

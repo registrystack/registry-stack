@@ -103,11 +103,17 @@ the tombstone and the key may be reused.
 
 ## Absence cover and explicit assignment
 
+The Administrator directory response is one consistent snapshot of its revision,
+teams, memberships, and served queues. Its serialized JSON is limited to 2 MiB.
+Bootstrap and team updates that would exceed this aggregate limit are refused
+with `request.invalid` before committing any change.
+
 The authenticated directory API lists and mutates absence records. Staff can
 manage their own absence when the cover is staff in the same team. Supervisors
 can manage staff they currently supervise, and Administrators can manage any
-directory staff. The ordered list returns pages of at most 1000 records; use
-`limit` to request a smaller page and follow `nextCursor` until it is absent.
+directory staff. The ordered list returns pages of at most 1000 records and 2 MiB; use
+`limit` to request fewer records and follow `nextCursor` until it is absent.
+A page may contain fewer records than requested to stay within its byte limit.
 The 15-minute cursor is bound to the caller, selected profile, role, page size,
 and directory revision. Every page checks current authority. If the directory
 changes or the cursor expires, restart the list without it. Every record uses
@@ -332,6 +338,10 @@ For direct local development without a proxy, declare
 `tlsTermination: development-loopback`. That mode accepts only a loopback
 listener with `networkExposure: private-address`; it cannot be combined with a
 private LAN address, a wildcard listener, or `container-private`.
+
+Project validation requires unique source IDs. Each required scope is a
+1–256 byte OAuth scope token using the RFC 6749 character set; empty scope
+values and embedded whitespace are refused before packaging.
 
 Casework accepts Administrator, Supervisor, and Staff credentials only when
 the trusted issuer asserts the configured human identity claim. The operator
