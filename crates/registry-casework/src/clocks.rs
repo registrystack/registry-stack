@@ -1412,6 +1412,7 @@ mod tests {
         review_timing: Option<ReviewTiming>,
     ) -> registry_casework_core::AuthoritativeObservation {
         registry_casework_core::AuthoritativeObservation {
+            display_reference: None,
             subject: SubjectRef {
                 source_id: "source-a".to_owned(),
                 kind: "request-a".to_owned(),

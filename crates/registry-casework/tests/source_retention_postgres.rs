@@ -42,6 +42,7 @@ const TOKEN_KID: &str = "casework-retention-key";
 const TOKEN_SECRET: &[u8] = b"01234567890123456789012345678901";
 const TOKEN_SECRET_BASE64URL: &str = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE";
 const CANARY: &str = "ERASED-SOURCE-PAYLOAD-CANARY";
+const REFERENCE_CANARY: &str = "ERASED-DISPLAY-REFERENCE-CANARY";
 
 struct SourceFixture {
     reads: Arc<AtomicUsize>,
@@ -90,6 +91,7 @@ impl SourceAdapter for SourceFixture {
     ) -> Result<CallerSubjectView, SourceAdapterError> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         Ok(CallerSubjectView {
+            display_reference: None,
             subject: subject.clone(),
             binding: binding(1),
             disclosed: BTreeMap::from([("summary".to_owned(), json!(CANARY))]),
@@ -166,6 +168,9 @@ fn project() -> CaseworkProject {
             adapter: "test".to_owned(),
             description: "Retention source fixture".to_owned(),
             requests: vec![SourceRequestPolicy {
+                display_reference: Some(registry_casework_core::DisplayReferencePolicy {
+                    field: "case-number".to_owned(),
+                }),
                 entity: REQUEST_KIND.to_owned(),
                 queue: QUEUE.to_owned(),
                 projection: Vec::new(),
@@ -192,6 +197,7 @@ fn binding(revision: i64) -> SourceBinding {
 
 fn observation(id: String, revision: i64) -> AuthoritativeObservation {
     AuthoritativeObservation {
+        display_reference: Some(REFERENCE_CANARY.to_owned()),
         submitted_at: None,
         stage_entered_at: None,
         review_timing: None,
@@ -310,6 +316,26 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
         .await
         .expect("completed decision");
     assert!(decision.1.is_some());
+    for table_and_column in [
+        ("casework_history", "detail"),
+        ("casework_audit_outbox", "audit_record"),
+    ] {
+        let contains_reference: bool = database
+            .query_one(
+                &format!(
+                    "SELECT EXISTS(SELECT 1 FROM {} WHERE {}::text LIKE $1)",
+                    table_and_column.0, table_and_column.1
+                ),
+                &[&format!("%{REFERENCE_CANARY}%")],
+            )
+            .await
+            .expect("inspect protected event storage")
+            .get(0);
+        assert!(
+            !contains_reference,
+            "the retained lookup candidate must not enter history or audit"
+        );
+    }
 
     let selected_clock = Uuid::new_v4();
     let other_clock = Uuid::new_v4();
@@ -431,6 +457,17 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
         store.item(item.item_id).await,
         Err(StoreError::NotFound)
     ));
+    assert_eq!(
+        database
+            .query_one(
+                "SELECT display_reference FROM casework_items WHERE item_id=$1",
+                &[&item.item_id],
+            )
+            .await
+            .expect("erased item row")
+            .get::<_, Option<String>>(0),
+        None
+    );
     assert!(matches!(
         store.history(&staff, item.item_id, 100).await,
         Err(StoreError::NotFound)

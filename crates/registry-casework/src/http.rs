@@ -396,10 +396,24 @@ async fn list_items(
     let source_profile = source_profile_optional(&headers)?;
     let limit = page_limit(&state, query.limit)?;
     let subject = query.subject().map_err(|_| HttpError::Invalid)?;
+    let reference = query.reference().map_err(|_| HttpError::Invalid)?;
     let page = if let Some(source_profile) = source_profile {
+        if reference.is_some()
+            && !state.service.project.sources.iter().any(|source| {
+                source.requests.iter().any(|request| {
+                    request.display_reference.is_some()
+                        && query
+                            .queue
+                            .as_deref()
+                            .is_none_or(|queue| request.queue == queue)
+                })
+            })
+        {
+            return Err(HttpError::Invalid);
+        }
         state
             .service
-            .inbox_for_view(
+            .inbox_for_view_query(
                 &actor,
                 source_profile,
                 token,
@@ -407,11 +421,16 @@ async fn list_items(
                 limit,
                 query.queue.as_deref(),
                 subject.as_ref(),
+                reference,
+                query.sort,
                 query.cursor.as_deref(),
             )
             .await?
     } else {
-        if subject.is_some() {
+        if subject.is_some()
+            || reference.is_some()
+            || query.sort != registry_casework_core::InboxSort::Due
+        {
             return Err(HttpError::Invalid);
         }
         state
@@ -436,7 +455,7 @@ async fn next_item(
 ) -> Result<Response, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let source_profile = source_profile(&headers)?;
-    let item = state
+    let page = state
         .service
         .next_item(
             &actor,
@@ -445,16 +464,8 @@ async fn next_item(
             query.queue.as_deref(),
             query.cursor.as_deref(),
         )
-        .await;
-    if let Ok(item) = item {
-        Ok(Json(item).into_response())
-    } else {
-        match item {
-            Err(ServiceError::NotFound) => Ok(StatusCode::NO_CONTENT.into_response()),
-            Err(error) => Err(error.into()),
-            Ok(_) => unreachable!(),
-        }
-    }
+        .await?;
+    Ok(Json(page).into_response())
 }
 
 async fn get_item(
@@ -756,6 +767,7 @@ async fn holdings(
             &actor,
             source_profile(&headers)?,
             token,
+            page_limit(&state, query.limit)?,
             query.cursor.as_deref(),
         )
         .await?;

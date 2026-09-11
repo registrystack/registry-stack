@@ -969,7 +969,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
     OperationContract {
         method: "GET",
         path: "/v1/work-items/next",
-        success_statuses: &[200, 204],
+        success_statuses: &[200],
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
@@ -1174,6 +1174,6 @@ mod tests {
             .iter()
             .find(|operation| operation.method == "GET" && operation.path == "/v1/work-items/next")
             .expect("next-item operation");
-        assert_eq!(next.success_statuses, &[200, 204]);
+        assert_eq!(next.success_statuses, &[200]);
     }
 }

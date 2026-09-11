@@ -8,11 +8,11 @@ use registry_casework_core::{
     resolve_absence_cover, validate_absence, AbsenceInput, AbsenceList, AbsenceRecord,
     ActorContext, AssignmentContext, AssignmentRequest, CaseloadApplyRequest, CaseloadItemOutcome,
     CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage, CaseworkRole, DelegateRequest,
-    DirectoryTargetPage, DirectoryTargetPurpose, DirectoryTeamUpdateRequest, HistoryKind,
-    IssuerPrincipal, Page, PageStatus, SourceAdapterError, StaffingDiagnostic, WorkItem,
-    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_DIRECTORY_IDENTIFIER_BYTES,
-    MAXIMUM_DIRECTORY_PRINCIPALS, MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES,
-    MAXIMUM_DIRECTORY_SERVED_QUEUES,
+    DirectoryMember, DirectoryTargetPage, DirectoryTargetPurpose, DirectoryTeamUpdateRequest,
+    HistoryKind, IssuerPrincipal, Page, PageStatus, SourceAdapterError, StaffingDiagnostic,
+    WorkItem, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES,
+    MAXIMUM_DIRECTORY_IDENTIFIER_BYTES, MAXIMUM_DIRECTORY_PRINCIPALS,
+    MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES, MAXIMUM_DIRECTORY_SERVED_QUEUES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -71,8 +71,9 @@ impl PostgresStore {
             DirectoryTargetPurpose::AbsencePerson => queue.is_none() && person.is_none(),
             DirectoryTargetPurpose::AbsenceCover => {
                 queue.is_none()
-                    && person
-                        .is_some_and(|person| valid_directory_people(std::slice::from_ref(person)))
+                    && person.is_some_and(|person| {
+                        valid_directory_principals(std::slice::from_ref(person))
+                    })
             }
         };
         if !valid_shape {
@@ -134,7 +135,7 @@ impl PostgresStore {
                 }
                 transaction
                     .query(
-                        "SELECT DISTINCT m.issuer,m.subject FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=$1 AND m.membership_kind='staff' AND (m.issuer,m.subject)>($2,$3) ORDER BY m.issuer,m.subject LIMIT $4",
+                        "SELECT m.issuer,m.subject,m.display_name FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=$1 AND m.membership_kind='staff' AND (m.issuer,m.subject)>($2,$3) ORDER BY m.issuer,m.subject LIMIT $4",
                         &[&queue, &after.0, &after.1, &query_limit],
                     )
                     .await?
@@ -143,7 +144,7 @@ impl PostgresStore {
                 CaseworkRole::Staff => {
                     transaction
                         .query(
-                            "SELECT DISTINCT m.issuer,m.subject FROM casework_memberships m WHERE m.issuer=$1 AND m.subject=$2 AND m.membership_kind='staff' AND (m.issuer,m.subject)>($3,$4) ORDER BY m.issuer,m.subject LIMIT $5",
+                            "SELECT m.issuer,m.subject,min(m.display_name) FROM casework_memberships m WHERE m.issuer=$1 AND m.subject=$2 AND m.membership_kind='staff' AND (m.issuer,m.subject)>($3,$4) GROUP BY m.issuer,m.subject ORDER BY m.issuer,m.subject LIMIT $5",
                             &[&actor.principal.issuer, &actor.principal.subject, &after.0, &after.1, &query_limit],
                         )
                         .await?
@@ -151,7 +152,7 @@ impl PostgresStore {
                 CaseworkRole::Supervisor => {
                     transaction
                         .query(
-                            "SELECT DISTINCT person.issuer,person.subject FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.membership_kind='staff' AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' AND (person.issuer,person.subject)>($3,$4) ORDER BY person.issuer,person.subject LIMIT $5",
+                            "SELECT person.issuer,person.subject,min(person.display_name) FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.membership_kind='staff' AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' AND (person.issuer,person.subject)>($3,$4) GROUP BY person.issuer,person.subject ORDER BY person.issuer,person.subject LIMIT $5",
                             &[&actor.principal.issuer, &actor.principal.subject, &after.0, &after.1, &query_limit],
                         )
                         .await?
@@ -159,7 +160,7 @@ impl PostgresStore {
                 CaseworkRole::Administrator => {
                     transaction
                         .query(
-                            "SELECT DISTINCT m.issuer,m.subject FROM casework_memberships m WHERE m.membership_kind='staff' AND (m.issuer,m.subject)>($1,$2) ORDER BY m.issuer,m.subject LIMIT $3",
+                            "SELECT m.issuer,m.subject,min(m.display_name) FROM casework_memberships m WHERE m.membership_kind='staff' AND (m.issuer,m.subject)>($1,$2) GROUP BY m.issuer,m.subject ORDER BY m.issuer,m.subject LIMIT $3",
                             &[&after.0, &after.1, &query_limit],
                         )
                         .await?
@@ -176,14 +177,14 @@ impl PostgresStore {
                     // second team the absent person belongs to stays unseen.
                     transaction
                         .query(
-                            "SELECT DISTINCT cover.issuer,cover.subject FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id JOIN casework_memberships lead ON lead.team_id=cover.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.membership_kind='staff' AND lead.issuer=$3 AND lead.subject=$4 AND lead.membership_kind='supervisor' AND (cover.issuer,cover.subject)<>($1,$2) AND (cover.issuer,cover.subject)>($5,$6) ORDER BY cover.issuer,cover.subject LIMIT $7",
+                            "SELECT cover.issuer,cover.subject,min(cover.display_name) FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id JOIN casework_memberships lead ON lead.team_id=cover.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.membership_kind='staff' AND lead.issuer=$3 AND lead.subject=$4 AND lead.membership_kind='supervisor' AND (cover.issuer,cover.subject)<>($1,$2) AND (cover.issuer,cover.subject)>($5,$6) GROUP BY cover.issuer,cover.subject ORDER BY cover.issuer,cover.subject LIMIT $7",
                             &[&person.issuer, &person.subject, &actor.principal.issuer, &actor.principal.subject, &after.0, &after.1, &query_limit],
                         )
                         .await?
                 } else {
                     transaction
                         .query(
-                            "SELECT DISTINCT cover.issuer,cover.subject FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.membership_kind='staff' AND (cover.issuer,cover.subject)<>($1,$2) AND (cover.issuer,cover.subject)>($3,$4) ORDER BY cover.issuer,cover.subject LIMIT $5",
+                            "SELECT cover.issuer,cover.subject,min(cover.display_name) FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.membership_kind='staff' AND (cover.issuer,cover.subject)<>($1,$2) AND (cover.issuer,cover.subject)>($3,$4) GROUP BY cover.issuer,cover.subject ORDER BY cover.issuer,cover.subject LIMIT $5",
                             &[&person.issuer, &person.subject, &after.0, &after.1, &query_limit],
                         )
                         .await?
@@ -194,9 +195,10 @@ impl PostgresStore {
         let items = rows
             .into_iter()
             .take(desired)
-            .map(|row| IssuerPrincipal {
+            .map(|row| DirectoryMember {
                 issuer: row.get(0),
                 subject: row.get(1),
+                display_name: row.get(2),
             })
             .collect::<Vec<_>>();
         let next_cursor = if more {
@@ -304,10 +306,10 @@ impl PostgresStore {
             )
             .await?;
         for person in &request.staff {
-            transaction.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES($1,$2,$3,'staff')", &[&team_id,&person.issuer,&person.subject]).await?;
+            transaction.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind,display_name) VALUES($1,$2,$3,'staff',$4)", &[&team_id,&person.issuer,&person.subject,&person.display_name]).await?;
         }
         for person in &request.supervisors {
-            transaction.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES($1,$2,$3,'supervisor')", &[&team_id,&person.issuer,&person.subject]).await?;
+            transaction.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind,display_name) VALUES($1,$2,$3,'supervisor',$4)", &[&team_id,&person.issuer,&person.subject,&person.display_name]).await?;
         }
         transaction
             .execute(
@@ -470,7 +472,7 @@ impl PostgresStore {
             .as_ref()
             .map_or(&input.person, |record| &record.person);
         if !can_manage_person(&transaction, actor, managed_person).await?
-            || !valid_absence_cover(&transaction, managed_person, &input.cover).await?
+            || !valid_absence_cover(&transaction, actor, managed_person, &input.cover).await?
         {
             return Err(StoreError::Forbidden);
         }
@@ -1712,7 +1714,7 @@ fn valid_directory_identifier(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
-fn valid_directory_people(people: &[IssuerPrincipal]) -> bool {
+fn valid_directory_principals(people: &[IssuerPrincipal]) -> bool {
     people.len() <= MAXIMUM_DIRECTORY_PRINCIPALS
         && people.iter().collect::<BTreeSet<_>>().len() == people.len()
         && people.iter().all(|person| {
@@ -1722,6 +1724,29 @@ fn valid_directory_people(people: &[IssuerPrincipal]) -> bool {
                 && person.subject.len() <= MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES
                 && !person.issuer.chars().any(char::is_control)
                 && !person.subject.chars().any(char::is_control)
+        })
+}
+
+fn valid_directory_people(people: &[DirectoryMember]) -> bool {
+    people.len() <= MAXIMUM_DIRECTORY_PRINCIPALS
+        && people
+            .iter()
+            .map(|person| (&person.issuer, &person.subject))
+            .collect::<BTreeSet<_>>()
+            .len()
+            == people.len()
+        && people.iter().all(|person| {
+            !person.issuer.is_empty()
+                && person.issuer.len() <= MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES
+                && !person.subject.is_empty()
+                && person.subject.len() <= MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES
+                && !person.issuer.chars().any(char::is_control)
+                && !person.subject.chars().any(char::is_control)
+                && person.display_name.as_ref().is_none_or(|display_name| {
+                    !display_name.is_empty()
+                        && display_name.len() <= MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES
+                        && !display_name.chars().any(char::is_control)
+                })
         })
 }
 fn validate_reason(value: &str, maximum: usize, allow_empty: bool) -> Result<(), StoreError> {
@@ -1781,9 +1806,13 @@ async fn can_manage_person(
 }
 async fn valid_absence_cover(
     tx: &Transaction<'_>,
+    actor: &ActorContext,
     person: &IssuerPrincipal,
     cover: &IssuerPrincipal,
 ) -> Result<bool, StoreError> {
+    if actor.role == CaseworkRole::Supervisor {
+        return Ok(tx.query_opt("SELECT 1 FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.issuer=$3 AND cover.subject=$4 AND cover.membership_kind='staff' AND lead.issuer=$5 AND lead.subject=$6 AND lead.membership_kind='supervisor' FOR KEY SHARE OF person,cover,lead",&[&person.issuer,&person.subject,&cover.issuer,&cover.subject,&actor.principal.issuer,&actor.principal.subject]).await?.is_some());
+    }
     Ok(tx.query_opt("SELECT 1 FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.issuer=$3 AND cover.subject=$4 AND cover.membership_kind='staff' FOR KEY SHARE OF person,cover",&[&person.issuer,&person.subject,&cover.issuer,&cover.subject]).await?.is_some())
 }
 async fn can_assign_queue(

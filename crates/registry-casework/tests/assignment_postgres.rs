@@ -9,7 +9,7 @@ use registry_casework_core::{
     AbsenceInput, AccessProfile, ActiveSubjectsPage, ActorContext, AssignmentRequest,
     AuthoritativeObservation, BootstrapDirectoryRequest, CallerSubjectView, CaseloadApplyRequest,
     CaseloadItemOutcome, CaseloadItemSelection, CaseloadMoveRequest, CaseworkIdentity,
-    CaseworkProject, CaseworkRole, DelegateRequest, DirectoryTargetPurpose,
+    CaseworkProject, CaseworkRole, DelegateRequest, DirectoryMember, DirectoryTargetPurpose,
     DirectoryTeamUpdateRequest, DiscoveryCursor, EphemeralCredential, EventRequest,
     ExecutePreparedRequest, HistoryKind, HostedCreateRequest, HostedHistoryKind, HostedKindPolicy,
     HostedOutcomePolicy, HostedRetentionPolicy, InboxPolicy, IssuerPrincipal, OccurrenceKind,
@@ -81,6 +81,7 @@ impl SourceAdapter for TestSource {
     ) -> Result<CallerSubjectView, SourceAdapterError> {
         match self.reads.get(&subject.id).copied() {
             Some(ReadMode::Visible) => Ok(CallerSubjectView {
+                display_reference: None,
                 subject: subject.clone(),
                 binding: binding(),
                 disclosed: BTreeMap::from([("summary".to_owned(), json!("visible"))]),
@@ -125,6 +126,18 @@ fn principal(subject: &str) -> IssuerPrincipal {
     }
 }
 
+fn member(principal: &IssuerPrincipal) -> DirectoryMember {
+    principal.clone().into()
+}
+
+fn named_member(principal: &IssuerPrincipal, display_name: &str) -> DirectoryMember {
+    DirectoryMember {
+        issuer: principal.issuer.clone(),
+        subject: principal.subject.clone(),
+        display_name: Some(display_name.to_owned()),
+    }
+}
+
 fn actor(subject: &str, role: CaseworkRole, profile_id: &str) -> ActorContext {
     ActorContext {
         principal: principal(subject),
@@ -166,6 +179,7 @@ fn project() -> CaseworkProject {
             adapter: "test".to_owned(),
             description: "Assignment test source".to_owned(),
             requests: vec![SourceRequestPolicy {
+                display_reference: None,
                 entity: SOURCE_KIND.to_owned(),
                 queue: QUEUE.to_owned(),
                 projection: Vec::new(),
@@ -301,6 +315,7 @@ fn source_observation(
     state: OccurrenceState,
 ) -> AuthoritativeObservation {
     AuthoritativeObservation {
+        display_reference: None,
         subject: SubjectRef {
             source_id: SOURCE_ID.to_owned(),
             kind: SOURCE_KIND.to_owned(),
@@ -661,7 +676,7 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
         .expect("staff may select only self for absence management");
     assert_eq!(
         staff_absence_people.items,
-        vec![fixture.staff_a.principal.clone()]
+        vec![member(&fixture.staff_a.principal)]
     );
     assert!(matches!(
         fixture
@@ -684,8 +699,8 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
             1,
             "bulk-a",
             &DirectoryTeamUpdateRequest {
-                staff: bulk_a.clone(),
-                supervisors: vec![fixture.supervisor.principal.clone()],
+                staff: bulk_a.iter().map(member).collect(),
+                supervisors: vec![member(&fixture.supervisor.principal)],
                 served_queues: Vec::new(),
             },
             "bulk-a",
@@ -699,8 +714,8 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
             revision,
             "bulk-b",
             &DirectoryTeamUpdateRequest {
-                staff: bulk_b.clone(),
-                supervisors: vec![fixture.supervisor.principal.clone()],
+                staff: bulk_b.iter().map(member).collect(),
+                supervisors: vec![member(&fixture.supervisor.principal)],
                 served_queues: Vec::new(),
             },
             "bulk-b",
@@ -756,8 +771,8 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
     assert_eq!(
         cover_targets.items,
         vec![
-            fixture.staff_b.principal.clone(),
-            fixture.staff_c.principal.clone()
+            member(&fixture.staff_b.principal),
+            member(&fixture.staff_c.principal)
         ]
     );
 
@@ -769,9 +784,9 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
             "review-team",
             &DirectoryTeamUpdateRequest {
                 staff: vec![
-                    fixture.staff_a.principal.clone(),
-                    fixture.staff_b.principal.clone(),
-                    fixture.staff_c.principal.clone(),
+                    member(&fixture.staff_a.principal),
+                    member(&fixture.staff_b.principal),
+                    member(&fixture.staff_c.principal),
                 ],
                 supervisors: Vec::new(),
                 served_queues: vec![QUEUE.to_owned()],
@@ -787,7 +802,7 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
             revision,
             "bulk-a",
             &DirectoryTeamUpdateRequest {
-                staff: bulk_a,
+                staff: bulk_a.iter().map(member).collect(),
                 supervisors: Vec::new(),
                 served_queues: Vec::new(),
             },
@@ -802,7 +817,7 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
             revision,
             "bulk-b",
             &DirectoryTeamUpdateRequest {
-                staff: bulk_b,
+                staff: bulk_b.iter().map(member).collect(),
                 supervisors: Vec::new(),
                 served_queues: Vec::new(),
             },
@@ -870,8 +885,8 @@ async fn absence_cover_targets_stay_inside_the_teams_the_actor_supervises() {
             "other-team",
             &DirectoryTeamUpdateRequest {
                 staff: vec![
-                    fixture.staff_a.principal.clone(),
-                    unsupervised_staff.clone(),
+                    member(&fixture.staff_a.principal),
+                    member(&unsupervised_staff),
                 ],
                 supervisors: Vec::new(),
                 served_queues: Vec::new(),
@@ -893,12 +908,12 @@ async fn absence_cover_targets_stay_inside_the_teams_the_actor_supervises() {
         )
         .await
         .expect("supervised absence covers");
-    assert!(!supervised.items.contains(&unsupervised_staff));
+    assert!(!supervised.items.contains(&member(&unsupervised_staff)));
     assert_eq!(
         supervised.items,
         vec![
-            fixture.staff_b.principal.clone(),
-            fixture.staff_c.principal.clone()
+            member(&fixture.staff_b.principal),
+            member(&fixture.staff_c.principal)
         ]
     );
 
@@ -917,11 +932,189 @@ async fn absence_cover_targets_stay_inside_the_teams_the_actor_supervises() {
     assert_eq!(
         unscoped.items,
         vec![
-            fixture.staff_b.principal.clone(),
-            fixture.staff_c.principal.clone(),
-            unsupervised_staff
+            member(&fixture.staff_b.principal),
+            member(&fixture.staff_c.principal),
+            member(&unsupervised_staff)
         ]
     );
+}
+
+#[tokio::test]
+async fn directory_names_follow_authorized_memberships_without_duplicate_targets() {
+    let fixture = fixture([]).await;
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    assert!(matches!(
+        fixture
+            .service
+            .update_directory_team(
+                &administrator,
+                1,
+                "invalid-name-team",
+                &DirectoryTeamUpdateRequest {
+                    staff: vec![DirectoryMember {
+                        issuer: fixture.staff_a.principal.issuer.clone(),
+                        subject: fixture.staff_a.principal.subject.clone(),
+                        display_name: Some(String::new()),
+                    }],
+                    supervisors: Vec::new(),
+                    served_queues: Vec::new(),
+                },
+                "invalid-empty-name",
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Invalid))
+    ));
+    let revision = fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            1,
+            "review-team",
+            &DirectoryTeamUpdateRequest {
+                staff: vec![
+                    named_member(&fixture.staff_a.principal, "Review Officer"),
+                    named_member(&fixture.staff_b.principal, "Cover Officer"),
+                    member(&fixture.staff_c.principal),
+                ],
+                supervisors: vec![named_member(
+                    &fixture.supervisor.principal,
+                    "Review Supervisor",
+                )],
+                served_queues: vec![QUEUE.to_owned()],
+            },
+            "name-review-team",
+        )
+        .await
+        .expect("name the review team memberships");
+    fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            revision,
+            "other-team",
+            &DirectoryTeamUpdateRequest {
+                staff: vec![named_member(
+                    &fixture.staff_a.principal,
+                    "Alternate Officer",
+                )],
+                supervisors: Vec::new(),
+                served_queues: Vec::new(),
+            },
+            "name-other-team",
+        )
+        .await
+        .expect("store a team-specific name for the same principal");
+
+    let (_, teams) = fixture
+        .store
+        .directory(&administrator)
+        .await
+        .expect("administrator reads the full directory");
+    assert_eq!(teams.len(), 2);
+    assert_eq!(
+        teams[0].members[0].display_name.as_deref(),
+        Some("Alternate Officer")
+    );
+    assert_eq!(
+        teams[1].members[0].display_name.as_deref(),
+        Some("Review Officer")
+    );
+    assert_eq!(
+        teams[1].supervisors[0].display_name.as_deref(),
+        Some("Review Supervisor")
+    );
+
+    let self_target = fixture
+        .service
+        .directory_targets(
+            &fixture.staff_a,
+            DirectoryTargetPurpose::AbsencePerson,
+            None,
+            None,
+            100,
+            None,
+        )
+        .await
+        .expect("staff resolves one self target across memberships");
+    assert_eq!(
+        self_target.items,
+        vec![named_member(
+            &fixture.staff_a.principal,
+            "Alternate Officer"
+        )]
+    );
+
+    let supervised_target = fixture
+        .service
+        .directory_targets(
+            &fixture.supervisor,
+            DirectoryTargetPurpose::AbsencePerson,
+            None,
+            None,
+            100,
+            None,
+        )
+        .await
+        .expect("supervisor resolves only names from supervised memberships");
+    assert_eq!(
+        supervised_target
+            .items
+            .iter()
+            .find(|member| member.subject == fixture.staff_a.principal.subject)
+            .and_then(|member| member.display_name.as_deref()),
+        Some("Review Officer")
+    );
+}
+
+#[tokio::test]
+async fn supervisor_cannot_record_cover_from_an_unsupervised_shared_team() {
+    let fixture = fixture([]).await;
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    let unsupervised_cover = principal("unsupervised-cover");
+    let revision = fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            1,
+            "other-team",
+            &DirectoryTeamUpdateRequest {
+                staff: vec![
+                    member(&fixture.staff_a.principal),
+                    member(&unsupervised_cover),
+                ],
+                supervisors: Vec::new(),
+                served_queues: Vec::new(),
+            },
+            "add-unsupervised-shared-team",
+        )
+        .await
+        .expect("add a shared team the supervisor does not lead");
+
+    assert!(matches!(
+        fixture
+            .service
+            .create_absence(
+                &fixture.supervisor,
+                revision,
+                &AbsenceInput {
+                    person: fixture.staff_a.principal.clone(),
+                    from: Utc::now() - TimeDelta::hours(1),
+                    until: Utc::now() + TimeDelta::hours(1),
+                    cover: unsupervised_cover,
+                },
+                "unsupervised-shared-cover",
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Forbidden))
+    ));
 }
 
 #[tokio::test]
@@ -1177,11 +1370,11 @@ async fn absence_update_preserves_owner_and_delete_replay_rechecks_current_autho
             "review-team",
             &DirectoryTeamUpdateRequest {
                 staff: vec![
-                    fixture.staff_a.principal.clone(),
-                    fixture.staff_b.principal.clone(),
-                    fixture.staff_c.principal.clone(),
+                    member(&fixture.staff_a.principal),
+                    member(&fixture.staff_b.principal),
+                    member(&fixture.staff_c.principal),
                 ],
-                supervisors: vec![fixture.supervisor.principal.clone()],
+                supervisors: vec![member(&fixture.supervisor.principal)],
                 served_queues: vec![QUEUE.to_owned()],
             },
             "unrelated-directory-change",
@@ -1632,10 +1825,10 @@ async fn team_reorganization_revokes_immediately_and_reconciliation_defers_live_
 
     let replacement = DirectoryTeamUpdateRequest {
         staff: vec![
-            fixture.staff_b.principal.clone(),
-            fixture.staff_c.principal.clone(),
+            member(&fixture.staff_b.principal),
+            member(&fixture.staff_c.principal),
         ],
-        supervisors: vec![fixture.supervisor.principal.clone()],
+        supervisors: vec![member(&fixture.supervisor.principal)],
         served_queues: vec![QUEUE.to_owned()],
     };
     let administrator = actor(

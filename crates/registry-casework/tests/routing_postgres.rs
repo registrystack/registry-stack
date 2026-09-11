@@ -87,6 +87,7 @@ impl SourceAdapter for RoutingSource {
             .get(&subject.id)
             .ok_or(SourceAdapterError::Concealed)?;
         Ok(CallerSubjectView {
+            display_reference: None,
             subject: subject.clone(),
             binding: observation.binding.clone(),
             disclosed: BTreeMap::from([("summary".to_owned(), json!("caller-visible"))]),
@@ -170,6 +171,7 @@ fn routing_project() -> CaseworkProject {
             adapter: "test".to_owned(),
             description: "Routing test source".to_owned(),
             requests: vec![SourceRequestPolicy {
+                display_reference: None,
                 entity: SOURCE_KIND.to_owned(),
                 queue: "triage".to_owned(),
                 projection: vec!["region".to_owned()],
@@ -213,6 +215,7 @@ fn routing_project() -> CaseworkProject {
 
 fn observation(id: Uuid, stage: &str, region: &str) -> AuthoritativeObservation {
     AuthoritativeObservation {
+        display_reference: None,
         subject: SubjectRef {
             source_id: SOURCE_ID.to_owned(),
             kind: SOURCE_KIND.to_owned(),

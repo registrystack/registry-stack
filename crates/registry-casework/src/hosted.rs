@@ -376,6 +376,7 @@ impl StoredHostedItem {
             occurrence_kind: OccurrenceKind::Hosted,
             stage: None,
             binding_reference: self.kind_policy_digest.clone(),
+            display_reference: None,
             binding,
             state: occurrence_state(self.state),
             queue_id: self.queue_id.clone(),

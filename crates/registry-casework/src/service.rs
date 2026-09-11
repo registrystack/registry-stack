@@ -1,14 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::{stream, StreamExt};
 use registry_casework_core::{
     ActiveSubjectsPage, ActorContext, AttemptState, AttemptStatus, CallerSubjectView,
-    CaseworkAction, CaseworkProject, DiscoveryCursor, Draft, EphemeralCredential, EventRequest,
-    ExecutePreparedRequest, HistoryEntry, HoldingSummary, InboxPolicy, InboxView, MutationResponse,
-    OccurrenceState, OperationName, Page, PageStatus, PrepareActionRequest, SourceAdapter,
-    SourceAdapterError, SourceBinding, SourceReceipt, SubjectRef, WorkItem, WorkItemPage,
+    CaseworkAction, CaseworkProject, ClockRuntimeState, Draft, EphemeralCredential, EventRequest,
+    ExecutePreparedRequest, HistoryEntry, HoldingSummary, InboxPolicy, InboxSort, InboxView,
+    MutationResponse, OccurrenceState, OperationName, Page, PageStatus, PrepareActionRequest,
+    SourceAdapter, SourceAdapterError, SourceBinding, SourceReceipt, SubjectRef, WorkItem,
+    WorkItemPage,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -23,6 +25,8 @@ struct SourceCursorContext<'a> {
     view: InboxView,
     queue: Option<&'a str>,
     subject: Option<&'a SubjectRef>,
+    reference_hash: Option<String>,
+    sort: InboxSort,
     ordering: &'static str,
 }
 
@@ -263,62 +267,68 @@ impl CaseworkService {
     pub async fn reconcile_source(&self, source_id: &str) -> Result<usize, ServiceError> {
         let adapter = self.adapter(source_id)?;
         self.store
-            .set_source_status(source_id, adapter.binding_generation(), false, false)
+            .begin_reconciliation_cycle(source_id, adapter.binding_generation())
             .await?;
-        let mut cursor: Option<DiscoveryCursor> = None;
         let mut discovered = 0;
         let mut discovery_error = None;
-        let mut remote_complete = false;
         for _ in 0..100 {
+            let Some(claim) = self
+                .store
+                .claim_remote_discovery_page(source_id, adapter.binding_generation())
+                .await?
+            else {
+                break;
+            };
             let ActiveSubjectsPage {
                 subjects,
                 next_cursor,
-            } = match adapter.discover_active(cursor.as_ref(), 100).await {
+            } = match adapter.discover_active(claim.cursor.as_ref(), 100).await {
                 Ok(page) => page,
                 Err(error) => {
                     self.store
-                        .set_source_status(source_id, adapter.binding_generation(), false, true)
+                        .fail_remote_discovery_page(
+                            source_id,
+                            adapter.binding_generation(),
+                            claim.token,
+                        )
                         .await?;
                     discovery_error = Some(error);
                     break;
                 }
             };
-            self.store
-                .enqueue_discovered(adapter.binding_generation(), &subjects)
+            let accepted = self
+                .store
+                .commit_remote_discovery_page(
+                    source_id,
+                    adapter.binding_generation(),
+                    claim.token,
+                    &subjects,
+                    next_cursor.as_ref(),
+                )
                 .await?;
+            if !accepted {
+                break;
+            }
             discovered += subjects.len();
-            cursor = next_cursor;
-            if cursor.is_none() {
-                remote_complete = true;
+            if next_cursor.is_none() {
                 break;
             }
         }
-        for subject in self.store.local_active_subjects(source_id, 10_000).await? {
-            self.store
-                .enqueue_discovered(adapter.binding_generation(), &[subject])
-                .await?;
-        }
+        self.store
+            .enqueue_local_active_page(source_id, adapter.binding_generation(), 10_000)
+            .await?;
         let (_, sync_unavailable) = self.synchronize_source_pending(source_id, 100).await?;
         if let Some(error) = discovery_error {
             return Err(error.into());
         }
         if sync_unavailable {
             self.store
-                .set_source_status(source_id, adapter.binding_generation(), false, true)
+                .fail_reconciliation_pass(source_id, adapter.binding_generation())
                 .await?;
             return Err(ServiceError::Adapter(SourceAdapterError::Unavailable));
         }
-        let pending = self
-            .store
-            .source_has_pending(source_id, adapter.binding_generation())
-            .await?;
         self.store
-            .set_source_status(
-                source_id,
-                adapter.binding_generation(),
-                remote_complete && !pending,
-                false,
-            )
+            .finalize_reconciliation_status(source_id, adapter.binding_generation())
             .await?;
         Ok(discovered)
     }
@@ -406,6 +416,7 @@ impl CaseworkService {
             None
         };
         item.live_attempt = live_attempt;
+        item.display_reference = view.display_reference.clone();
         if view.binding.generation != item.binding.generation {
             if item.live_attempt.is_some() {
                 item.routing = routing;
@@ -706,6 +717,8 @@ impl CaseworkService {
             limit,
             queue,
             None,
+            None,
+            InboxSort::Due,
             cursor,
             "list",
         )
@@ -724,6 +737,35 @@ impl CaseworkService {
         subject: Option<&SubjectRef>,
         cursor: Option<&str>,
     ) -> Result<WorkItemPage, ServiceError> {
+        self.inbox_for_view_query(
+            actor,
+            source_profile_id,
+            token,
+            view,
+            limit,
+            queue,
+            subject,
+            None,
+            InboxSort::Due,
+            cursor,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn inbox_for_view_query(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: &str,
+        token: &str,
+        view: InboxView,
+        limit: usize,
+        queue: Option<&str>,
+        subject: Option<&SubjectRef>,
+        reference: Option<&str>,
+        sort: InboxSort,
+        cursor: Option<&str>,
+    ) -> Result<WorkItemPage, ServiceError> {
         self.inbox_for_context(
             actor,
             source_profile_id,
@@ -732,6 +774,8 @@ impl CaseworkService {
             limit,
             queue,
             subject,
+            reference,
+            sort,
             cursor,
             "list",
         )
@@ -748,11 +792,13 @@ impl CaseworkService {
         limit: usize,
         queue: Option<&str>,
         subject: Option<&SubjectRef>,
+        reference: Option<&str>,
+        sort: InboxSort,
         cursor: Option<&str>,
         feed: &'static str,
     ) -> Result<WorkItemPage, ServiceError> {
         let policy = &self.project.inbox;
-        let cursor_context = source_cursor_context(feed, view, queue, subject)?;
+        let cursor_context = source_cursor_context(feed, view, queue, subject, reference, sort)?;
         let after = self
             .store
             .resolve_cursor(actor, source_profile_id, &cursor_context, cursor)
@@ -766,9 +812,11 @@ impl CaseworkService {
                 actor,
                 view,
                 policy.maximum_candidate_scan,
-                after,
+                after.clone(),
                 queue,
                 subject,
+                reference,
+                sort,
             )
             .await?;
         let candidate_ids = candidates
@@ -794,6 +842,7 @@ impl CaseworkService {
                     && source.requests.iter().any(|request| {
                         queue.is_none_or(|queue| request.queue == queue)
                             && subject.is_none_or(|subject| request.entity == subject.kind)
+                            && reference.is_none_or(|_| request.display_reference.is_some())
                     })
             })
             .collect::<Vec<_>>();
@@ -816,7 +865,11 @@ impl CaseworkService {
                 discovery_pending |= pending;
             }
         }
-        if subject.is_none() && after.is_none() && candidates.items.is_empty() {
+        if subject.is_none()
+            && reference.is_none()
+            && after.is_none()
+            && candidates.items.is_empty()
+        {
             unavailable = false;
             discovery_pending = false;
             for source in relevant_sources {
@@ -873,41 +926,54 @@ impl CaseworkService {
         }
         let mut reads = 0;
         let mut examined = 0;
-        let mut last_examined = after;
+        let mut last_examined = after.clone();
         let mut items = Vec::new();
         let candidate_count = candidates.items.len();
-        for candidate in candidates.items {
-            if items.len() == desired
-                || reads == policy.maximum_source_reads
-                || started.elapsed() >= deadline
-            {
+        let deadline_at = tokio::time::Instant::now() + deadline.saturating_sub(started.elapsed());
+        let reads_to_schedule = candidate_count.min(policy.maximum_source_reads);
+        let mut caller_reads = stream::iter(candidates.items.into_iter().take(reads_to_schedule))
+            .map(|candidate| {
+                let adapter = self.adapter(&candidate.item.subject.source_id).cloned();
+                async move {
+                    let adapter = adapter?;
+                    let result = tokio::time::timeout_at(
+                        deadline_at,
+                        adapter.read_for_caller(
+                            &candidate.item.subject,
+                            source_profile_id,
+                            EphemeralCredential::new(token),
+                        ),
+                    )
+                    .await;
+                    Ok::<_, ServiceError>((candidate, result))
+                }
+            })
+            .buffered(policy.maximum_concurrent_source_reads);
+        while items.len() < desired {
+            let Some(read) = caller_reads.next().await else {
                 break;
-            }
+            };
             reads += 1;
+            let (candidate, result) = read?;
             let item = candidate.item;
-            let adapter = self.adapter(&item.subject.source_id)?;
-            let remaining = deadline.saturating_sub(started.elapsed());
-            let read = tokio::time::timeout(
-                remaining,
-                adapter.read_for_caller(
-                    &item.subject,
-                    source_profile_id,
-                    EphemeralCredential::new(token),
-                ),
-            )
-            .await;
-            match read {
+            match result {
                 Err(_) => {
                     unavailable = true;
                     break;
                 }
                 Ok(Ok(view)) => {
                     examined += 1;
-                    last_examined = Some((
-                        candidate.effective_due_at,
-                        item.first_observed_at,
-                        item.item_id,
-                    ));
+                    last_examined = Some(crate::store::InboxPosition {
+                        effective_due_at: candidate.effective_due_at,
+                        first_observed_at: item.first_observed_at,
+                        subject_kind: item.subject.kind.clone(),
+                        item_id: item.item_id,
+                    });
+                    if reference.is_some_and(|reference| {
+                        view.display_reference.as_deref() != Some(reference)
+                    }) {
+                        continue;
+                    }
                     let item = match self
                         .assemble_caller_visible_item(
                             actor,
@@ -926,11 +992,12 @@ impl CaseworkService {
                 }
                 Ok(Err(SourceAdapterError::Concealed | SourceAdapterError::Denied)) => {
                     examined += 1;
-                    last_examined = Some((
-                        candidate.effective_due_at,
-                        item.first_observed_at,
-                        item.item_id,
-                    ));
+                    last_examined = Some(crate::store::InboxPosition {
+                        effective_due_at: candidate.effective_due_at,
+                        first_observed_at: item.first_observed_at,
+                        subject_kind: item.subject.kind,
+                        item_id: item.item_id,
+                    });
                 }
                 Ok(Err(SourceAdapterError::Unavailable)) => {
                     unavailable = true;
@@ -939,10 +1006,18 @@ impl CaseworkService {
                 Ok(Err(error)) => return Err(error.into()),
             }
         }
-        let exhausted = reads == policy.maximum_source_reads
-            || started.elapsed() >= deadline
-            || discovery_pending
-            || items.len() < desired && candidates.next_cursor.is_some();
+        drop(caller_reads);
+        let unvisited =
+            discovery_pending || examined < candidate_count || candidates.next_cursor.is_some();
+        let exhausted = if feed == "holdings" {
+            unvisited
+        } else {
+            unvisited
+                && (reads == policy.maximum_source_reads
+                    || started.elapsed() >= deadline
+                    || discovery_pending
+                    || items.len() < desired && candidates.next_cursor.is_some())
+        };
         let status = if unavailable {
             PageStatus::SourceUnavailable
         } else if exhausted {
@@ -950,12 +1025,19 @@ impl CaseworkService {
         } else {
             PageStatus::Complete
         };
-        let unvisited =
-            discovery_pending || examined < candidate_count || candidates.next_cursor.is_some();
         let next_cursor = if unvisited {
             Some(
                 self.store
-                    .issue_cursor(actor, source_profile_id, &cursor_context, last_examined)
+                    .issue_cursor(
+                        actor,
+                        source_profile_id,
+                        &cursor_context,
+                        if unavailable && feed == "holdings" {
+                            after
+                        } else {
+                            last_examined
+                        },
+                    )
                     .await?,
             )
         } else {
@@ -985,28 +1067,21 @@ impl CaseworkService {
         token: &str,
         queue: Option<&str>,
         cursor: Option<&str>,
-    ) -> Result<WorkItem, ServiceError> {
-        let page = self
-            .inbox_for_context(
-                actor,
-                source_profile_id,
-                token,
-                InboxView::MyTeams,
-                1,
-                queue,
-                None,
-                cursor,
-                "next",
-            )
-            .await?;
-        let item = if let Some(item) = page.items.into_iter().next() {
-            item
-        } else if page.status == PageStatus::Complete {
-            return Err(ServiceError::NotFound);
-        } else {
-            return Err(ServiceError::Adapter(SourceAdapterError::Unavailable));
-        };
-        Ok(item)
+    ) -> Result<WorkItemPage, ServiceError> {
+        self.inbox_for_context(
+            actor,
+            source_profile_id,
+            token,
+            InboxView::MyTeams,
+            1,
+            queue,
+            None,
+            None,
+            InboxSort::Due,
+            cursor,
+            "next",
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1446,88 +1521,70 @@ impl CaseworkService {
         })
     }
 
-    /// Count the whole supervised caseload in one aggregate. The counts cover
-    /// every held item the supervisor's teams serve, so they are exact however
-    /// large the caseload is and no cursor is issued or consumed. A source that
-    /// cannot answer still yields no counts at all, so an outage stays distinct
-    /// from an empty caseload.
+    /// Count a caller-visible page of the supervised caseload. A partial page
+    /// is explicit and resumes after the last item whose current source
+    /// visibility was resolved. A source outage yields no counts and retries
+    /// from the beginning of this page. Immutable observation age keeps clock
+    /// recalculation from moving counted items across the continuation cursor.
     pub async fn caller_visible_holdings(
         &self,
         actor: &ActorContext,
         source_profile_id: &str,
         token: &str,
-        _cursor: Option<&str>,
+        limit: usize,
+        cursor: Option<&str>,
     ) -> Result<Page<HoldingSummary>, ServiceError> {
         if actor.role != registry_casework_core::CaseworkRole::Supervisor {
             return Err(ServiceError::Forbidden);
         }
-        if !self
-            .supervised_sources_answer(actor, source_profile_id, token)
-            .await?
-        {
+        let page = self
+            .inbox_for_context(
+                actor,
+                source_profile_id,
+                token,
+                InboxView::TeamHoldings,
+                limit,
+                None,
+                None,
+                None,
+                InboxSort::Age,
+                cursor,
+                "holdings",
+            )
+            .await?;
+        if page.status == PageStatus::SourceUnavailable {
             return Ok(Page {
                 items: Vec::new(),
-                next_cursor: None,
+                next_cursor: page.next_cursor,
                 status: PageStatus::SourceUnavailable,
             });
         }
-        Ok(Page {
-            items: self.store.holdings(actor).await?,
-            next_cursor: None,
-            status: PageStatus::Complete,
-        })
-    }
-
-    /// Read one supervised subject from every source the caller's teams serve.
-    /// A source that conceals the subject from this caller has answered, so
-    /// only an unreachable source reports false.
-    async fn supervised_sources_answer(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: &str,
-        token: &str,
-    ) -> Result<bool, ServiceError> {
-        let policy = &self.project.inbox;
-        let started = Instant::now();
-        let deadline = Duration::from_millis(policy.page_deadline_milliseconds);
-        let candidates = self
-            .store
-            .inbox_candidates_for_view(
-                actor,
-                InboxView::MyTeams,
-                policy.maximum_candidate_scan,
-                None,
-                None,
-                None,
-            )
-            .await?;
-        let mut probed = BTreeSet::new();
-        for candidate in candidates.items {
-            let subject = candidate.item.subject;
-            if !probed.insert(subject.source_id.clone()) {
-                continue;
-            }
-            let remaining = deadline.saturating_sub(started.elapsed());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            let read = tokio::time::timeout(
-                remaining,
-                self.adapter(&subject.source_id)?.read_for_caller(
-                    &subject,
-                    source_profile_id,
-                    EphemeralCredential::new(token),
-                ),
-            )
-            .await;
-            match read {
-                Ok(Ok(_)) | Ok(Err(SourceAdapterError::Concealed | SourceAdapterError::Denied)) => {
-                }
-                Ok(Err(SourceAdapterError::Unavailable)) | Err(_) => return Ok(false),
-                Ok(Err(error)) => return Err(error.into()),
+        let mut holdings: BTreeMap<(registry_casework_core::IssuerPrincipal, String), (u32, u32)> =
+            BTreeMap::new();
+        let now = chrono::Utc::now();
+        for item in page.items {
+            let overdue = effective_due_at(&item).is_some_and(|due| due < now);
+            if let Some(holder) = item.holder {
+                let counts = holdings.entry((holder, item.queue_id)).or_insert((0, 0));
+                counts.0 += 1;
+                counts.1 += u32::from(overdue);
             }
         }
-        Ok(true)
+        Ok(Page {
+            items: holdings
+                .into_iter()
+                .map(
+                    |((principal, queue_id), (active_items, overdue_items))| HoldingSummary {
+                        principal,
+                        queue_id,
+                        active_items,
+                        overdue_items,
+                    },
+                )
+                .collect(),
+            next_cursor: page.next_cursor,
+            status: page.status,
+        })
     }
 
     pub(crate) fn adapter(&self, source_id: &str) -> Result<&Arc<dyn SourceAdapter>, ServiceError> {
@@ -1677,15 +1734,54 @@ fn source_cursor_context(
     view: InboxView,
     queue: Option<&str>,
     subject: Option<&SubjectRef>,
+    reference: Option<&str>,
+    sort: InboxSort,
 ) -> Result<String, ServiceError> {
+    let reference_hash = reference.map(|reference| {
+        let mut digest = Sha256::new();
+        digest.update(b"registry-casework:display-reference:v1\0");
+        digest.update(reference.as_bytes());
+        sha256_string(&digest.finalize())
+    });
     serde_json::to_string(&SourceCursorContext {
         feed,
         view,
         queue,
         subject,
-        ordering: "effective-due-v1",
+        reference_hash,
+        sort,
+        ordering: "source-inbox-v2",
     })
     .map_err(|_| ServiceError::Configuration)
+}
+
+fn effective_due_at(item: &WorkItem) -> Option<chrono::DateTime<chrono::Utc>> {
+    if item.clock_occurrences.is_empty() {
+        return item.passive_due_at;
+    }
+    let active_due = item
+        .clock_occurrences
+        .iter()
+        .filter(|clock| {
+            matches!(
+                clock.state,
+                ClockRuntimeState::Running | ClockRuntimeState::VerificationPending
+            )
+        })
+        .filter_map(|clock| clock.due_at)
+        .min();
+    if active_due.is_some() {
+        return active_due;
+    }
+    if item
+        .clock_occurrences
+        .iter()
+        .any(|clock| clock.state == ClockRuntimeState::Paused)
+    {
+        None
+    } else {
+        item.passive_due_at
+    }
 }
 
 fn routing_policy_digest(
@@ -1859,6 +1955,8 @@ mod tests {
             InboxView::Mine,
             Some("region:appeals"),
             Some(&subject),
+            Some("CASE:42"),
+            InboxSort::Type,
         )
         .expect("cursor context");
         assert_eq!(
@@ -1872,7 +1970,9 @@ mod tests {
                     "kind": "request:appeal",
                     "id": "record:42"
                 },
-                "ordering": "effective-due-v1"
+                "referenceHash": "sha256:1f9540b240052ab5c807d680031fc171b3cb1dd0bad3848d8342e9535145441d",
+                "sort": "type",
+                "ordering": "source-inbox-v2"
             })
         );
     }

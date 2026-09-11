@@ -28,6 +28,7 @@ use registry_casework_core::{
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use serde_json::json;
+use tokio::sync::Notify;
 use tokio_postgres::NoTls;
 use tower::ServiceExt;
 use tracing::instrument::WithSubscriber;
@@ -62,14 +63,38 @@ enum CallerRead {
     Delayed(Duration),
 }
 
+struct ActiveCallerRead {
+    active: Arc<AtomicUsize>,
+}
+
+struct DiscoveryGate {
+    calls: AtomicUsize,
+    entered: Notify,
+    release: Notify,
+    first_subject: SubjectRef,
+    first_fails: bool,
+}
+
+impl Drop for ActiveCallerRead {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 struct MockSource {
+    generation: String,
     reads: HashMap<String, CallerRead>,
     caller_read_calls: Arc<AtomicUsize>,
+    active_caller_reads: Arc<AtomicUsize>,
+    peak_caller_reads: Arc<AtomicUsize>,
     caller_unavailable_after: Option<usize>,
     prepare_calls: Arc<AtomicUsize>,
     terminal_read: Option<String>,
     discovery_unavailable: Arc<AtomicBool>,
     discovery_pages: Option<(Uuid, Uuid)>,
+    discovery_total: Option<usize>,
+    discovery_cursors: Arc<Mutex<Vec<Option<String>>>>,
+    discovery_gate: Option<Arc<DiscoveryGate>>,
     open_reads: HashSet<String>,
     attachment_verification: Option<(String, Arc<AtomicBool>)>,
     verify_diagnostic_events: bool,
@@ -82,16 +107,22 @@ struct MockSource {
 impl MockSource {
     fn with_reads(reads: impl IntoIterator<Item = (Uuid, CallerRead)>) -> Self {
         Self {
+            generation: GENERATION.to_owned(),
             reads: reads
                 .into_iter()
                 .map(|(id, read)| (id.to_string(), read))
                 .collect(),
             caller_read_calls: Arc::new(AtomicUsize::new(0)),
+            active_caller_reads: Arc::new(AtomicUsize::new(0)),
+            peak_caller_reads: Arc::new(AtomicUsize::new(0)),
             caller_unavailable_after: None,
             prepare_calls: Arc::new(AtomicUsize::new(0)),
             terminal_read: None,
             discovery_unavailable: Arc::new(AtomicBool::new(false)),
             discovery_pages: None,
+            discovery_total: None,
+            discovery_cursors: Arc::new(Mutex::new(Vec::new())),
+            discovery_gate: None,
             open_reads: HashSet::new(),
             attachment_verification: None,
             verify_diagnostic_events: false,
@@ -157,6 +188,36 @@ impl MockSource {
         source
     }
 
+    fn with_large_discovery(total: usize) -> (Self, Arc<Mutex<Vec<Option<String>>>>) {
+        let mut source = Self::with_reads([]);
+        source.discovery_total = Some(total);
+        source.open_reads = (1..=total)
+            .map(|value| Uuid::from_u128(value as u128).to_string())
+            .collect();
+        let cursors = Arc::clone(&source.discovery_cursors);
+        (source, cursors)
+    }
+
+    fn with_blocked_first_discovery(id: Uuid, first_fails: bool) -> (Self, Arc<DiscoveryGate>) {
+        let mut source = Self::with_reads([]);
+        let first_subject = subject(id);
+        source.open_reads.insert(first_subject.id.clone());
+        let gate = Arc::new(DiscoveryGate {
+            calls: AtomicUsize::new(0),
+            entered: Notify::new(),
+            release: Notify::new(),
+            first_subject,
+            first_fails,
+        });
+        source.discovery_gate = Some(Arc::clone(&gate));
+        (source, gate)
+    }
+
+    fn with_generation(mut self, generation: &str) -> Self {
+        self.generation = generation.to_owned();
+        self
+    }
+
     fn with_attachment_verification(id: Uuid) -> (Self, Arc<AtomicBool>) {
         let mut source = Self::with_reads([]);
         let verified = Arc::new(AtomicBool::new(false));
@@ -172,6 +233,7 @@ impl MockSource {
 
     fn visible(subject: &SubjectRef, disclosure: &'static str) -> CallerSubjectView {
         CallerSubjectView {
+            display_reference: None,
             subject: subject.clone(),
             binding: binding(),
             disclosed: BTreeMap::from([("summary".into(), json!(disclosure))]),
@@ -187,7 +249,7 @@ impl SourceAdapter for MockSource {
     }
 
     fn binding_generation(&self) -> &str {
-        GENERATION
+        &self.generation
     }
 
     async fn verify_transition(
@@ -218,6 +280,7 @@ impl SourceAdapter for MockSource {
             if id == &subject.id {
                 let verified = verified.load(Ordering::SeqCst);
                 return Ok(AuthoritativeObservation {
+                    display_reference: None,
                     submitted_at: None,
                     stage_entered_at: None,
                     review_timing: None,
@@ -246,6 +309,7 @@ impl SourceAdapter for MockSource {
                 return Err(SourceAdapterError::Invalid);
             }
             return Ok(AuthoritativeObservation {
+                display_reference: None,
                 submitted_at: None,
                 stage_entered_at: None,
                 review_timing: None,
@@ -264,6 +328,7 @@ impl SourceAdapter for MockSource {
         let mut terminal_binding = binding();
         terminal_binding.source_revision = "2".into();
         Ok(AuthoritativeObservation {
+            display_reference: None,
             submitted_at: None,
             stage_entered_at: None,
             review_timing: None,
@@ -285,8 +350,40 @@ impl SourceAdapter for MockSource {
         cursor: Option<&DiscoveryCursor>,
         _limit: usize,
     ) -> Result<ActiveSubjectsPage, SourceAdapterError> {
+        self.discovery_cursors
+            .lock()
+            .expect("discovery cursor lock")
+            .push(cursor.map(|value| value.0.clone()));
+        if let Some(gate) = &self.discovery_gate {
+            if gate.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+                if gate.first_fails {
+                    return Err(SourceAdapterError::Unavailable);
+                }
+                return Ok(ActiveSubjectsPage {
+                    subjects: vec![gate.first_subject.clone()],
+                    next_cursor: None,
+                });
+            }
+            return Ok(ActiveSubjectsPage {
+                subjects: Vec::new(),
+                next_cursor: None,
+            });
+        }
         if self.discovery_unavailable.load(Ordering::SeqCst) {
             Err(SourceAdapterError::Unavailable)
+        } else if let Some(total) = self.discovery_total {
+            let offset = cursor
+                .map_or(Ok(0), |cursor| cursor.0.parse::<usize>())
+                .map_err(|_| SourceAdapterError::Invalid)?;
+            let end = (offset + 100).min(total);
+            Ok(ActiveSubjectsPage {
+                subjects: (offset + 1..=end)
+                    .map(|value| subject(Uuid::from_u128(value as u128)))
+                    .collect(),
+                next_cursor: (end < total).then(|| DiscoveryCursor(end.to_string())),
+            })
         } else if let Some((first, second)) = self.discovery_pages {
             match cursor.map(|cursor| cursor.0.as_str()) {
                 None => Ok(ActiveSubjectsPage {
@@ -313,6 +410,11 @@ impl SourceAdapter for MockSource {
         _source_profile_id: &str,
         credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
+        let active = self.active_caller_reads.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak_caller_reads.fetch_max(active, Ordering::SeqCst);
+        let _active_read = ActiveCallerRead {
+            active: Arc::clone(&self.active_caller_reads),
+        };
         let read_index = self.caller_read_calls.fetch_add(1, Ordering::SeqCst);
         if self
             .caller_unavailable_after
@@ -352,6 +454,7 @@ impl SourceAdapter for MockSource {
                 reason,
                 readable_fields,
             }) => Ok(CallerSubjectView {
+                display_reference: None,
                 subject: subject.clone(),
                 binding: binding(),
                 disclosed: BTreeMap::from([
@@ -493,6 +596,10 @@ async fn fixture_with_source(source: MockSource, inbox: InboxPolicy) -> Fixture 
     let migration = PostgresStore::connect_migration(&database, &resolver).unwrap();
     migration.migrate().await.unwrap();
     let store = PostgresStore::connect_runtime(&database, &resolver).unwrap();
+    store
+        .register_source_generation(SOURCE_ID, GENERATION)
+        .await
+        .expect("register source generation");
 
     let administrator = actor("administrator", CaseworkRole::Administrator);
     let staff = actor("staff", CaseworkRole::Staff);
@@ -560,6 +667,7 @@ fn project(inbox: InboxPolicy) -> CaseworkProject {
             adapter: "mock".into(),
             description: "Test source".into(),
             requests: vec![SourceRequestPolicy {
+                display_reference: None,
                 entity: ENTITY.into(),
                 queue: QUEUE.into(),
                 projection: Vec::new(),
@@ -605,11 +713,16 @@ fn binding() -> SourceBinding {
     }
 }
 
-async fn add_item(service: &CaseworkService, id: Uuid, passive_target_seconds: Option<i64>) {
+async fn add_item(
+    service: &CaseworkService,
+    id: Uuid,
+    passive_target_seconds: Option<i64>,
+) -> Uuid {
     service
         .store()
         .apply_observation(
             &AuthoritativeObservation {
+                display_reference: None,
                 submitted_at: None,
                 stage_entered_at: None,
                 review_timing: None,
@@ -632,7 +745,9 @@ async fn add_item(service: &CaseworkService, id: Uuid, passive_target_seconds: O
             passive_target_seconds,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .expect("open observation creates a work item")
+        .item_id
 }
 
 async fn complete_item(service: &CaseworkService, id: Uuid) {
@@ -642,6 +757,7 @@ async fn complete_item(service: &CaseworkService, id: Uuid) {
         .store()
         .apply_observation(
             &AuthoritativeObservation {
+                display_reference: None,
                 submitted_at: None,
                 stage_entered_at: None,
                 review_timing: None,
@@ -683,7 +799,17 @@ async fn service_visibility_boundaries() {
     zero_local_candidates_distinguish_empty_source_from_outage().await;
     warm_empty_source_status_does_not_mask_a_later_outage().await;
     incomplete_multipage_discovery_stays_incomplete_across_requests().await;
+    reconciliation_resumes_remote_and_local_progress_after_restart().await;
+    completed_discovery_waits_for_the_pending_tail_before_restarting().await;
+    expired_remote_lease_fences_the_stale_page().await;
+    expired_remote_lease_fences_the_stale_failure().await;
+    generation_change_fences_the_stale_discovery_page().await;
+    incomplete_reconciliation_preserves_outage_until_complete().await;
     sparse_disclosure_and_cursor_preserve_unvisited_candidates().await;
+    next_item_returns_a_resumable_budget_page().await;
+    exhausted_final_concealed_candidate_is_complete().await;
+    caller_reads_use_bounded_order_preserving_concurrency().await;
+    next_item_does_not_wait_for_a_speculative_tail_read().await;
     current_directory_controls_queue_visibility().await;
     source_deadline_is_hard_and_retryable().await;
     local_terminal_repair_survives_discovery_outage().await;
@@ -695,6 +821,380 @@ async fn service_visibility_boundaries() {
     source_claim_requires_a_current_permitted_operation().await;
     supervisor_release_and_holder_timing_obey_current_authority().await;
     exact_subject_selector_is_complete_and_cursor_bound().await;
+}
+
+async fn reconciliation_resumes_remote_and_local_progress_after_restart() {
+    let total = 10_001;
+    let (source, first_cursors) = MockSource::with_large_discovery(total);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+
+    assert_eq!(
+        fixture.service.reconcile_source(SOURCE_ID).await.unwrap(),
+        10_000
+    );
+    assert_eq!(first_cursors.lock().expect("first cursor lock").len(), 100);
+    let local_progress = fixture.database.query_one(
+        "SELECT local_after_kind,local_after_id,local_cycle_complete FROM casework_source_reconciliation_progress WHERE source_id=$1 AND binding_generation=$2",
+        &[&SOURCE_ID, &GENERATION],
+    ).await.expect("first local continuation");
+    assert!(local_progress.get::<_, Option<String>>(0).is_some());
+    assert!(local_progress.get::<_, Option<String>>(1).is_some());
+    assert!(!local_progress.get::<_, bool>(2));
+
+    let (restarted_source, restarted_cursors) = MockSource::with_large_discovery(total);
+    let restarted = CaseworkService::new(
+        fixture.service.store().clone(),
+        project(policy(10, 1_000)),
+        [Arc::new(restarted_source) as Arc<dyn SourceAdapter>],
+    )
+    .expect("restart service from persisted progress");
+    assert_eq!(restarted.reconcile_source(SOURCE_ID).await.unwrap(), 1);
+    assert_eq!(
+        restarted_cursors
+            .lock()
+            .expect("restart cursor lock")
+            .first()
+            .cloned()
+            .flatten()
+            .as_deref(),
+        Some("10000")
+    );
+    let count: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2",
+            &[&SOURCE_ID, &GENERATION],
+        )
+        .await
+        .expect("count reconciled subjects")
+        .get(0);
+    assert_eq!(count, i64::try_from(total).unwrap());
+    let local_complete: bool = fixture.database.query_one(
+        "SELECT local_cycle_complete FROM casework_source_reconciliation_progress WHERE source_id=$1 AND binding_generation=$2",
+        &[&SOURCE_ID, &GENERATION],
+    ).await.expect("completed local continuation").get(0);
+    assert!(local_complete);
+}
+
+async fn completed_discovery_waits_for_the_pending_tail_before_restarting() {
+    let total = 201;
+    let (source, cursors) = MockSource::with_large_discovery(total);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+
+    assert_eq!(
+        fixture.service.reconcile_source(SOURCE_ID).await.unwrap(),
+        total
+    );
+    assert_eq!(cursors.lock().expect("discovery cursors").len(), 3);
+    fixture.service.reconcile_source(SOURCE_ID).await.unwrap();
+    fixture.service.reconcile_source(SOURCE_ID).await.unwrap();
+
+    let tail_id = Uuid::from_u128(u128::try_from(total).unwrap()).to_string();
+    let tail_applied: i64 = fixture.database.query_one(
+        "SELECT applied_revision FROM casework_subjects WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3",
+        &[&SOURCE_ID, &ENTITY, &tail_id],
+    ).await.expect("tail subject").get(0);
+    assert_eq!(tail_applied, 1);
+    assert_eq!(
+        fixture
+            .service
+            .store()
+            .source_status(SOURCE_ID, GENERATION)
+            .await
+            .expect("source status"),
+        Some((true, false))
+    );
+    assert_eq!(
+        cursors.lock().expect("no restarted discovery").len(),
+        3,
+        "a completed cycle must not restart while its pending tail is draining"
+    );
+}
+
+async fn expired_remote_lease_fences_the_stale_page() {
+    let stale_id = Uuid::from_u128(210);
+    let (source, gate) = MockSource::with_blocked_first_discovery(stale_id, false);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    let first_service = fixture.service.clone();
+    let first = tokio::spawn(async move { first_service.reconcile_source(SOURCE_ID).await });
+    gate.entered.notified().await;
+    fixture.database.execute(
+        "UPDATE casework_source_reconciliation_progress SET remote_lease_until=now()-interval '1 second' WHERE source_id=$1 AND binding_generation=$2",
+        &[&SOURCE_ID, &GENERATION],
+    ).await.expect("expire first remote lease");
+
+    assert_eq!(
+        fixture.service.reconcile_source(SOURCE_ID).await.unwrap(),
+        0
+    );
+    gate.release.notify_one();
+    assert_eq!(first.await.expect("first reconciliation task").unwrap(), 0);
+    let stale_exists: bool = fixture
+        .database
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM casework_subjects WHERE source_id=$1 AND subject_id=$2)",
+            &[&SOURCE_ID, &stale_id.to_string()],
+        )
+        .await
+        .expect("stale page subject check")
+        .get(0);
+    assert!(!stale_exists);
+    assert_eq!(
+        fixture
+            .service
+            .store()
+            .source_status(SOURCE_ID, GENERATION)
+            .await
+            .unwrap(),
+        Some((true, false))
+    );
+}
+
+async fn expired_remote_lease_fences_the_stale_failure() {
+    let (source, gate) = MockSource::with_blocked_first_discovery(Uuid::from_u128(211), true);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    let first_service = fixture.service.clone();
+    let first = tokio::spawn(async move { first_service.reconcile_source(SOURCE_ID).await });
+    gate.entered.notified().await;
+    fixture.database.execute(
+        "UPDATE casework_source_reconciliation_progress SET remote_lease_until=now()-interval '1 second' WHERE source_id=$1 AND binding_generation=$2",
+        &[&SOURCE_ID, &GENERATION],
+    ).await.expect("expire first remote lease");
+
+    assert_eq!(
+        fixture.service.reconcile_source(SOURCE_ID).await.unwrap(),
+        0
+    );
+    gate.release.notify_one();
+    assert!(matches!(
+        first.await.expect("first reconciliation task"),
+        Err(ServiceError::Adapter(SourceAdapterError::Unavailable))
+    ));
+    assert_eq!(
+        fixture
+            .service
+            .store()
+            .source_status(SOURCE_ID, GENERATION)
+            .await
+            .expect("source status after stale failure"),
+        Some((true, false))
+    );
+}
+
+async fn generation_change_fences_the_stale_discovery_page() {
+    let stale_id = Uuid::from_u128(221);
+    let (source, gate) = MockSource::with_blocked_first_discovery(stale_id, false);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    let first_service = fixture.service.clone();
+    let first = tokio::spawn(async move { first_service.reconcile_source(SOURCE_ID).await });
+    gate.entered.notified().await;
+
+    fixture
+        .service
+        .store()
+        .register_source_generation(SOURCE_ID, "generation-2")
+        .await
+        .expect("register replacement generation");
+    let replacement_source = MockSource::with_reads([]).with_generation("generation-2");
+    let replacement_cursors = Arc::clone(&replacement_source.discovery_cursors);
+    let replacement = CaseworkService::new(
+        fixture.service.store().clone(),
+        project(policy(10, 1_000)),
+        [Arc::new(replacement_source) as Arc<dyn SourceAdapter>],
+    )
+    .expect("replacement generation service");
+    assert_eq!(replacement.reconcile_source(SOURCE_ID).await.unwrap(), 0);
+    gate.release.notify_one();
+    assert!(matches!(
+        first.await.expect("stale generation task"),
+        Err(ServiceError::Store(StoreError::StaleGeneration))
+    ));
+    assert_eq!(
+        replacement_cursors
+            .lock()
+            .expect("replacement cursor lock")
+            .as_slice(),
+        &[None]
+    );
+    let stale_exists: bool = fixture
+        .database
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM casework_subjects WHERE source_id=$1 AND subject_id=$2)",
+            &[&SOURCE_ID, &stale_id.to_string()],
+        )
+        .await
+        .expect("stale subject check")
+        .get(0);
+    assert!(!stale_exists);
+    let generations: Vec<String> = fixture.database.query(
+        "SELECT binding_generation FROM casework_source_reconciliation_progress WHERE source_id=$1 ORDER BY binding_generation",
+        &[&SOURCE_ID],
+    ).await.expect("generation progress rows").into_iter().map(|row| row.get(0)).collect();
+    assert_eq!(generations, ["generation-2"]);
+    assert_eq!(
+        replacement
+            .store()
+            .source_status(SOURCE_ID, "generation-2")
+            .await
+            .unwrap(),
+        Some((true, false))
+    );
+}
+
+async fn incomplete_reconciliation_preserves_outage_until_complete() {
+    let fixture = fixture([], policy(10, 1_000)).await;
+    let lease = Uuid::new_v4();
+    fixture.database.execute(
+        "UPDATE casework_source_reconciliation_progress SET remote_cycle_complete=false,remote_lease_token=$3,remote_lease_until=now()+interval '1 hour',local_cycle_complete=true WHERE source_id=$1 AND binding_generation=$2",
+        &[&SOURCE_ID, &GENERATION, &lease],
+    ).await.expect("hold incomplete remote phase");
+    fixture.database.execute(
+        "INSERT INTO casework_source_status(source_id,binding_generation,remote_complete,unavailable,checked_at) VALUES($1,$2,false,true,now()) ON CONFLICT(source_id) DO UPDATE SET binding_generation=EXCLUDED.binding_generation,remote_complete=false,unavailable=true,checked_at=EXCLUDED.checked_at",
+        &[&SOURCE_ID, &GENERATION],
+    ).await.expect("record source outage");
+
+    assert_eq!(
+        fixture.service.reconcile_source(SOURCE_ID).await.unwrap(),
+        0
+    );
+    assert_eq!(
+        fixture
+            .service
+            .store()
+            .source_status(SOURCE_ID, GENERATION)
+            .await
+            .unwrap(),
+        Some((false, true))
+    );
+
+    fixture.database.execute(
+        "UPDATE casework_source_reconciliation_progress SET remote_lease_token=NULL,remote_lease_until=NULL WHERE source_id=$1 AND binding_generation=$2",
+        &[&SOURCE_ID, &GENERATION],
+    ).await.expect("release incomplete remote phase");
+    assert_eq!(
+        fixture.service.reconcile_source(SOURCE_ID).await.unwrap(),
+        0
+    );
+    assert_eq!(
+        fixture
+            .service
+            .store()
+            .source_status(SOURCE_ID, GENERATION)
+            .await
+            .unwrap(),
+        Some((true, false))
+    );
+}
+
+async fn next_item_returns_a_resumable_budget_page() {
+    let concealed = Uuid::from_u128(101);
+    let visible = Uuid::from_u128(102);
+    let fixture = fixture(
+        [
+            (concealed, CallerRead::Concealed),
+            (visible, CallerRead::Visible("resumed")),
+        ],
+        policy(1, 1_000),
+    )
+    .await;
+    add_item(&fixture.service, concealed, Some(1)).await;
+    add_item(&fixture.service, visible, Some(3_600)).await;
+
+    let first = fixture
+        .service
+        .next_item(&fixture.staff, "reader", "token", None, None)
+        .await
+        .expect("budget exhaustion is a page result");
+    assert!(first.items.is_empty());
+    assert_eq!(first.status, PageStatus::BudgetExhausted);
+    let cursor = first.next_cursor.expect("budget page continuation");
+
+    let resumed = fixture
+        .service
+        .next_item(&fixture.staff, "reader", "token", None, Some(&cursor))
+        .await
+        .expect("resume next-item scan");
+    assert_eq!(resumed.items.len(), 1);
+    assert_eq!(resumed.items[0].subject.id, visible.to_string());
+}
+
+async fn exhausted_final_concealed_candidate_is_complete() {
+    let concealed = Uuid::from_u128(103);
+    let fixture = fixture([(concealed, CallerRead::Concealed)], policy(1, 1_000)).await;
+    fixture
+        .service
+        .reconcile_source(SOURCE_ID)
+        .await
+        .expect("complete source discovery");
+    add_item(&fixture.service, concealed, Some(1)).await;
+
+    let page = fixture
+        .service
+        .next_item(&fixture.staff, "reader", "token", None, None)
+        .await
+        .expect("fully examined next-item page");
+    assert!(page.items.is_empty());
+    assert_eq!(page.status, PageStatus::Complete);
+    assert!(page.next_cursor.is_none());
+}
+
+async fn caller_reads_use_bounded_order_preserving_concurrency() {
+    let ids = [
+        Uuid::from_u128(111),
+        Uuid::from_u128(112),
+        Uuid::from_u128(113),
+    ];
+    let source =
+        MockSource::with_reads(ids.map(|id| (id, CallerRead::Delayed(Duration::from_millis(50)))));
+    let peak = Arc::clone(&source.peak_caller_reads);
+    let fixture = fixture_with_source(source, policy(3, 1_000)).await;
+    for (index, id) in ids.into_iter().enumerate() {
+        add_item(
+            &fixture.service,
+            id,
+            Some(i64::try_from(index + 1).unwrap()),
+        )
+        .await;
+    }
+
+    let page = fixture
+        .service
+        .inbox(&fixture.staff, "reader", "token", 3, None, None)
+        .await
+        .expect("concurrent source page");
+    assert_eq!(peak.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| item.subject.id.as_str())
+            .collect::<Vec<_>>(),
+        ids.iter().map(Uuid::to_string).collect::<Vec<_>>()
+    );
+}
+
+async fn next_item_does_not_wait_for_a_speculative_tail_read() {
+    let first = Uuid::from_u128(121);
+    let slow_tail = Uuid::from_u128(122);
+    let fixture = fixture(
+        [
+            (first, CallerRead::Visible("first")),
+            (slow_tail, CallerRead::Delayed(Duration::from_secs(5))),
+        ],
+        policy(2, 1_000),
+    )
+    .await;
+    add_item(&fixture.service, first, Some(1)).await;
+    add_item(&fixture.service, slow_tail, Some(3_600)).await;
+
+    let started = Instant::now();
+    let page = fixture
+        .service
+        .next_item(&fixture.staff, "reader", "token", None, None)
+        .await
+        .expect("first visible item");
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].subject.id, first.to_string());
 }
 
 async fn source_claim_requires_a_current_permitted_operation() {
@@ -1877,28 +2377,110 @@ async fn source_outage_is_distinct_from_empty_inbox_and_holdings() {
     assert_eq!(inbox.status, PageStatus::Complete);
     let holdings = empty
         .service
-        .caller_visible_holdings(&empty.supervisor, "reader", "token", None)
+        .caller_visible_holdings(&empty.supervisor, "reader", "token", 10, None)
         .await
         .unwrap();
     assert!(holdings.items.is_empty());
     assert_eq!(holdings.status, PageStatus::Complete);
 
-    let outage = fixture([(unavailable, CallerRead::Unavailable)], policy(10, 1_000)).await;
-    add_item(&outage.service, unavailable, Some(1)).await;
+    let visible = Uuid::from_u128(40);
+    let concealed = Uuid::from_u128(41);
+    let scoped = fixture(
+        [
+            (visible, CallerRead::Visible("visible holding")),
+            (concealed, CallerRead::Concealed),
+        ],
+        policy(10, 1_000),
+    )
+    .await;
+    let visible_item = add_item(&scoped.service, visible, Some(1)).await;
+    let concealed_item = add_item(&scoped.service, concealed, Some(2)).await;
+    scoped
+        .service
+        .store()
+        .claim(&scoped.staff, visible_item, 1, "claim-visible")
+        .await
+        .unwrap();
+    scoped
+        .service
+        .store()
+        .claim(&scoped.staff, concealed_item, 1, "claim-concealed")
+        .await
+        .unwrap();
+    scoped
+        .service
+        .store()
+        .set_source_status(SOURCE_ID, GENERATION, true, false)
+        .await
+        .unwrap();
+    let holdings = scoped
+        .service
+        .caller_visible_holdings(&scoped.supervisor, "reader", "token", 10, None)
+        .await
+        .unwrap();
+    assert_eq!(holdings.status, PageStatus::Complete);
+    assert_eq!(holdings.items.len(), 1);
+    assert_eq!(holdings.items[0].active_items, 1);
+
+    let first_visible = Uuid::from_u128(42);
+    let outage = fixture(
+        [
+            (first_visible, CallerRead::Visible("visible before outage")),
+            (unavailable, CallerRead::Unavailable),
+        ],
+        policy(10, 1_000),
+    )
+    .await;
+    let first_visible_item = add_item(&outage.service, first_visible, Some(1)).await;
+    let unavailable_item = add_item(&outage.service, unavailable, Some(3_600)).await;
+    outage
+        .service
+        .store()
+        .claim(&outage.staff, first_visible_item, 1, "claim-first-visible")
+        .await
+        .unwrap();
+    outage
+        .service
+        .store()
+        .claim(&outage.staff, unavailable_item, 1, "claim-unavailable")
+        .await
+        .unwrap();
+    outage
+        .service
+        .store()
+        .set_source_status(SOURCE_ID, GENERATION, true, false)
+        .await
+        .unwrap();
     let inbox = outage
         .service
         .inbox(&outage.staff, "reader", "token", 10, None, None)
         .await
         .unwrap();
-    assert!(inbox.items.is_empty());
+    assert_eq!(inbox.items.len(), 1);
+    assert_eq!(inbox.items[0].subject.id, first_visible.to_string());
     assert_eq!(inbox.status, PageStatus::SourceUnavailable);
     let holdings = outage
         .service
-        .caller_visible_holdings(&outage.supervisor, "reader", "token", None)
+        .caller_visible_holdings(&outage.supervisor, "reader", "token", 10, None)
         .await
         .unwrap();
     assert!(holdings.items.is_empty());
     assert_eq!(holdings.status, PageStatus::SourceUnavailable);
+    let retry_cursor = holdings.next_cursor.expect("failed page is retryable");
+    let retry = outage
+        .service
+        .caller_visible_holdings(
+            &outage.supervisor,
+            "reader",
+            "token",
+            1,
+            Some(&retry_cursor),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.items.len(), 1);
+    assert_eq!(retry.items[0].active_items, 1);
+    assert_eq!(retry.status, PageStatus::BudgetExhausted);
 }
 
 async fn current_directory_controls_queue_visibility() {
@@ -2376,6 +2958,21 @@ async fn http_authentication_and_directory_authority_are_enforced() {
         .pop()
         .expect("seeded work item");
     let item_path = format!("/v1/work-items/{}", item.item_id);
+
+    let next = authenticated_request(
+        "GET",
+        "/v1/work-items/next",
+        &access_token("staff"),
+        "staff",
+        json!(null),
+        &[(SOURCE_PROFILE_HEADER, "reader")],
+    );
+    let response = app.clone().oneshot(next).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let page = response_body(response).await;
+    assert_eq!(page["status"], "budget_exhausted");
+    assert_eq!(page["items"].as_array().map(Vec::len), Some(1));
+    assert!(page["nextCursor"].is_string());
 
     for profile in ["administrator", "supervisor"] {
         let list = authenticated_request(

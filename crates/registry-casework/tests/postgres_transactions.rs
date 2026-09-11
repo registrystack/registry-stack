@@ -765,7 +765,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=8).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=11).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 

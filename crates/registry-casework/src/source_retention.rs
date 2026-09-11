@@ -54,7 +54,7 @@ impl PostgresStore {
         if !item_ids.is_empty() {
             transaction
                 .execute(
-                    "UPDATE casework_items SET erased_at=COALESCE(erased_at,$2) WHERE item_id=ANY($1)",
+                    "UPDATE casework_items SET display_reference=NULL,erased_at=COALESCE(erased_at,$2) WHERE item_id=ANY($1)",
                     &[&item_ids, &now],
                 )
                 .await?;

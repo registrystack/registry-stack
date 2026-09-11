@@ -5,14 +5,14 @@ use std::env;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, TimeDelta, Utc};
-use registry_casework::{CaseworkService, DatabaseConfig, PostgresStore};
+use chrono::{DateTime, TimeDelta, Timelike, Utc};
+use registry_casework::{CaseworkService, DatabaseConfig, PostgresStore, ServiceError, StoreError};
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, BootstrapDirectoryRequest, CallerSubjectView,
     CaseworkIdentity, CaseworkProject, CaseworkRole, ClockRuntimeState, DiscoveryCursor,
-    EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy, InboxView,
-    IssuerPrincipal, PageStatus, PrepareActionRequest, PreparedSourceAttempt, QueuePolicy,
-    SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt,
+    DisplayReferencePolicy, EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy,
+    InboxSort, InboxView, IssuerPrincipal, PageStatus, PrepareActionRequest, PreparedSourceAttempt,
+    QueuePolicy, SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt,
     SourceRequestPolicy, SubjectRef, TransitionHint,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -57,8 +57,12 @@ impl SourceAdapter for VisibleSource {
         _limit: usize,
     ) -> Result<ActiveSubjectsPage, SourceAdapterError> {
         Ok(ActiveSubjectsPage {
-            subjects: Vec::new(),
-            next_cursor: None,
+            subjects: vec![SubjectRef {
+                source_id: SOURCE_ID.to_owned(),
+                kind: SUBJECT_KIND.to_owned(),
+                id: "remote-active".to_owned(),
+            }],
+            next_cursor: Some(DiscoveryCursor("more".to_owned())),
         })
     }
 
@@ -69,6 +73,11 @@ impl SourceAdapter for VisibleSource {
         _credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
         Ok(CallerSubjectView {
+            display_reference: match subject.id.as_str() {
+                "reference-concealed" => None,
+                "reference-moved" => Some("CASE-2026-MOVED".to_owned()),
+                _ => Some("CASE-2026-0042".to_owned()),
+            },
             subject: subject.clone(),
             binding: binding(),
             disclosed: BTreeMap::new(),
@@ -149,14 +158,20 @@ fn project() -> CaseworkProject {
             id: SOURCE_ID.to_owned(),
             adapter: "test".to_owned(),
             description: "Focused inbox ordering source".to_owned(),
-            requests: vec![SourceRequestPolicy {
-                entity: SUBJECT_KIND.to_owned(),
-                queue: "default".to_owned(),
-                projection: Vec::new(),
-                routing: Vec::new(),
-                clock: None,
-                target: None,
-            }],
+            requests: [SUBJECT_KIND, "appeal"]
+                .into_iter()
+                .map(|entity| SourceRequestPolicy {
+                    display_reference: Some(DisplayReferencePolicy {
+                        field: "case-number".to_owned(),
+                    }),
+                    entity: entity.to_owned(),
+                    queue: "default".to_owned(),
+                    projection: Vec::new(),
+                    routing: Vec::new(),
+                    clock: None,
+                    target: None,
+                })
+                .collect(),
         }],
         hosted_kinds: Vec::new(),
         calendars: Vec::new(),
@@ -255,6 +270,182 @@ fn item_subjects(page: &registry_casework_core::WorkItemPage) -> Vec<&str> {
         .collect()
 }
 
+async fn set_reference_and_type(
+    database: &tokio_postgres::Client,
+    item_id: Uuid,
+    reference: &str,
+    subject_kind: &str,
+) {
+    database
+        .execute(
+            "UPDATE casework_items SET display_reference=$2,subject_kind=$3 WHERE item_id=$1",
+            &[&item_id, &reference, &subject_kind],
+        )
+        .await
+        .expect("set retained display reference and request type");
+}
+
+#[tokio::test]
+async fn reference_lookup_rechecks_caller_disclosure_and_binds_stable_sort_cursors() {
+    let (store, database, service) = fixture().await;
+    let staff = actor("staff", "staff", CaseworkRole::Staff);
+    let administrator = actor(
+        "administrator",
+        "administrator",
+        CaseworkRole::Administrator,
+    );
+    store
+        .bootstrap_directory(
+            &administrator,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team".to_owned(),
+                staff: vec![staff.principal.clone()],
+                supervisors: Vec::new(),
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap-reference",
+        )
+        .await
+        .expect("bootstrap directory");
+    store
+        .set_source_status(SOURCE_ID, GENERATION, true, false)
+        .await
+        .expect("source is synchronized");
+
+    let now = Utc::now();
+    for (offset, subject_id, subject_kind) in [
+        (4, "reference-visible-old", SUBJECT_KIND),
+        (3, "reference-concealed", SUBJECT_KIND),
+        (2, "reference-moved", SUBJECT_KIND),
+        (1, "reference-visible-new", "appeal"),
+    ] {
+        let item_id = Uuid::from_u128(10_000 + u128::try_from(offset).unwrap());
+        insert_item(
+            &database,
+            item_id,
+            subject_id,
+            now - TimeDelta::days(offset),
+            Some(now + TimeDelta::days(offset)),
+            &staff.principal,
+        )
+        .await;
+        set_reference_and_type(&database, item_id, "CASE-2026-0042", subject_kind).await;
+    }
+
+    let first = service
+        .inbox_for_view_query(
+            &staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            1,
+            None,
+            None,
+            Some("CASE-2026-0042"),
+            InboxSort::Age,
+            None,
+        )
+        .await
+        .expect("first reference page");
+    assert_eq!(item_subjects(&first), ["reference-visible-old"]);
+    assert_eq!(
+        first.items[0].display_reference.as_deref(),
+        Some("CASE-2026-0042")
+    );
+    let cursor = first.next_cursor.as_deref().expect("continuation cursor");
+    let context: String = database
+        .query_one(
+            "SELECT context FROM casework_cursors WHERE cursor_id=$1",
+            &[&Uuid::parse_str(cursor).unwrap()],
+        )
+        .await
+        .expect("read cursor context")
+        .get(0);
+    assert!(!context.contains("CASE-2026-0042"));
+    assert!(context.contains("referenceHash"));
+
+    let wrong_sort = service
+        .inbox_for_view_query(
+            &staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            1,
+            None,
+            None,
+            Some("CASE-2026-0042"),
+            InboxSort::Type,
+            Some(cursor),
+        )
+        .await;
+    assert!(matches!(
+        wrong_sort,
+        Err(ServiceError::Store(StoreError::Invalid))
+    ));
+
+    let second = service
+        .inbox_for_view_query(
+            &staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            1,
+            None,
+            None,
+            Some("CASE-2026-0042"),
+            InboxSort::Age,
+            Some(cursor),
+        )
+        .await
+        .expect("second reference page");
+    assert_eq!(item_subjects(&second), ["reference-visible-new"]);
+    assert!(second.next_cursor.is_none());
+
+    let wrong_case = service
+        .inbox_for_view_query(
+            &staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            10,
+            None,
+            None,
+            Some("case-2026-0042"),
+            InboxSort::Age,
+            None,
+        )
+        .await
+        .expect("case-sensitive lookup");
+    assert!(wrong_case.items.is_empty());
+    assert_eq!(wrong_case.status, PageStatus::Complete);
+
+    let by_type = service
+        .inbox_for_view_query(
+            &staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            10,
+            None,
+            None,
+            None,
+            InboxSort::Type,
+            None,
+        )
+        .await
+        .expect("type-sorted inbox");
+    assert_eq!(item_subjects(&by_type)[0], "reference-visible-new");
+    assert_eq!(
+        item_subjects(&by_type)[1..],
+        [
+            "reference-visible-old",
+            "reference-concealed",
+            "reference-moved"
+        ]
+    );
+}
+
 #[tokio::test]
 async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_scope() {
     let (store, database, service) = fixture().await;
@@ -292,6 +483,9 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         .expect("source is synchronized");
 
     let now = Utc::now();
+    let now = now
+        .with_nanosecond(now.nanosecond() / 1_000 * 1_000)
+        .expect("microsecond-aligned test time");
     let cases = [
         (
             Uuid::from_u128(1),
@@ -356,6 +550,15 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
     .await;
     insert_clock(
         &database,
+        Uuid::from_u128(1),
+        "multi-real",
+        "paused-independent",
+        "paused",
+        Some(now - TimeDelta::days(10)),
+    )
+    .await;
+    insert_clock(
+        &database,
         Uuid::from_u128(2),
         "real",
         "deadline",
@@ -395,7 +598,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         )
         .await
         .expect("first ordered page");
-    assert_eq!(item_subjects(&first), ["paused", "facts-missing"]);
+    assert_eq!(item_subjects(&first), ["facts-missing", "multi-real"]);
     assert_eq!(first.served_queues, ["default", "secondary"]);
     let second = service
         .inbox_for_view(
@@ -410,7 +613,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         )
         .await
         .expect("second ordered page");
-    assert_eq!(item_subjects(&second), ["multi-real", "real"]);
+    assert_eq!(item_subjects(&second), ["real", "passive"]);
     let third = service
         .inbox_for_view(
             &staff,
@@ -424,7 +627,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         )
         .await
         .expect("third ordered page");
-    assert_eq!(item_subjects(&third), ["passive", "no-due"]);
+    assert_eq!(item_subjects(&third), ["paused", "no-due"]);
     assert!(third.next_cursor.is_none());
 
     let overdue = service
@@ -442,7 +645,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         .expect("effective overdue view");
     assert_eq!(
         item_subjects(&overdue),
-        ["paused", "facts-missing", "multi-real", "real", "passive"]
+        ["facts-missing", "multi-real", "real", "passive"]
     );
 
     let selected = service
@@ -466,7 +669,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
     assert_eq!(
         selected.items[0].passive_due_at,
         Some(now - TimeDelta::days(9)),
-        "a paused clock leaves the passive due date as the due date the inbox shows"
+        "the retained passive target is historical and does not make a paused clock overdue"
     );
 
     let (paused_item, _) = service
@@ -483,14 +686,14 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
     let stored_holdings = store.holdings(&supervisor).await.expect("stored holdings");
     assert_eq!(stored_holdings.len(), 1);
     assert_eq!(stored_holdings[0].active_items, 6);
-    assert_eq!(stored_holdings[0].overdue_items, 5);
+    assert_eq!(stored_holdings[0].overdue_items, 4);
     let visible_holdings = service
-        .caller_visible_holdings(&supervisor, "reader", "token", None)
+        .caller_visible_holdings(&supervisor, "reader", "token", 100, None)
         .await
         .expect("caller-visible holdings");
     assert_eq!(visible_holdings.items.len(), 1);
     assert_eq!(visible_holdings.items[0].active_items, 6);
-    assert_eq!(visible_holdings.items[0].overdue_items, 5);
+    assert_eq!(visible_holdings.items[0].overdue_items, 4);
 
     assert_eq!(
         store
@@ -514,7 +717,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
 }
 
 #[tokio::test]
-async fn holdings_count_every_held_item_beyond_a_single_inbox_page() {
+async fn holdings_continue_truthfully_beyond_a_single_source_read_page() {
     let (store, database, service) = fixture().await;
     let staff = actor("staff", "staff", CaseworkRole::Staff);
     let supervisor = actor("supervisor", "supervisor", CaseworkRole::Supervisor);
@@ -537,12 +740,16 @@ async fn holdings_count_every_held_item_beyond_a_single_inbox_page() {
         )
         .await
         .expect("bootstrap directory");
+    store
+        .set_source_status(SOURCE_ID, GENERATION, true, false)
+        .await
+        .expect("source is synchronized");
 
     let now = Utc::now();
     let held = 150_u128;
     let overdue = 70_u128;
     for index in 0..held {
-        let passive_due_at = if index < overdue {
+        let passive_due_at = if index > 0 && index <= overdue {
             now - TimeDelta::days(1)
         } else {
             now + TimeDelta::days(1)
@@ -563,13 +770,62 @@ async fn holdings_count_every_held_item_beyond_a_single_inbox_page() {
     assert_eq!(stored[0].active_items, 150);
     assert_eq!(stored[0].overdue_items, 70);
 
-    let visible = service
-        .caller_visible_holdings(&supervisor, "reader", "token", None)
+    let first = service
+        .caller_visible_holdings(&supervisor, "reader", "token", 100, None)
         .await
-        .expect("caller-visible holdings");
-    assert_eq!(visible.items.len(), 1);
-    assert_eq!(visible.items[0].active_items, 150);
-    assert_eq!(visible.items[0].overdue_items, 70);
-    assert!(visible.next_cursor.is_none());
-    assert_eq!(visible.status, PageStatus::Complete);
+        .expect("first caller-visible holdings page");
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(first.items[0].active_items, 100);
+    assert_eq!(first.items[0].overdue_items, 21);
+    assert_eq!(first.status, PageStatus::BudgetExhausted);
+    let cursor = first.next_cursor.expect("holdings continuation");
+
+    // Changing a deadline must not move an unvisited holding behind the
+    // continuation cursor. Holdings pages use immutable observation age.
+    database
+        .execute(
+            "UPDATE casework_items SET passive_due_at=$1 WHERE item_id=$2",
+            &[&(now + TimeDelta::hours(12)), &Uuid::from_u128(1_000)],
+        )
+        .await
+        .expect("move an unvisited deadline across the prior due-order cursor");
+    assert!(matches!(
+        service
+            .inbox_for_view(
+                &supervisor,
+                "reader",
+                "token",
+                InboxView::TeamHoldings,
+                100,
+                None,
+                None,
+                Some(&cursor),
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Invalid))
+    ));
+    assert!(matches!(
+        service
+            .caller_visible_holdings(&supervisor, "different-reader", "token", 100, Some(&cursor),)
+            .await,
+        Err(ServiceError::Store(StoreError::Invalid))
+    ));
+
+    let second = service
+        .caller_visible_holdings(&supervisor, "reader", "token", 100, Some(&cursor))
+        .await
+        .expect("second caller-visible holdings page");
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.items[0].active_items, 50);
+    assert_eq!(second.items[0].overdue_items, 49);
+    assert!(second.next_cursor.is_none());
+    assert_eq!(second.status, PageStatus::Complete);
+    assert_eq!(
+        first.items[0].active_items + second.items[0].active_items,
+        150
+    );
+    assert_eq!(
+        first.items[0].overdue_items + second.items[0].overdue_items,
+        70
+    );
 }
