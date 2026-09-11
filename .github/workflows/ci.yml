@@ -1140,6 +1140,7 @@ jobs:
           export PATH="${RUNNER_TEMP}/maturin/bin:${PATH}"
           python3 release/scripts/assemble-registry-client-packages.py \
             --artifacts python \
+            --include-casework \
             --python-profile ci \
             --output-dir "${out_dir}" \
             --work-dir "${RUNNER_TEMP}/client-assembly" \

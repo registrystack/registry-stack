@@ -1652,7 +1652,7 @@ jobs:
             "${casework_install_dir}/caseworkctl" test "${casework_project}"
             "${casework_install_dir}/caseworkctl" package \
               "${casework_project}" --output "${casework_package}"
-            test -f "${casework_package}/package.json"
+            test -f "${casework_package}/casework.package.json"
             rm candidate/bundle-root/SHA256SUMS
           fi
           evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"

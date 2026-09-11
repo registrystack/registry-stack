@@ -716,7 +716,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("casework", selected)
         self.assertTrue(product["casework_postgres"])
         core = classify(self.workspace, ("crates/registry-casework-core/src/adapter.rs",))
-        self.assertTrue(CASEWORK_PACKAGES <= set(core["rust_packages"]))
+        self.assertLessEqual(CASEWORK_PACKAGES, set(core["rust_packages"]))
         self.assertTrue(core["casework_postgres"])
         python = classify(
             self.workspace,
@@ -1364,6 +1364,15 @@ class CiChangesTest(unittest.TestCase):
                 self.workspace, ("crates/registry-casework-client-py/src/lib.rs",)
             )["evidence_tutorial"]
         )
+
+    def test_casework_node_sources_run_the_linux_release_addon_proof(self) -> None:
+        for path in (
+            "crates/registry-casework-client/src/client.rs",
+            "crates/registry-casework-client-node/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["release_linux_node_clients"])
 
     def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
         # Both bindings are Cargo path-dependents of the SDK and the verifier,

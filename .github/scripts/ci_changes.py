@@ -305,6 +305,7 @@ LINUX_NODE_BINDING_PACKAGES = frozenset(
         "registry-evidence-client-node",
         "registry-relay-client-node",
         "registry-breg-client-node",
+        "registry-casework-client-node",
     }
 )
 

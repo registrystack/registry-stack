@@ -674,6 +674,19 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             assemble,
         )
 
+    def test_candidate_checks_the_casework_package_manifest_it_emits(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble public payload and validate version-appropriate install inputs",
+        )
+        self.assertIn(
+            'test -f "${casework_package}/casework.package.json"',
+            assemble,
+        )
+        self.assertNotIn('test -f "${casework_package}/package.json"', assemble)
+
     def test_next_release_embeds_and_smokes_relay_installer_aliases(self) -> None:
         _, document = workflow("release-candidate.yml")
         assemble = step_run(
