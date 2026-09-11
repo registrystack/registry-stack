@@ -1222,7 +1222,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "76bab2f49eef78995b5df8cf21d45a179cdfc9842041a0d7f0b291fc6d632c1d",
+        "sha256": "64df0c3d4071b547486c1f572b6c9b24102bfe32ebeb74c7af4b3228aedbf06c",
         "mediaType": "application/schema+json"
       }
     },
