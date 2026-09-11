@@ -830,6 +830,10 @@ async fn static_jwks_key_refusal_is_bounded_and_repinning_restores_authenticatio
 
     let captured = CapturedLogs::default();
     let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_target(false)
+        .with_current_span(false)
+        .with_span_list(false)
         .with_writer(captured.clone())
         .with_max_level(tracing::Level::WARN)
         .finish();
@@ -862,6 +866,12 @@ async fn static_jwks_key_refusal_is_bounded_and_repinning_restores_authenticatio
         logs.matches("unknown or disallowed key identifier").count(),
         1
     );
+    let event: Value = serde_json::from_str(logs.trim()).expect("production-shaped JSON log");
+    assert!(event.get("target").is_none());
+    assert!(event["fields"]["message"]
+        .as_str()
+        .expect("message field")
+        .contains("unknown or disallowed key identifier"));
     assert!(logs.contains("does not establish provider key rotation"));
     for value in [
         &rotated,
