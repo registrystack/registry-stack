@@ -84,6 +84,7 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-caseworkctl` | Casework authoring and local operator tooling and the `caseworkctl` binary |
 | `crates/registry-casework-client` | Rust Casework client and its bounded problem and recovery contract |
 | `crates/registry-casework-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
+| `crates/registry-casework-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-record` | Product-neutral Registry Record v1 response DTOs shared by the Base Registry Engine and Relay clients |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
 | `crates/registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
@@ -125,8 +126,9 @@ and none may become a Rust type, built-in operation, or special route.
 
 Registry Casework is implemented by `registry-casework`,
 `registry-casework-core`, `registry-casework-breg`, `registry-caseworkctl`, and
-its Rust and Node.js client crates. Its product contracts, generated OpenAPI,
-examples, checkpoint demo, and focused gates live under `products/casework`.
+its Rust, Node.js, and Python client crates. Its product contracts, generated
+OpenAPI, examples, checkpoint demo, and focused gates live under
+`products/casework`.
 Casework coordinates claims, private drafts, accountable attempts, and
 caller-visible inboxes. Source adapters retain source visibility and action
 authority. The source-neutral core and generic clients must not depend on BReg

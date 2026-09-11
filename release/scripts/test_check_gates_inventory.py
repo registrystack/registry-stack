@@ -49,6 +49,9 @@ class GateInventoryTest(unittest.TestCase):
         self.platform_fuzz_runner = (
             ROOT / "products" / "platform" / "scripts" / "run-fuzz-smoke.sh"
         ).read_text(encoding="utf-8")
+        self.casework_checkpoint_runner = (
+            ROOT / "products" / "casework" / "scripts" / "check-checkpoint.sh"
+        ).read_text(encoding="utf-8")
         self.nightly_security = (
             ROOT / ".github" / "workflows" / "nightly-security.yml"
         ).read_text(encoding="utf-8")
@@ -800,6 +803,111 @@ class GateInventoryTest(unittest.TestCase):
             with self.subTest(gate=gate):
                 text = self.workflow.replace(snippet, replacement, 1)
                 self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_casework_workflow_gates_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "casework_postgres: ${{ steps.filter.outputs.casework_postgres }}",
+                "casework_postgres: 'false'",
+                "Casework PostgreSQL path filter",
+            ),
+            (
+                "casework-postgres:\n    name: Casework PostgreSQL transactions",
+                "casework-postgres:\n    name: Casework disabled",
+                "Casework PostgreSQL gate",
+            ),
+            (
+                "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+                "postgres:17.11",
+                "Casework PostgreSQL 17 image pin",
+            ),
+            (
+                "run: products/casework/scripts/check-checkpoint.sh",
+                "run: true # Casework checkpoint wrapper disabled",
+                "Casework product checkpoint wrapper",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test postgres_transactions",
+                "true # Casework transactions disabled",
+                "Casework claim, reconciliation, and attempt suite",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test service_visibility",
+                "true # Casework visibility disabled",
+                "Casework caller visibility suite",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_postgres --test assignment_postgres --test routing_postgres",
+                "true # Casework hosted suites disabled",
+                "Casework hosted, assignment, and routing suites",
+            ),
+            (
+                "-- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget",
+                "-- clocks",
+                "Casework persisted source clock selection",
+            ),
+            (
+                r"grep -q 'test result: ok\. 1 passed'",
+                "true # clock result assertion dropped",
+                "Casework persisted source clock result assertion",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test inbox_ordering_postgres",
+                "true # Casework inbox ordering disabled",
+                "Casework inbox ordering suite",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_standalone",
+                "true # Casework standalone acceptance disabled",
+                "Casework standalone hosted acceptance suite",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres",
+                "true # Casework source retention disabled",
+                "Casework source retention suite",
+            ),
+            (
+                "registry-breg-client-py registry-casework-client-py",
+                "registry-breg-client-py",
+                "Casework Python client binding coverage",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement, 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_casework_checkpoint_wrapper_steps_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "python3 products/casework/scripts/generate_openapi.py --check",
+                "true # Casework OpenAPI drift check disabled",
+                "Casework HTTP contract drift check",
+            ),
+            (
+                "python3 products/casework/scripts/check_dependency_direction.py",
+                "true # Casework dependency guard disabled",
+                "Casework dependency-direction guard",
+            ),
+            (
+                "python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'",
+                "true # Casework product script tests disabled",
+                "Casework product script tests",
+            ),
+            (
+                '"$caseworkctl_bin" test "$work/project"',
+                "true # Casework authoring journey disabled",
+                "Casework offline authoring journeys",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                runner = self.casework_checkpoint_runner.replace(snippet, replacement, 1)
+                self.assertIn(
+                    gate,
+                    self.module.missing_gates(
+                        self.workflow,
+                        casework_checkpoint_runner_text=runner,
+                    ),
+                )
 
     def test_linux_node_release_proof_is_two_runner_read_only_and_aggregated(
         self,

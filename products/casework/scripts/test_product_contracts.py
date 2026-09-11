@@ -5,6 +5,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
+README = ROOT / "products/casework/README.md"
+RUNTIME_CRATE = ROOT / "crates/registry-casework"
 MATRIX = ROOT / "products/casework/contracts/security-invariant-matrix.yaml"
 TRACE = ROOT / "products/casework/contracts/security-test-traceability.yaml"
 STANDALONE_EXAMPLE = (
@@ -42,6 +44,28 @@ MULTISTAGE_HOLIDAYS = (
 
 def references(text: str) -> set[tuple[str, str]]:
     return set(re.findall(r"(?:path|file): ([^,}]+), name: ([A-Za-z0-9_]+)", text))
+
+
+def rust_test_attributes(source: str, name: str) -> str | None:
+    """Return the attribute block that makes `name` a selectable Rust test.
+
+    A private helper called from another test carries no attribute block, so it
+    cannot be selected by `cargo test -- <name>` and cannot fail on its own.
+    """
+    match = re.search(
+        rf"((?:^[ \t]*#\[[^\n]*\]\n)+)[ \t]*(?:pub(?:\([^)]*\))?\s+)?"
+        rf"(?:async\s+)?fn\s+{re.escape(name)}\b",
+        source,
+        re.M,
+    )
+    if match is None:
+        return None
+    block = match.group(1)
+    selectable = any(
+        line.strip().startswith(("#[test]", "#[tokio::test", "#[rstest"))
+        for line in block.splitlines()
+    )
+    return block if selectable else None
 
 
 class ProductContractTests(unittest.TestCase):
@@ -124,6 +148,41 @@ class ProductContractTests(unittest.TestCase):
             self.assertTrue(source_path.is_file(), relative)
             source = source_path.read_text(encoding="utf-8")
             self.assertRegex(source, rf"\b(?:async\s+)?(?:fn|def)\s+{re.escape(name)}\b", f"{relative}:{name}")
+
+    def test_readme_documents_every_operator_supplied_test_database(self):
+        required = {
+            variable
+            for source in RUNTIME_CRATE.rglob("*.rs")
+            for variable in re.findall(
+                r'"(CASEWORK_[A-Z_]*DATABASE_URL)"', source.read_text(encoding="utf-8")
+            )
+        }
+        self.assertTrue(required)
+        readme = README.read_text(encoding="utf-8")
+        for variable in sorted(required):
+            with self.subTest(variable=variable):
+                self.assertIn(variable, readme)
+
+    def test_every_mapped_test_is_selected_by_its_own_runner(self):
+        mapped = references(MATRIX.read_text(encoding="utf-8")) | references(
+            TRACE.read_text(encoding="utf-8")
+        )
+        self.assertTrue(mapped)
+        for relative, name in sorted(mapped):
+            with self.subTest(test=f"{relative}:{name}"):
+                source = (ROOT / relative).read_text(encoding="utf-8")
+                if relative.endswith(".rs"):
+                    self.assertIsNotNone(
+                        rust_test_attributes(source, name),
+                        f"{relative}:{name} needs a #[test], #[tokio::test] or "
+                        "#[rstest] attribute to be selectable",
+                    )
+                else:
+                    self.assertTrue(
+                        name.startswith("test_"),
+                        f"{relative}:{name} is not collected by unittest",
+                    )
+                    self.assertIn(f"def {name}(", source, f"{relative}:{name}")
 
 
 if __name__ == "__main__":

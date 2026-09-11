@@ -1349,6 +1349,22 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["client_bindings"])
         self.assertTrue(outputs["evidence_tutorial"])
 
+    def test_casework_bindings_run_the_native_client_job(self) -> None:
+        # The Casework bindings are covered only by the shared native-client
+        # job, and the Python one also ships in the assembled package the
+        # application tutorial imports.
+        for path in (
+            "crates/registry-casework-client-node/src/lib.rs",
+            "crates/registry-casework-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["client_bindings"])
+        self.assertTrue(
+            classify(
+                self.workspace, ("crates/registry-casework-client-py/src/lib.rs",)
+            )["evidence_tutorial"]
+        )
+
     def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
         # Both bindings are Cargo path-dependents of the SDK and the verifier,
         # so either can change the native surface or the error envelope the

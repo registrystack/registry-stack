@@ -12,7 +12,8 @@ checkpoint examples, and product-local verification scripts. Read the workspace
 - Preserve the source-neutral boundary: the core and generic client do not
   depend on a source product, and BReg packages do not depend on Casework. Run
   `scripts/check_dependency_direction.py` after dependency changes.
-- PostgreSQL verification requires the two separate disposable databases named
-  in `README.md`. Never point either variable at retained operator data.
+- PostgreSQL verification requires the nine disposable database URL variables
+  named in `README.md`, four of which reset `public` and must each own their
+  database. Never point any of them at retained operator data.
 - Keep authored examples and the checkpoint demo small. Do not add later-wave
   clocks, automation, or a second source to close a documentation obligation.

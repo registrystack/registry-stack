@@ -37,8 +37,12 @@
 - Require an explicit local-development or upstream-TLS mode, reject public
   listeners, and document the private server-to-server, no-CORS boundary.
 - Add a reproducible combined demo with Registry App Kit and the existing-kit
-  comparison. This checkpoint does not include timers, routing rules, reminders,
-  bulk decisions, consultation or automatic outcomes.
+  comparison.
+
+This checkpoint does not include bulk decisions, consultation, automatic
+outcomes, or outbound delivery. Clock policies compute due reminder and
+escalation occurrences and expose them for review; an Administrator applies a
+reviewed recompute, and the service neither acts nor notifies on its own.
 
 These changes are unreleased. The workspace version alone does not identify a
 published client package containing Casework; the demo builds a matching local

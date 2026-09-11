@@ -38,6 +38,7 @@ class NightlyCoverageTests(unittest.TestCase):
             "relay-client": "relay-client",
             "relay-v2": "relay-v2",
             "breg": "breg",
+            "casework": "casework",
             "stack-client": "stack-client",
             "evidence": "evidence",
             "mint": "mint",

@@ -289,11 +289,15 @@ DISCOVERY_BINDING_PACKAGES = frozenset(
 BREG_BINDING_PACKAGES = frozenset(
     {"registry-breg-client-node", "registry-breg-client-py"}
 )
+CASEWORK_BINDING_PACKAGES = frozenset(
+    {"registry-casework-client-node", "registry-casework-client-py"}
+)
 NATIVE_BINDING_PACKAGES = (
     DISCOVERY_BINDING_PACKAGES
     | EVIDENCE_BINDING_PACKAGES
     | RELAY_BINDING_PACKAGES
     | BREG_BINDING_PACKAGES
+    | CASEWORK_BINDING_PACKAGES
 )
 LINUX_NODE_BINDING_PACKAGES = frozenset(
     {

@@ -364,23 +364,53 @@ python3 products/casework/scripts/check_dependency_direction.py
 python3 -m unittest products/casework/scripts/test_dependency_direction.py
 ```
 
-The PostgreSQL checkpoint tests deliberately require two **distinct,
-disposable** databases. They reset their schemas and must never point at
-retained operator data. Create both databases, export their URLs separately,
-and enable the `postgres-test` feature:
+The PostgreSQL checkpoint tests deliberately require **distinct, disposable**
+databases. They reset the schemas they use and must never point at retained
+operator data. Nine operator-supplied variables are required, one per suite:
+
+| Variable | Suite | Database |
+|---|---|---|
+| `CASEWORK_TEST_DATABASE_URL` | `--test postgres_transactions` | Its own: the suite resets `public` |
+| `CASEWORK_VISIBILITY_TEST_DATABASE_URL` | `--test service_visibility` | Its own: the suite resets `public` |
+| `CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL` | `--test source_retention_postgres` | Its own: the suite resets `public` |
+| `CASEWORK_CLOCK_TEST_DATABASE_URL` | `--lib clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget` | Its own: the test resets `public` |
+| `CASEWORK_HOSTED_TEST_DATABASE_URL` | `--test hosted_postgres` | May be shared: the fixture creates a unique schema |
+| `CASEWORK_ASSIGNMENT_TEST_DATABASE_URL` | `--test assignment_postgres` | May be shared: the fixture creates a unique schema |
+| `CASEWORK_ROUTING_TEST_DATABASE_URL` | `--test routing_postgres` | May be shared: the fixture creates a unique schema |
+| `CASEWORK_INBOX_TEST_DATABASE_URL` | `--test inbox_ordering_postgres` | May be shared: the fixture creates a unique schema |
+| `CASEWORK_HOSTED_ACCEPTANCE_DATABASE_URL` | `--test hosted_standalone` | May be shared: the test creates a unique schema |
+
+The first four suites run `DROP SCHEMA public CASCADE`, so each of those four
+variables must resolve to a database no other suite uses. The last five create
+a per-fixture schema and set `search_path`, so several of them may resolve to
+one database: root CI points the hosted, assignment, and routing variables at a
+single `casework_hosted` database. `CASEWORK_HOSTED_ACCEPTANCE_SCHEMA_URL` is
+not an operator input; the standalone suite derives it from
+`CASEWORK_HOSTED_ACCEPTANCE_DATABASE_URL` and its own schema name. A missing
+variable fails visibly rather than silently skipping the required proof.
+
+Create the databases, export the URLs, and enable the `postgres-test` feature:
 
 ```sh
 export CASEWORK_TEST_DATABASE_URL=postgresql://localhost/casework_transactions_test
 export CASEWORK_VISIBILITY_TEST_DATABASE_URL=postgresql://localhost/casework_visibility_test
+export CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL=postgresql://localhost/casework_source_retention_test
+export CASEWORK_CLOCK_TEST_DATABASE_URL=postgresql://localhost/casework_clocks_test
+export CASEWORK_HOSTED_TEST_DATABASE_URL=postgresql://localhost/casework_hosted_test
+export CASEWORK_ASSIGNMENT_TEST_DATABASE_URL=postgresql://localhost/casework_hosted_test
+export CASEWORK_ROUTING_TEST_DATABASE_URL=postgresql://localhost/casework_hosted_test
+export CASEWORK_INBOX_TEST_DATABASE_URL=postgresql://localhost/casework_inbox_ordering_test
+export CASEWORK_HOSTED_ACCEPTANCE_DATABASE_URL=postgresql://localhost/casework_hosted_acceptance_test
 cargo test -p registry-casework --features postgres-test --test postgres_transactions --locked
 cargo test -p registry-casework --features postgres-test --test service_visibility --locked
+cargo test -p registry-casework --features postgres-test --test source_retention_postgres --locked
+cargo test -p registry-casework --features postgres-test --lib --locked \
+  -- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget
+cargo test -p registry-casework --features postgres-test --locked \
+  --test hosted_postgres --test assignment_postgres --test routing_postgres
+cargo test -p registry-casework --features postgres-test --test inbox_ordering_postgres --locked
+cargo test -p registry-casework --features postgres-test --test hosted_standalone --locked
 ```
-
-The two variables must not resolve to the same database. The transaction suite
-uses `CASEWORK_TEST_DATABASE_URL`; the disclosure, authorization, pagination,
-outage, and HTTP boundary suite uses
-`CASEWORK_VISIBILITY_TEST_DATABASE_URL`. A missing variable fails visibly rather
-than silently skipping the required proof.
 
 Install the kit dependencies and browser from the [demo prerequisites](demo/README.md),
 then run the automated technical checkpoint with the matching App Kit checkout:

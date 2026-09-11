@@ -646,11 +646,12 @@ jobs:
           shared-key: workspace-registry
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Verify Casework HTTP contract and dependency direction
-        run: |
-          python3 products/casework/scripts/generate_openapi.py --check
-          python3 products/casework/scripts/check_dependency_direction.py
-          python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'
+      - name: Build the Casework authoring tool
+        run: cargo build --locked --profile ci -p registry-caseworkctl
+      - name: Verify Casework product contracts and offline authoring journeys
+        env:
+          CASEWORKCTL_BIN: ${{ github.workspace }}/target/ci/caseworkctl
+        run: products/casework/scripts/check-checkpoint.sh
       - name: Verify claims, reconciliation, and durable attempts
         env:
           CASEWORK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
@@ -679,9 +680,17 @@ jobs:
           CASEWORK_ROUTING_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_hosted
         run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_postgres --test assignment_postgres --test routing_postgres
       - name: Verify persisted source clocks, restart, and recompute
+        # An inexact name filter that selects nothing still exits 0, so the
+        # step names the test exactly and fails unless it reports one pass.
+        shell: bash
         env:
           CASEWORK_CLOCK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_clocks
-        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --lib clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile ci -p registry-casework --features postgres-test --lib \
+            -- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget \
+            | tee "${RUNNER_TEMP}/casework-clocks.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-clocks.log"
       - name: Verify effective-due inbox ordering and exact source selection
         env:
           CASEWORK_INBOX_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_inbox_ordering
@@ -909,6 +918,9 @@ jobs:
 
       - name: Test local client package assembly
         run: python3 -m unittest release/scripts/test_assemble_registry_client_packages.py
+
+      - name: Test client package smoke checks
+        run: python3 -m unittest release/scripts/test_smoke_registry_client_package.py
 
       - name: Test release storage preflight
         run: python3 -m unittest release/scripts/test_check_release_storage.py
@@ -1584,7 +1596,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py registry-breg-client-py; do
+          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py registry-breg-client-py registry-casework-client-py; do
             cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
             (
               cd "crates/${client}"

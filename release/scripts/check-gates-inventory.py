@@ -13,6 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CI_CLASSIFIER = ROOT / ".github" / "scripts" / "ci_changes.py"
 PLATFORM_FUZZ_RUNNER = ROOT / "products" / "platform" / "scripts" / "run-fuzz-smoke.sh"
+CASEWORK_CHECKPOINT_RUNNER = (
+    ROOT / "products" / "casework" / "scripts" / "check-checkpoint.sh"
+)
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
@@ -196,6 +199,74 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Base Registry Engine PostgreSQL 17 / PostGIS 3.5 image pin",
         "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6",
+    ),
+    (
+        "Casework PostgreSQL path filter",
+        "casework_postgres: ${{ steps.filter.outputs.casework_postgres }}",
+    ),
+    (
+        "Casework PostgreSQL gate",
+        "casework-postgres:\n    name: Casework PostgreSQL transactions",
+    ),
+    (
+        "Casework PostgreSQL 17 image pin",
+        "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+    ),
+    (
+        "Casework product checkpoint wrapper",
+        "run: products/casework/scripts/check-checkpoint.sh",
+    ),
+    (
+        "Casework HTTP contract drift check",
+        "python3 products/casework/scripts/generate_openapi.py --check",
+    ),
+    (
+        "Casework dependency-direction guard",
+        "python3 products/casework/scripts/check_dependency_direction.py",
+    ),
+    (
+        "Casework product script tests",
+        "python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'",
+    ),
+    (
+        "Casework offline authoring journeys",
+        '"$caseworkctl_bin" test "$work/project"',
+    ),
+    (
+        "Casework claim, reconciliation, and attempt suite",
+        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test postgres_transactions",
+    ),
+    (
+        "Casework caller visibility suite",
+        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test service_visibility",
+    ),
+    (
+        "Casework hosted, assignment, and routing suites",
+        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_postgres --test assignment_postgres --test routing_postgres",
+    ),
+    (
+        "Casework persisted source clock selection",
+        "-- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget",
+    ),
+    (
+        "Casework persisted source clock result assertion",
+        r"grep -q 'test result: ok\. 1 passed'",
+    ),
+    (
+        "Casework inbox ordering suite",
+        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test inbox_ordering_postgres",
+    ),
+    (
+        "Casework standalone hosted acceptance suite",
+        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_standalone",
+    ),
+    (
+        "Casework source retention suite",
+        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres",
+    ),
+    (
+        "Casework Python client binding coverage",
+        "registry-breg-client-py registry-casework-client-py",
     ),
     (
         "Release Linux Node client path filter",
@@ -1012,6 +1083,7 @@ def missing_gates(
     workflow_text: str,
     classifier_text: str | None = None,
     platform_fuzz_runner_text: str | None = None,
+    casework_checkpoint_runner_text: str | None = None,
 ) -> list[str]:
     if classifier_text is None:
         classifier_text = CI_CLASSIFIER.read_text(encoding="utf-8")
@@ -1021,8 +1093,15 @@ def missing_gates(
             if PLATFORM_FUZZ_RUNNER.is_file()
             else ""
         )
+    if casework_checkpoint_runner_text is None:
+        casework_checkpoint_runner_text = (
+            CASEWORK_CHECKPOINT_RUNNER.read_text(encoding="utf-8")
+            if CASEWORK_CHECKPOINT_RUNNER.is_file()
+            else ""
+        )
     inventory_text = (
-        f"{workflow_text}\n{classifier_text}\n{platform_fuzz_runner_text}"
+        f"{workflow_text}\n{classifier_text}\n{platform_fuzz_runner_text}\n"
+        f"{casework_checkpoint_runner_text}"
     )
     return [name for name, snippet in REQUIRED_GATES if snippet not in inventory_text]
 
