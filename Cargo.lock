@@ -3511,12 +3511,156 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-casework"
+version = "0.29.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "deadpool-postgres",
+ "futures",
+ "http",
+ "jsonwebtoken",
+ "registry-casework-breg",
+ "registry-casework-client",
+ "registry-casework-core",
+ "registry-platform-audit",
+ "registry-platform-authcommon",
+ "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-testing",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-casework-breg"
+version = "0.29.0"
+dependencies = [
+ "async-trait",
+ "registry-breg-client",
+ "registry-casework-core",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "url",
+ "uuid",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-casework-client"
+version = "0.29.0"
+dependencies = [
+ "axum",
+ "registry-casework-core",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "registry-casework-client-node"
+version = "0.29.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-casework-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "registry-casework-client-py"
+version = "0.29.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-casework-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "registry-casework-core"
+version = "0.29.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "jsonschema",
+ "registry-platform-canonical-json",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
+name = "registry-caseworkctl"
+version = "0.29.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "registry-casework",
+ "registry-casework-core",
+ "registry-platform-buildinfo",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "registry-cli-docs"
 version = "0.29.0"
 dependencies = [
  "clap",
  "registry-breg",
  "registry-bregctl",
+ "registry-casework",
+ "registry-caseworkctl",
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
@@ -4075,6 +4219,7 @@ dependencies = [
  "subtle",
  "tempfile",
  "thiserror 2.0.20",
+ "time",
  "tokio",
  "url",
  "zeroize",
@@ -4343,6 +4488,7 @@ name = "registry-stack-client"
 version = "0.29.0"
 dependencies = [
  "registry-breg-client",
+ "registry-casework-client",
  "registry-discovery-client",
  "registry-evidence-client",
  "registry-platform-httputil",

@@ -417,6 +417,107 @@ fn record_application_shape_tracks_retained_or_erased_detail() {
 }
 
 #[test]
+fn review_state_timing_and_actor_references_are_strict_and_optional() {
+    let mut value = request_metadata(Vec::new());
+    value["review"] = json!({
+        "stages": [
+            {"id":"legal-review","approvals":2,"excludeSubmitter":true,"excludePreviousReviewers":true},
+            {"id":"operations","approvals":1,"excludeSubmitter":false}
+        ],
+        "submittedAt": "2026-09-01T10:00:00Z",
+        "pendingStage": "legal-review",
+        "stageEnteredAt": "2026-09-01T10:01:00Z"
+    });
+    value["reviewTiming"] = json!({
+        "firstSubmittedAt": "2026-09-01T10:00:00Z",
+        "pausedMilliseconds": 1200,
+        "pauseStartedAt": null,
+        "completedAt": "2026-09-01T12:00:00Z"
+    });
+    value["submitterReference"] = json!("opaque-submitter");
+    value["applierReference"] = json!("opaque-applier");
+    value["decisions"] = json!([{
+        "stageId":"legal-review",
+        "kind":"approve",
+        "decidedAt":"2026-09-01T11:00:00Z",
+        "reasonPresent":false,
+        "actorReference":"opaque-reviewer"
+    }]);
+    let metadata = BRegRequestMetadata::from_value(value.clone(), false).unwrap();
+    let review = metadata.review().unwrap();
+    assert_eq!(review.stages().len(), 2);
+    assert_eq!(review.stages()[0].identifier(), "legal-review");
+    assert_eq!(review.stages()[0].approvals(), 2);
+    assert!(review.stages()[0].exclude_submitter());
+    assert!(review.stages()[0].exclude_previous_reviewers());
+    assert!(!review.stages()[1].exclude_previous_reviewers());
+    assert_eq!(review.submitted_at(), "2026-09-01T10:00:00Z");
+    assert_eq!(review.pending_stage(), Some("legal-review"));
+    assert_eq!(review.stage_entered_at(), Some("2026-09-01T10:01:00Z"));
+    let timing = metadata.review_timing().unwrap();
+    assert_eq!(timing.first_submitted_at(), "2026-09-01T10:00:00Z");
+    assert_eq!(timing.paused_milliseconds(), 1200);
+    assert_eq!(timing.pause_started_at(), None);
+    assert_eq!(timing.completed_at(), Some("2026-09-01T12:00:00Z"));
+    assert_eq!(metadata.submitter_reference(), Some("opaque-submitter"));
+    assert_eq!(metadata.applier_reference(), Some("opaque-applier"));
+    assert_eq!(
+        metadata.decisions()[0].actor_reference(),
+        Some("opaque-reviewer")
+    );
+    let debug = format!("{metadata:?}");
+    for private in [
+        "legal-review",
+        "opaque-submitter",
+        "opaque-applier",
+        "opaque-reviewer",
+    ] {
+        assert!(!debug.contains(private));
+    }
+
+    for invalid in [
+        ("review.stages.extra", json!(true)),
+        ("review.stages.null", Value::Null),
+        ("review.pending_missing", Value::Null),
+        ("review.pending_unknown", json!("unknown-stage")),
+        ("timing.too_wide", json!(u64::MAX)),
+        ("decision.actor_null", Value::Null),
+        ("submitter_null", Value::Null),
+    ] {
+        let mut candidate = value.clone();
+        match invalid.0 {
+            "review.stages.extra" => candidate["review"]["stages"][0]["extra"] = invalid.1,
+            "review.stages.null" => {
+                candidate["review"]["stages"][0]["excludePreviousReviewers"] = invalid.1
+            }
+            "review.pending_missing" => {
+                candidate["review"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("pendingStage");
+            }
+            "review.pending_unknown" => candidate["review"]["pendingStage"] = invalid.1,
+            "timing.too_wide" => candidate["reviewTiming"]["pausedMilliseconds"] = invalid.1,
+            "decision.actor_null" => candidate["decisions"][0]["actorReference"] = invalid.1,
+            "submitter_null" => candidate["submitterReference"] = invalid.1,
+            _ => unreachable!(),
+        }
+        assert!(
+            BRegRequestMetadata::from_value(candidate, false).is_err(),
+            "{}",
+            invalid.0
+        );
+    }
+
+    let mut erased = value;
+    erased["detailErased"] = json!(true);
+    erased["editable"] = json!(false);
+    erased["application"] = json!({"applicationId":APPLICATION_ID,"proposalVersion":7});
+    erased.as_object_mut().unwrap().remove("review");
+    assert!(BRegRequestMetadata::from_value(erased, true).is_ok());
+}
+
+#[test]
 fn action_receipt_is_distinct_exact_and_requires_full_application() {
     assert!(BRegLifecycleActionReceipt::from_slice(
         br#"{"id":"00000000-0000-4000-8000-000000000001","id":"00000000-0000-4000-8000-000000000002","revision":9,"snapshot":"breg1_00000000-0000-4000-8000-000000000001","request":{"bregState":"canceled","proposalVersion":7,"effectDigest":null,"application":null}}"#
@@ -426,6 +527,7 @@ fn action_receipt_is_distinct_exact_and_requires_full_application() {
         "id": RECORD_ID,
         "revision": 9,
         "snapshot": format!("breg1_{RECORD_ID}"),
+        "actorReference": "opaque-actor",
         "request": {
             "bregState": "applied",
             "proposalVersion": 7,
@@ -436,6 +538,9 @@ fn action_receipt_is_distinct_exact_and_requires_full_application() {
     .expect("action receipt conforms");
     assert_eq!(receipt.record_identifier(), RECORD_ID);
     assert_eq!(receipt.revision(), 9);
+    assert_eq!(receipt.actor_reference(), Some("opaque-actor"));
+    assert_eq!(receipt.to_value()["actorReference"], json!("opaque-actor"));
+    assert!(!format!("{receipt:?}").contains("opaque-actor"));
     assert_eq!(receipt.request().breg_state(), BRegRequestState::Applied);
     assert_eq!(
         receipt.request().application().unwrap().applied_at(),
@@ -460,6 +565,10 @@ fn action_receipt_is_distinct_exact_and_requires_full_application() {
             "request": {"bregState":"applied", "proposalVersion":7, "effectDigest":DIGEST,
                 "application":{"applicationId":APPLICATION_ID,"proposalVersion":7}}
         }),
+        json!({
+            "id": RECORD_ID, "revision": 9, "snapshot": "breg1_x", "principal":"private",
+            "request": {"bregState":"applied", "proposalVersion":7, "effectDigest":DIGEST, "application":retained_application()}
+        }),
     ] {
         assert!(BRegLifecycleActionReceipt::from_value(invalid).is_err());
     }
@@ -479,6 +588,14 @@ fn action_receipt_is_distinct_exact_and_requires_full_application() {
     assert!(nullable.request().proposal_version().is_none());
     assert!(nullable.request().effect_digest().is_none());
     assert!(nullable.request().application().is_none());
+    assert!(nullable.actor_reference().is_none());
+    assert!(nullable.to_value().get("actorReference").is_none());
+
+    for actor_reference in [Value::Null, json!(""), json!("x".repeat(513))] {
+        let mut invalid = receipt.to_value();
+        invalid["actorReference"] = actor_reference;
+        assert!(BRegLifecycleActionReceipt::from_value(invalid).is_err());
+    }
 }
 
 #[test]
@@ -811,6 +928,7 @@ fn retained_decisions_preserve_disclosed_withheld_and_absent_reasons() {
     let base = json!({"stageId":"review", "kind":"reject", "decidedAt":"2026-09-09T00:00:00Z", "reasonPresent":true});
     let mut visible = base.clone();
     visible["reason"] = json!("  Please correct the values.\nเหตุผล 📝  ");
+    visible["actorReference"] = json!("opaque-reviewer");
     let mut absent = base.clone();
     absent["reasonPresent"] = json!(false);
     let mut request = request_metadata(vec![]);
@@ -833,6 +951,10 @@ fn retained_decisions_preserve_disclosed_withheld_and_absent_reasons() {
         decoded.retained_history().unwrap()["proposals"][0]["decisions"][0],
         visible
     );
+    assert_eq!(
+        decoded.retained_decisions()[0].actor_reference(),
+        Some("opaque-reviewer")
+    );
     assert!(!format!("{:?}", decoded.decisions()).contains("Please correct"));
     for (field, value) in [
         ("reason", json!(null)),
@@ -841,6 +963,7 @@ fn retained_decisions_preserve_disclosed_withheld_and_absent_reasons() {
         ("kind", json!("other")),
         ("kind", json!("approve")),
         ("reasonPresent", json!(false)),
+        ("actorReference", Value::Null),
         ("unknown", json!(true)),
     ] {
         let mut invalid = request.clone();
@@ -857,6 +980,12 @@ fn retained_decisions_preserve_disclosed_withheld_and_absent_reasons() {
         BRegRequestMetadata::from_value(request_metadata(vec![]), false)
             .unwrap()
             .decisions()
+            .is_empty()
+    );
+    assert!(
+        BRegRequestMetadata::from_value(request_metadata(vec![]), false)
+            .unwrap()
+            .retained_decisions()
             .is_empty()
     );
 }

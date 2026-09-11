@@ -1,0 +1,103 @@
+---
+title: Configure Registry Casework
+description: Author, validate, and package Casework policy, then bind it to deployment-owned identity, database, audit, and source settings.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-10"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+If you are preparing a Registry Casework candidate, keep reviewed policy and
+deployment-owned bindings separate. Authors control queues, profiles, hosted
+kinds, routing, and clocks. Operators control PostgreSQL credentials, identity,
+secrets, source endpoints, the listener, and the active package.
+
+Registry Casework is not in a published release yet. Build `caseworkctl` from
+the same reviewed source revision as the runtime before following this procedure.
+
+## Start an authored project
+
+Create a source-free project when an integration service needs a bounded human
+decision:
+
+```sh
+caseworkctl init ./casework --template standalone-decision
+caseworkctl check ./casework
+caseworkctl test ./casework
+```
+
+`init` refuses an existing destination. If the destination already exists,
+choose a new directory or review the existing project rather than overwriting it.
+The starter creates `casework.yaml`, synthetic fixtures, and
+`operator.example.yaml`. Copy the operator example to `operator.yaml`; keep the
+operator file and its secrets out of the policy package.
+
+For work from Base Registry Engine (BReg), start with
+`--template professional-review`, then preview
+the exact source changes before applying them:
+
+```sh
+caseworkctl source add ./registry \
+  --project ./casework --source-id professional-register
+caseworkctl source add ./registry \
+  --project ./casework --source-id professional-register --apply
+caseworkctl check ./casework
+caseworkctl test ./casework
+```
+
+The apply step changes reviewed local authoring inputs. It does not activate a
+production package or grant a person source authority.
+
+{/* Evidence: crates/registry-caseworkctl/src/{lib,project,source_add}.rs;
+    products/casework/examples/{standalone-decision,professional-review}/casework.yaml. */}
+
+## Bind the operator configuration
+
+Set the operator file's `project` to the selected `casework.yaml`. Configure a
+private listener, the file secret root, separate runtime and migration database
+URL references, the OIDC issuer and audience, the human-identity assertion, and
+the audit path and secret reference. Add one operator source binding for every
+source declared by policy. A standalone project has no source bindings.
+
+Production uses `tlsTermination: operator-controlled-upstream`. Put a TLS proxy
+or ingress in front of the private listener. Use `networkExposure:
+container-private` only for a wildcard listener confined to a private container
+network. Direct plaintext development uses `development-loopback` with a
+loopback listener and `private-address` exposure.
+
+Configure the issuer to reserve the Staff, Supervisor, and Administrator scopes
+for interactive human sessions carrying the exact human assertion. Issue the
+Requester scope to service clients. Directory membership remains a second,
+runtime-controlled authority check.
+
+{/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig and RuntimeConfig::check;
+    crates/registry-casework/src/auth.rs; products/casework/examples/professional-review/operator.example.yaml. */}
+
+## Package reviewed policy
+
+Package the exact policy and imported source descriptions into a new directory:
+
+```sh
+caseworkctl package ./casework --output ./casework-policy-package
+```
+
+The command refuses an existing output directory. Review
+`casework.package.json`, then set the production operator file's `project` to
+`./casework-policy-package/casework.yaml`. Production startup verifies the
+manifest's policy digest, file digests, and byte counts. Install and select the
+reviewed directory atomically before restarting or rolling out Casework.
+
+Run `caseworkctl --help` for the complete current command surface.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, package();
+    crates/registry-casework/src/config.rs, PolicyPackageManifest and
+    verify_policy_package(). */}
+
+## Next
+
+- [Run the source candidate](../../operate/casework/)
+- [Read the Casework API](../../reference/apis/registry-casework/)

@@ -89,6 +89,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
 const docsetsManifest = loadDocsetsManifest();
 const {
   base,
+  isArchivedBuild,
   isHistoricalArchiveBuild,
   isSearchExcludedBuild,
   internalRedirect,
@@ -116,6 +117,21 @@ const disabledSitemap = {
   name: '@astrojs/sitemap',
   hooks: {},
 };
+const caseworkOpenApiSchema = {
+  base: 'reference/apis/casework',
+  schema: './openapi/registry-casework.openapi.json',
+  sidebar: {
+    label: 'API operations',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+const caseworkCurrentOnlyRoutes = [
+  '/start/casework/',
+  '/configure/casework/',
+  '/operate/casework/',
+  '/reference/apis/registry-casework/',
+];
 
 export default defineConfig({
   site: 'https://docs.registrystack.org',
@@ -131,6 +147,10 @@ export default defineConfig({
   redirects: {
     ...buildNotaryRetirementRedirects(currentDocsetRedirect),
     ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
+    ...(isArchivedBuild ? Object.fromEntries(caseworkCurrentOnlyRoutes.flatMap((route) => [
+      [route, currentDocsetRedirect(route)],
+      [`${route.slice(0, -1)}.md`, currentDocsetRedirect(route)],
+    ])) : {}),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     // Retired product choosers. The homepage chooses between the products, so
@@ -267,6 +287,7 @@ export default defineConfig({
               operations: { labels: 'path', badges: true },
             },
           },
+          ...[caseworkOpenApiSchema].filter(() => !isArchivedBuild),
         ]),
       ],
       defaultLocale: 'root',
@@ -384,7 +405,7 @@ export default defineConfig({
             { label: 'API overview', slug: 'reference/apis/registry-evidence' },
             // The API plugin supplies its own operation groups. An extra HTTP
             // API wrapper would add a disclosure without helping navigation.
-            ...openAPISidebarGroups,
+            ...openAPISidebarGroups.slice(0, 1),
             { label: 'Security model', slug: 'security/evidence' },
           ],
         },
@@ -486,6 +507,17 @@ export default defineConfig({
             { label: 'PublicSchema wizard prompts', slug: 'reference/bregctl-publicschema-wizard' },
           ],
         },
+        ...(isArchivedBuild ? [] : [{
+          label: 'Registry Casework',
+          collapsed: true,
+          items: [
+            { label: 'Overview', slug: 'start/casework' },
+            { label: 'Configure policy and authority', slug: 'configure/casework' },
+            { label: 'Run the source candidate', slug: 'operate/casework' },
+            { label: 'API overview', slug: 'reference/apis/registry-casework' },
+            ...openAPISidebarGroups.slice(1, 2),
+          ],
+        }]),
         {
           label: 'Registry Mint',
           collapsed: true,

@@ -85,6 +85,8 @@ pub fn catalog() -> Catalog {
         command_reference(registry_evidence_oid4vci::command(), None, None),
         command_reference(registry_evidencectl::command(), None, None),
         command_reference(registry_mint::command(), None, None),
+        command_reference(registry_caseworkctl::command(), None, None),
+        command_reference(registry_casework::command(), None, None),
         command_reference(registry_breg::command(), None, None),
         command_reference(
             registry_bregctl::command(),
@@ -610,6 +612,8 @@ mod tests {
             [
                 "breg",
                 "bregctl",
+                "casework",
+                "caseworkctl",
                 "evidence",
                 "evidence-oid4vci",
                 "evidencectl",

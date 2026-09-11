@@ -27,6 +27,9 @@ const MAX_PATH_BYTES: usize = 2_048;
 const MAX_SUPPORTED_ACTION_TARGETS: u64 = 16;
 const MAX_SUPPORTED_ACTION_FIELD_MUTATIONS: u64 = 128;
 const MAX_SUPPORTED_ACTION_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_CHANGE_REQUEST_STAGES: usize = 32;
+const MAX_CHANGE_REQUEST_STAGE_ID_BYTES: usize = 64;
+const MAX_CHANGE_REQUEST_STAGE_APPROVALS: u64 = 32;
 
 /// A coarse, response-value-free reason that runtime metadata was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -362,7 +365,54 @@ impl BRegChangeRequestApplicationCapability {
 pub struct BRegChangeRequestCapability {
     planner: BRegChangeRequestPlannerCapability,
     review_mode: BRegChangeRequestReviewMode,
+    stages: Option<Vec<BRegChangeRequestStage>>,
     application: BRegChangeRequestApplicationCapability,
+}
+
+/// One authored review stage advertised for a change-request kind.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegChangeRequestStage {
+    id: String,
+    approvals: u64,
+    exclude_submitter: bool,
+    exclude_previous_reviewers: bool,
+}
+
+impl fmt::Debug for BRegChangeRequestStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegChangeRequestStage")
+            .field("identifier", &"<redacted>")
+            .field("approvals", &self.approvals)
+            .field("exclude_submitter", &self.exclude_submitter)
+            .field(
+                "exclude_previous_reviewers",
+                &self.exclude_previous_reviewers,
+            )
+            .finish()
+    }
+}
+
+impl BRegChangeRequestStage {
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn approvals(&self) -> u64 {
+        self.approvals
+    }
+
+    #[must_use]
+    pub const fn exclude_submitter(&self) -> bool {
+        self.exclude_submitter
+    }
+
+    #[must_use]
+    pub const fn exclude_previous_reviewers(&self) -> bool {
+        self.exclude_previous_reviewers
+    }
 }
 
 impl BRegChangeRequestCapability {
@@ -374,6 +424,12 @@ impl BRegChangeRequestCapability {
     #[must_use]
     pub const fn review_mode(&self) -> BRegChangeRequestReviewMode {
         self.review_mode
+    }
+
+    /// Returns authored stages when the server supports this additive metadata field.
+    #[must_use]
+    pub fn stages(&self) -> Option<&[BRegChangeRequestStage]> {
+        self.stages.as_deref()
     }
 
     #[must_use]
@@ -852,6 +908,7 @@ pub struct BRegMetadataOperation {
     required_capabilities: Vec<String>,
     fields: Vec<BRegMetadataField>,
     readable_fields: Vec<String>,
+    readable_request_fields: Vec<String>,
     create_writable_fields: Vec<String>,
     patch_writable_fields: Vec<String>,
     request: BRegOperationRequest,
@@ -934,6 +991,14 @@ impl BRegMetadataOperation {
     #[must_use]
     pub fn readable_fields(&self) -> &[String] {
         &self.readable_fields
+    }
+
+    /// Change-request metadata this operation's profile may read, such as
+    /// `review_state`. An engine that predates the grant projection names
+    /// none, so a caller that needs one refuses rather than assumes it.
+    #[must_use]
+    pub fn readable_request_fields(&self) -> &[String] {
+        &self.readable_request_fields
     }
 
     #[must_use]
@@ -2826,13 +2891,63 @@ fn parse_change_request_capability(
         "staged" => BRegChangeRequestReviewMode::Staged,
         _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
     };
+    let stages = capability
+        .remove("stages")
+        .map(parse_change_request_stages)
+        .transpose()?;
+    if review_mode == BRegChangeRequestReviewMode::None
+        && stages.as_ref().is_some_and(|stages| !stages.is_empty())
+    {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
     let application = parse_change_request_application(required(&mut capability, "application")?)?;
     finish(capability)?;
     Ok(BRegChangeRequestCapability {
         planner,
         review_mode,
+        stages,
         application,
     })
+}
+
+fn parse_change_request_stages(
+    value: Value,
+) -> Result<Vec<BRegChangeRequestStage>, BRegMetadataError> {
+    let values = array(value)?;
+    if values.len() > MAX_CHANGE_REQUEST_STAGES {
+        return Err(metadata_error(BRegMetadataErrorKind::Bound));
+    }
+    let mut ids = BTreeSet::new();
+    values
+        .into_iter()
+        .map(|value| {
+            let mut stage = object(value)?;
+            let id = identifier(required(&mut stage, "id")?)?;
+            if id.len() > MAX_CHANGE_REQUEST_STAGE_ID_BYTES || id.contains('.') {
+                return Err(metadata_error(BRegMetadataErrorKind::Identifier));
+            }
+            if !ids.insert(id.clone()) {
+                return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
+            }
+            let approvals = positive_integer(required(&mut stage, "approvals")?)?;
+            if approvals > MAX_CHANGE_REQUEST_STAGE_APPROVALS {
+                return Err(metadata_error(BRegMetadataErrorKind::Bound));
+            }
+            let exclude_submitter = boolean(required(&mut stage, "excludeSubmitter")?)?;
+            let exclude_previous_reviewers = stage
+                .remove("excludePreviousReviewers")
+                .map(boolean)
+                .transpose()?
+                .unwrap_or(false);
+            finish(stage)?;
+            Ok(BRegChangeRequestStage {
+                id,
+                approvals,
+                exclude_submitter,
+                exclude_previous_reviewers,
+            })
+        })
+        .collect()
 }
 
 fn parse_change_request_planner(
@@ -3067,6 +3182,11 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         .remove("readPath")
         .map(parse_read_path)
         .transpose()?;
+    let readable_request_fields = operation
+        .remove("readableRequestFields")
+        .map(parse_request_metadata_fields)
+        .transpose()?
+        .unwrap_or_default();
     finish(operation)?;
     Ok(BRegMetadataOperation {
         id,
@@ -3079,6 +3199,7 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         required_capabilities,
         fields,
         readable_fields,
+        readable_request_fields,
         create_writable_fields,
         patch_writable_fields,
         request,
@@ -3088,6 +3209,20 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         selectors,
         read_path,
     })
+}
+
+fn parse_request_metadata_fields(value: Value) -> Result<Vec<String>, BRegMetadataError> {
+    let fields = identifier_array(value)?;
+    ensure_unique(fields.iter().map(String::as_str))?;
+    if fields.iter().any(|field| {
+        !matches!(
+            field.as_str(),
+            "actor_reference" | "reason" | "review_state"
+        )
+    }) {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    Ok(fields)
 }
 
 fn parse_field(value: Value) -> Result<BRegMetadataField, BRegMetadataError> {

@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+ARG SOURCE_DATE_EPOCH=0
+
+FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime-root
+ARG SOURCE_DATE_EPOCH
+
+# The policy package, operator configuration, source bindings, and secrets are
+# deployment inputs. The image carries only the runtime binary and license.
+# Casework stores work and accountability records in PostgreSQL; only its local
+# append-only audit chain needs a writable persistent directory.
+RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
+    --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
+    mkdir -p \
+        /workspace/runtime-root/etc/registry-casework \
+        /workspace/runtime-root/licenses/casework \
+        /workspace/runtime-root/usr/local/bin \
+        /workspace/runtime-root/var/lib/registry-casework/audit \
+    && install -m 0755 /workspace/image-bin/casework /workspace/runtime-root/usr/local/bin/casework \
+    && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/casework/LICENSE \
+    && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-casework \
+    && chmod 0700 /workspace/runtime-root/var/lib/registry-casework/audit \
+    && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
+
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS runtime
+
+LABEL org.registrystack.runtime.uid="65532" \
+      org.registrystack.runtime.gid="65532"
+
+COPY --from=runtime-root /workspace/runtime-root/ /
+
+WORKDIR /var/lib/registry-casework
+
+EXPOSE 8091
+
+# Casework serves GET /health. Distroless has no shell or HTTP client, so the
+# deployment platform owns the probe.
+ENTRYPOINT ["/usr/local/bin/casework"]
+CMD ["--config", "/etc/registry-casework/operator.yaml", "serve"]

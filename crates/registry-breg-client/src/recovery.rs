@@ -70,7 +70,7 @@ struct CreateEvidence {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LifecycleEvidence {
+struct LegacyLifecycleEvidence {
     version: u8,
     source: String,
     registry_revision: String,
@@ -81,8 +81,74 @@ struct LifecycleEvidence {
     idempotency_key: String,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LifecycleEvidence {
+    version: u8,
+    source: String,
+    authority: Value,
+    action: Value,
+    body: String,
+    idempotency_key: String,
+}
+
+enum DecodedLifecycleEvidence {
+    Legacy(LegacyLifecycleEvidence),
+    Minimal(LifecycleEvidence),
+}
+
 capsule!(BRegPreparedCreate, CreateEvidence);
-capsule!(BRegPreparedLifecycle, LifecycleEvidence);
+
+/// Inert minimal lifecycle-action evidence for explicit, exact recovery.
+/// It contains no access token, record fields, proposal preview, history, or
+/// decisions. Store it with the attempt in application-protected state.
+pub struct BRegPreparedLifecycle(Zeroizing<Vec<u8>>);
+
+impl BRegPreparedLifecycle {
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, BaseRegistryClientError> {
+        if bytes.len() > MAXIMUM_PREPARED_BYTES {
+            return Err(refusal());
+        }
+        let value = crate::strict_json::from_slice(bytes).map_err(|_| refusal())?;
+        decode_lifecycle_evidence(value)?;
+        Ok(Self(Zeroizing::new(bytes.to_vec())))
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn encode(value: &LifecycleEvidence) -> Result<Self, BaseRegistryClientError> {
+        let bytes = Zeroizing::new(serde_json::to_vec(value).map_err(|_| refusal())?);
+        Self::from_slice(&bytes)
+    }
+
+    fn decode(&self) -> Result<DecodedLifecycleEvidence, BaseRegistryClientError> {
+        let value = serde_json::from_slice(&self.0).map_err(|_| refusal())?;
+        decode_lifecycle_evidence(value)
+    }
+}
+
+impl fmt::Debug for BRegPreparedLifecycle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegPreparedLifecycle(<redacted>)")
+    }
+}
+
+fn decode_lifecycle_evidence(
+    value: Value,
+) -> Result<DecodedLifecycleEvidence, BaseRegistryClientError> {
+    match value.get("version").and_then(Value::as_u64) {
+        Some(1) => serde_json::from_value(value)
+            .map(DecodedLifecycleEvidence::Legacy)
+            .map_err(|_| refusal()),
+        Some(2) => serde_json::from_value(value)
+            .map(DecodedLifecycleEvidence::Minimal)
+            .map_err(|_| refusal()),
+        _ => Err(refusal()),
+    }
+}
 
 fn create_identity(binding: &BRegCreateBinding) -> Value {
     serde_json::json!({
@@ -160,8 +226,9 @@ impl BaseRegistryClient {
         Ok((request, key, evidence.format))
     }
 
-    /// Prepare the exact promoted action plus its original record evidence.
-    /// No token acquisition or I/O occurs; persist before executing the action.
+    /// Prepare the exact promoted action's minimal authority and record binding.
+    /// Record fields, proposal and review previews, history, and decisions are
+    /// excluded. No token acquisition or I/O occurs; persist before execution.
     pub fn prepare_lifecycle_action(
         &self,
         authority: &BRegLifecycleAuthority,
@@ -184,13 +251,11 @@ impl BaseRegistryClient {
             return Err(refusal());
         }
         BRegPreparedLifecycle::encode(&LifecycleEvidence {
-            version: 1,
+            version: 2,
             source: self.source_binding(),
-            registry_revision: action.registry_revision().to_owned(),
-            record: serde_json::to_value(record).map_err(|_| refusal())?,
-            href: action.href().to_owned(),
+            authority: authority.recovery_identity(),
+            action: action.recovery_identity(),
             body: serde_json::to_string(action.body()).map_err(|_| refusal())?,
-            if_match: action.if_match().as_str().to_owned(),
             idempotency_key: key.as_str().to_owned(),
         })
     }
@@ -208,6 +273,40 @@ impl BaseRegistryClient {
         prepared: &BRegPreparedLifecycle,
     ) -> Result<(BRegLifecycleAction, BRegIdempotencyKey), BaseRegistryClientError> {
         let evidence = prepared.decode()?;
+        match evidence {
+            DecodedLifecycleEvidence::Legacy(evidence) => {
+                self.recover_legacy_lifecycle_action(authority, evidence)
+            }
+            DecodedLifecycleEvidence::Minimal(evidence) => {
+                self.recover_minimal_lifecycle_action(authority, evidence)
+            }
+        }
+    }
+
+    fn recover_minimal_lifecycle_action(
+        &self,
+        authority: &BRegLifecycleAuthority,
+        evidence: LifecycleEvidence,
+    ) -> Result<(BRegLifecycleAction, BRegIdempotencyKey), BaseRegistryClientError> {
+        if evidence.version != 2
+            || evidence.source != self.source_binding()
+            || !authority.matches_source(&evidence.source)
+            || !authority.matches_recovery_identity(&evidence.authority)
+        {
+            return Err(refusal());
+        }
+        let action = authority
+            .recover_action(evidence.action, &evidence.body)
+            .map_err(|_| refusal())?;
+        let key = BRegIdempotencyKey::parse(evidence.idempotency_key).map_err(|_| refusal())?;
+        Ok((action, key))
+    }
+
+    fn recover_legacy_lifecycle_action(
+        &self,
+        authority: &BRegLifecycleAuthority,
+        evidence: LegacyLifecycleEvidence,
+    ) -> Result<(BRegLifecycleAction, BRegIdempotencyKey), BaseRegistryClientError> {
         if evidence.version != 1
             || evidence.source != self.source_binding()
             || evidence.registry_revision != authority.registry_revision()

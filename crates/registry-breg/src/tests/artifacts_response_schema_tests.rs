@@ -408,6 +408,10 @@ fn action_response_schema_matches_application_receipt_shape() {
         .as_array()
         .expect("action response required properties render")
         .contains(&json!("snapshot")));
+    assert!(component["required"]
+        .as_array()
+        .expect("action response required properties render")
+        .contains(&json!("actorReference")));
     assert_eq!(
         component["properties"]["snapshot"]["maxLength"],
         crate::query::MAX_OPAQUE_VALUE_BYTES
@@ -421,6 +425,7 @@ fn action_response_schema_matches_application_receipt_shape() {
             "id": "00000000-0000-4000-8000-000000000001",
             "revision": 10,
             "snapshot": snapshot_reference(),
+            "actorReference": "actor-v1:opaque",
             "request": {
                 "bregState": "applied",
                 "proposalVersion": 2,

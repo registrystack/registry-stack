@@ -49,6 +49,7 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.evidence"),
     Path("release/docker/Dockerfile.mint"),
     Path("release/docker/Dockerfile.breg"),
+    Path("release/docker/Dockerfile.casework"),
     Path("release/docker/Dockerfile.relay"),
 )
 
@@ -134,6 +135,11 @@ HTTP_PROBE_DOCKERFILES = {
         "binary": "breg",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/breg"]',
         "command": 'CMD ["--config", "/etc/breg/runtime.yaml"]',
+    },
+    Path("release/docker/Dockerfile.casework"): {
+        "binary": "casework",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/casework"]',
+        "command": 'CMD ["--config", "/etc/registry-casework/operator.yaml", "serve"]',
     },
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Combine the four internal client wheels into one public wheel."""
+"""Combine the version-selected internal clients into one public wheel."""
 
 from __future__ import annotations
 
@@ -9,14 +9,22 @@ import csv
 import hashlib
 import io
 import re
+import sys
 import tomllib
 import zipfile
 from pathlib import Path
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import client_registry
+
+
 ROOT = Path(__file__).resolve().parents[2]
 FACADE = ROOT / "crates" / "registry-stack-client-py"
-PRODUCTS = ("discovery", "evidence", "relay", "breg")
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
 WHEEL_PATTERN = re.compile(r"^[^-]+-(?P<version>[^-]+)-(?P<tag>.+)\.whl$")
 
 
@@ -62,9 +70,26 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--include-casework",
+        action="store_true",
+        help="include Casework in an explicit local candidate before version 0.30.0",
+    )
     for product in PRODUCTS:
         parser.add_argument(f"--{product}-wheel", type=Path, required=True)
     args = parser.parse_args()
+
+    try:
+        casework_included = client_registry.includes_casework(
+            args.version, include_casework=args.include_casework
+        )
+    except client_registry.ClientRegistryError as exc:
+        parser.error(str(exc))
+    if not casework_included:
+        parser.error(
+            "this checkout contains the Casework Python facade; versions before "
+            "0.30.0 require the explicit --include-casework local-candidate option"
+        )
 
     configured_version = None
     try:

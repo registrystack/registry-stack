@@ -15,8 +15,8 @@ It produces, into `--output-dir`:
 
 Prerequisites this script does not perform:
 
-  * the four Node bindings built for this platform, from each of
-    `crates/registry-{discovery,evidence,relay,breg}-client-node`:
+  * the Node bindings selected for this version, built for this platform from
+    `crates/registry-{discovery,evidence,relay,breg,casework}-client-node`:
     `npm ci && npm run build:debug` (or `npm run build` for a release build)
   * a maturin for the Python half, passed with `--maturin`; the release
     workflows install the pinned one from
@@ -27,11 +27,15 @@ readable form of the recipe.
 
 Python wheels use the release profile by default. `--python-profile ci` opts
 into the workspace's cheaper CI profile for installed-package tutorial checks;
-it still assembles all four bindings with the same platform and package layout.
+it still assembles all five bindings with the same platform and package layout.
 
 The checked-in `crates/registry-stack-client-node/package.json` is never
 modified: the optional platform dependencies bind in a staging copy, because
 the version they name only exists at pack time.
+
+Casework joins the automatic public client roster at 0.30.0. The explicit
+`--include-casework` option permits integration checks against a local 0.29
+candidate; it does not change the roster used to validate published 0.29 bytes.
 """
 
 from __future__ import annotations
@@ -46,15 +50,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import client_registry
+
+
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = ("discovery", "evidence", "relay", "breg")
-# `registry-breg-client-py` publishes nothing on its own, so its wheel keeps
-# the name that says so; the other three carry their product name.
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
+NODE_PRODUCTS = PRODUCTS
+# BReg and Casework publish no standalone wheel, so their internal wheels use
+# explicit native stems. The other product wheels retain their historical stems.
 WHEEL_STEMS = {
     "discovery": "registry_discovery_client",
     "evidence": "registry_evidence_client",
     "relay": "registry_relay_client",
     "breg": "registry_breg_client_native",
+    "casework": "registry_casework_client_native",
 }
 # The platform, wheel tag, and maturin flags each release matrix entry uses.
 PLATFORMS = {
@@ -150,7 +163,7 @@ def node_steps(
             root,
         ),
     ]
-    for product in PRODUCTS:
+    for product in NODE_PRODUCTS:
         binding = root / "crates" / f"registry-{product}-client-node"
         steps.append(
             Step(
@@ -195,6 +208,7 @@ def python_steps(
     work_dir: Path,
     output_dir: Path,
     python_profile: str = "release",
+    include_casework: bool = False,
 ) -> list[Step]:
     if python_profile not in ("release", "ci"):
         raise ValueError(f"unsupported Python build profile: {python_profile}")
@@ -230,6 +244,8 @@ def python_steps(
         "--output-dir",
         str(output_dir),
     ]
+    if include_casework:
+        assemble.append("--include-casework")
     for product in PRODUCTS:
         assemble += [
             f"--{product}-wheel",
@@ -250,13 +266,28 @@ def plan(
     work_dir: Path,
     output_dir: Path,
     python_profile: str = "release",
+    include_casework: bool = False,
 ) -> list[Step]:
+    if not client_registry.includes_casework(
+        version, include_casework=include_casework
+    ):
+        raise ValueError(
+            "this checkout contains the Casework client; versions before 0.30.0 "
+            "require the explicit --include-casework local-candidate option"
+        )
     steps: list[Step] = []
     if artifacts in ("all", "node"):
         steps += node_steps(root, version, napi_platform, work_dir, output_dir)
     if artifacts in ("all", "python"):
         steps += python_steps(
-            root, version, napi_platform, maturin, work_dir, output_dir, python_profile
+            root,
+            version,
+            napi_platform,
+            maturin,
+            work_dir,
+            output_dir,
+            python_profile,
+            include_casework,
         )
     return steps
 
@@ -287,6 +318,11 @@ def main() -> int:
         default="release",
         help="Python binding build profile; ci is for installed-package CI checks",
     )
+    parser.add_argument(
+        "--include-casework",
+        action="store_true",
+        help="include Casework in an explicit local candidate before version 0.30.0",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -295,16 +331,20 @@ def main() -> int:
     output_dir = args.output_dir.resolve()
     work_dir = (args.work_dir or (args.output_dir / "staging")).resolve()
 
-    steps = plan(
-        ROOT,
-        version,
-        napi_platform,
-        args.artifacts,
-        args.maturin,
-        work_dir,
-        output_dir,
-        args.python_profile,
-    )
+    try:
+        steps = plan(
+            ROOT,
+            version,
+            napi_platform,
+            args.artifacts,
+            args.maturin,
+            work_dir,
+            output_dir,
+            args.python_profile,
+            args.include_casework,
+        )
+    except (ValueError, client_registry.ClientRegistryError) as exc:
+        parser.error(str(exc))
     for step in steps:
         print(f"# {step.description}")
         print(step.render())

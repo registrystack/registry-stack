@@ -486,6 +486,13 @@ impl JsonlFileSink {
         Self::with_rotation(path, DEFAULT_MAX_SIZE_BYTES, DEFAULT_MAX_FILES)
     }
 
+    /// Construct a single-writer file sink with the default rotation policy.
+    ///
+    /// This is the production counterpart to [`Self::new`].
+    pub fn new_single_writer(path: impl Into<PathBuf>) -> Result<Self, AuditError> {
+        Self::with_rotation_single_writer(path, DEFAULT_MAX_SIZE_BYTES, DEFAULT_MAX_FILES)
+    }
+
     /// Construct an unlocked file sink with byte-based rotation.
     ///
     /// `max_size_bytes = 0` disables rotation. `max_files` counts the active file;
@@ -542,6 +549,19 @@ impl JsonlFileSink {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.inner.path
+    }
+
+    /// Return the newest retained envelope without loading the whole journal.
+    ///
+    /// This observes identity at the tail only. It does not verify the retained
+    /// chain, so callers making a trust decision must first verify the chain with
+    /// [`AuditSink::tail_hash_with_hasher`] or bootstrap a keyed [`ChainState`].
+    pub async fn last_envelope(&self) -> Result<Option<AuditEnvelope>, AuditError> {
+        let _guard = self.inner.lock.lock().await;
+        let inner = Arc::clone(&self.inner);
+        tokio::task::spawn_blocking(move || inner.current_tail_envelope())
+            .await
+            .map_err(join_error_to_io)?
     }
 }
 
@@ -667,6 +687,12 @@ impl JsonlFileSinkInner {
     /// non-empty file, so the cost is independent of file size. A last line that
     /// fails to parse surfaces as a verification error (fail closed).
     fn current_tail_record_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        Ok(self
+            .current_tail_envelope()?
+            .map(|envelope| envelope.record_hash))
+    }
+
+    fn current_tail_envelope(&self) -> Result<Option<AuditEnvelope>, AuditError> {
         // Active file first; only when it is empty (e.g. immediately after a
         // process that rotated but had no subsequent write) fall back to the
         // newest rotated file, so the check stays correct without a false
@@ -685,7 +711,7 @@ impl JsonlFileSinkInner {
                     message: source.to_string(),
                 })
             })?;
-            return Ok(Some(envelope.record_hash));
+            return Ok(Some(envelope));
         }
         Ok(None)
     }
@@ -3141,6 +3167,55 @@ mod tests {
         drop(first);
         JsonlFileSink::with_rotation_single_writer(&path, 0, 1)
             .expect("lock is re-acquirable after the holder drops");
+    }
+
+    #[tokio::test]
+    async fn last_envelope_reads_the_active_or_newest_rotated_tail() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlFileSink::with_rotation(&path, 1, 3);
+        let chain = ChainState::unkeyed_dev_only();
+
+        let first = chain
+            .append(&sink, json!({ "event": "first" }))
+            .await
+            .expect("first append");
+        assert_eq!(
+            sink.last_envelope().await.expect("active tail"),
+            Some(first)
+        );
+
+        let second = chain
+            .append(&sink, json!({ "event": "second" }))
+            .await
+            .expect("rotating append");
+        assert_eq!(
+            sink.last_envelope().await.expect("new active tail"),
+            Some(second.clone())
+        );
+
+        fs::remove_file(rotated_path(&path, 1)).expect("remove older rotated file");
+        fs::rename(&path, rotated_path(&path, 1)).expect("leave an empty active file");
+        File::create(&path).expect("empty active file");
+        assert_eq!(
+            sink.last_envelope().await.expect("rotated tail"),
+            Some(second)
+        );
+    }
+
+    #[tokio::test]
+    async fn last_envelope_rejects_a_malformed_tail() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        fs::write(&path, "{not-json}\n").expect("malformed audit tail");
+        let sink = JsonlFileSink::new(&path);
+
+        assert!(matches!(
+            sink.last_envelope().await,
+            Err(AuditError::ChainVerification(
+                ChainVerificationError::InvalidJson { .. }
+            ))
+        ));
     }
 
     #[tokio::test]

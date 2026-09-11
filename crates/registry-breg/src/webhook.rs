@@ -8,11 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
-use hmac::{Hmac, KeyInit, Mac};
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_crypto::breg_webhook::{sign_v1, SignatureFields};
 use registry_platform_httputil::destination::{DestinationSendError, EventDeliveryHeaders};
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -33,11 +31,12 @@ use crate::startup::{OperationalEvent, WebhookStateTransitionCode};
 
 const LEASE_FINALIZATION_ALLOWANCE: Duration = Duration::from_secs(5);
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const SIGNATURE_DOMAIN: &[u8] = b"breg-webhook-signature-v1";
 const IDEMPOTENCY_DOMAIN: &[u8] = b"breg-webhook-idempotency-v1";
 pub const MAX_WEBHOOK_STATUS_RESULTS: u16 = 100;
-
-type HmacSha256 = Hmac<Sha256>;
+const _: () = assert!(
+    crate::compiler::MAX_WEBHOOK_PAYLOAD_BYTES as usize
+        == registry_platform_crypto::breg_webhook::MAX_BODY_BYTES
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum WebhookDeliveryError {
@@ -919,7 +918,7 @@ impl WebhookDeliveryService {
             &material.destination_binding_digest,
         );
         let signature = destination.with_hmac_sha256_key(|key| {
-            webhook_signature(
+            sign_v1(
                 key,
                 SignatureFields {
                     id: &event_id,
@@ -1609,55 +1608,6 @@ fn webhook_idempotency_key(
     format!("sha256:{}", hex::encode(Sha256::digest(input)))
 }
 
-#[derive(Clone, Copy)]
-struct SignatureFields<'a> {
-    id: &'a str,
-    source: &'a str,
-    event_type: &'a str,
-    time: &'a str,
-    data_schema: &'a str,
-    generation: &'a str,
-    attempt: &'a str,
-    delivery_time: &'a str,
-    method: &'a str,
-    request_target: &'a str,
-    content_type: &'a str,
-    idempotency_key: &'a str,
-    body: &'a [u8],
-}
-
-fn webhook_signature(
-    key: &[u8],
-    fields: SignatureFields<'_>,
-) -> Result<String, WebhookDeliveryError> {
-    let mut input = Vec::new();
-    input.extend_from_slice(SIGNATURE_DOMAIN);
-    for value in [
-        b"1.0".as_slice(),
-        fields.id.as_bytes(),
-        fields.source.as_bytes(),
-        fields.event_type.as_bytes(),
-        fields.time.as_bytes(),
-        fields.data_schema.as_bytes(),
-        fields.generation.as_bytes(),
-        fields.attempt.as_bytes(),
-        fields.delivery_time.as_bytes(),
-        fields.method.as_bytes(),
-        fields.request_target.as_bytes(),
-        fields.content_type.as_bytes(),
-        fields.idempotency_key.as_bytes(),
-        fields.body,
-    ] {
-        append_length_prefixed(&mut input, value);
-    }
-    let mut mac = HmacSha256::new_from_slice(key).map_err(|_| WebhookDeliveryError::Unavailable)?;
-    mac.update(&input);
-    Ok(format!(
-        "v1={}",
-        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
-    ))
-}
-
 fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) {
     output.extend_from_slice(&(value.len() as u64).to_be_bytes());
     output.extend_from_slice(value);
@@ -1700,61 +1650,6 @@ mod tests {
             None,
             "an attempt that outlives its captured timeout never reaches the destination"
         );
-    }
-
-    #[test]
-    fn hmac_sha256_v1_binds_every_header_and_exact_canonical_body() {
-        let key = [0x5a; 32];
-        let fields = SignatureFields {
-            id: "00000000-0000-4000-8000-000000000001",
-            source: "urn:registrystack:registry:example:instance:primary",
-            event_type: "case-created-v1",
-            time: "2026-08-30T00:00:00Z",
-            data_schema:
-                "urn:registrystack:registry:example:event:case-created-v1:schema:sha256:aaa",
-            generation: "1",
-            attempt: "1",
-            delivery_time: "2026-08-30T00:00:01Z",
-            method: "POST",
-            request_target: "/hooks/registry",
-            content_type: "application/json",
-            idempotency_key:
-                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            body: br#"{"entity":"case","values":{"label":"value"}}"#,
-        };
-        let baseline = webhook_signature(&key, fields).expect("bounded signature computes");
-        macro_rules! assert_field_is_bound {
-            ($member:ident, $changed:expr) => {{
-                let mut changed = fields;
-                changed.$member = $changed;
-                assert_ne!(
-                    baseline,
-                    webhook_signature(&key, changed).expect("changed signature computes")
-                );
-            }};
-        }
-        assert_field_is_bound!(id, "00000000-0000-4000-8000-000000000002");
-        assert_field_is_bound!(source, "urn:registrystack:registry:other:instance:primary");
-        assert_field_is_bound!(event_type, "case-patched-v1");
-        assert_field_is_bound!(time, "2026-08-30T00:00:02Z");
-        assert_field_is_bound!(data_schema, "urn:registrystack:schema:changed");
-        assert_field_is_bound!(generation, "2");
-        assert_field_is_bound!(attempt, "2");
-        assert_field_is_bound!(delivery_time, "2026-08-30T00:00:03Z");
-        assert_field_is_bound!(method, "PUT");
-        assert_field_is_bound!(request_target, "/hooks/other");
-        assert_field_is_bound!(content_type, "application/cloudevents+json");
-        assert_field_is_bound!(
-            idempotency_key,
-            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        );
-        assert_field_is_bound!(body, br#"{"entity":"case","values":{"label":"changed"}}"#);
-        assert_ne!(
-            baseline,
-            webhook_signature(&[0x6b; 32], fields).expect("changed key computes")
-        );
-        assert!(baseline.starts_with("v1="));
-        assert!(!baseline[3..].contains('='));
     }
 
     #[test]

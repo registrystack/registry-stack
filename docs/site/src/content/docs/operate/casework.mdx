@@ -1,0 +1,196 @@
+---
+title: Run Registry Casework from source
+description: Build the unreleased candidate, migrate its PostgreSQL database, start it behind TLS, and complete authenticated directory setup.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-10"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+If you operate the unreleased Registry Casework candidate, build the runtime and
+tooling from one reviewed source revision, then run one policy package against
+PostgreSQL and one OIDC issuer. No published Registry Stack release currently
+contains a Casework runtime, installer, or image.
+
+## Build the candidate
+
+From the reviewed Registry Stack checkout, build both binaries with the locked
+dependency graph:
+
+```sh
+cargo build --release --locked \
+  -p registry-casework -p registry-caseworkctl
+export PATH="$PWD/target/release:$PATH"
+casework --version
+caseworkctl --version
+```
+
+Both version commands must identify the same source version. If the build needs
+to update `Cargo.lock`, stop and restore the reviewed lockfile or review the
+dependency change before continuing.
+
+{/* Evidence: Cargo.toml; crates/registry-casework/src/runtime.rs, command();
+    crates/registry-caseworkctl/src/lib.rs, Cli. */}
+
+### Use the source container adapter
+
+The checkout also provides a local image target and Compose adapter. These
+build the same unreleased source; they do not pull or represent a published
+Casework image.
+
+First [package the reviewed policy](../../configure/casework/#package-reviewed-policy).
+Set the operator file's `project` to
+`/etc/registry-casework/package/casework.yaml`, its secret root to
+`/run/secrets/registry-casework`, its audit path below
+`/var/lib/registry-casework/audit`, and its listener to a container-private
+address. Then provide absolute host paths to the three read-only inputs:
+
+```sh
+export CASEWORK_OPERATOR_FILE="$PWD/operator.yaml"
+export CASEWORK_PACKAGE_DIR="$PWD/casework-policy-package"
+export CASEWORK_SECRET_ROOT="$PWD/secrets"
+
+docker compose -f docker/compose/docker-compose.casework.yaml build
+docker compose -f docker/compose/docker-compose.casework.yaml run --rm \
+  casework --config /etc/registry-casework/operator.yaml migrate
+docker compose -f docker/compose/docker-compose.casework.yaml up -d
+```
+
+The adapter publishes no host port. Attach an operator-controlled TLS proxy to
+its network, or enable only the loopback port mapping shown in the Compose file
+for local evaluation. PostgreSQL and the OIDC issuer remain external
+operator-owned dependencies.
+
+{/* Evidence: docker/Dockerfile; docker/compose/docker-compose.casework.yaml;
+    docker/README.md. */}
+
+## Prepare durable dependencies
+
+Provide one PostgreSQL database and two credentials. The migration credential
+owns and changes the Casework schema. The runtime credential serves requests and
+workers. Store both URLs behind the operator file's secret references rather
+than writing credentials into YAML.
+
+Provide the OIDC issuer named by the operator file. Its discovery document and
+keys must be reachable at startup unless the configuration selects a static JWKS
+document. Keep the audit file on durable storage and provide an audit secret of
+at least 32 bytes through the configured file secret provider.
+
+Place a TLS proxy or ingress in front of the Casework listener. The production
+runtime serves HTTP only on the private or container-private boundary declared
+by the operator file.
+
+{/* Evidence: crates/registry-casework/src/{config,runtime,store}.rs;
+    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES. */}
+
+## Migrate and start
+
+Apply embedded migrations using the operator configuration bound to the reviewed
+package:
+
+```sh
+casework --config ./operator.yaml migrate
+casework --config ./operator.yaml serve
+```
+
+Run `serve` under the host's service manager. Startup refuses an unverified
+production package, an invalid listener boundary, mismatched source bindings,
+unavailable database state, invalid OIDC configuration, or an unusable audit
+secret. Fix the reported dependency or binding and restart; do not bypass the
+package or transport check.
+
+Probe `GET /health` for process liveness and `GET /ready` before routing traffic.
+Readiness checks PostgreSQL and audit publication. A failed audit publication
+pass makes readiness fail, logs only the failed stage, and retries; a successful
+pass restores readiness. Source outages remain visible on affected work-item
+operations instead of turning the inbox into an apparently complete empty page.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, migrate_from_path() and serve_from_path();
+    crates/registry-casework/src/http.rs, health() and ready();
+    crates/registry-casework/src/service.rs. */}
+
+## Establish directory authority
+
+After authentication is working, use an Administrator token to bootstrap the
+first directory, then create or replace teams under the current directory
+revision. Each served queue belongs to at most one team. Removing a queue from
+one team before assigning it to another keeps the authority transition explicit.
+
+Administrator authority grants directory and holiday maintenance only. It does
+not grant item payload access. Supervisors assign and move caseload for teams
+they currently lead; Staff can delegate work they currently hold.
+
+Use the [generated API operations](../../reference/apis/casework/) for the exact
+headers, request schemas, success responses, and recovery problems.
+
+{/* Evidence: crates/registry-casework/src/{assignment,http}.rs;
+    products/casework/generated/registry-casework.openapi.json. */}
+
+## Erase source-backed payload copies
+
+When the source owner authorizes erasure for one exact request, preview the
+local effect under the migration database credential:
+
+```sh
+caseworkctl retention erase ./casework --operator ./operator.yaml \
+  --source-id "<source-id>" --request-kind "<request-kind>" --request-id "<request-id>"
+```
+
+The JSON report contains counts and the selector, with no item identifiers or
+erased values. Review that report against the source owner's retention decision,
+then repeat the exact command with `--apply`. Apply marks the local subject and
+items erased, removes drafts and correction context, strips retained attempt,
+receipt, history, event, idempotency, and audit-outbox payload fields, and
+cancels local clock work. A pending or uncertain source attempt blocks erasure;
+recover or settle that attempt before retrying so Casework does not fabricate an
+outcome.
+
+This command makes no Base Registry Engine (BReg) call and does not erase the
+external audit JSONL file. Retention and disposal for that file remain the
+deployment operator's separate policy.
+
+{/* Evidence: crates/registry-caseworkctl/src/{lib,project}.rs, retention_erase();
+    crates/registry-casework/src/source_retention.rs;
+    crates/registry-casework-core/src/source_retention.rs. */}
+
+## Settle an uncertain source attempt
+
+When a source attempt stays uncertain and recovery cannot observe its outcome,
+confirm the outcome with the source owner. Then preview the settlement under the
+migration database credential:
+
+```sh
+caseworkctl attempt settle ./casework --operator ./operator.yaml \
+  --attempt-id "<attempt-id>" --outcome not-applied \
+  --reason "<why the source owner confirmed this outcome>" \
+  --decided-by "<who decided>"
+```
+
+Use `--outcome applied` when the source applied the attempt. Only an uncertain
+attempt whose execution lease has expired can be settled; a live lease, a
+terminal attempt, or an unknown identifier is refused. The JSON report names the
+attempt, work item, operation, binding reference, and outcome, with the attempt
+and work item states the settlement produces. Review it, then repeat the exact
+command with `--apply`.
+
+`not-applied` refuses the attempt and returns the work item to its holder, who
+can act on it again. `applied` completes the attempt without a source receipt;
+the work item stays synchronizing until Casework observes the source's next
+revision. Apply records an `attempt_settled` history event with the outcome,
+reason, and decider, and no actor, in the same transaction as the state change.
+The reason is limited to 2,000 bytes and the decider to 256 bytes.
+
+This command makes no BReg call.
+
+{/* Evidence: crates/registry-caseworkctl/src/{lib,project}.rs, attempt_settle();
+    crates/registry-casework/src/store.rs, settle_attempt();
+    crates/registry-casework-core/src/attempt_settlement.rs. */}
+
+## Next
+
+- [Configure policy and authority](../../configure/casework/)
+- [Read the Casework API](../../reference/apis/registry-casework/)

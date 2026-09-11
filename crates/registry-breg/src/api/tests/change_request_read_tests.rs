@@ -71,12 +71,15 @@ fn request_get_omits_optional_review_action_when_target_claim_is_absent() {
     .expect("verified claims are valid");
     let surface = authorize_route(&service, route, &claims, &QueryOptions::default())
         .expect("request GET is authorized with target claims");
-    assert_eq!(surface.context.request_actions().len(), 3);
+    assert_eq!(surface.context.request_actions().len(), 6);
     let approve = surface
         .context
         .request_actions()
         .iter()
-        .find(|action| action.operation() == Operation::ApproveRequest)
+        .find(|action| {
+            action.operation() == Operation::ApproveRequest
+                && action.review_stage() == Some("review")
+        })
         .expect("approve action is discoverable");
     assert_eq!(
         approve.route_id(),
@@ -162,6 +165,20 @@ fn metadata_advertises_controlled_operations_separately_from_crud() {
 }
 
 #[test]
+fn request_description_declares_ordered_review_stages() {
+    let registry = compiled_registry();
+    let request = registry.entities()["placement-correction-request"]
+        .change_request
+        .as_ref()
+        .expect("request capability");
+    let metadata = crate::artifacts::request_capability_metadata(request, &BTreeSet::new());
+    assert_eq!(metadata["stages"].as_array().unwrap().len(), 2);
+    assert_eq!(metadata["stages"][0]["id"], "review");
+    assert_eq!(metadata["stages"][1]["id"], "final-approval");
+    assert_eq!(metadata["stages"][1]["excludePreviousReviewers"], true);
+}
+
+#[test]
 fn served_schemas_do_not_disclose_hidden_request_types_or_full_authoring_grants() {
     let registry = compiled_registry();
     let service = service_for(registry.clone());
@@ -219,7 +236,10 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
                 "operation":"patch",
                 "set":{"site":{"fromField":"proposed-site"}}
               }],
-              "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+              "review":{"stages":[
+                {"id":"review","approvals":1,"excludeSubmitter":true},
+                {"id":"final-approval","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":true}
+              ]}
             }
           }],
           "accessProfiles":[{
@@ -229,6 +249,13 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
               "readableFields":["placement","proposed-site"],
               "reviewStages":[{
                 "stage":"review",
+                "targets":[{
+                  "entity":"placement",
+                  "readableFields":["site"],
+                  "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]
+                }]
+              },{
+                "stage":"final-approval",
                 "targets":[{
                   "entity":"placement",
                   "readableFields":["site"],

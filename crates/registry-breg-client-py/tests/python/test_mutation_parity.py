@@ -138,6 +138,7 @@ def metadata() -> dict:
         {"fieldNames": "api", "queryParameters": [], "body": "none"},
     )
     get["readPath"] = {"id": "related-companies", "label": "Related companies"}
+    get["readableRequestFields"] = ["reason"]
     get["selectors"] = [
         {
             "id": "by-name",
@@ -217,7 +218,20 @@ def metadata() -> dict:
                         "possibleWriteCount": 1,
                         "possibleWriteOperations": ["patch"],
                     },
-                    "reviewMode": "none",
+                    "reviewMode": "staged",
+                    "stages": [
+                        {
+                            "id": "legal-review",
+                            "approvals": 2,
+                            "excludeSubmitter": True,
+                            "excludePreviousReviewers": True,
+                        },
+                        {
+                            "id": "operations",
+                            "approvals": 1,
+                            "excludeSubmitter": False,
+                        },
+                    ],
                     "application": {
                         "mode": "planner",
                         "allowedDispositions": ["apply", "queue"],
@@ -402,6 +416,7 @@ class MutationParityTests(unittest.TestCase):
 
     def test_metadata_descriptors_and_immediate_action(self) -> None:
         get = self.contract.operations[0]
+        self.assertEqual(get["readable_request_fields"], ["reason"])
         self.assertEqual(get["selectors"][0]["request_fields"], ["legalName"])
         self.assertEqual(get["read_path"]["id"], "related-companies")
         self.assertEqual(get["fields"][0]["code_labels"], {"active": "Active"})
@@ -416,6 +431,23 @@ class MutationParityTests(unittest.TestCase):
         capability = self.contract.change_request_capability("company")
         self.assertEqual(capability["planner"]["kind"], "rhai")
         self.assertEqual(capability["planner"]["limits"]["maximum_modules"], 0)
+        self.assertEqual(
+            capability["stages"],
+            [
+                {
+                    "id": "legal-review",
+                    "approvals": 2,
+                    "exclude_submitter": True,
+                    "exclude_previous_reviewers": True,
+                },
+                {
+                    "id": "operations",
+                    "approvals": 1,
+                    "exclude_submitter": False,
+                    "exclude_previous_reviewers": False,
+                },
+            ],
+        )
         self.assertEqual(
             capability["application"]["queue_reasons"],
             [{"code": "manual-check", "label": "Manual check"}],

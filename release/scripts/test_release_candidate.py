@@ -380,6 +380,7 @@ class ReleaseCandidateTest(TestCase):
             "evidence",
             "mint",
             "breg",
+            "casework",
             "relay",
         )
         evidence_members = security_evidence_members(image_names)
@@ -836,12 +837,29 @@ class ReleaseCandidateTest(TestCase):
             self.module._candidate_image_names("0.26.0"),
         )
 
+    def test_casework_joins_only_the_future_v0_30_roster(self) -> None:
+        self.assertNotIn("casework", self.module._candidate_image_names("0.29.0"))
+        self.assertEqual(
+            {"breg", "casework", "discovery", "evidence", "mint", "relay"},
+            self.module._candidate_image_names("0.30.0"),
+        )
+        historical = self.module._relay_v2_payload_inventory("0.29.0")
+        future = self.module._relay_v2_payload_inventory("0.30.0")
+        self.assertNotIn("casework-v0.29.0-linux-amd64", historical)
+        for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            self.assertEqual("binary", future[f"casework-v0.30.0-{platform}"])
+            self.assertEqual("binary", future[f"caseworkctl-v0.30.0-{platform}"])
+        self.assertEqual("installer", future["casework-v0.30.0-install.sh"])
+        self.assertEqual("installer", future["casework-install.sh"])
+
     def test_image_names_cli_emits_the_version_appropriate_roster(self) -> None:
         cases = (
             ("0.20.2", "relay\n"),
             ("0.21.0", "evidence mint relay\n"),
             ("0.24.0", "discovery evidence mint relay\n"),
             ("0.26.0", "breg discovery evidence mint relay\n"),
+            ("0.29.0", "breg discovery evidence mint relay\n"),
+            ("0.30.0", "breg casework discovery evidence mint relay\n"),
         )
         for version, expected in cases:
             with self.subTest(version=version):
@@ -860,6 +878,20 @@ class ReleaseCandidateTest(TestCase):
                     self.module._candidate_image_names(version),
                     self.module.check_image_onboarding(ROOT, version),
                 )
+
+    def test_image_onboarding_at_0_30_0_requires_casework_bootstrap(self) -> None:
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "casework advisory baseline is missing",
+        ):
+            self.module.check_image_onboarding(ROOT, "0.30.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain casework-candidate",
+        ):
+            self.module.check_image_onboarding(
+                ROOT, "0.30.0", allow_missing_baseline=True
+            )
 
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
         with self.assertRaisesRegex(
@@ -910,7 +942,7 @@ class ReleaseCandidateTest(TestCase):
         recipe = root / "release/scripts/build-release-image.sh"
         recipe.write_text(
             recipe.read_text(encoding="utf-8").replace(
-                "discovery|evidence|mint|breg|relay",
+                "discovery|evidence|mint|breg|casework|relay",
                 "discovery|evidence|mint|relay",
             ),
             encoding="utf-8",
@@ -1323,7 +1355,9 @@ class ReleaseCandidateTest(TestCase):
 
     def test_v2_security_evidence_archive_rejects_unbound_contents(self) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
-        base = security_evidence_members()
+        base = security_evidence_members(
+            tuple(image["name"] for image in candidate["images"])
+        )
 
         unbound_syft = dict(base)
         syft = json.loads(unbound_syft["syft/relay.syft.json"])

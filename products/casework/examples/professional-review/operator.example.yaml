@@ -1,0 +1,32 @@
+project: casework.yaml
+listen: 127.0.0.1:8091
+tlsTermination: development-loopback
+networkExposure: private-address
+secretProviders:
+  file:
+    root: secrets
+database:
+  runtimeUrlRef: secret:env/CASEWORK_DATABASE_URL
+  migrationUrlRef: secret:env/CASEWORK_MIGRATION_DATABASE_URL
+authentication:
+  oidc:
+    issuer: https://identity.example.test/realms/registry
+    audience: urn:example:casework
+    scopeClaim: registry_scopes
+    # The trusted issuer must add this claim only to interactive human sessions.
+    # Client-credentials and other service tokens must omit it or use another value.
+    humanIdentity:
+      claim: registry_actor_kind
+      value: human
+audit:
+  path: state/audit.ndjson
+  secretRef: secret:file/casework-audit-key
+sources:
+  professional-register:
+    baseUrl: https://registry.example.test
+    readerProfile: casework-reader
+    tokenEndpoint: https://identity.example.test/realms/registry/token
+    clientIdRef: secret:file/breg-reader-client-id
+    clientAssertionKeyRef: secret:file/breg-reader-key
+    webhookSecretRef: secret:file/breg-casework-webhook
+    eventSource: urn:registrystack:registry:professional-licences:instance:professional-licences-starter

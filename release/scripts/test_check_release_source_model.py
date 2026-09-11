@@ -106,6 +106,31 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("registry-evidence-oid4vci crate", result.stderr)
 
+    def test_monorepo_mode_requires_every_casework_crate(self) -> None:
+        for crate, name in (
+            ("registry-casework-core", "registry-casework core crate"),
+            ("registry-casework-breg", "registry-casework BReg source adapter crate"),
+            ("registry-casework", "registry-casework runtime crate"),
+            ("registry-caseworkctl", "registry-caseworkctl crate"),
+            ("registry-casework-client", "registry-casework client crate"),
+            (
+                "registry-casework-client-node",
+                "registry-casework Node client binding",
+            ),
+            (
+                "registry-casework-client-py",
+                "registry-casework Python client binding",
+            ),
+        ):
+            with self.subTest(crate=crate):
+                with MonorepoFixture() as stack_root:
+                    shutil.rmtree(stack_root / "crates" / crate)
+
+                    result = run_monorepo_validator(stack_root)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(name, result.stderr)
+
     def test_monorepo_mode_records_all_declared_external_release_refs(self) -> None:
         with MonorepoFixture() as stack_root:
             result = run_monorepo_validator(stack_root)
@@ -233,6 +258,13 @@ class MonorepoFixture:
             "crates/registry-breg-client",
             "crates/registry-breg-client-node",
             "crates/registry-breg-client-py",
+            "crates/registry-casework-core",
+            "crates/registry-casework-breg",
+            "crates/registry-casework",
+            "crates/registry-caseworkctl",
+            "crates/registry-casework-client",
+            "crates/registry-casework-client-node",
+            "crates/registry-casework-client-py",
             "crates/registry-stack-client-node",
             "crates/registry-stack-client-py",
         ):

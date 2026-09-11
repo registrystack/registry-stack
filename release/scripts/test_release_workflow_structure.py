@@ -506,7 +506,10 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         shards = document["jobs"]["build-canonical-binaries"]
         self.assertEqual("validate", shards["needs"])
         self.assertFalse(shards["strategy"]["fail-fast"])
-        self.assertEqual(["core", "breg"], shards["strategy"]["matrix"]["group"])
+        self.assertEqual(
+            ["core", "breg", "casework"],
+            shards["strategy"]["matrix"]["group"],
+        )
         checkout = shards["steps"][0]
         self.assertEqual(
             "${{ needs.validate.outputs.source_sha }}", checkout["with"]["ref"]
@@ -531,9 +534,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         downloads = [
             step for step in consumer["steps"] if "download-artifact@" in str(step)
         ]
-        self.assertEqual(2, len(downloads))
+        self.assertEqual(3, len(downloads))
         self.assertEqual(
-            {"binary-shards/core", "binary-shards/breg"},
+            {"binary-shards/core", "binary-shards/breg", "binary-shards/casework"},
             {step["with"]["path"] for step in downloads},
         )
         merge = step_run(
@@ -543,6 +546,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             '--source-sha "${{ needs.validate.outputs.source_sha }}"',
             "--core binary-shards/core",
             "--breg binary-shards/breg",
+            "--casework binary-shards/casework",
             '--builder-image "${RELEASE_BUILDER_IMAGE}"',
         ):
             self.assertIn(binding, merge)
@@ -595,7 +599,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual("macos-14", shards["runs-on"])
         self.assertFalse(shards["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "bregctl"],
+            ["core", "breg", "bregctl", "casework"],
             shards["strategy"]["matrix"]["group"],
         )
         checkout = shards["steps"][0]
@@ -633,6 +637,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn('--core "inputs/${prefix}-core-${suffix}"', merge)
         self.assertIn('--breg "inputs/${prefix}-breg-${suffix}"', merge)
         self.assertIn('--bregctl "inputs/${prefix}-bregctl-${suffix}"', merge)
+        self.assertIn('--casework "inputs/${prefix}-casework-${suffix}"', merge)
         self.assertIn(
             'inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}',
             merge,
@@ -668,6 +673,19 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "chmod 0755 candidate/bundle-root/evidencectl-install.sh",
             assemble,
         )
+
+    def test_candidate_checks_the_casework_package_manifest_it_emits(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble public payload and validate version-appropriate install inputs",
+        )
+        self.assertIn(
+            'test -f "${casework_package}/casework.package.json"',
+            assemble,
+        )
+        self.assertNotIn('test -f "${casework_package}/package.json"', assemble)
 
     def test_next_release_embeds_and_smokes_relay_installer_aliases(self) -> None:
         _, document = workflow("release-candidate.yml")
@@ -1141,7 +1159,7 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, text)
 
-    def test_builds_three_bound_shards_and_merges_one_review_only_payload(self) -> None:
+    def test_builds_bound_shards_and_merges_one_review_only_payload(self) -> None:
         text, document = workflow("release-native-benchmark.yml")
         validation = step_run(
             document, "validate", "Validate source and version binding"
@@ -1152,7 +1170,7 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         self.assertEqual("macos-14", build["runs-on"])
         self.assertFalse(build["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "bregctl"],
+            ["core", "breg", "bregctl", "casework"],
             build["strategy"]["matrix"]["group"],
         )
         build_run = step_run(
@@ -1177,9 +1195,14 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         downloads = [
             step for step in merge["steps"] if "download-artifact@" in str(step)
         ]
-        self.assertEqual(3, len(downloads))
+        self.assertEqual(4, len(downloads))
         self.assertEqual(
-            {"native-shards/core", "native-shards/breg", "native-shards/bregctl"},
+            {
+                "native-shards/core",
+                "native-shards/breg",
+                "native-shards/bregctl",
+                "native-shards/casework",
+            },
             {step["with"]["path"] for step in downloads},
         )
         merge_run = step_run(
@@ -1187,6 +1210,7 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("release/scripts/merge-release-native-platform-shards.py", merge_run)
         self.assertIn("--purpose review_only", merge_run)
+        self.assertIn("--casework native-shards/casework", merge_run)
         self.assertIn("registry-stack.release-native-benchmark.v1", merge_run)
         self.assertIn("purpose=review_only", merge_run)
         self.assertIn("group=merged", merge_run)
@@ -1734,6 +1758,81 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
 
 
 class SupportingWorkflowStructureTest(unittest.TestCase):
+    def test_public_verification_selects_the_versioned_image_roster(self) -> None:
+        verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")
+        jq_filter = verify.split('jq -e --arg tag "${tag}" \'\n', 1)[1].split(
+            '\n\' "${manifest}"', 1
+        )[0]
+        cases = {
+            "v0.20.2": ["relay"],
+            "v0.21.0": ["evidence", "mint", "relay"],
+            "v0.24.0": ["discovery", "evidence", "mint", "relay"],
+            "v0.26.0": ["breg", "discovery", "evidence", "mint", "relay"],
+            "v0.29.0": ["breg", "discovery", "evidence", "mint", "relay"],
+            "v0.30.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "mint",
+                "relay",
+            ],
+        }
+        manifests = {}
+        for tag, image_names in cases.items():
+            with self.subTest(tag=tag):
+                images = [
+                    {
+                        "name": name,
+                        "digest": "sha256:fixture",
+                        "final_ref": f"ghcr.io/registrystack/{name}:{tag}",
+                        "candidate_ref": (
+                            f"ghcr.io/registrystack/{name}-candidate@sha256:fixture"
+                        ),
+                    }
+                    for name in image_names
+                ]
+                manifest = {
+                    "schema_version": "registry-stack.release-candidate.v2",
+                    "repository": "registrystack/registry-stack",
+                    "release": {"tag": tag, "source_sha": "a" * 40},
+                    "workflow": {
+                        "path": ".github/workflows/release-candidate.yml",
+                        "revision": "b" * 40,
+                        "run_id": 1,
+                        "run_attempt": 1,
+                    },
+                    "images": images,
+                    "advisory": {"verdict": "passed"},
+                }
+                manifests[tag] = manifest
+                result = subprocess.run(
+                    ["jq", "-e", "--arg", "tag", tag, jq_filter],
+                    input=json.dumps(manifest),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+
+        missing_casework = dict(manifests["v0.30.0"])
+        missing_casework["images"] = [
+            image
+            for image in missing_casework["images"]
+            if image["name"] != "casework"
+        ]
+        rejected = subprocess.run(
+            ["jq", "-e", "--arg", "tag", "v0.30.0", jq_filter],
+            input=json.dumps(missing_casework),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(0, rejected.returncode)
+
+        self.assertIn("breg|casework|discovery|evidence|mint|relay)", verify)
+        self.assertIn("`casework` from\n`v0.30.0`", verify)
+
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
         verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")

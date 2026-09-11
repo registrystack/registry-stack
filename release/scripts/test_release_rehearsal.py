@@ -135,7 +135,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         binary_job = document["jobs"]["canonical-linux-binaries"]
         self.assertFalse(binary_job["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg"], binary_job["strategy"]["matrix"]["group"]
+            ["core", "breg", "casework"], binary_job["strategy"]["matrix"]["group"]
         )
         self.assertEqual(
             "${{ github.sha }}", binary_job["steps"][0]["with"]["ref"]

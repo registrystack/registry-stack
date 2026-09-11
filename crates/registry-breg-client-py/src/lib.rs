@@ -688,7 +688,7 @@ fn proposal_value(value: &BRegRequestProposal) -> Value {
 
 fn receipt_value(value: &BRegLifecycleActionReceipt) -> Value {
     let request = value.request();
-    json!({
+    let mut receipt = json!({
         "id": value.record_identifier(),
         "revision": value.revision(),
         "snapshot": value.snapshot(),
@@ -704,7 +704,11 @@ fn receipt_value(value: &BRegLifecycleActionReceipt) -> Value {
                 "applied_at": value.applied_at(),
             })),
         },
-    })
+    });
+    if let Some(actor_reference) = value.actor_reference() {
+        receipt["actor_reference"] = Value::String(actor_reference.to_owned());
+    }
+    receipt
 }
 
 fn review_value(value: &BRegRequestReview) -> Value {
@@ -809,6 +813,7 @@ fn metadata_operation_value(value: &breg_client_sdk::BRegMetadataOperation) -> V
         "title_fields": value.title_fields(),
         "required_capabilities": value.required_capabilities(),
         "readable_fields": value.readable_fields(),
+        "readable_request_fields": value.readable_request_fields(),
         "create_writable_fields": value.create_writable_fields(),
         "patch_writable_fields": value.patch_writable_fields(),
         "query": value.query(),
@@ -918,6 +923,14 @@ fn change_request_capability_value(value: &breg_client_sdk::BRegChangeRequestCap
             ReviewMode::None => "none",
             ReviewMode::Staged => "staged",
         },
+        "stages": value.stages().map(|stages| {
+            stages.iter().map(|stage| json!({
+                "id": stage.identifier(),
+                "approvals": stage.approvals(),
+                "exclude_submitter": stage.exclude_submitter(),
+                "exclude_previous_reviewers": stage.exclude_previous_reviewers(),
+            })).collect::<Vec<_>>()
+        }),
         "application": {
             "mode": match application.mode() {
                 ApplicationMode::Manual => "manual",

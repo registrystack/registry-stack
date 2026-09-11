@@ -1,0 +1,39 @@
+# Source-built Casework adapter for local evaluation. The policy package,
+# operator settings, file-backed secrets, audit state, and PostgreSQL service
+# remain operator-owned inputs.
+#
+# Required environment:
+#   CASEWORK_OPERATOR_FILE  operator.yaml configured for container paths
+#   CASEWORK_PACKAGE_DIR    output from caseworkctl package
+#   CASEWORK_SECRET_ROOT    owner-only file-secret directory
+name: registry-casework
+
+services:
+  casework:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: casework
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    volumes:
+      - ${CASEWORK_OPERATOR_FILE:?set CASEWORK_OPERATOR_FILE}:/etc/registry-casework/operator.yaml:ro
+      - ${CASEWORK_PACKAGE_DIR:?set CASEWORK_PACKAGE_DIR}:/etc/registry-casework/package:ro
+      - ${CASEWORK_SECRET_ROOT:?set CASEWORK_SECRET_ROOT}:/run/secrets/registry-casework:ro
+      - casework-audit:/var/lib/registry-casework
+      - type: tmpfs
+        target: /dev/shm
+        read_only: true
+    networks: [casework-net]
+    # Publish only to an operator-controlled upstream proxy when needed:
+    # ports:
+    #   - "127.0.0.1:8091:8091"
+
+networks:
+  casework-net: {}
+
+volumes:
+  casework-audit:

@@ -5,12 +5,13 @@
 // project, never against a checkout.
 
 import assert from 'node:assert';
-import { breg, discovery, evidence, relay } from '@registrystack/client';
+import { breg, casework, discovery, evidence, relay } from '@registrystack/client';
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
 assert.strictEqual(typeof discovery.DiscoveryClient, 'function');
 assert.strictEqual(typeof evidence.EvidenceClient, 'function');
 assert.strictEqual(typeof relay.RelayClient, 'function');
+assert.strictEqual(typeof casework.CaseworkClient, 'function');
 
 // A published verification key from the Evidence client construction tests. An
 // Evidence client refuses to exist without a usable trust anchor, so the smoke
@@ -45,5 +46,6 @@ assert.ok(new relay.RelayClient({
   baseUrl: 'https://relay.invalid',
   authorization: { static: 'placeholder-token' },
 }));
+assert.ok(new casework.CaseworkClient({ baseUrl: 'https://casework.invalid' }));
 
 console.log('Unified Node Registry client package ESM smoke passed');

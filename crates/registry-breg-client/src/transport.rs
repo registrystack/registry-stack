@@ -9,6 +9,7 @@ use reqwest::{Response, Url};
 
 use crate::{BRegProtocolFailure, BaseRegistryClientConfig, BaseRegistryClientError};
 
+#[derive(Clone)]
 pub(crate) struct Transport {
     pub(crate) http: reqwest::Client,
     pub(crate) base_url: ServiceBaseUrl,

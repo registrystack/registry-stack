@@ -206,7 +206,7 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
 
     def test_reuses_compiler_paths_for_all_products_in_one_job(self) -> None:
         compilers = []
-        for client in ("discovery", "evidence", "relay", "breg"):
+        for client in ("discovery", "evidence", "relay", "breg", "casework"):
             self.make_client(client, "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
             result = self.run_build(client=client)
             self.assertEqual(result.returncode, 0, result.stderr)

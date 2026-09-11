@@ -320,7 +320,16 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
             "possibleWriteCount": 1,
             "possibleWriteOperations": ["patch"]
         },
-        "reviewMode": "none",
+        "reviewMode": "staged",
+        "stages": [
+            {
+                "id": "legal-review",
+                "approvals": 2,
+                "excludeSubmitter": true,
+                "excludePreviousReviewers": true
+            },
+            {"id": "operations", "approvals": 1, "excludeSubmitter": false}
+        ],
         "application": {
             "mode": "planner",
             "allowedDispositions": ["apply", "queue"],
@@ -363,8 +372,17 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
     ));
     assert_eq!(
         change_request.review_mode(),
-        BRegChangeRequestReviewMode::None
+        BRegChangeRequestReviewMode::Staged
     );
+    let stages = change_request
+        .stages()
+        .expect("new servers advertise stages");
+    assert_eq!(stages.len(), 2);
+    assert_eq!(stages[0].identifier(), "legal-review");
+    assert_eq!(stages[0].approvals(), 2);
+    assert!(stages[0].exclude_submitter());
+    assert!(stages[0].exclude_previous_reviewers());
+    assert!(!stages[1].exclude_previous_reviewers());
     assert_eq!(
         change_request.application().mode(),
         BRegChangeRequestApplicationMode::Planner
@@ -385,12 +403,23 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         "Manual check"
     );
     assert!(!format!("{change_request:?}").contains("Manual check"));
+    assert!(!format!("{change_request:?}").contains("legal-review"));
     assert!(matches!(
         metadata
             .select_direct_write("records.company.patch", "company-writer")
             .expect("descriptive capability does not alter direct-write authority"),
         BRegDirectWrite::Patch(_)
     ));
+
+    let mut legacy_capability = capability.clone();
+    legacy_capability.as_object_mut().unwrap().remove("stages");
+    let mut legacy = fixture();
+    legacy["entities"][0]["changeRequest"] = legacy_capability;
+    assert!(parse(&legacy)
+        .change_request_capability("company")
+        .unwrap()
+        .stages()
+        .is_none());
 
     for malformed in [
         {
@@ -404,8 +433,28 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
             malformed
         },
         {
-            let mut malformed = capability;
+            let mut malformed = capability.clone();
             malformed["planner"]["possibleWriteOperations"] = json!(["patch", "patch"]);
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["stages"][1]["id"] = json!("legal-review");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["stages"][0]["approvals"] = json!(33);
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["stages"][0]["excludePreviousReviewers"] = Value::Null;
+            malformed
+        },
+        {
+            let mut malformed = capability;
+            malformed["stages"][0]["privateGrant"] = json!("reviewers");
             malformed
         },
     ] {
@@ -989,5 +1038,40 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
             .unwrap_err()
             .kind(),
         BRegMetadataSelectionErrorKind::ContractMismatch
+    );
+}
+
+#[test]
+fn request_metadata_grants_are_retained_and_an_older_engine_grants_none() {
+    let older = parse(&fixture());
+    assert!(older
+        .operations()
+        .iter()
+        .all(|operation| operation.readable_request_fields().is_empty()));
+
+    let mut granted = fixture();
+    granted["operations"][0]["readableRequestFields"] = json!(["reason", "review_state"]);
+    let metadata = parse(&granted);
+    assert_eq!(
+        metadata.operations()[0].readable_request_fields(),
+        ["reason", "review_state"]
+    );
+
+    let mut duplicate = fixture();
+    duplicate["operations"][0]["readableRequestFields"] = json!(["reason", "reason"]);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&duplicate).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::DuplicateIdentifier
+    );
+
+    let mut unknown = fixture();
+    unknown["operations"][0]["readableRequestFields"] = json!(["reviewer_notes"]);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&unknown).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
     );
 }

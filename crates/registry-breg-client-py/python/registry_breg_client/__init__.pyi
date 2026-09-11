@@ -107,6 +107,41 @@ class BRegLifecycleAction:
     @property
     def review(self) -> dict[str, JsonValue] | None: ...
 
+class BRegChangeRequestStage(TypedDict):
+    id: str
+    approvals: int
+    exclude_submitter: bool
+    exclude_previous_reviewers: bool
+
+class BRegChangeRequestCapability(TypedDict):
+    planner: dict[str, JsonValue]
+    review_mode: Literal["none", "staged"]
+    stages: list[BRegChangeRequestStage] | None
+    application: dict[str, JsonValue]
+
+class BRegLifecycleReceiptRequest(TypedDict):
+    breg_state: str
+    proposal_version: int | None
+    effect_digest: str | None
+    proposal: dict[str, JsonValue] | None
+    application: dict[str, JsonValue] | None
+
+class _BRegLifecycleReceiptRequired(TypedDict):
+    id: str
+    revision: int
+    snapshot: str
+    request: BRegLifecycleReceiptRequest
+
+class BRegLifecycleReceipt(_BRegLifecycleReceiptRequired, total=False):
+    actor_reference: str
+
+class BRegLifecycleComplete(TypedDict):
+    kind: Literal["complete"]
+    value: BRegLifecycleReceipt
+    trace_id: str
+    etag: str | None
+    location: str | None
+
 class BRegMetadata:
     @property
     def operations(self) -> Sequence[dict[str, JsonValue]]:
@@ -141,7 +176,7 @@ class BRegMetadata:
     def select_attachments(self, entity_identifier: str, expected_profile: str) -> Sequence[BRegAttachmentSlot]: ...
     def change_request_capability(
         self, entity_identifier: str
-    ) -> dict[str, JsonValue] | None: ...
+    ) -> BRegChangeRequestCapability | None: ...
 
 class BaseRegistryClient:
     def __init__(
@@ -387,8 +422,8 @@ class BaseRegistryClient:
     def execute_recovered_lifecycle_action(
         self,
         recovered: BRegRecoveredLifecycle,
-    ) -> dict[str, Any]: ...
-    def execute_lifecycle_action(self, action: BRegLifecycleAction, idempotency_key: str) -> dict[str, Any]: ...
+    ) -> BRegLifecycleComplete: ...
+    def execute_lifecycle_action(self, action: BRegLifecycleAction, idempotency_key: str) -> BRegLifecycleComplete: ...
     def upload_attachment(
         self,
         slot: BRegAttachmentSlot,

@@ -2022,7 +2022,9 @@ pub struct AccessProfileSource {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestMetadataFieldSource {
+    ActorReference,
     Reason,
+    ReviewState,
 }
 
 fn default_readable_request_fields() -> BTreeSet<RequestMetadataFieldSource> {

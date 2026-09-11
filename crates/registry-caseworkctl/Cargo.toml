@@ -1,0 +1,30 @@
+[package]
+name = "registry-caseworkctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Casework adopter and local operator tooling."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "caseworkctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-casework-core.workspace = true
+registry-casework.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+uuid.workspace = true

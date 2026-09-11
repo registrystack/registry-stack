@@ -47,6 +47,16 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/src/auth.rs, admits_one_access_token_type();
     crates/registry-breg/src/runtime_config.rs, token_verifier_config(). */}
 
+- `GET /v1/registry` lists each operation's `readableRequestFields` beside
+  `readableFields`, so a caller can learn before a read whether its selected
+  profile receives request review state, actor references, or decision reasons.
+  The list follows the rule request reads apply: an anonymous profile, or an
+  entity without a change request, lists no request fields. See
+  [Base Registry Engine API](../reference/breg-api/).
+
+{/* Evidence: crates/registry-breg/src/api/metadata.rs, readable_request_fields;
+    crates/registry-breg/tests/http_read_only.rs, workspace_metadata_projects_request_field_disclosure_per_caller_profile. */}
+
 - The Rust, Node.js, and Python Base Registry Engine clients accept the
   `action.refused` problem an immediate action answers a declared business rule
   with. No client registered that code, so the one refusal a caller is meant to
@@ -70,6 +80,18 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: docs/site/src/data/breg-api.yaml;
     crates/registry-breg/src/problem.rs, ActionEvidenceFailed. */}
+
+- `readableRequestFields` widens to `review_state` and `actor_reference`,
+  disclosing `review`, `reviewTiming`, `submitterReference`, and
+  `applierReference` on a change-request record for a non-anonymous profile.
+  Every change-request action response now also includes `actorReference`,
+  independent of `readableRequestFields`. See
+  [Base Registry Engine API](../reference/breg-api/).
+
+{/* Evidence: crates/registry-breg/src/contract.rs, RequestMetadataFieldSource;
+    crates/registry-breg/src/postgres/request_read.rs, may_disclose_review_state
+    and may_disclose_actor_references;
+    crates/registry-breg/src/artifacts.rs, request_record_metadata_schema. */}
 
 ## v0.29.0 beta-41
 

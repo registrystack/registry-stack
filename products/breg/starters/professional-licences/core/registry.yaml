@@ -499,6 +499,9 @@
             "reason",
             "supporting-reference"
           ],
+          "filterableFields": [
+            "record"
+          ],
           "rowBoundaries": [],
           "reviewStages": [
             {

@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
 
-const PRODUCTS = ['discovery', 'evidence', 'relay', 'breg'];
+const PRODUCTS = ['discovery', 'evidence', 'relay', 'breg', 'casework'];
 
 // Node synthesises the named exports an ESM consumer imports from this CommonJS
 // entry point by statically scanning it for individual `exports.<name> =`

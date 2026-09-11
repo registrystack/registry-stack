@@ -41,6 +41,16 @@
       "exporterPath": "crates/registry-breg/examples/problem-catalog.rs",
       "cargoPackage": "registry-breg",
       "cargoExample": "problem-catalog"
+    },
+    {
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-casework/",
+      "sourcePath": "crates/registry-casework/src/problem.rs",
+      "exporterPath": "crates/registry-casework/examples/problem-catalog.rs",
+      "cargoPackage": "registry-casework",
+      "cargoExample": "problem-catalog"
     }
   ],
   "referenceExclusions": [

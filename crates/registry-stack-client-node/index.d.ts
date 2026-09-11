@@ -2,5 +2,6 @@ import * as discovery from './discovery/client'
 import * as evidence from './evidence/client'
 import * as relay from './relay/client'
 import * as breg from './breg/client'
+import * as casework from './casework/client'
 
-export { discovery, evidence, relay, breg }
+export { discovery, evidence, relay, breg, casework }

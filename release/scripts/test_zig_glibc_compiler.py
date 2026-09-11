@@ -224,7 +224,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "target = pathlib.Path('target/release')\n"
             "target.mkdir(parents=True, exist_ok=True)\n"
             "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
-            "'evidencectl', 'mint', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl'):\n"
+            "'evidencectl', 'mint', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl', "
+            "'casework', 'caseworkctl'):\n"
             "    (target / binary).write_text('fixture binary\\n')\n",
             encoding="utf-8",
         )
@@ -410,6 +411,33 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         result, breg = self.run_payload(version="0.25.9", group="breg")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([], breg)
+
+    def test_casework_group_builds_both_exact_binary_targets_from_v0_30(self) -> None:
+        result, calls = self.run_payload(version="0.30.0", group="casework")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            [
+                [
+                    "build",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    "registry-casework",
+                    "--bin",
+                    "casework",
+                ],
+                [
+                    "build",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    "registry-caseworkctl",
+                    "--bin",
+                    "caseworkctl",
+                ],
+            ],
+            [call["args"] for call in calls],
+        )
 
     def test_outer_builder_dispatches_each_group_with_canonical_container_paths(
         self,

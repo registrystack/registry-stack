@@ -5,7 +5,7 @@ description = "Unified Python client for Registry Stack products."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
-keywords = ["registry", "registrystack", "discovery", "evidence", "relay", "breg"]
+keywords = ["registry", "registrystack", "discovery", "evidence", "relay", "breg", "casework"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "License :: OSI Approved :: Apache Software License",

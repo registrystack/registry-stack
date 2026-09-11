@@ -24,6 +24,7 @@ from ci_changes import (
     IDENTIFIER_CATALOG_INPUTS,
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     BREG_PACKAGES,
+    CASEWORK_PACKAGES,
     RELAY_CLIENT_PACKAGES,
     RELAY_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
@@ -269,6 +270,7 @@ class CiChangesTest(unittest.TestCase):
         self,
     ) -> None:
         selectors = {
+            "casework-postgres": "needs.changes.outputs.casework_postgres == 'true'",
             "platform-fuzz": "needs.changes.outputs.platform == 'true'",
             "platform-coverage": "needs.changes.outputs.platform == 'true'",
             "rust-quality": "needs.changes.outputs.rust == 'true'",
@@ -329,6 +331,7 @@ class CiChangesTest(unittest.TestCase):
             "breg-contracts",
             "identifiers",
             "rust-result",
+            "casework-postgres",
             "release-tool",
             "release-tool-required",
             "release-source-proof",
@@ -359,6 +362,7 @@ class CiChangesTest(unittest.TestCase):
                 "relay-client-contracts",
                 "breg-contracts",
                 "identifiers",
+                "casework-postgres",
             ),
             "release-tool-required": ("changes", "release-tool"),
             "release-source-proof-required": ("changes", "release-source-proof"),
@@ -380,6 +384,7 @@ class CiChangesTest(unittest.TestCase):
                 "relay-client-contracts",
                 "breg-contracts",
                 "identifiers",
+                "casework-postgres",
                 "release-tool",
                 "release-source-proof",
                 "evidence-tutorials",
@@ -433,7 +438,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(26, len(final_needs))
+        self.assertEqual(27, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]
@@ -703,6 +708,22 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertTrue(outputs["relay_v2_contracts"])
         self.assertTrue(outputs["editors"])
+
+    def test_casework_product_and_core_select_the_checkpoint_crates(self) -> None:
+        product = classify(self.workspace, ("products/casework/README.md",))
+        self.assertEqual(set(product["rust_packages"]) & CASEWORK_PACKAGES, set(CASEWORK_PACKAGES))
+        selected = {row["name"] for row in product["rust_matrix"]["include"]}
+        self.assertIn("casework", selected)
+        self.assertTrue(product["casework_postgres"])
+        core = classify(self.workspace, ("crates/registry-casework-core/src/adapter.rs",))
+        self.assertLessEqual(CASEWORK_PACKAGES, set(core["rust_packages"]))
+        self.assertTrue(core["casework_postgres"])
+        python = classify(
+            self.workspace,
+            ("crates/registry-casework-client-py/src/lib.rs",),
+        )
+        self.assertIn("registry-casework-client-py", python["rust_packages"])
+        self.assertTrue(python["casework_postgres"])
 
     def test_breg_paths_select_its_shard_and_product_gate(self) -> None:
         for path in (
@@ -1256,7 +1277,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("registry-relay-client", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"breg", "stack-client", "developer-tools"},
+            {"breg", "casework", "stack-client", "developer-tools"},
         )
 
     def test_registry_record_change_runs_both_product_clients_and_facade(self) -> None:
@@ -1327,6 +1348,31 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertTrue(outputs["client_bindings"])
         self.assertTrue(outputs["evidence_tutorial"])
+
+    def test_casework_bindings_run_the_native_client_job(self) -> None:
+        # The Casework bindings are covered only by the shared native-client
+        # job, and the Python one also ships in the assembled package the
+        # application tutorial imports.
+        for path in (
+            "crates/registry-casework-client-node/src/lib.rs",
+            "crates/registry-casework-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["client_bindings"])
+        self.assertTrue(
+            classify(
+                self.workspace, ("crates/registry-casework-client-py/src/lib.rs",)
+            )["evidence_tutorial"]
+        )
+
+    def test_casework_node_sources_run_the_linux_release_addon_proof(self) -> None:
+        for path in (
+            "crates/registry-casework-client/src/client.rs",
+            "crates/registry-casework-client-node/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["release_linux_node_clients"])
 
     def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
         # Both bindings are Cargo path-dependents of the SDK and the verifier,
@@ -1647,6 +1693,19 @@ on:
         for _pattern, source in CLI_REFERENCE_INPUTS:
             with self.subTest(source=source):
                 self.assertTrue(classify(self.workspace, (source,))["docs"])
+
+    def test_casework_command_changes_select_docs_and_product_checks(self) -> None:
+        for path in (
+            "crates/registry-casework/src/runtime.rs",
+            "crates/registry-caseworkctl/src/lib.rs",
+            "crates/registry-caseworkctl/src/main.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["casework_postgres"])
+                selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
+                self.assertIn("casework", selected)
 
     def test_docs_rebuild_from_generator_inputs_without_rendered_changes(self) -> None:
         for path in (

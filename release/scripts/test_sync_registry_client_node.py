@@ -55,5 +55,41 @@ class SyncRegistryClientNodeReadmeTest(unittest.TestCase):
         self.assertNotIn(TARGET / "README.md", self.files)
 
 
+CASEWORK_PYTHON_LICENCE = "crates/registry-casework-client-py/LICENSE"
+
+
+class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.files = self.module.expected_files()
+        self.licence = (ROOT / "LICENSE").read_bytes()
+        self.gated = sorted(
+            str(path.relative_to(ROOT))
+            for path in self.files
+            if path.name == "LICENSE"
+        )
+
+    def test_every_gated_licence_carries_the_root_apache_text(self) -> None:
+        self.assertTrue(self.gated)
+        for name in self.gated:
+            with self.subTest(licence=name):
+                self.assertEqual(
+                    len(self.files[ROOT / name]), len(self.licence), name
+                )
+                self.assertTrue(self.files[ROOT / name] == self.licence, name)
+
+    def test_the_casework_python_binding_licence_is_gated(self) -> None:
+        # The wheel is assembled from this crate, so its licence is held by the
+        # same gate as the other assembled bindings.
+        self.assertIn(CASEWORK_PYTHON_LICENCE, self.gated)
+
+    def test_the_casework_python_binding_ships_the_root_apache_text(self) -> None:
+        shipped = (ROOT / CASEWORK_PYTHON_LICENCE).read_bytes()
+        self.assertEqual(
+            len(shipped), len(self.licence), CASEWORK_PYTHON_LICENCE
+        )
+        self.assertTrue(shipped == self.licence, CASEWORK_PYTHON_LICENCE)
+
+
 if __name__ == "__main__":
     unittest.main()

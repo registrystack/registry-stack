@@ -16,7 +16,7 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
-VERSION = "0.27.0"
+VERSION = "0.30.0"
 TAG = f"v{VERSION}"
 BUILDER = "rust:fixture@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
@@ -31,10 +31,15 @@ CORE = [
     f"relayctl-{TAG}-linux-amd64",
 ]
 BREG = [f"breg-{TAG}-linux-amd64", f"bregctl-{TAG}-linux-amd64"]
-FINAL = [CORE[0], *BREG, *CORE[1:]]
+CASEWORK = [
+    f"casework-{TAG}-linux-amd64",
+    f"caseworkctl-{TAG}-linux-amd64",
+]
+FINAL = [CORE[0], *BREG, *CASEWORK, *CORE[1:]]
 IMAGE_SOURCES = {
     "discovery": CORE[0],
     "breg": BREG[0],
+    "casework": CASEWORK[0],
     "evidence": CORE[1],
     "mint": CORE[3],
     "relay": CORE[6],
@@ -52,6 +57,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.core = self.write_shard("core", CORE)
         self.breg = self.write_shard("breg", BREG)
+        self.casework = self.write_shard("casework", CASEWORK)
         self.output = self.root / "dist"
 
     def write_shard(self, name: str, assets: list[str]) -> Path:
@@ -80,6 +86,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             source_sha=SOURCE_SHA,
             core=self.core,
             breg=self.breg,
+            casework=self.casework,
             output=self.output,
             builder_image=BUILDER,
         )
@@ -97,11 +104,23 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             sorted(path.name for path in image_dir.iterdir()),
         )
         for asset in FINAL:
-            source_root = self.breg if asset in BREG else self.core
+            source_root = (
+                self.breg
+                if asset in BREG
+                else self.casework
+                if asset in CASEWORK
+                else self.core
+            )
             self.assertEqual((source_root / "bin" / asset).read_bytes(), (bin_dir / asset).read_bytes())
             self.assertEqual(stat.S_IMODE((bin_dir / asset).stat().st_mode), 0o755)
         for image_name, source_name in IMAGE_SOURCES.items():
-            source_root = self.breg if source_name in BREG else self.core
+            source_root = (
+                self.breg
+                if source_name in BREG
+                else self.casework
+                if source_name in CASEWORK
+                else self.core
+            )
             self.assertEqual(
                 (source_root / "bin" / source_name).read_bytes(),
                 (image_dir / image_name).read_bytes(),
@@ -134,6 +153,13 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         rosters_026, images_026 = MODULE.rosters("0.26.0")
         self.assertEqual(2, len(rosters_026["breg"]))
         self.assertEqual(["discovery", "breg", "evidence", "mint", "relay"], [name for name, _ in images_026])
+        self.assertEqual([], rosters_026["casework"])
+        rosters_030, images_030 = MODULE.rosters("0.30.0")
+        self.assertEqual(2, len(rosters_030["casework"]))
+        self.assertEqual(
+            ["discovery", "breg", "casework", "evidence", "mint", "relay"],
+            [name for name, _ in images_030],
+        )
 
     def test_rejects_incomplete_or_ambiguous_shards_before_staging_output(self) -> None:
         mutations = {
@@ -161,6 +187,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                     try:
                         self.core = self.write_shard("core", CORE)
                         self.breg = self.write_shard("breg", BREG)
+                        self.casework = self.write_shard("casework", CASEWORK)
                         self.output = fixture / "dist"
                         mutate()
                         with self.assertRaises(MODULE.ShardError):

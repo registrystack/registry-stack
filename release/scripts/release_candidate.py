@@ -49,11 +49,13 @@ DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 23, 0)
 DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
 DISCOVERY_RUNTIME_IMAGE_NAMES = OFFICIAL_RUNTIME_IMAGE_NAMES | {"discovery"}
 BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
+CASEWORK_RELEASE_MINIMUM_VERSION = (0, 30, 0)
 UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PROVENANCE_ASSET_MINIMUM_VERSION = (0, 27, 1)
 BREG_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
     "breg"
 }
+CASEWORK_RUNTIME_IMAGE_NAMES = BREG_RUNTIME_IMAGE_NAMES | {"casework"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -92,7 +94,7 @@ SECURITY_EVIDENCE_COMMON_REQUIRED_FILES = {
 }
 SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
     f"{directory}/{image}.{suffix}.json"
-    for image in BREG_RUNTIME_IMAGE_NAMES
+    for image in CASEWORK_RUNTIME_IMAGE_NAMES
     for directory, suffix in (
         ("image-sbom", "spdx"),
         ("syft", "syft"),
@@ -118,7 +120,9 @@ def _candidate_image_names(version: str) -> set[str]:
         return OFFICIAL_RUNTIME_IMAGE_NAMES
     if parsed < BREG_RELEASE_MINIMUM_VERSION:
         return DISCOVERY_RUNTIME_IMAGE_NAMES
-    return BREG_RUNTIME_IMAGE_NAMES
+    if parsed < CASEWORK_RELEASE_MINIMUM_VERSION:
+        return BREG_RUNTIME_IMAGE_NAMES
+    return CASEWORK_RUNTIME_IMAGE_NAMES
 
 
 def _literal_string_roster(path: Path, name: str) -> set[str]:
@@ -376,6 +380,12 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"bregctl-{tag}-{platform}"] = "binary"
         inventory[f"breg-{tag}-install.sh"] = "installer"
         inventory["breg-install.sh"] = "installer"
+    if version_tuple >= CASEWORK_RELEASE_MINIMUM_VERSION:
+        for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            inventory[f"casework-{tag}-{platform}"] = "binary"
+            inventory[f"caseworkctl-{tag}-{platform}"] = "binary"
+        inventory[f"casework-{tag}-install.sh"] = "installer"
+        inventory["casework-install.sh"] = "installer"
     return inventory
 
 

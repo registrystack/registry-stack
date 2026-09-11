@@ -15,7 +15,39 @@ pub mod breg {
         BRegPage, BRegPatchBinding, BRegPatchBuilder, BRegPatchRequest, BRegPlanRefusal,
         BRegProbeStatus, BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat,
         BRegRecordOptions, BRegRequestError, BRegResponseMetadata, BaseRegistryClient,
-        BaseRegistryClientConfig, BaseRegistryClientError,
+        BaseRegistryClientConfig, BaseRegistryClientError, Uuid,
+    };
+}
+
+pub mod casework {
+    pub use registry_casework_client::{
+        AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, ActivityClockAnchor,
+        AssignmentContext, AssignmentRequest, AttemptState, AttemptStatus, BearerToken,
+        BootstrapDirectoryRequest, CalendarPolicy, CallerSubjectView, CaseloadApplyRequest,
+        CaseloadItemOutcome, CaseloadItemResult, CaseloadItemSelection, CaseloadMoveRequest,
+        CaseloadPreviewPage, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth, CaseworkClient,
+        CaseworkClientConfig, CaseworkClientError, CaseworkComplete, CaseworkProblemCode,
+        CaseworkProtocolFailure, ClaimRequest, ClockNextEffect, ClockOccurrenceView, ClockPolicy,
+        ClockReassignment, ClockRecomputeApplyRequest, ClockRecomputeChange, ClockRecomputePreview,
+        ClockRecomputeRequest, ClockRecomputeResult, ClockReminder, ClockRuntimeState, ClockStep,
+        ClockStepAction, ClockStepInstant, CorrectionRoutingCopy, DecideRequest, DelegateRequest,
+        Description, DirectoryMember, DirectoryResponse, DirectoryTargetPage,
+        DirectoryTargetPurpose, DirectoryTargetsQuery, DirectoryTeamUpdateRequest,
+        DisplayReferencePolicy, Draft, DraftResponse, EqualsPredicate, HistoryEntry, HistoryKind,
+        HistoryPage, HoldingSummary, HoldingsPage, HoldingsQuery, HolidaySetDocument,
+        HolidaySetRevisionInput, HostedAccountabilityRecord, HostedCancelRequest,
+        HostedCreateRequest, HostedDecisionRequest, HostedHistoryEntry, HostedHistoryKind,
+        HostedHistoryPage, HostedKindPolicy, HostedNote, HostedNotePage, HostedNoteRequest,
+        HostedOutcomePolicy, HostedPageQuery, HostedTerminalPage, HostedTerminalQuery,
+        HostedTerminalResult, HostedTerminalState, HostedValidationError, HostedValidationReason,
+        HostedWorkItemContext, InboxSort, InboxView, IssuerPrincipal, ListWorkItemsQuery,
+        MutationResponse, NextWorkItemQuery, OccurrenceKind, OccurrenceState, OneOfPredicate,
+        OpaqueActorRef, OperationName, Page, PageStatus, QueueRecord, RecoverAttemptRequest,
+        ReleaseRequest, RequesterHostedItem, RoutingActivity, RoutingCondition, RoutingPredicate,
+        RoutingRule, SaveDraftRequest, SourceBinding, SourcePolicy, SourceReceipt,
+        SourceRequestPolicy, StaffingDiagnostic, SubjectClockAnchor, SubjectClockCompletion,
+        SubjectClockPause, SubjectRef, TeamRecord, Uuid, WorkItem, WorkItemPage, WorkItemRouting,
+        WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
     };
 }
 

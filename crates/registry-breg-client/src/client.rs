@@ -7,7 +7,9 @@
 
 use std::fmt;
 
+use async_trait::async_trait;
 use registry_platform_httpsec::{response_trace_id, ProblemDocument, TraceId};
+use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_MATCH, LINK,
     LOCATION, VARY,
@@ -47,6 +49,28 @@ impl BaseRegistryClient {
         config.validate()?;
         let transport = Transport::new(&config)?;
         Ok(Self { config, transport })
+    }
+
+    /// Return a caller-scoped client that presents `token` on authenticated
+    /// exchanges while reusing this client's transport and connection pool.
+    ///
+    /// The original client is unchanged. Each derived client owns an immutable
+    /// credential, so independently derived clients may be used concurrently
+    /// without replacing or observing one another's token. Keep the derived
+    /// value within the inbound caller request that supplied the token.
+    ///
+    /// Recovery evidence and capability handles remain bound to the same BReg
+    /// deployment and profile metadata. They do not identify a principal: the
+    /// application must ensure a refreshed token still belongs to the original
+    /// principal and source generation before recovering an attempt.
+    #[must_use]
+    pub fn with_bearer_token(&self, token: BearerToken) -> Self {
+        let mut config = self.config.clone();
+        config.token_provider = Some(std::sync::Arc::new(PerCallToken(token)));
+        Self {
+            config,
+            transport: self.transport.clone(),
+        }
     }
 
     /// Unauthenticated liveness probe. Configured bearer credentials are never
@@ -1734,6 +1758,15 @@ impl BaseRegistryClient {
             link: None,
             status: status.as_u16(),
         })
+    }
+}
+
+struct PerCallToken(BearerToken);
+
+#[async_trait]
+impl TokenProvider for PerCallToken {
+    async fn bearer_token(&self) -> Result<BearerToken, TokenError> {
+        Ok(self.0.clone())
     }
 }
 

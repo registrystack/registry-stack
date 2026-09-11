@@ -34,8 +34,9 @@ record, or lifecycle payload values.
 ## Exact values and application metadata
 
 Use the public server-side package `@registrystack/client` and its `breg`
-namespace. `registryContract(profile).operations` exposes typed, caller-filtered
-field, request, and query descriptors. Labels are inert presentation text;
+namespace. `registryContract(profile).operations` exposes typed,
+caller-filtered field, readable request field, request, and query descriptors.
+Labels are inert presentation text;
 `schemaJson` preserves JSON Schema numbers. Descriptors grant no authority.
 Continue to use `selectCreate`, `selectPatch`, and `selectLifecycle` to obtain
 opaque authorities bound to the client source and selected profile.

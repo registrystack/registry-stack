@@ -27,6 +27,8 @@ export const reviewSchemaVersion = 'registry.cli-reference-review/v3';
 export const expectedBinaries = [
   'breg',
   'bregctl',
+  'casework',
+  'caseworkctl',
   'evidence',
   'evidence-oid4vci',
   'evidencectl',
@@ -47,6 +49,7 @@ const hiddenCommands = new Set([
 ]);
 const groups = [
   { title: 'Base Registry Engine', binaries: ['breg', 'bregctl'] },
+  { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Relay', binaries: ['relay', 'relayctl'] },
   { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },
   {

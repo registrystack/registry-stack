@@ -372,6 +372,38 @@ async fn test_client(
     (BaseRegistryClient::new(config).expect("client"), requests)
 }
 
+#[tokio::test]
+async fn caller_scoped_tokens_are_isolated_across_concurrent_requests() {
+    let configured = Arc::new(CountingToken(AtomicUsize::new(0)));
+    let (client, captured) =
+        test_client(Mode::Happy, Some(configured.clone()), 8 * 1024 * 1024).await;
+    let first = client.with_bearer_token(BearerToken::new("human-token-one").unwrap());
+    let second = client.with_bearer_token(BearerToken::new("human-token-two").unwrap());
+
+    let (first_result, second_result) = tokio::join!(
+        first.registry_metadata(Some("reviewer")),
+        second.registry_metadata(Some("reviewer")),
+    );
+    first_result.expect("first caller metadata");
+    second_result.expect("second caller metadata");
+
+    assert_eq!(configured.0.load(Ordering::SeqCst), 0);
+    let mut credentials = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.authorization.clone().unwrap())
+        .collect::<Vec<_>>();
+    credentials.sort();
+    assert_eq!(
+        credentials,
+        vec!["Bearer human-token-one", "Bearer human-token-two"]
+    );
+    let rendered = format!("{first:?} {second:?}");
+    assert!(!rendered.contains("human-token-one"));
+    assert!(!rendered.contains("human-token-two"));
+}
+
 #[derive(Debug)]
 struct CountingToken(AtomicUsize);
 

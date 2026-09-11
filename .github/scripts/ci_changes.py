@@ -53,6 +53,15 @@ SHARDS = {
         "registry-bregctl",
         "registry-linkml",
     ),
+    "casework": (
+        "registry-casework-core",
+        "registry-casework-breg",
+        "registry-casework",
+        "registry-caseworkctl",
+        "registry-casework-client",
+        "registry-casework-client-node",
+        "registry-casework-client-py",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -78,6 +87,7 @@ MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 BREG_PACKAGES = frozenset(SHARDS["breg"])
+CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # These are the cross-product semantic commitments implemented independently by
@@ -261,6 +271,11 @@ CLI_REFERENCE_INPUTS = (
     ("crates/registry-relayctl/src/**", "crates/registry-relayctl/src/lib.rs"),
     ("crates/registry-breg/src/cli.rs", "crates/registry-breg/src/cli.rs"),
     ("crates/registry-bregctl/src/**", "crates/registry-bregctl/src/lib.rs"),
+    (
+        "crates/registry-casework/src/runtime.rs",
+        "crates/registry-casework/src/runtime.rs",
+    ),
+    ("crates/registry-caseworkctl/src/**", "crates/registry-caseworkctl/src/lib.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -279,11 +294,15 @@ DISCOVERY_BINDING_PACKAGES = frozenset(
 BREG_BINDING_PACKAGES = frozenset(
     {"registry-breg-client-node", "registry-breg-client-py"}
 )
+CASEWORK_BINDING_PACKAGES = frozenset(
+    {"registry-casework-client-node", "registry-casework-client-py"}
+)
 NATIVE_BINDING_PACKAGES = (
     DISCOVERY_BINDING_PACKAGES
     | EVIDENCE_BINDING_PACKAGES
     | RELAY_BINDING_PACKAGES
     | BREG_BINDING_PACKAGES
+    | CASEWORK_BINDING_PACKAGES
 )
 LINUX_NODE_BINDING_PACKAGES = frozenset(
     {
@@ -291,6 +310,7 @@ LINUX_NODE_BINDING_PACKAGES = frozenset(
         "registry-evidence-client-node",
         "registry-relay-client-node",
         "registry-breg-client-node",
+        "registry-casework-client-node",
     }
 )
 
@@ -639,6 +659,8 @@ def classify(
                 seeds.update(RELAY_V2_PACKAGES)
             elif path.startswith("products/breg/"):
                 seeds.update(BREG_PACKAGES)
+            elif path.startswith("products/casework/"):
+                seeds.update(CASEWORK_PACKAGES)
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
@@ -875,6 +897,7 @@ def classify(
         or bool(affected & BREG_PACKAGES)
         or "registry-evidence" in affected,
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
+        "casework_postgres": bool(affected & CASEWORK_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,

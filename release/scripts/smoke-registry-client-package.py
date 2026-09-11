@@ -13,6 +13,7 @@ def main() -> None:
         callable(value)
         for value in (
             registry_client.breg.BaseRegistryClient,
+            registry_client.casework.CaseworkClient,
             registry_client.discovery.DiscoveryClient,
             registry_client.evidence.EvidenceClient,
             registry_client.relay.RelayClient,
@@ -22,6 +23,8 @@ def main() -> None:
     public_types = (
         ("breg", registry_client.breg.BaseRegistryClient),
         ("breg", registry_client.breg.BaseRegistryClientError),
+        ("casework", registry_client.casework.CaseworkClient),
+        ("casework", registry_client.casework.CaseworkClientError),
         ("discovery", registry_client.discovery.DiscoveryClient),
         ("discovery", registry_client.discovery.DiscoveryClientError),
         ("evidence", registry_client.evidence.EvidenceClient),
@@ -50,6 +53,11 @@ def main() -> None:
     )
     if client is None:
         raise SystemExit("Base Registry client construction returned no client")
+    casework_client = registry_client.casework.CaseworkClient(
+        base_url="https://casework.invalid",
+    )
+    if casework_client is None:
+        raise SystemExit("Casework client construction returned no client")
     print("Unified Python Registry client package smoke passed")
 
 

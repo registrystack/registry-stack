@@ -1,0 +1,29 @@
+[package]
+name = "registry-casework-breg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Bounded Base Registry Engine source adapter for Registry Casework."
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+registry-casework-core.workspace = true
+registry-breg-client.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+time.workspace = true
+tokio.workspace = true
+wiremock.workspace = true

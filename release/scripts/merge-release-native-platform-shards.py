@@ -44,7 +44,18 @@ def rosters(version: str) -> dict[str, list[str]]:
     if parsed >= (0, 26, 0):
         breg = [f"breg-{tag}-{ASSET}"]
         bregctl = [f"bregctl-{tag}-{ASSET}"]
-    return {"core": core, "breg": breg, "bregctl": bregctl}
+    casework = []
+    if parsed >= (0, 30, 0):
+        casework = [
+            f"casework-{tag}-{ASSET}",
+            f"caseworkctl-{tag}-{ASSET}",
+        ]
+    return {
+        "core": core,
+        "breg": breg,
+        "bregctl": bregctl,
+        "casework": casework,
+    }
 
 
 def sha256(path: Path) -> str:
@@ -148,6 +159,7 @@ def merge(
     core: Path,
     breg: Path,
     bregctl: Path,
+    casework: Path | None,
     output: Path,
 ) -> None:
     shard_rosters = rosters(version)
@@ -184,11 +196,25 @@ def merge(
             source_sha=source_sha,
         ),
     }
-    sources = inputs["core"] | inputs["breg"] | inputs["bregctl"]
+    if casework is None:
+        if shard_rosters["casework"]:
+            raise ShardError("casework shard is required from version 0.30.0")
+        inputs["casework"] = {}
+    else:
+        inputs["casework"] = validate_shard(
+            "casework",
+            casework,
+            shard_rosters["casework"],
+            purpose=purpose,
+            version=version,
+            source_sha=source_sha,
+        )
+    sources = inputs["core"] | inputs["breg"] | inputs["bregctl"] | inputs["casework"]
     final_roster = [
         *shard_rosters["core"],
         *shard_rosters["breg"],
         *shard_rosters["bregctl"],
+        *shard_rosters["casework"],
     ]
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +240,7 @@ def main() -> int:
     parser.add_argument("--core", required=True, type=Path)
     parser.add_argument("--breg", required=True, type=Path)
     parser.add_argument("--bregctl", required=True, type=Path)
+    parser.add_argument("--casework", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
@@ -224,6 +251,7 @@ def main() -> int:
             core=args.core,
             breg=args.breg,
             bregctl=args.bregctl,
+            casework=args.casework,
             output=args.output,
         )
     except (OSError, UnicodeError, ShardError) as error:

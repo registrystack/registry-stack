@@ -50,6 +50,7 @@ pub use registry_record::{
     REGISTRY_RECORD_SCHEMA_IDENTIFIER,
 };
 pub use response::*;
+pub use uuid::Uuid;
 
 pub const DEFAULT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);

@@ -1,0 +1,31 @@
+apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework:
+  id: professional-review
+  version: "1"
+accessProfiles:
+  - id: staff
+    principalClaim: registry_principal
+    requiredScopes: [casework:staff]
+    role: staff
+  - id: supervisor
+    principalClaim: registry_principal
+    requiredScopes: [casework:supervisor]
+    role: supervisor
+  - id: administrator
+    principalClaim: registry_principal
+    requiredScopes: [casework:admin]
+    role: administrator
+sources:
+  - id: professional-register
+    adapter: breg
+    description: sources/professional-register.json
+    requests:
+      - entity: scope-correction
+        queue: corrections
+        target:
+          id: first-review-response
+          after: {elapsed: PT48H}
+queues:
+  - id: corrections
+    label: Licence corrections

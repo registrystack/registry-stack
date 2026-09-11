@@ -1,6 +1,8 @@
 extends:
   - recommended
 apis:
+  registry-casework:
+    root: openapi/registry-casework.openapi.json
   registry-evidence:
     root: openapi/registry-evidence.openapi.json
 rules:

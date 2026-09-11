@@ -5,6 +5,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 
 group=""
+include_casework_override=0
 purpose=""
 source_sha=""
 version=""
@@ -12,6 +13,7 @@ output=""
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --group) group="${2:-}"; shift 2 ;;
+    --include-casework) include_casework_override=1; shift ;;
     --purpose) purpose="${2:-}"; shift 2 ;;
     --source-sha) source_sha="${2:-}"; shift 2 ;;
     --version) version="${2:-}"; shift 2 ;;
@@ -21,12 +23,12 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 usage() {
-  printf 'usage: %s --group core|breg|bregctl|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
+  printf 'usage: %s [--include-casework] --group core|breg|bregctl|casework|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
   exit 2
 }
 
 if [[ "${group}" != core && "${group}" != breg &&
-      "${group}" != bregctl && "${group}" != all ]]; then
+      "${group}" != bregctl && "${group}" != casework && "${group}" != all ]]; then
   usage
 fi
 if [[ "${purpose}" != candidate_input && "${purpose}" != review_only ]]; then
@@ -56,6 +58,11 @@ IFS=. read -r version_major version_minor _version_patch <<<"${version}"
 include_breg=0
 if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
+fi
+include_casework=0
+if ((version_major > 0 || version_minor >= 30)) ||
+   [[ "${include_casework_override}" -eq 1 ]]; then
+  include_casework=1
 fi
 
 output_parent="$(dirname -- "${output}")"
@@ -125,6 +132,25 @@ build_bregctl() {
     "bregctl ${version}"
 }
 
+build_casework() {
+  if [[ "${include_casework}" -ne 1 ]]; then
+    return
+  fi
+  "${cargo_bin}" build --release --locked \
+    -p registry-casework --bin casework \
+    --target "${target}"
+  "${cargo_bin}" build --release --locked \
+    -p registry-caseworkctl --bin caseworkctl \
+    --target "${target}"
+
+  local binary
+  for binary in casework caseworkctl; do
+    stage "${binary}" "${binary}-${tag}-${asset}"
+    test "$("${temporary}/platform/${binary}-${tag}-${asset}" --version)" = \
+      "${binary} ${version}"
+  done
+}
+
 cd -- "${repo_root}"
 if [[ "${group}" == core || "${group}" == all ]]; then
   build_core
@@ -134,6 +160,9 @@ if [[ "${group}" == breg || "${group}" == all ]]; then
 fi
 if [[ "${group}" == bregctl || "${group}" == all ]]; then
   build_bregctl
+fi
+if [[ "${group}" == casework || "${group}" == all ]]; then
+  build_casework
 fi
 
 assets=()
@@ -151,6 +180,9 @@ if [[ ("${group}" == breg || "${group}" == all) && "${include_breg}" -eq 1 ]]; t
 fi
 if [[ ("${group}" == bregctl || "${group}" == all) && "${include_breg}" -eq 1 ]]; then
   assets+=("bregctl-${tag}-${asset}")
+fi
+if [[ ("${group}" == casework || "${group}" == all) && "${include_casework}" -eq 1 ]]; then
+  assets+=("casework-${tag}-${asset}" "caseworkctl-${tag}-${asset}")
 fi
 
 (

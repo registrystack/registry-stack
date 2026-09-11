@@ -68,6 +68,28 @@ BREGCTL_ARGS = [
     "--target",
     TARGET,
 ]
+CASEWORK_RUNTIME_ARGS = [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "registry-casework",
+    "--bin",
+    "casework",
+    "--target",
+    TARGET,
+]
+CASEWORKCTL_ARGS = [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "registry-caseworkctl",
+    "--bin",
+    "caseworkctl",
+    "--target",
+    TARGET,
+]
 
 
 def digest(path: Path) -> str:
@@ -112,6 +134,8 @@ binaries = {
     "registry-evidence-oid4vci": "evidence-oid4vci",
     "registry-breg": "breg",
     "registry-bregctl": "bregctl",
+    "registry-casework": "casework",
+    "registry-caseworkctl": "caseworkctl",
 }
 for package in packages:
     name = binaries[package]
@@ -138,6 +162,7 @@ fi
         name: str | None = None,
         fail_call: int | None = None,
         binary_version: str | None = None,
+        include_casework: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], Path, list[list[str]]]:
         stem = name or group
         output = self.root / stem
@@ -161,6 +186,7 @@ fi
             [
                 "bash",
                 str(BUILDER),
+                *(["--include-casework"] if include_casework else []),
                 "--group",
                 group,
                 "--purpose",
@@ -208,12 +234,30 @@ fi
         self.assertNotIn("tooling", BREG_ARGS)
         self.assertNotIn("--features", BREGCTL_ARGS)
 
+    def test_explicit_casework_group_builds_the_local_pre_release_candidate(self) -> None:
+        result, output, calls = self.build(
+            "casework", include_casework=True, name="local-casework"
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([CASEWORK_RUNTIME_ARGS, CASEWORKCTL_ARGS], calls)
+        self.assertEqual(
+            [
+                f"casework-v{VERSION}-macos-arm64",
+                f"caseworkctl-v{VERSION}-macos-arm64",
+            ],
+            [
+                line.split("  ", 1)[1]
+                for line in (output / "SHA256SUMS").read_text().splitlines()
+            ],
+        )
+
     def test_merged_groups_match_all_mode_bytes_modes_and_roster(self) -> None:
         all_result, all_output, _ = self.build("all")
         core_result, core, _ = self.build("core")
         breg_result, breg, _ = self.build("breg")
         bregctl_result, bregctl, _ = self.build("bregctl")
-        for result in (all_result, core_result, breg_result, bregctl_result):
+        casework_result, casework, _ = self.build("casework")
+        for result in (all_result, core_result, breg_result, bregctl_result, casework_result):
             self.assertEqual(0, result.returncode, result.stderr)
         merged = self.root / "merged"
         MODULE.merge(
@@ -223,6 +267,7 @@ fi
             core=core,
             breg=breg,
             bregctl=bregctl,
+            casework=casework,
             output=merged,
         )
         expected = sorted(path.name for path in (all_output / "platform").iterdir())
@@ -242,18 +287,26 @@ fi
         bregctl_result, bregctl, bregctl_calls = self.build(
             "bregctl", version=version, name="old-bregctl"
         )
+        casework_result, casework, casework_calls = self.build(
+            "casework", version=version, name="old-casework"
+        )
         self.assertEqual(0, core_result.returncode, core_result.stderr)
         self.assertEqual(0, breg_result.returncode, breg_result.stderr)
         self.assertEqual(0, bregctl_result.returncode, bregctl_result.stderr)
+        self.assertEqual(0, casework_result.returncode, casework_result.stderr)
         self.assertEqual([], breg_calls)
         self.assertEqual([], bregctl_calls)
+        self.assertEqual([], casework_calls)
         self.assertEqual([], list((breg / "platform").iterdir()))
         self.assertEqual([], list((bregctl / "platform").iterdir()))
+        self.assertEqual([], list((casework / "platform").iterdir()))
         self.assertEqual("", (breg / "SHA256SUMS").read_text())
         self.assertEqual("", (bregctl / "SHA256SUMS").read_text())
+        self.assertEqual("", (casework / "SHA256SUMS").read_text())
         # Artifact upload/download does not retain empty directories.
         (breg / "platform").rmdir()
         (bregctl / "platform").rmdir()
+        (casework / "platform").rmdir()
         merged = self.root / "old-merged"
         MODULE.merge(
             version=version,
@@ -262,6 +315,7 @@ fi
             core=core,
             breg=breg,
             bregctl=bregctl,
+            casework=casework,
             output=merged,
         )
         self.assertEqual(
@@ -342,9 +396,13 @@ fi
                 bregctl_result, bregctl, _ = self.build(
                     "bregctl", name=f"{name}-bregctl"
                 )
+                casework_result, casework, _ = self.build(
+                    "casework", name=f"{name}-casework"
+                )
                 self.assertEqual(0, core_result.returncode, core_result.stderr)
                 self.assertEqual(0, breg_result.returncode, breg_result.stderr)
                 self.assertEqual(0, bregctl_result.returncode, bregctl_result.stderr)
+                self.assertEqual(0, casework_result.returncode, casework_result.stderr)
                 mutate(core)
                 output = self.root / f"{name}-merged"
                 with self.assertRaises(MODULE.ShardError):
@@ -355,6 +413,7 @@ fi
                         core=core,
                         breg=breg,
                         bregctl=bregctl,
+                        casework=casework,
                         output=output,
                     )
                 self.assertFalse(output.exists())
