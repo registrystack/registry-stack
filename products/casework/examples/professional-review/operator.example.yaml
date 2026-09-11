@@ -4,6 +4,9 @@ tlsTermination: development-loopback
 networkExposure: private-address
 secretProviders:
   file:
+    # Every secret:file reference resolves under this root. A secret file must
+    # be owner-only text with no NUL byte, such as `openssl rand -hex 32`
+    # (GitHub issue #976), and carry mode 0400 or 0600.
     root: secrets
 database:
   runtimeUrlRef: secret:env/CASEWORK_DATABASE_URL

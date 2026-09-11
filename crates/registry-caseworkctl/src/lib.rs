@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod dev;
 mod policy;
 mod project;
 mod source_add;
@@ -47,8 +48,11 @@ enum Command {
     Retention(RetentionArgs),
     /// Preview or record an operator settlement of one uncertain source attempt.
     Attempt(AttemptArgs),
-    /// Manage a retained local Casework process.
-    Dev(DevArgs),
+    /// Start, stop and inspect this project's retained local Casework runtime.
+    Dev(dev::DevArgs),
+    /// Supervise one project's owned local services. Not for direct use.
+    #[command(name = "__dev-supervisor", hide = true)]
+    DevSupervisor(dev::SupervisorArgs),
 }
 
 #[derive(Debug, Args)]
@@ -225,24 +229,20 @@ impl From<SettleOutcome> for AttemptSettlementOutcome {
     }
 }
 
-#[derive(Debug, Args)]
-struct DevArgs {
-    #[command(subcommand)]
-    command: DevCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum DevCommand {
-    /// Start a retained local Casework runtime.
-    Start(OperatorArgs),
-    /// Stop this project's retained local Casework runtime.
-    Stop(ProjectArgs),
-    /// Print the bounded retained runtime journal.
-    Events(ProjectArgs),
-}
-
 pub fn main_entry() -> ExitCode {
-    match run(Cli::parse()) {
+    let cli = Cli::parse();
+    // The supervisor is detached and has no terminal; it reports through the
+    // session journal its owner reads, never through a machine-readable report.
+    if let Command::DevSupervisor(args) = cli.command {
+        return match dev::run_supervisor(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error:#}");
+                ExitCode::from(1)
+            }
+        };
+    }
+    match run(cli) {
         Ok(report) => {
             if serde_json::to_writer_pretty(std::io::stdout().lock(), &report).is_err() {
                 return ExitCode::from(3);
@@ -308,11 +308,8 @@ fn run(cli: Cli) -> Result<Value> {
                 args.apply,
             ),
         },
-        Command::Dev(args) => match args.command {
-            DevCommand::Start(args) => project::dev_start(&args.project, args.operator.as_deref()),
-            DevCommand::Stop(args) => project::dev_stop(&args.project),
-            DevCommand::Events(args) => project::dev_events(&args.project),
-        },
+        Command::Dev(args) => dev::run(args),
+        Command::DevSupervisor(_) => unreachable!("the supervisor is dispatched before run"),
     }
     .context("casework command refused")
 }
