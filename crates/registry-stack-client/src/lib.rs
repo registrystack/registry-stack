@@ -21,14 +21,14 @@ pub mod breg {
 
 pub mod casework {
     pub use registry_casework_client::{
-        AbsenceInput, AbsenceList, AbsenceRecord, ActivityClockAnchor, AssignmentContext,
-        AssignmentRequest, AttemptState, AttemptStatus, BearerToken, BootstrapDirectoryRequest,
-        CalendarPolicy, CallerSubjectView, CaseloadApplyRequest, CaseloadItemOutcome,
-        CaseloadItemResult, CaseloadItemSelection, CaseloadMoveRequest, CaseloadPreviewPage,
-        CaseloadPreviewQuery, CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
-        CaseworkClientError, CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure,
-        ClaimRequest, ClockNextEffect, ClockOccurrenceView, ClockPolicy, ClockReassignment,
-        ClockRecomputeApplyRequest, ClockRecomputeChange, ClockRecomputePreview,
+        AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, ActivityClockAnchor,
+        AssignmentContext, AssignmentRequest, AttemptState, AttemptStatus, BearerToken,
+        BootstrapDirectoryRequest, CalendarPolicy, CallerSubjectView, CaseloadApplyRequest,
+        CaseloadItemOutcome, CaseloadItemResult, CaseloadItemSelection, CaseloadMoveRequest,
+        CaseloadPreviewPage, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth, CaseworkClient,
+        CaseworkClientConfig, CaseworkClientError, CaseworkComplete, CaseworkProblemCode,
+        CaseworkProtocolFailure, ClaimRequest, ClockNextEffect, ClockOccurrenceView, ClockPolicy,
+        ClockReassignment, ClockRecomputeApplyRequest, ClockRecomputeChange, ClockRecomputePreview,
         ClockRecomputeRequest, ClockRecomputeResult, ClockReminder, ClockRuntimeState, ClockStep,
         ClockStepAction, ClockStepInstant, CorrectionRoutingCopy, DecideRequest, DelegateRequest,
         Description, DirectoryMember, DirectoryResponse, DirectoryTargetPage,

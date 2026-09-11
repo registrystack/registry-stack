@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use registry_stack_client::casework::{
-    AbsenceInput, AbsenceList, AbsenceRecord, AssignmentRequest, BearerToken,
+    AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, AssignmentRequest, BearerToken,
     BootstrapDirectoryRequest, CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest,
     CaseloadPreviewPage, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth, CaseworkClient,
     CaseworkClientConfig, CaseworkClientError, CaseworkComplete, ClockOccurrenceView,
@@ -65,6 +65,7 @@ async fn every_casework_method_names_its_types(
     targets_query: &DirectoryTargetsQuery,
     bootstrap: &BootstrapDirectoryRequest,
     absence: &AbsenceInput,
+    absences_query: &AbsencesQuery,
     assignment: &AssignmentRequest,
     delegation: &DelegateRequest,
     caseload_move: &CaseloadMoveRequest,
@@ -219,6 +220,9 @@ async fn every_casework_method_names_its_types(
         .await?;
     let _: CaseworkComplete<AbsenceList> =
         client.absences(CaseworkAuth::new(token, profile)).await?;
+    let _: CaseworkComplete<AbsenceList> = client
+        .absences_page(CaseworkAuth::new(token, profile), absences_query)
+        .await?;
     let _: CaseworkComplete<AbsenceRecord> = client
         .create_absence(
             CaseworkAuth::new(token, profile),
