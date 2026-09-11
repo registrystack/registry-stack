@@ -439,7 +439,7 @@ Download that exact rehearsal artifact and prepare one image's evidence with:
 rehearsal_run=<successful-rehearsal-run-id>
 version=<version>
 request_id=<rehearsal-request-id>
-name=relay # or evidence, mint, discovery, or breg
+name=relay # or evidence, mint, discovery, breg, or casework
 artifact_dir="rehearsal-advisory-${rehearsal_run}-${name}"
 test ! -e "${artifact_dir}"
 gh run download "${rehearsal_run}" \
@@ -449,7 +449,7 @@ gh run download "${rehearsal_run}" \
 
 case "${name}" in
   relay) baseline=products/relay-v2/security/advisory-baseline.json ;;
-  breg|discovery|evidence|mint)
+  breg|casework|discovery|evidence|mint)
     baseline="release/security/${name}-advisory-baseline.json"
     ;;
   *) echo "unsupported release image: ${name}" >&2; exit 2 ;;
@@ -653,7 +653,7 @@ prefix of the candidate's authoritative uncompressed DiffIDs:
 
 ```sh
 baseline=products/relay-v2/security/advisory-baseline.json
-# BReg, Discovery, Evidence, and Mint use release/security/<name>-advisory-baseline.json.
+# BReg, Casework, Discovery, Evidence, and Mint use release/security/<name>-advisory-baseline.json.
 jq --slurpfile baseline "${baseline}" -e '
   .rootfs.diff_ids[0:($baseline[0].runtime.layer_ids | length)]
     == $baseline[0].runtime.layer_ids
