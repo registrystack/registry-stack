@@ -196,6 +196,16 @@ The `directory` block names one team per queue, with its Staff and its Superviso
 ```yaml
 version: 1
 clients:
+  - id: administrator
+    accessProfile: administrator
+    scopes: [casework:admin]
+    claims:
+      registry_actor_kind: human
+  - id: supervisor
+    accessProfile: supervisor
+    scopes: [casework:supervisor]
+    claims:
+      registry_actor_kind: human
   - id: staff
     accessProfile: staff
     scopes: [casework:staff]

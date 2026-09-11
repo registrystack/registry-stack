@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Seek, Write},
+    io::{Read, Seek, SeekFrom, Write},
     net::TcpListener,
     os::unix::{
         fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -30,7 +30,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -1267,6 +1267,94 @@ fn pump(mut input: impl Read, mut output: impl Write) -> Result<()> {
     Ok(())
 }
 
+/// One owner-only service journal shared by both child streams. Once full it
+/// compacts to its newest half before accepting more bytes, so a noisy service
+/// retains its latest diagnostics without growing the file across restarts.
+#[derive(Clone)]
+struct RetainedJournal {
+    file: Arc<Mutex<File>>,
+}
+
+impl RetainedJournal {
+    fn open(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            private::create(path, b"")?;
+        }
+        private::check(path, false)?;
+        let before = fs::symlink_metadata(path)?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .open(path)
+            .context("cannot open the retained local journal")?;
+        let opened = file.metadata()?;
+        private::check_metadata(&opened, false)?;
+        if before.ino() != opened.ino() || before.dev() != opened.dev() {
+            bail!("local state changed while opening it");
+        }
+        compact_journal(&mut file, MAX_BYTES)?;
+        Ok(Self {
+            file: Arc::new(Mutex::new(file)),
+        })
+    }
+}
+
+impl Write for RetainedJournal {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| std::io::Error::other("retained journal lock failed"))?;
+        let maximum = MAX_BYTES as usize;
+        let kept = if bytes.len() > maximum {
+            &bytes[bytes.len() - maximum..]
+        } else {
+            bytes
+        };
+        let length = file.metadata()?.len() as usize;
+        if length.saturating_add(kept.len()) > maximum {
+            compact_journal(&mut file, (maximum - kept.len()).min(maximum / 2) as u64)?;
+        }
+        file.seek(SeekFrom::End(0))?;
+        file.write_all(kept)?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file
+            .lock()
+            .map_err(|_| std::io::Error::other("retained journal lock failed"))?
+            .flush()
+    }
+}
+
+fn compact_journal(file: &mut File, keep: u64) -> std::io::Result<()> {
+    let length = file.metadata()?.len();
+    if length > keep {
+        file.seek(SeekFrom::Start(length - keep))?;
+        let mut tail = Vec::with_capacity(keep as usize);
+        file.take(keep).read_to_end(&mut tail)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&tail)?;
+        file.set_len(tail.len() as u64)?;
+    }
+    file.seek(SeekFrom::End(0))?;
+    Ok(())
+}
+
+fn pump_retained(mut input: impl Read, mut journal: RetainedJournal) -> Result<()> {
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        journal.write_all(&buffer[..count])?;
+    }
+    Ok(())
+}
+
 /// Start one supervised service, appending both its streams to the retained
 /// journal `dev events` tails.
 fn service(
@@ -1296,10 +1384,10 @@ fn service(
         .stderr
         .take()
         .context("service diagnostic pipe missing")?;
-    let log = private::append(&root.join("logs").join(format!("{name}.log")))?;
-    let second = log.try_clone()?;
-    let stdout_pump = thread::spawn(move || pump(out, log));
-    let stderr_pump = thread::spawn(move || pump(err, second));
+    let journal = RetainedJournal::open(&root.join("logs").join(format!("{name}.log")))?;
+    let second = journal.clone();
+    let stdout_pump = thread::spawn(move || pump_retained(out, journal));
+    let stderr_pump = thread::spawn(move || pump_retained(err, second));
     Ok(Service {
         child,
         pumps: vec![stdout_pump, stderr_pump],
@@ -1357,6 +1445,29 @@ fn output(
     name: &str,
     input: Option<Input<'_>>,
 ) -> Result<NativeOutput> {
+    output_with_deadline(command, root, name, input, None)
+}
+
+/// Run a prerequisite that belongs to an already-active aggregate deadline.
+/// Unlike ordinary prerequisite commands, expiry kills this probe immediately
+/// so its cleanup cannot extend the aggregate readiness budget by 35 seconds.
+fn output_before(
+    command: &mut Command,
+    root: &Path,
+    name: &str,
+    input: Option<Input<'_>>,
+    deadline: Instant,
+) -> Result<NativeOutput> {
+    output_with_deadline(command, root, name, input, Some(deadline))
+}
+
+fn output_with_deadline(
+    command: &mut Command,
+    root: &Path,
+    name: &str,
+    input: Option<Input<'_>>,
+    aggregate_deadline: Option<Instant>,
+) -> Result<NativeOutput> {
     let log = log_file(root, name)?;
     let secret = input
         .as_ref()
@@ -1403,16 +1514,24 @@ fn output(
             .context("command input missing")?
             .write_all(input.bytes)?;
     }
-    let deadline = Instant::now() + CHILD_DEADLINE;
+    // Preserve the full per-command allowance for ordinary prerequisites.
+    // An aggregate readiness deadline instead includes all probe setup time.
+    let deadline = aggregate_deadline.unwrap_or_else(|| Instant::now() + CHILD_DEADLINE);
     let status = loop {
         if let Some(status) = child.try_wait()? {
-            break status;
+            break Some(status);
         }
-        if Instant::now() > deadline {
-            stop_child(&mut child)?;
-            bail!("native local prerequisite timed out; inspect private logs");
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            if aggregate_deadline.is_some() {
+                child.kill()?;
+                child.wait()?;
+            } else {
+                stop_child(&mut child)?;
+            }
+            break None;
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50).min(remaining));
     };
     let mut bytes = out
         .join()
@@ -1424,6 +1543,9 @@ fn output(
         let echoed = Zeroizing::new(std::mem::take(&mut bytes));
         bytes = redact(&echoed, secret);
     }
+    let Some(status) = status else {
+        bail!("native local prerequisite timed out; inspect private logs");
+    };
     if !status.success() {
         // Native caseworkctl and casework report errors as JSON. Preserve them
         // privately as well; credentials never enter the report.
@@ -1458,6 +1580,21 @@ fn command(
     input: Option<Input<'_>>,
 ) -> Result<Vec<u8>> {
     let output = output(command, root, name, input)?;
+    checked_output(output, root, name)
+}
+
+fn command_before(
+    command: &mut Command,
+    root: &Path,
+    name: &str,
+    input: Option<Input<'_>>,
+    deadline: Instant,
+) -> Result<Vec<u8>> {
+    let output = output_before(command, root, name, input, deadline)?;
+    checked_output(output, root, name)
+}
+
+fn checked_output(output: NativeOutput, root: &Path, name: &str) -> Result<Vec<u8>> {
     if !output.success {
         let logs = root.join("logs").display().to_string();
         let refusal = refused_check(&output.stderr)
@@ -1518,6 +1655,22 @@ fn docker_command(
     input: Option<Input<'_>>,
 ) -> Result<Vec<u8>> {
     command(Command::new(docker).args(args), &state.root(), name, input)
+}
+
+fn docker_command_before(
+    docker: &Path,
+    state: &State,
+    name: &str,
+    args: &[&str],
+    deadline: Instant,
+) -> Result<Vec<u8>> {
+    command_before(
+        Command::new(docker).args(args),
+        &state.root(),
+        name,
+        None,
+        deadline,
+    )
 }
 
 /// Listing by exact generated name distinguishes absence from a daemon failure
@@ -1647,7 +1800,10 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
     }
     let deadline = Instant::now() + READY_DEADLINE;
     loop {
-        let result = docker_command(
+        if deadline.saturating_duration_since(Instant::now()).is_zero() {
+            bail!("owned PostgreSQL did not become ready; inspect private logs");
+        }
+        let result = docker_command_before(
             docker,
             state,
             "database-readiness",
@@ -1660,15 +1816,16 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 "-U",
                 "postgres",
             ],
-            None,
+            deadline,
         );
         if result.is_ok() {
             break;
         }
-        if Instant::now() > deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             bail!("owned PostgreSQL did not become ready; inspect private logs");
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(200).min(remaining));
     }
     if !state.database_ready {
         docker_command(

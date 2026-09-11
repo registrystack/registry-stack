@@ -599,6 +599,75 @@ fn migration_failures_use_the_bounded_native_diagnostic_stream() {
 }
 
 #[test]
+fn database_readiness_commands_stop_at_the_aggregate_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    let started = Instant::now();
+    let deadline = started + Duration::from_millis(75);
+
+    let refusal = format!(
+        "{:#}",
+        command_before(
+            Command::new("/bin/sh").args(["-c", "while :; do :; done"]),
+            root.path(),
+            "database-readiness",
+            None,
+            deadline,
+        )
+        .unwrap_err()
+    );
+
+    assert!(refusal.contains("timed out"), "{refusal}");
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn retained_service_journal_stays_bounded_and_keeps_latest_diagnostics() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("logs");
+    private::directory(&logs).unwrap();
+    let path = logs.join("casework.log");
+    let old_marker = b"latest-before-restart\n";
+    let mut oversized = vec![b'o'; MAX_BYTES as usize + 1024];
+    oversized.extend_from_slice(old_marker);
+    private::create(&path, &oversized).unwrap();
+
+    let journal = RetainedJournal::open(&path).unwrap();
+    drop(journal);
+    let compacted = fs::read(&path).unwrap();
+    assert!(compacted.len() <= MAX_BYTES as usize);
+    assert!(compacted.ends_with(old_marker));
+
+    let new_marker = b"latest-during-service\n";
+    let mut service_output = vec![b'n'; MAX_BYTES as usize + 1024];
+    service_output.extend_from_slice(new_marker);
+    pump_retained(
+        std::io::Cursor::new(service_output),
+        RetainedJournal::open(&path).unwrap(),
+    )
+    .unwrap();
+    let after_service = fs::read(&path).unwrap();
+    assert!(after_service.len() <= MAX_BYTES as usize);
+    assert!(after_service.ends_with(new_marker));
+
+    let restart_marker = b"latest-after-restart\n";
+    pump_retained(
+        std::io::Cursor::new(restart_marker),
+        RetainedJournal::open(&path).unwrap(),
+    )
+    .unwrap();
+    let after_restart = fs::read(&path).unwrap();
+    assert!(after_restart.len() <= MAX_BYTES as usize);
+    assert!(after_restart.ends_with(restart_marker));
+    assert!(after_restart
+        .windows(new_marker.len())
+        .any(|window| window == new_marker));
+    let metadata = fs::symlink_metadata(&path).unwrap();
+    assert_eq!(metadata.permissions().mode() & 0o077, 0);
+    assert_eq!(metadata.nlink(), 1);
+}
+
+#[test]
 fn service_cleanup_joins_every_log_pump() {
     let child = Command::new("/usr/bin/true").spawn().unwrap();
     let joined = Arc::new(AtomicBool::new(false));

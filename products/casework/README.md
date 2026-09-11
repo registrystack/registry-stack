@@ -315,15 +315,25 @@ Casework. Activating a new package does not rewrite running clock occurrences;
 each keeps its pinned clock policy and calculation. Holiday changes use the
 Administrator preview-and-apply flow described above.
 
-After the operator supplies the separate runtime configuration and credentials,
-the local workflow is:
+The source-backed starter cannot run under `caseworkctl dev`: every declared
+source needs a running source system and a reader credential that the local
+supervisor cannot create. Follow
+[Deploy Registry Casework](../../docs/site/src/content/docs/operate/casework.mdx)
+to install the package, runtime configuration, and credentials. The deployment
+runtime applies migrations and serves the package through the `casework`
+binary:
 
 ```sh
-caseworkctl db migrate ./casework --operator ./casework/operator.yaml
-caseworkctl dev start ./casework --operator ./casework/operator.yaml
-caseworkctl doctor ./casework --operator ./casework/operator.yaml
-caseworkctl dev events ./casework
-caseworkctl dev stop ./casework
+casework --config /etc/registry-casework/operator.yaml migrate
+casework --config /etc/registry-casework/operator.yaml serve
+```
+
+After the Administrator establishes the directory, check the same deployed
+package and operator configuration:
+
+```sh
+caseworkctl doctor /etc/registry-casework/package \
+  --operator /etc/registry-casework/operator.yaml
 ```
 
 Doctor distinguishes configuration, database, source, issuer, and directory
