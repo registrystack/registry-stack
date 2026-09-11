@@ -104,13 +104,13 @@ struct StartArgs {
     #[arg(long, alias = "clients", value_name = "FILE")]
     clients_file: Option<PathBuf>,
     /// Casework loopback port on first start (default 8092; retained for restarts).
-    #[arg(long)]
+    #[arg(long, env = "CASEWORKCTL_DEV_CASEWORK_PORT")]
     casework_port: Option<u16>,
     /// Local Mint loopback port on first start (default 8093; retained for restarts).
-    #[arg(long)]
+    #[arg(long, env = "CASEWORKCTL_DEV_MINT_PORT")]
     mint_port: Option<u16>,
     /// PostgreSQL loopback port on first start (default 55433; retained for restarts).
-    #[arg(long)]
+    #[arg(long, env = "CASEWORKCTL_DEV_DATABASE_PORT")]
     database_port: Option<u16>,
     #[arg(long, hide = true, env = "CASEWORK_BIN")]
     casework_bin: Option<PathBuf>,

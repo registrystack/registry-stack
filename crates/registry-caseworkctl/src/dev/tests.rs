@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::project::{STANDALONE_DEV_CLIENTS, STANDALONE_YAML};
+use clap::Parser;
 use registry_casework::RuntimeConfig;
 
 fn session(project: &Path) -> State {
@@ -257,6 +258,75 @@ fn ports_must_be_three_distinct_loopback_ports() {
     ports(8092, 8093, 55433).unwrap();
     assert!(ports(8092, 8092, 55433).is_err());
     assert!(ports(0, 8093, 55433).is_err());
+}
+
+#[test]
+fn start_ports_fall_back_to_named_environment_variables() {
+    let casework_var = "CASEWORKCTL_DEV_CASEWORK_PORT";
+    let mint_var = "CASEWORKCTL_DEV_MINT_PORT";
+    let database_var = "CASEWORKCTL_DEV_DATABASE_PORT";
+    std::env::set_var(casework_var, "19092");
+    std::env::set_var(mint_var, "19093");
+    std::env::set_var(database_var, "19099");
+
+    let parsed =
+        crate::Cli::try_parse_from(["caseworkctl", "dev", "start", "/tmp/casework-project"])
+            .unwrap();
+    std::env::remove_var(casework_var);
+    std::env::remove_var(mint_var);
+    std::env::remove_var(database_var);
+
+    let crate::Command::Dev(DevArgs {
+        action: Some(DevAction::Start(start)),
+        ..
+    }) = parsed.command
+    else {
+        panic!("expected dev start");
+    };
+    assert_eq!(start.casework_port, Some(19092));
+    assert_eq!(start.mint_port, Some(19093));
+    assert_eq!(start.database_port, Some(19099));
+}
+
+#[test]
+fn start_ports_prefer_an_explicit_flag_over_the_environment() {
+    let casework_var = "CASEWORKCTL_DEV_CASEWORK_PORT";
+    std::env::set_var(casework_var, "19092");
+
+    let parsed = crate::Cli::try_parse_from([
+        "caseworkctl",
+        "dev",
+        "start",
+        "/tmp/casework-project",
+        "--casework-port",
+        "9100",
+    ])
+    .unwrap();
+    std::env::remove_var(casework_var);
+
+    let crate::Command::Dev(DevArgs {
+        action: Some(DevAction::Start(start)),
+        ..
+    }) = parsed.command
+    else {
+        panic!("expected dev start");
+    };
+    assert_eq!(start.casework_port, Some(9100));
+}
+
+#[test]
+fn bare_dev_alias_ports_also_fall_back_to_the_environment() {
+    let database_var = "CASEWORKCTL_DEV_DATABASE_PORT";
+    std::env::set_var(database_var, "19099");
+
+    let parsed =
+        crate::Cli::try_parse_from(["caseworkctl", "dev", "/tmp/casework-project"]).unwrap();
+    std::env::remove_var(database_var);
+
+    let crate::Command::Dev(DevArgs { start, .. }) = parsed.command else {
+        panic!("expected dev");
+    };
+    assert_eq!(start.database_port, Some(19099));
 }
 
 #[test]
