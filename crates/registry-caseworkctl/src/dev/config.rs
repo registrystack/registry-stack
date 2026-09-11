@@ -5,7 +5,9 @@ use super::{private, State, MIGRATION_ROLE, RUNTIME_ROLE};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::ecdsa::SigningKey;
-use registry_casework_core::{CaseworkProject, CaseworkRole};
+use registry_casework_core::{
+    valid_directory_identifier, valid_profile_identifier, CaseworkProject, CaseworkRole,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -98,7 +100,9 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         if client.id == "issuer" || !identifier(&client.id) || !ids.insert(&client.id) {
             bail!("local clients need unique bounded lowercase IDs, and issuer is reserved for the local token issuer");
         }
-        if !identifier(&client.access_profile) || !profiles.insert(&client.access_profile) {
+        if !valid_profile_identifier(&client.access_profile)
+            || !profiles.insert(&client.access_profile)
+        {
             bail!("each local access profile must bind to exactly one teaching client");
         }
         let unique_scopes = client.scopes.iter().collect::<BTreeSet<_>>();
@@ -133,7 +137,10 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
     let mut teams = BTreeSet::new();
     let mut queues = BTreeSet::new();
     for team in &clients.directory {
-        if !identifier(&team.team) || !teams.insert(&team.team) || !identifier(&team.queue) {
+        if !identifier(&team.team)
+            || !teams.insert(&team.team)
+            || !valid_directory_identifier(&team.queue)
+        {
             bail!("each local directory team needs a unique bounded ID and one bounded queue");
         }
         if !queues.insert(&team.queue) {

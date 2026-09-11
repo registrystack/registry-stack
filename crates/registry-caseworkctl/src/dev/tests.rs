@@ -46,6 +46,10 @@ fn wait_for_process_exit(pid: rustix::process::Pid, grace: Duration) -> bool {
     rustix::process::test_kill_process(pid).is_err()
 }
 
+fn file_has_bytes(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.len() > 0)
+}
+
 #[test]
 fn init_clients_bind_the_standalone_template() {
     let root = tempfile::tempdir().unwrap();
@@ -92,6 +96,87 @@ fn clients_file_refuses_unknown_keys_and_repeated_identity() {
     let unknown_member = b"version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\ndirectory:\n  - team: decisions-team\n    queue: decisions\n    staff: [absent]\n";
     let refusal = format!("{:#}", config::clients(unknown_member).unwrap_err());
     assert!(refusal.contains("absent"), "{refusal}");
+}
+
+#[test]
+fn client_ids_keep_the_narrow_local_identifier_contract() {
+    for valid in ["staff-1".to_owned(), "x".repeat(64)] {
+        let text = format!(
+            "version: 1\nclients:\n  - id: '{valid}'\n    accessProfile: staff\n    scopes: [casework:staff]\n"
+        );
+        config::clients(text.as_bytes()).unwrap();
+    }
+
+    for invalid in [
+        String::new(),
+        "x".repeat(65),
+        "staff_review".to_owned(),
+        "staff.review".to_owned(),
+        "staff:review".to_owned(),
+    ] {
+        let text = format!(
+            "version: 1\nclients:\n  - id: '{invalid}'\n    accessProfile: staff\n    scopes: [casework:staff]\n"
+        );
+        assert!(config::clients(text.as_bytes()).is_err(), "{invalid:?}");
+    }
+}
+
+#[test]
+fn access_profile_references_match_the_casework_profile_contract() {
+    for valid in [
+        "staff_review".to_owned(),
+        "staff.review".to_owned(),
+        "staff:review".to_owned(),
+        "staff.review:v1_2-3".to_owned(),
+        "x".repeat(128),
+    ] {
+        let text = format!(
+            "version: 1\nclients:\n  - id: staff\n    accessProfile: '{valid}'\n    scopes: [casework:staff]\n"
+        );
+        config::clients(text.as_bytes()).unwrap();
+    }
+
+    for invalid in [
+        String::new(),
+        "x".repeat(129),
+        "staff/review".to_owned(),
+        "staff review".to_owned(),
+        "stáff".to_owned(),
+    ] {
+        let text = format!(
+            "version: 1\nclients:\n  - id: staff\n    accessProfile: '{invalid}'\n    scopes: [casework:staff]\n"
+        );
+        assert!(config::clients(text.as_bytes()).is_err(), "{invalid:?}");
+    }
+}
+
+#[test]
+fn queue_references_match_the_directory_identifier_contract() {
+    for valid in [
+        "review_queue".to_owned(),
+        "review.queue".to_owned(),
+        "review.queue_1-2".to_owned(),
+        "x".repeat(128),
+    ] {
+        let text = format!(
+            "version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\ndirectory:\n  - team: review-team\n    queue: '{valid}'\n    staff: [staff]\n"
+        );
+        config::clients(text.as_bytes()).unwrap();
+    }
+
+    for invalid in [
+        String::new(),
+        "x".repeat(129),
+        "review:queue".to_owned(),
+        "review/queue".to_owned(),
+        "review queue".to_owned(),
+        "réview".to_owned(),
+    ] {
+        let text = format!(
+            "version: 1\nclients:\n  - id: staff\n    accessProfile: staff\n    scopes: [casework:staff]\ndirectory:\n  - team: review-team\n    queue: '{invalid}'\n    staff: [staff]\n"
+        );
+        assert!(config::clients(text.as_bytes()).is_err(), "{invalid:?}");
+    }
 }
 
 #[test]
@@ -1762,10 +1847,13 @@ fn nonzero_outer_guard_helper() {
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !service_pid_file.exists() && Instant::now() < deadline {
+    while !file_has_bytes(&service_pid_file) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert!(service_pid_file.exists(), "service did not become ready");
+    assert!(
+        file_has_bytes(&service_pid_file),
+        "service did not become ready"
+    );
     std::process::exit(23);
 }
 
@@ -1794,10 +1882,10 @@ fn guarded_service_stops_after_its_supervisor_is_killed() {
         .unwrap();
     let service_pid_file = root.path().join("service.pid");
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !service_pid_file.exists() && Instant::now() < deadline {
+    while !file_has_bytes(&service_pid_file) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
-    if !service_pid_file.exists() {
+    if !file_has_bytes(&service_pid_file) {
         supervisor.kill().unwrap();
         supervisor.wait().unwrap();
         panic!("guarded service did not start");
@@ -1923,10 +2011,10 @@ fn established_service_keeps_its_graceful_shutdown_window() {
     )
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !service_pid_file.exists() && Instant::now() < deadline {
+    while !file_has_bytes(&service_pid_file) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    if !service_pid_file.exists() {
+    if !file_has_bytes(&service_pid_file) {
         let _ = service.stop();
         panic!("service did not reach its startup handshake");
     }
@@ -1954,10 +2042,10 @@ fn established_stubborn_service_reports_forced_shutdown() {
     let mut service =
         service(&binary, &[], &service_pid_file, &[], root.path(), "guarded").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !service_pid_file.exists() && Instant::now() < deadline {
+    while !file_has_bytes(&service_pid_file) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    if !service_pid_file.exists() {
+    if !file_has_bytes(&service_pid_file) {
         let _ = service.stop();
         panic!("stubborn service did not reach its startup handshake");
     }
@@ -1988,10 +2076,13 @@ fn killed_guard_leaves_the_supervisor_to_clean_its_exact_service_group() {
     let mut service =
         service(&binary, &[], &service_pid_file, &[], root.path(), "guarded").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !service_pid_file.exists() && Instant::now() < deadline {
+    while !file_has_bytes(&service_pid_file) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert!(service_pid_file.exists(), "guarded service did not start");
+    assert!(
+        file_has_bytes(&service_pid_file),
+        "guarded service did not start"
+    );
     let service_pid = rustix::process::Pid::from_raw(
         fs::read_to_string(&service_pid_file)
             .unwrap()
@@ -2056,13 +2147,13 @@ fn nonzero_guard_exit_is_detected_without_waiting_for_pump_eof() {
     // the parent that complete startup budget plus scheduling margin when the
     // full test suite is running concurrently.
     let deadline = Instant::now() + Duration::from_secs(6);
-    while (!service_pid_file.exists() || service.guard_exit().unwrap().is_none())
+    while (!file_has_bytes(&service_pid_file) || service.guard_exit().unwrap().is_none())
         && Instant::now() < deadline
     {
         thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        service_pid_file.exists(),
+        file_has_bytes(&service_pid_file),
         "guard did not create its service"
     );
     assert!(
@@ -2114,10 +2205,13 @@ fn live_guard_timeout_kills_the_pinned_group_before_reaping() {
     guard.arg(&service_binary).arg(&service_pid_file);
     let mut service = service_with_guard_command(guard, root.path(), "guarded").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !service_pid_file.exists() && Instant::now() < deadline {
+    while !file_has_bytes(&service_pid_file) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert!(service_pid_file.exists(), "guarded service did not start");
+    assert!(
+        file_has_bytes(&service_pid_file),
+        "guarded service did not start"
+    );
     let service_pid = rustix::process::Pid::from_raw(
         fs::read_to_string(&service_pid_file)
             .unwrap()
@@ -2271,10 +2365,10 @@ fn guardian_pump_setup_failure_reaps_a_stubborn_owned_service() {
         "{:#}",
         service_with_pump_spawner(child, journal, |_stream, _task| {
             let deadline = Instant::now() + Duration::from_secs(5);
-            while !service_pid_file.exists() && Instant::now() < deadline {
+            while !file_has_bytes(&service_pid_file) && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(5));
             }
-            ready = service_pid_file.exists();
+            ready = file_has_bytes(&service_pid_file);
             Err(std::io::Error::other("injected pump spawn failure"))
         })
         .err()
