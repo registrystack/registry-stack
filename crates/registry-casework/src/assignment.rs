@@ -5,15 +5,15 @@ use std::time::{Duration, Instant};
 
 use chrono::{TimeDelta, Utc};
 use registry_casework_core::{
-    resolve_absence_cover, validate_absence, AbsenceInput, AbsenceList, AbsenceRecord,
-    ActorContext, AssignmentContext, AssignmentRequest, BootstrapDirectoryRequest,
+    resolve_absence_cover, valid_directory_identifier, validate_absence, AbsenceInput, AbsenceList,
+    AbsenceRecord, ActorContext, AssignmentContext, AssignmentRequest, BootstrapDirectoryRequest,
     CaseloadApplyRequest, CaseloadItemOutcome, CaseloadItemResult, CaseloadMoveRequest,
     CaseloadPreviewPage, CaseworkRole, DelegateRequest, DirectoryMember, DirectoryTargetPage,
     DirectoryTargetPurpose, DirectoryTeamUpdateRequest, HistoryKind, IssuerPrincipal, Page,
     PageStatus, SourceAdapterError, StaffingDiagnostic, WorkItem,
     MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES,
-    MAXIMUM_DIRECTORY_IDENTIFIER_BYTES, MAXIMUM_DIRECTORY_PRINCIPALS,
-    MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES, MAXIMUM_DIRECTORY_SERVED_QUEUES,
+    MAXIMUM_DIRECTORY_PRINCIPALS, MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES,
+    MAXIMUM_DIRECTORY_SERVED_QUEUES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1736,13 +1736,6 @@ fn role_name(role: CaseworkRole) -> &'static str {
         CaseworkRole::Administrator => "administrator",
         CaseworkRole::Requester => "requester",
     }
-}
-fn valid_directory_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAXIMUM_DIRECTORY_IDENTIFIER_BYTES
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 fn valid_directory_principals(people: &[IssuerPrincipal]) -> bool {
     people.len() <= MAXIMUM_DIRECTORY_PRINCIPALS
