@@ -97,6 +97,10 @@ NODE_CLIENT_RELEASE_SURFACES = (
         "crates/registry-breg-client-node",
         "@registrystack/breg-client-native",
     ),
+    (
+        "crates/registry-casework-client-node",
+        "@registrystack/casework-client-native",
+    ),
 )
 PYTHON_CLIENT_RELEASE_SURFACES = (
     (

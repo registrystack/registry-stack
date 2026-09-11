@@ -1372,13 +1372,14 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence mint discovery breg)",
+            "image_names=(relay evidence mint discovery breg casework)",
             "images: $images[0]",
             "scans: $scans[0]",
             '"discovery-image"',
             '"evidence-image"',
             '"mint-image"',
             '"breg-image"',
+            '"casework-image"',
             '"relay-image"',
         ):
             self.assertIn(current, workflow)
