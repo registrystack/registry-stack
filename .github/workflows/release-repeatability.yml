@@ -179,6 +179,8 @@ jobs:
               "registry-manifest-cli": "registry-manifest",
               "breg": "breg",
               "bregctl": "bregctl",
+              "casework": "casework",
+              "caseworkctl": "caseworkctl",
               "relay": "relay",
               "relayctl": "relayctl",
           }

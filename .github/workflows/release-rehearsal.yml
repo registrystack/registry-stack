@@ -226,6 +226,10 @@ jobs:
             "breg ${REHEARSAL_VERSION}"
           test "$("dist/bin/bregctl-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
             "bregctl ${REHEARSAL_VERSION}"
+          test "$("dist/bin/casework-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
+            "casework ${REHEARSAL_VERSION}"
+          test "$("dist/bin/caseworkctl-v${REHEARSAL_VERSION}-linux-amd64" --version)" = \
+            "caseworkctl ${REHEARSAL_VERSION}"
 
       - name: Set up Docker Buildx for advisory evidence
         if: ${{ inputs.advisory_evidence }}

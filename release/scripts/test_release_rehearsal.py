@@ -175,6 +175,9 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("--breg binary-shards/breg", merge)
         self.assertIn("breg-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("bregctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        self.assertIn("--casework binary-shards/casework", merge)
+        self.assertIn("casework-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        self.assertIn("caseworkctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertNotIn("${{ inputs.", merge)
         for forbidden in (
             "npm publish",

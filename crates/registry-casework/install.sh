@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="registrystack/registry-stack"
-binaries=(casework caseworkctl)
+binaries=(casework caseworkctl mint)
 # Publication packaging replaces this empty value with the asset's canonical tag.
 default_version=""
 script_name="${BASH_SOURCE[0]:-}"
@@ -30,14 +30,18 @@ asset_dir="${CASEWORK_ASSET_DIR:-}"
 
 usage() {
 	cat <<EOF
-Install the Registry Casework runtime and its caseworkctl adopter tooling.
+Install the Registry Casework runtime, the caseworkctl adopter tooling, and
+the mint token issuer that a local registry uses when no identity provider is
+at hand. The mint binary is the one the Base Registry Engine and Evidence
+toolset installers also ship; every installer installs the same release
+asset.
 
 After selecting a release whose manifest lists Casework:
   curl -fsSL https://github.com/${repo}/releases/download/<version>/casework-<version>-install.sh | bash
 
 The installer verifies every downloaded release asset against the release's
 SHA256SUMS before anything reaches the install directory, and installs the
-two binaries together or not at all. It does not verify release authenticity. For
+three binaries together or not at all. It does not verify release authenticity. For
 a higher-assurance installation, follow the release verification guide for the
 pinned tag, then rerun with CASEWORK_ASSET_DIR set to the verified
 directory:
@@ -364,6 +368,7 @@ Try it:
   caseworkctl init --help
   caseworkctl check --help
   casework --help
+  mint --help
 
 EOF
 
