@@ -854,6 +854,77 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
 }
 
 #[tokio::test]
+async fn absence_cover_targets_stay_inside_the_teams_the_actor_supervises() {
+    let fixture = fixture([]).await;
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    let unsupervised_staff = principal("unsupervised-staff");
+    fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            1,
+            "other-team",
+            &DirectoryTeamUpdateRequest {
+                staff: vec![
+                    fixture.staff_a.principal.clone(),
+                    unsupervised_staff.clone(),
+                ],
+                supervisors: Vec::new(),
+                served_queues: Vec::new(),
+            },
+            "add-team-without-the-review-supervisor",
+        )
+        .await
+        .expect("add a second team the review supervisor does not supervise");
+
+    let supervised = fixture
+        .service
+        .directory_targets(
+            &fixture.supervisor,
+            DirectoryTargetPurpose::AbsenceCover,
+            None,
+            Some(&fixture.staff_a.principal),
+            100,
+            None,
+        )
+        .await
+        .expect("supervised absence covers");
+    assert!(!supervised.items.contains(&unsupervised_staff));
+    assert_eq!(
+        supervised.items,
+        vec![
+            fixture.staff_b.principal.clone(),
+            fixture.staff_c.principal.clone()
+        ]
+    );
+
+    let unscoped = fixture
+        .service
+        .directory_targets(
+            &administrator,
+            DirectoryTargetPurpose::AbsenceCover,
+            None,
+            Some(&fixture.staff_a.principal),
+            100,
+            None,
+        )
+        .await
+        .expect("administrator absence covers");
+    assert_eq!(
+        unscoped.items,
+        vec![
+            fixture.staff_b.principal.clone(),
+            fixture.staff_c.principal.clone(),
+            unsupervised_staff
+        ]
+    );
+}
+
+#[tokio::test]
 async fn caseload_preview_filters_concealed_source_items_and_propagates_source_outage() {
     let concealed_id = Uuid::new_v4();
     let unavailable_id = Uuid::new_v4();
@@ -1769,9 +1840,9 @@ async fn source_observation_that_drops_the_holder_clears_the_assignment_and_reco
         recovery_evidence: RecoveryEvidence::new(b"inert recovery capsule".to_vec())
             .expect("bounded recovery evidence"),
     };
-    let attempt = fixture
+    let (attempt, execution_token) = fixture
         .store
-        .reserve_attempt(
+        .reserve_attempt_for_execution(
             &fixture.staff_b,
             item.item_id,
             assigned.revision,
@@ -1790,6 +1861,7 @@ async fn source_observation_that_drops_the_holder_clears_the_assignment_and_reco
         .complete_attempt(
             &fixture.staff_b,
             attempt.attempt_id,
+            execution_token,
             &SourceReceipt {
                 source_revision: "2".to_owned(),
                 resulting_state: "approved".to_owned(),

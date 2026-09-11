@@ -171,12 +171,23 @@ impl PostgresStore {
                 if !can_manage_person(&transaction, actor, person).await? {
                     return Err(StoreError::Forbidden);
                 }
-                transaction
-                    .query(
-                        "SELECT DISTINCT cover.issuer,cover.subject FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.membership_kind='staff' AND (cover.issuer,cover.subject)<>($1,$2) AND (cover.issuer,cover.subject)>($3,$4) ORDER BY cover.issuer,cover.subject LIMIT $5",
-                        &[&person.issuer, &person.subject, &after.0, &after.1, &query_limit],
-                    )
-                    .await?
+                if actor.role == CaseworkRole::Supervisor {
+                    // A supervisor covers only inside the teams they lead, so a
+                    // second team the absent person belongs to stays unseen.
+                    transaction
+                        .query(
+                            "SELECT DISTINCT cover.issuer,cover.subject FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id JOIN casework_memberships lead ON lead.team_id=cover.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.membership_kind='staff' AND lead.issuer=$3 AND lead.subject=$4 AND lead.membership_kind='supervisor' AND (cover.issuer,cover.subject)<>($1,$2) AND (cover.issuer,cover.subject)>($5,$6) ORDER BY cover.issuer,cover.subject LIMIT $7",
+                            &[&person.issuer, &person.subject, &actor.principal.issuer, &actor.principal.subject, &after.0, &after.1, &query_limit],
+                        )
+                        .await?
+                } else {
+                    transaction
+                        .query(
+                            "SELECT DISTINCT cover.issuer,cover.subject FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.membership_kind='staff' AND (cover.issuer,cover.subject)<>($1,$2) AND (cover.issuer,cover.subject)>($3,$4) ORDER BY cover.issuer,cover.subject LIMIT $5",
+                            &[&person.issuer, &person.subject, &after.0, &after.1, &query_limit],
+                        )
+                        .await?
+                }
             }
         };
         let more = rows.len() > desired;

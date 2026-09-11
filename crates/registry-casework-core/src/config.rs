@@ -92,6 +92,9 @@ impl CaseworkProject {
         {
             return Err(ConfigError::AccessProfiles);
         }
+        if !human_roles_are_separately_scoped(&self.access_profiles) {
+            return Err(ConfigError::AccessProfileScopes);
+        }
         let hosted_kinds: BTreeSet<_> = self.hosted_kinds.iter().map(|kind| &kind.id).collect();
         if self.hosted_kinds.len() > crate::MAXIMUM_HOSTED_KINDS
             || hosted_kinds.len() != self.hosted_kinds.len()
@@ -183,6 +186,46 @@ impl CaseworkProject {
         }
         self.inbox.check()
     }
+}
+
+/// The selected profile carries the caller's role, so the token must be what
+/// separates one human role from another: two human roles that require the
+/// same scopes let one token select either, and an administrator profile whose
+/// scopes are all required elsewhere is reachable by every caller that holds
+/// them.
+fn human_roles_are_separately_scoped(profiles: &[AccessProfile]) -> bool {
+    fn is_human(role: CaseworkRole) -> bool {
+        matches!(
+            role,
+            CaseworkRole::Staff | CaseworkRole::Supervisor | CaseworkRole::Administrator
+        )
+    }
+    fn scopes(profile: &AccessProfile) -> BTreeSet<&String> {
+        profile.required_scopes.iter().collect()
+    }
+    let distinct = profiles.iter().enumerate().all(|(index, left)| {
+        profiles.iter().skip(index + 1).all(|right| {
+            left.role == right.role
+                || !is_human(left.role)
+                || !is_human(right.role)
+                || scopes(left) != scopes(right)
+        })
+    });
+    let elsewhere: BTreeSet<&String> = profiles
+        .iter()
+        .filter(|profile| profile.role != CaseworkRole::Administrator)
+        .flat_map(|profile| profile.required_scopes.iter())
+        .collect();
+    distinct
+        && profiles
+            .iter()
+            .filter(|profile| profile.role == CaseworkRole::Administrator)
+            .all(|profile| {
+                profile
+                    .required_scopes
+                    .iter()
+                    .any(|scope| !elsewhere.contains(scope))
+            })
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -324,6 +367,8 @@ pub enum ConfigError {
     DefaultQueue,
     #[error("staff, supervisor, and administrator access profiles are required")]
     AccessProfiles,
+    #[error("the staff, supervisor, and administrator access profiles must require different scopes from one another, and the administrator profile must require a scope no other profile requires")]
+    AccessProfileScopes,
     #[error("the hosted kind policy or its profile grants are invalid")]
     HostedKinds,
     #[error("the Casework project configures no source or hosted work")]
@@ -406,6 +451,39 @@ mod tests {
         let mut candidate = project();
         candidate.access_profiles[2].kinds = vec!["decision".to_owned()];
         assert_eq!(candidate.check(), Err(ConfigError::HostedKinds));
+    }
+
+    #[test]
+    fn human_roles_are_not_reachable_through_one_shared_scope_set() {
+        let mut candidate = project();
+        candidate.access_profiles[1].required_scopes =
+            candidate.access_profiles[0].required_scopes.clone();
+        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+    }
+
+    #[test]
+    fn the_administrator_profile_requires_a_scope_of_its_own() {
+        let mut candidate = project();
+        candidate.access_profiles[2].required_scopes = vec![
+            "casework:staff".to_owned(),
+            "casework:supervisor".to_owned(),
+        ];
+        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+    }
+
+    #[test]
+    fn the_shipped_example_projects_load() {
+        let examples =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/casework/examples");
+        for example in [
+            "professional-review",
+            "standalone-decision",
+            "multi-stage-routing-clocks",
+        ] {
+            let path = examples.join(example).join("casework.yaml");
+            CaseworkProject::load(&path)
+                .unwrap_or_else(|error| panic!("{} loads: {error}", path.display()));
+        }
     }
 
     #[test]
