@@ -214,10 +214,12 @@ Administrator profiles publish immutable holiday-set revisions with an
 `Idempotency-Key` and can read a named revision. An exact repeat is idempotent;
 different content for an existing revision returns `precondition.failed`.
 Changing a holiday revision does not silently rewrite active clock deadlines.
-The Administrator first previews at most 100 changes. The preview records each
-expected calculation generation and is bound to the actor and selected profile
-for 15 minutes. Applying the reviewed preview requires an `Idempotency-Key` and
-checks all generations atomically. An expired preview returns
+The Administrator previews and applies changes in batches of at most 100,
+repeating those two operations until every active occurrence is pinned to the
+selected immutable holiday revision. The preview records each expected
+calculation generation and is bound to the actor and selected profile for 15
+minutes. Applying the reviewed preview requires an `Idempotency-Key` and checks
+all generations atomically. An expired preview returns
 `clock.recompute-preview-expired`; create and review a new preview before
 applying. An already-applied preview or changed generation returns
 `precondition.failed`.

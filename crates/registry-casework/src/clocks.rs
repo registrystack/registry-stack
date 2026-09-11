@@ -241,11 +241,12 @@ impl PostgresStore {
             .map(|row| serde_json::from_value(row.get(0)))
             .transpose()?
             .ok_or(StoreError::NotFound)?;
+        let holiday_value = serde_json::to_value(&holiday)?;
         let rows=transaction.query(
-            "SELECT o.clock_occurrence_id,o.item_id,o.current_calculation_generation,o.source_revision,o.source_etag,c.policy_digest,c.policy,c.calendar,c.anchor_at,c.started_at,c.source_timing,c.completed_at FROM casework_clock_occurrences o JOIN casework_items i ON i.item_id=o.item_id AND i.erased_at IS NULL JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.clock_id=$1 AND o.scope='activity' AND o.state IN ('running','paused','verification_pending') ORDER BY o.clock_occurrence_id FOR UPDATE OF o LIMIT 101",
-            &[&request.clock_id],
+            "SELECT o.clock_occurrence_id,o.item_id,o.current_calculation_generation,o.source_revision,o.source_etag,c.policy_digest,c.policy,c.calendar,c.anchor_at,c.started_at,c.source_timing,c.completed_at FROM casework_clock_occurrences o JOIN casework_items i ON i.item_id=o.item_id AND i.erased_at IS NULL JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.clock_id=$1 AND o.scope='activity' AND o.state IN ('running','paused','verification_pending') AND c.calendar->>'holidaySet'=$2 AND c.holiday_document IS DISTINCT FROM $3::jsonb ORDER BY o.clock_occurrence_id FOR UPDATE OF o LIMIT 100",
+            &[&request.clock_id, &request.holiday_set, &holiday_value],
         ).await?;
-        if rows.is_empty() || rows.len() > 100 {
+        if rows.is_empty() {
             return Err(StoreError::Invalid);
         }
         let preview_id = Uuid::new_v4();
@@ -2034,5 +2035,114 @@ mod tests {
             .unwrap();
         assert_eq!(frozen[0].clock_occurrence_id, occurrence_id);
         assert_eq!(frozen[0].state, ClockRuntimeState::Completed);
+
+        store
+            .put_holiday_set(
+                &admin,
+                &HolidaySetDocument {
+                    holiday_set: "batch-holidays".to_owned(),
+                    revision: 1,
+                    dates: vec![],
+                },
+                "batch-holiday-1",
+            )
+            .await
+            .unwrap();
+        let mut batch_policy = activity_policy();
+        let ClockPolicy::Activity { id, .. } = &mut batch_policy.clock else {
+            unreachable!("activity policy fixture")
+        };
+        *id = "batch-deadline".to_owned();
+        batch_policy
+            .calendar
+            .as_mut()
+            .expect("activity calendar")
+            .holiday_set = "batch-holidays".to_owned();
+        for index in 0..101 {
+            let batch_subject = format!("batch-subject-{index:03}");
+            let batch_key = format!("review:batch:{index:03}");
+            let batch_observation = observation(
+                &batch_subject,
+                &batch_key,
+                1,
+                OccurrenceKind::Review,
+                OccurrenceState::Open,
+                Some(instant("2026-08-01T15:00:00+07:00")),
+                None,
+            );
+            store
+                .apply_observation_with_context(
+                    &batch_observation,
+                    "default",
+                    None,
+                    None,
+                    Some(&batch_policy),
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .put_holiday_set(
+                &admin,
+                &HolidaySetDocument {
+                    holiday_set: "batch-holidays".to_owned(),
+                    revision: 2,
+                    dates: vec!["2026-08-03".to_owned()],
+                },
+                "batch-holiday-2",
+            )
+            .await
+            .unwrap();
+        let batch_request = registry_casework_core::ClockRecomputeRequest {
+            clock_id: "batch-deadline".to_owned(),
+            holiday_set: "batch-holidays".to_owned(),
+            holiday_revision: 2,
+        };
+        let first_batch = store
+            .preview_clock_recompute(&admin, &batch_request)
+            .await
+            .unwrap();
+        assert_eq!(first_batch.changes.len(), 100);
+        let first_result = store
+            .apply_clock_recompute(&admin, first_batch.preview_id, "apply-batch-1")
+            .await
+            .unwrap();
+        assert_eq!(first_result.applied_occurrences.len(), 100);
+        assert_eq!(
+            store
+                .apply_clock_recompute(&admin, first_batch.preview_id, "apply-batch-1")
+                .await
+                .unwrap(),
+            first_result
+        );
+
+        let second_batch = store
+            .preview_clock_recompute(&admin, &batch_request)
+            .await
+            .unwrap();
+        assert_eq!(second_batch.changes.len(), 1);
+        assert!(!first_result
+            .applied_occurrences
+            .contains(&second_batch.changes[0].clock_occurrence_id));
+        let second_result = store
+            .apply_clock_recompute(&admin, second_batch.preview_id, "apply-batch-2")
+            .await
+            .unwrap();
+        assert_eq!(second_result.applied_occurrences.len(), 1);
+        assert!(matches!(
+            store.preview_clock_recompute(&admin, &batch_request).await,
+            Err(StoreError::Invalid)
+        ));
+        assert_eq!(
+            client
+                .query_one(
+                    "SELECT count(*) FROM casework_clock_occurrences o JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.clock_id='batch-deadline' AND c.holiday_document->>'holidaySet'='batch-holidays' AND c.holiday_document->>'revision'='2'",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            101
+        );
     }
 }
