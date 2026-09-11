@@ -4811,6 +4811,8 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
                 | "history"
                 | "application"
                 | "decisions"
+                | "review"
+                | "reviewTiming"
                 | "detailErased"
         )
     }) || !["bregState", "proposalVersion"]
@@ -4849,7 +4851,119 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
     if let Some(application) = request.get("application") {
         assert_request_application_shape(application)?;
     }
+    if let Some(review) = request.get("review") {
+        assert_request_review_shape(review)?;
+    }
+    if let Some(timing) = request.get("reviewTiming") {
+        assert_request_review_timing_shape(timing)?;
+    }
     Ok(())
+}
+
+fn assert_request_review_shape(value: &Value) -> Result<(), FixtureError> {
+    let review = exact_object(
+        value,
+        &["stages", "submittedAt", "pendingStage", "stageEnteredAt"],
+    )?;
+    let stages = review
+        .get("stages")
+        .and_then(Value::as_array)
+        .filter(|stages| stages.len() <= 32)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    for stage in stages {
+        let stage = stage
+            .as_object()
+            .ok_or(FixtureError::ResponseShapeRefused)?;
+        if stage.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "id" | "approvals" | "excludeSubmitter" | "excludePreviousReviewers"
+            )
+        }) || !["id", "approvals", "excludeSubmitter"]
+            .iter()
+            .all(|key| stage.contains_key(*key))
+            || stage
+                .get("id")
+                .and_then(Value::as_str)
+                .is_none_or(|id| !valid_review_stage_id(id))
+            || stage
+                .get("approvals")
+                .and_then(Value::as_u64)
+                .is_none_or(|approvals| !(1..=32).contains(&approvals))
+            || stage
+                .get("excludeSubmitter")
+                .and_then(Value::as_bool)
+                .is_none()
+            || stage
+                .get("excludePreviousReviewers")
+                .is_some_and(|value| !value.is_boolean())
+        {
+            return Err(FixtureError::ResponseShapeRefused);
+        }
+    }
+    assert_response_timestamp(review.get("submittedAt"), false)?;
+    assert_optional_review_stage(review.get("pendingStage"))?;
+    assert_response_timestamp(review.get("stageEnteredAt"), true)?;
+    Ok(())
+}
+
+fn assert_request_review_timing_shape(value: &Value) -> Result<(), FixtureError> {
+    let timing = exact_object(
+        value,
+        &[
+            "firstSubmittedAt",
+            "pausedMilliseconds",
+            "pauseStartedAt",
+            "completedAt",
+        ],
+    )?;
+    assert_response_timestamp(timing.get("firstSubmittedAt"), false)?;
+    if timing
+        .get("pausedMilliseconds")
+        .and_then(Value::as_u64)
+        .is_none_or(|milliseconds| milliseconds > 9_007_199_254_740_991)
+    {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    assert_response_timestamp(timing.get("pauseStartedAt"), true)?;
+    assert_response_timestamp(timing.get("completedAt"), true)?;
+    Ok(())
+}
+
+fn assert_optional_review_stage(value: Option<&Value>) -> Result<(), FixtureError> {
+    let value = value.ok_or(FixtureError::ResponseShapeRefused)?;
+    if !value.is_null()
+        && value
+            .as_str()
+            .is_none_or(|stage| !valid_review_stage_id(stage))
+    {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    Ok(())
+}
+
+fn assert_response_timestamp(value: Option<&Value>, nullable: bool) -> Result<(), FixtureError> {
+    let value = value.ok_or(FixtureError::ResponseShapeRefused)?;
+    if nullable && value.is_null() {
+        return Ok(());
+    }
+    let timestamp = value
+        .as_str()
+        .filter(|timestamp| timestamp.len() <= 128)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|_| ())
+        .map_err(|_| FixtureError::ResponseShapeRefused)
+}
+
+fn valid_review_stage_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= MAX_IDENTIFIER_BYTES
+        && bytes[0].is_ascii_lowercase()
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(*byte, b'-' | b'_')
+        })
 }
 
 fn assert_request_state(request: &Map<String, Value>) -> Result<(), FixtureError> {
@@ -6238,6 +6352,88 @@ mod tests {
         decisions[0].as_object_mut().unwrap().remove("actor");
         decisions[0]["reasonPresent"] = json!(false);
         assert!(assert_request_decisions_shape(&decisions).is_err());
+    }
+
+    #[test]
+    fn fixture_request_metadata_accepts_disclosed_review_state() {
+        let mut request = json!({
+            "bregState": "submitted",
+            "proposalVersion": 1,
+            "review": {
+                "stages": [{
+                    "id": "review",
+                    "approvals": 1,
+                    "excludeSubmitter": true,
+                    "excludePreviousReviewers": false
+                }],
+                "submittedAt": "2026-09-11T12:00:00Z",
+                "pendingStage": "review",
+                "stageEnteredAt": "2026-09-11T12:00:00Z"
+            },
+            "reviewTiming": {
+                "firstSubmittedAt": "2026-09-11T12:00:00.000000Z",
+                "pausedMilliseconds": 0,
+                "pauseStartedAt": null,
+                "completedAt": null
+            },
+            "decisions": [],
+            "editable": false,
+            "actions": []
+        });
+
+        assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
+        request["review"]["pendingStage"] = Value::Null;
+        request["review"]["stageEnteredAt"] = Value::Null;
+        request["reviewTiming"]["completedAt"] = json!("2026-09-11T12:05:00Z");
+        assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
+        request["review"]["pendingStage"] = json!("review");
+        request["review"]["stageEnteredAt"] = json!("2026-09-11T12:00:00Z");
+        request["reviewTiming"]["completedAt"] = Value::Null;
+
+        request["review"]["privateReviewer"] = json!("must-not-pass");
+        assert_eq!(
+            assert_request_record_metadata_shape(&request),
+            Err(FixtureError::ResponseShapeRefused)
+        );
+        request["review"]
+            .as_object_mut()
+            .unwrap()
+            .remove("privateReviewer");
+        request["review"]["stages"][0]["privateStageData"] = json!(true);
+        assert_eq!(
+            assert_request_record_metadata_shape(&request),
+            Err(FixtureError::ResponseShapeRefused)
+        );
+        request["review"]["stages"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("privateStageData");
+        request["reviewTiming"]["privateTimingData"] = json!(true);
+        assert_eq!(
+            assert_request_record_metadata_shape(&request),
+            Err(FixtureError::ResponseShapeRefused)
+        );
+        request["reviewTiming"]
+            .as_object_mut()
+            .unwrap()
+            .remove("privateTimingData");
+        request["review"]["stages"][0]["approvals"] = json!(0);
+        assert_eq!(
+            assert_request_record_metadata_shape(&request),
+            Err(FixtureError::ResponseShapeRefused)
+        );
+        request["review"]["stages"][0]["approvals"] = json!(1);
+        request["reviewTiming"]["pausedMilliseconds"] = json!(-1);
+        assert_eq!(
+            assert_request_record_metadata_shape(&request),
+            Err(FixtureError::ResponseShapeRefused)
+        );
+        request["reviewTiming"]["pausedMilliseconds"] = json!(0);
+        request["reviewTiming"]["firstSubmittedAt"] = json!("not-a-timestamp");
+        assert_eq!(
+            assert_request_record_metadata_shape(&request),
+            Err(FixtureError::ResponseShapeRefused)
+        );
     }
 
     #[test]

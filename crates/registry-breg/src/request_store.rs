@@ -228,23 +228,15 @@ pub(crate) async fn install(
                       WHERE d.request_entity_id = s.request_entity_id
                         AND d.request_id = s.request_id
                         AND d.decision = 'reject'),
-                    CASE WHEN NOT EXISTS (
-                        SELECT 1
-                          FROM registry_internal.registry_request_decisions d
-                         WHERE d.request_entity_id = s.request_entity_id
-                           AND d.request_id = s.request_id
-                           AND d.decision = 'approve'
-                    ) THEN
-                        (SELECT max(r.created_at)
-                           FROM registry_internal.registry_request_revision_links l
-                           JOIN registry_internal.registry_revisions r
-                             ON r.entity_id = l.entity_id
-                            AND r.record_id = l.record_id
-                            AND r.record_revision = l.record_revision
-                          WHERE l.request_entity_id = s.request_entity_id
-                            AND l.request_id = s.request_id
-                            AND l.link_kind = 'request_lifecycle')
-                    ELSE NULL END)
+                    (SELECT max(r.created_at)
+                       FROM registry_internal.registry_request_revision_links l
+                       JOIN registry_internal.registry_revisions r
+                         ON r.entity_id = l.entity_id
+                        AND r.record_id = l.record_id
+                        AND r.record_revision = l.record_revision
+                      WHERE l.request_entity_id = s.request_entity_id
+                        AND l.request_id = s.request_id
+                        AND l.link_kind = 'request_lifecycle'))
                 ELSE NULL
             END
           WHERE s.review_completed_at IS NULL
@@ -1777,6 +1769,7 @@ mod tests {
         let (database, mut migration, migration_task) = install_schema().await;
         let request_id = Uuid::new_v4();
         let direct_cancel_id = Uuid::new_v4();
+        let approved_cancel_id = Uuid::new_v4();
         let transaction = migration.transaction().await.expect("timing transaction");
         initialize_draft(&transaction, REQUEST_ENTITY, request_id, "submitter")
             .await
@@ -1940,6 +1933,80 @@ mod tests {
             )
             .await
             .expect("direct cancellation link inserts");
+        initialize_draft(
+            &transaction,
+            REQUEST_ENTITY,
+            approved_cancel_id,
+            "approved-cancel-submitter",
+        )
+        .await
+        .expect("approved-cancel draft initializes");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_proposals
+                     (request_entity_id, request_id, proposal_version,
+                      request_record_revision, contract_fingerprint, effect_digest,
+                      snapshot, created_at)
+                 VALUES ($1, $2, 1, 1, $3, $4, '{}'::jsonb,
+                         '2026-09-10T00:00:01Z'::timestamptz)",
+                &[
+                    &REQUEST_ENTITY,
+                    &approved_cancel_id,
+                    &format!("sha256:{}", "a".repeat(64)),
+                    &format!("sha256:{}", "b".repeat(64)),
+                ],
+            )
+            .await
+            .expect("approved-cancel proposal inserts");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_decisions
+                     (request_entity_id, request_id, proposal_version, decision_index,
+                      stage_id, actor_reference, decision, effect_digest, decided_at)
+                 VALUES ($1, $2, 1, 0, 'review', 'approving-actor', 'approve', $3,
+                         '2026-09-10T00:00:05Z'::timestamptz)",
+                &[
+                    &REQUEST_ENTITY,
+                    &approved_cancel_id,
+                    &format!("sha256:{}", "b".repeat(64)),
+                ],
+            )
+            .await
+            .expect("approved-cancel approval inserts");
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_request_state
+                    SET state = 'canceled', detail_erased_at = '2026-09-10T00:00:30Z',
+                        updated_at = '2026-09-10T00:00:30Z', review_completed_at = NULL
+                  WHERE request_entity_id = $1 AND request_id = $2",
+                &[&REQUEST_ENTITY, &approved_cancel_id],
+            )
+            .await
+            .expect("approved-cancel erased state saves");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_revisions
+                     (entity_id, record_id, record_reference, record_revision,
+                      predecessor_revision, record_lifecycle, package_revision, operation_id,
+                      mutation_kind, principal_reference, request_reference, snapshot, created_at)
+                 VALUES ($1, $2, 'approved-cancel', 1, NULL, 'active', 'legacy-package',
+                         'cancel', 'patch', 'legacy-actor', 'approved-cancel',
+                         '{}'::text::bytea, '2026-09-10T00:00:10Z'::timestamptz)",
+                &[&REQUEST_ENTITY, &approved_cancel_id],
+            )
+            .await
+            .expect("approved-cancel cancellation revision inserts");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_revision_links
+                     (entity_id, record_id, record_revision, request_entity_id, request_id,
+                      proposal_version, link_kind, created_at)
+                 VALUES ($1, $2, 1, $1, $2, 1, 'request_lifecycle',
+                         '2026-09-10T00:00:10Z'::timestamptz)",
+                &[&REQUEST_ENTITY, &approved_cancel_id],
+            )
+            .await
+            .expect("approved-cancel cancellation link inserts");
         transaction
             .commit()
             .await
@@ -1973,6 +2040,14 @@ mod tests {
             .expect("direct cancellation was submitted");
         assert_eq!(
             direct_cancel.completed_at.as_deref(),
+            Some("2026-09-10T00:00:10.000000Z")
+        );
+        let approved_cancel = load_review_timing(&transaction, REQUEST_ENTITY, approved_cancel_id)
+            .await
+            .expect("approved-cancel timing loads")
+            .expect("approved-cancel request was submitted");
+        assert_eq!(
+            approved_cancel.completed_at.as_deref(),
             Some("2026-09-10T00:00:10.000000Z")
         );
 
