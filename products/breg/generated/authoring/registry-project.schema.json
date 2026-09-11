@@ -3333,7 +3333,9 @@
     "RequestMetadataFieldSource": {
       "description": "Fields of request decision metadata governed separately from stored record fields.",
       "enum": [
-        "reason"
+        "actor_reference",
+        "reason",
+        "review_state"
       ],
       "type": "string"
     },

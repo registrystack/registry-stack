@@ -394,6 +394,12 @@ keeping the decision facts and reason-presence flag. Anonymous profiles never re
 text. Request-detail erasure removes the text while retaining reason presence and the decision
 facts.
 
+`readableRequestFields` also accepts `review_state`, which discloses `review` and `reviewTiming`
+on the request record, and `actor_reference`, which discloses `submitterReference` and
+`applierReference`. Both require a non-anonymous profile. Every change-request action response
+separately includes `actorReference`, the caller-supplied actor identity recorded with that
+action, independent of `readableRequestFields`.
+
 {/* Evidence: crates/registry-breg/src/artifacts.rs openapi_request_action_input_schema; crates/registry-breg/src/postgres/request_read.rs decisions_value; crates/registry-breg/src/contract.rs readable_request_fields; crates/registry-breg/src/request_retention.rs; crates/registry-breg/tests/postgres_request_upgrade_retention.rs. */}
 
 History returns up to 50 whole proposals per page. The response byte budget can shorten a page

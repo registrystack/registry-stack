@@ -71,6 +71,18 @@ relevant product pages on this site rather than duplicating release notes.
 {/* Evidence: docs/site/src/data/breg-api.yaml;
     crates/registry-breg/src/problem.rs, ActionEvidenceFailed. */}
 
+- `readableRequestFields` widens to `review_state` and `actor_reference`,
+  disclosing `review`, `reviewTiming`, `submitterReference`, and
+  `applierReference` on a change-request record for a non-anonymous profile.
+  Every change-request action response now also includes `actorReference`,
+  independent of `readableRequestFields`. See
+  [Base Registry Engine API](../reference/breg-api/).
+
+{/* Evidence: crates/registry-breg/src/contract.rs, RequestMetadataFieldSource;
+    crates/registry-breg/src/postgres/request_read.rs, may_disclose_review_state
+    and may_disclose_actor_references;
+    crates/registry-breg/src/artifacts.rs, request_record_metadata_schema. */}
+
 ## v0.29.0 beta-41
 
 - BREAKING: request-lifecycle webhook bodies add required
