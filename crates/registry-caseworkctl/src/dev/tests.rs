@@ -87,6 +87,22 @@ fn clients_file_refuses_unknown_keys_and_repeated_identity() {
 }
 
 #[test]
+fn clients_file_refuses_two_teams_assigned_to_one_queue() {
+    let duplicate_queue = STANDALONE_DEV_CLIENTS.replace(
+        "  - team: decisions-team\n",
+        "  - team: intake-team\n    queue: decisions\n    staff: [staff]\n    supervisors: [supervisor]\n  - team: decisions-team\n",
+    );
+    assert_ne!(duplicate_queue, STANDALONE_DEV_CLIENTS);
+
+    let refusal = format!(
+        "{:#}",
+        config::clients(duplicate_queue.as_bytes()).unwrap_err()
+    );
+    assert!(refusal.contains("decisions"), "{refusal}");
+    assert!(refusal.contains("only one team"), "{refusal}");
+}
+
+#[test]
 fn binding_refuses_a_requester_with_a_human_claim() {
     let root = tempfile::tempdir().unwrap();
     let project = standalone(root.path());
@@ -622,6 +638,120 @@ fn database_readiness_commands_stop_at_the_aggregate_deadline() {
 }
 
 #[test]
+fn service_http_readiness_stops_at_the_phase_deadline() {
+    let mut child = Command::new("/bin/sleep").arg("5").spawn().unwrap();
+    let terminate = AtomicBool::new(false);
+    let started = Instant::now();
+    let deadline = started + Duration::from_millis(75);
+    let mut request_timeouts = Vec::new();
+
+    let refusal = format!(
+        "{:#}",
+        ready_with_probe(&mut child, &terminate, deadline, |timeout| {
+            request_timeouts.push(timeout);
+            // Model an HTTP request that consumes its entire allowance. The
+            // readiness phase must pass only its remaining budget each time.
+            thread::sleep(timeout);
+            false
+        })
+        .unwrap_err()
+    );
+    let elapsed = started.elapsed();
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    assert!(refusal.contains("readiness timed out"), "{refusal}");
+    assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+    assert!(!request_timeouts.is_empty());
+    assert!(request_timeouts[0] <= deadline.duration_since(started));
+}
+
+#[test]
+fn service_http_readiness_keeps_the_normal_request_timeout() {
+    assert_eq!(
+        readiness_http_timeout(HTTP_TIMEOUT + Duration::from_secs(5)),
+        HTTP_TIMEOUT
+    );
+    assert_eq!(
+        readiness_http_timeout(Duration::from_millis(75)),
+        Duration::from_millis(75)
+    );
+}
+
+#[test]
+fn prerequisite_logs_are_bounded_and_keep_the_latest_diagnostics() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("logs");
+    private::directory(&logs).unwrap();
+    let latest = format!("diagnostic-{}", MAX_PREREQUISITE_LOGS + 7);
+    for index in 0..MAX_PREREQUISITE_LOGS + 8 {
+        let mut log = log_file(root.path(), "probe").unwrap();
+        writeln!(log, "diagnostic-{index}").unwrap();
+    }
+
+    let retained = fs::read_dir(&logs)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), MAX_PREREQUISITE_LOGS);
+    assert!(retained
+        .iter()
+        .any(|path| String::from_utf8_lossy(&fs::read(path).unwrap()).contains(&latest)));
+    for path in retained {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o077, 0);
+        assert_eq!(metadata.nlink(), 1);
+    }
+
+    let unsafe_root = tempfile::tempdir().unwrap();
+    let unsafe_logs = unsafe_root.path().join("logs");
+    private::directory(&unsafe_logs).unwrap();
+    let unsafe_path = unsafe_logs.join(format!("probe-{}.log", uuid::Uuid::new_v4()));
+    fs::write(&unsafe_path, b"must not rotate\n").unwrap();
+    fs::set_permissions(&unsafe_path, fs::Permissions::from_mode(0o644)).unwrap();
+    let refusal = format!("{:#}", log_file(unsafe_root.path(), "probe").unwrap_err());
+    assert!(refusal.contains("owner-only"), "{refusal}");
+    assert!(unsafe_path.exists());
+}
+
+#[test]
+fn prerequisite_log_rotation_stays_in_the_opened_directory_after_a_path_swap() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("logs");
+    private::directory(&logs).unwrap();
+    for index in 0..MAX_PREREQUISITE_LOGS {
+        let mut log = log_file(root.path(), "probe").unwrap();
+        writeln!(log, "diagnostic-{index}").unwrap();
+    }
+    let redirected = tempfile::tempdir().unwrap();
+    let names = fs::read_dir(&logs)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    for name in &names {
+        let path = redirected.path().join(name);
+        fs::write(&path, b"unrelated\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let opened_logs = root.path().join("opened-logs");
+
+    let mut log = log_file_with_rotation(root.path(), "probe", || {
+        fs::rename(&logs, &opened_logs).unwrap();
+        std::os::unix::fs::symlink(redirected.path(), &logs).unwrap();
+    })
+    .unwrap();
+    writeln!(log, "new diagnostic").unwrap();
+
+    assert!(names
+        .iter()
+        .all(|name| redirected.path().join(name).exists()));
+    assert_eq!(
+        fs::read_dir(&opened_logs).unwrap().count(),
+        MAX_PREREQUISITE_LOGS
+    );
+}
+
+#[test]
 fn retained_service_journal_stays_bounded_and_keeps_latest_diagnostics() {
     let root = tempfile::tempdir().unwrap();
     let logs = root.path().join("logs");
@@ -665,6 +795,135 @@ fn retained_service_journal_stays_bounded_and_keeps_latest_diagnostics() {
     let metadata = fs::symlink_metadata(&path).unwrap();
     assert_eq!(metadata.permissions().mode() & 0o077, 0);
     assert_eq!(metadata.nlink(), 1);
+}
+
+#[test]
+fn invalid_service_journal_is_refused_before_the_child_starts() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("logs");
+    private::directory(&logs).unwrap();
+    let journal = logs.join("casework.log");
+    fs::write(&journal, b"").unwrap();
+    fs::set_permissions(&journal, fs::Permissions::from_mode(0o644)).unwrap();
+    let marker = root.path().join("child-started");
+
+    let refusal = format!(
+        "{:#}",
+        service(
+            Path::new("/usr/bin/touch"),
+            &[],
+            &marker,
+            &[],
+            root.path(),
+            "casework",
+        )
+        .err()
+        .expect("unsafe journal must be refused")
+    );
+    thread::sleep(Duration::from_millis(100));
+
+    assert!(refusal.contains("owner-only"), "{refusal}");
+    assert!(!marker.exists());
+}
+
+#[test]
+fn service_pump_setup_failures_reap_the_child_and_join_started_pumps() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("logs");
+    private::directory(&logs).unwrap();
+    for fail_on in [1, 2] {
+        let journal = RetainedJournal::open(&logs.join("casework.log")).unwrap();
+        let child = Command::new("/bin/sleep")
+            .arg("5")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = rustix::process::Pid::from_raw(child.id() as i32).unwrap();
+        let joined = Arc::new(AtomicBool::new(false));
+        let mut calls = 0;
+        let started = Instant::now();
+
+        let refusal = format!(
+            "{:#}",
+            service_with_pump_spawner(child, journal, |_stream, task| {
+                calls += 1;
+                if calls == fail_on {
+                    return Err(std::io::Error::other("injected pump spawn failure"));
+                }
+                let joined = Arc::clone(&joined);
+                thread::Builder::new().spawn(move || {
+                    let result = task();
+                    joined.store(true, Ordering::Relaxed);
+                    result
+                })
+            })
+            .err()
+            .expect("selected pump spawn must fail")
+        );
+
+        let reader = if fail_on == 1 { "output" } else { "diagnostic" };
+        assert!(refusal.contains(reader), "{refusal}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(joined.load(Ordering::Relaxed), fail_on == 2);
+        assert!(rustix::process::test_kill_process(pid).is_err());
+    }
+}
+
+#[test]
+fn seeding_administrator_token_is_issued_after_every_other_client() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    let mut state = session(&project);
+    let clients = Clients {
+        version: 1,
+        clients: (0..32)
+            .map(|index| config::Client {
+                id: if index == 0 {
+                    "administrator".to_owned()
+                } else {
+                    format!("client-{index}")
+                },
+                access_profile: format!("profile-{index}"),
+                scopes: vec!["casework:test".to_owned()],
+                claims: BTreeMap::new(),
+            })
+            .collect(),
+        directory: Vec::new(),
+    };
+    state.clients = clients
+        .clients
+        .iter()
+        .enumerate()
+        .map(|(index, client)| ReportedClient {
+            id: client.id.clone(),
+            profile: client.access_profile.clone(),
+            role: if index == 0 {
+                CaseworkRole::Administrator
+            } else {
+                CaseworkRole::Requester
+            },
+            principal: config::principal(&client.id),
+        })
+        .collect();
+    let mut issued = Vec::new();
+
+    issue_tokens(&state, &clients, |id| {
+        issued.push(id.to_owned());
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(issued.len(), clients.clients.len());
+    assert_eq!(issued.last().map(String::as_str), Some("administrator"));
+    assert_eq!(
+        issued.into_iter().collect::<BTreeSet<_>>(),
+        clients
+            .clients
+            .iter()
+            .map(|client| client.id.clone())
+            .collect()
+    );
 }
 
 #[test]

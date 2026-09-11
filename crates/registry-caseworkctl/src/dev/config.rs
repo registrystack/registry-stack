@@ -105,9 +105,16 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         bail!("local directory declares at most 8 teams");
     }
     let mut teams = BTreeSet::new();
+    let mut queues = BTreeSet::new();
     for team in &clients.directory {
         if !identifier(&team.team) || !teams.insert(&team.team) || !identifier(&team.queue) {
             bail!("each local directory team needs a unique bounded ID and one bounded queue");
+        }
+        if !queues.insert(&team.queue) {
+            bail!(
+                "local directory queue {} may be assigned to only one team",
+                team.queue
+            );
         }
         if team.staff.is_empty() || team.staff.len() > 32 || team.supervisors.len() > 32 {
             bail!("a local directory team needs 1..32 staff and at most 32 supervisors");

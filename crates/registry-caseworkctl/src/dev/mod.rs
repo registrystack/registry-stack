@@ -67,6 +67,11 @@ const MAX_REFUSAL: usize = 400;
 /// Bound on the journal tail `dev events` reports, in bytes and in lines.
 const MAX_JOURNAL_BYTES: u64 = 256 * 1024;
 const MAX_JOURNAL_LINES: usize = 512;
+const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Maximum retained UUID-named prerequisite logs. Each file is independently
+/// bounded by `MAX_BYTES`; rotating the oldest before each new command also
+/// bounds diagnostics across retained starts while keeping the newest run.
+const MAX_PREREQUISITE_LOGS: usize = 64;
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -1073,6 +1078,46 @@ struct Service {
     pumps: Vec<thread::JoinHandle<Result<()>>>,
 }
 
+/// Own a spawned service from the first instruction after `Command::spawn`.
+/// Any partial pipe-reader setup kills and reaps the child before joining the
+/// readers that did start, so no failure can strand a service outside
+/// `Children`.
+struct StartingService {
+    child: Option<Child>,
+    pumps: Vec<thread::JoinHandle<Result<()>>>,
+}
+
+impl StartingService {
+    fn new(child: Child) -> Self {
+        Self {
+            child: Some(child),
+            pumps: Vec::new(),
+        }
+    }
+
+    fn finish(mut self) -> Result<Service> {
+        Ok(Service {
+            child: self.child.take().context("service child missing")?,
+            pumps: std::mem::take(&mut self.pumps),
+        })
+    }
+}
+
+impl Drop for StartingService {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            // Setup failed, so graceful service shutdown is neither available
+            // nor useful. A forceful stop makes every owned pipe reach EOF
+            // before its reader is joined.
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        for pump in self.pumps.drain(..) {
+            let _ = pump.join();
+        }
+    }
+}
+
 impl Service {
     fn stop(&mut self) -> Result<()> {
         let child_result = stop_child(&mut self.child);
@@ -1242,14 +1287,78 @@ fn matching_versions(binaries: &BTreeMap<String, Binary>) -> Result<()> {
 }
 
 fn log_file(root: &Path, name: &str) -> Result<File> {
-    let path = root
-        .join("logs")
-        .join(format!("{name}-{}.log", uuid::Uuid::new_v4()));
-    Ok(OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?)
+    log_file_with_rotation(root, name, || {})
+}
+
+fn log_file_with_rotation(root: &Path, name: &str, before_rotation: impl FnOnce()) -> Result<File> {
+    use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags};
+
+    let directory = File::from(
+        rustix::fs::open(
+            root.join("logs"),
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::DIRECTORY,
+            Mode::empty(),
+        )
+        .context("cannot open private prerequisite log directory")?,
+    );
+    private::check_metadata(&directory.metadata()?, true)?;
+    let mut logs = Vec::new();
+    for entry in Dir::read_from(&directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Ok(text) = std::str::from_utf8(name.to_bytes()) else {
+            continue;
+        };
+        let Some(stem) = text.strip_suffix(".log") else {
+            continue;
+        };
+        let stem = stem.as_bytes();
+        let Some(uuid_start) = stem.len().checked_sub(36) else {
+            continue;
+        };
+        if uuid_start == 0
+            || stem[uuid_start - 1] != b'-'
+            || std::str::from_utf8(&stem[uuid_start..])
+                .ok()
+                .is_none_or(|suffix| uuid::Uuid::parse_str(suffix).is_err())
+        {
+            continue;
+        }
+        let metadata = rustix::fs::statat(&directory, name, AtFlags::SYMLINK_NOFOLLOW)?;
+        if metadata.st_uid as u32 != rustix::process::geteuid().as_raw()
+            || metadata.st_mode as u32 & 0o077 != 0
+            || FileType::from_raw_mode(metadata.st_mode as _) != FileType::RegularFile
+            || metadata.st_nlink as u64 != 1
+        {
+            bail!("local state must use ordinary owner-only directories and single-link files");
+        }
+        logs.push((
+            metadata.st_mtime as i64,
+            metadata.st_mtime_nsec as i64,
+            name.to_owned(),
+        ));
+    }
+    logs.sort_by(|left, right| {
+        (left.0, left.1, left.2.as_bytes()).cmp(&(right.0, right.1, right.2.as_bytes()))
+    });
+    let remove = logs
+        .len()
+        .saturating_sub(MAX_PREREQUISITE_LOGS.saturating_sub(1));
+    before_rotation();
+    for (_, _, name) in logs.into_iter().take(remove) {
+        rustix::fs::unlinkat(&directory, &name, AtFlags::empty())
+            .context("cannot rotate retained prerequisite diagnostics")?;
+    }
+    let filename = format!("{name}-{}.log", uuid::Uuid::new_v4());
+    Ok(File::from(
+        rustix::fs::openat(
+            &directory,
+            filename,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::from_bits_truncate(0o600),
+        )
+        .context("cannot create private prerequisite log")?,
+    ))
 }
 
 fn pump(mut input: impl Read, mut output: impl Write) -> Result<()> {
@@ -1365,7 +1474,10 @@ fn service(
     root: &Path,
     name: &str,
 ) -> Result<Service> {
-    let mut child = Command::new(binary)
+    // Validate and compact the retained destination before a child exists. A
+    // refused journal must not leave an otherwise untracked service running.
+    let journal = RetainedJournal::open(&root.join("logs").join(format!("{name}.log")))?;
+    let child = Command::new(binary)
         .args(leading)
         .arg(config)
         .args(trailing)
@@ -1379,19 +1491,45 @@ fn service(
         .stderr(Stdio::piped())
         .spawn()
         .context("cannot start local service")?;
-    let out = child.stdout.take().context("service output pipe missing")?;
-    let err = child
+    service_with_pump_spawner(child, journal, |stream, task| {
+        thread::Builder::new()
+            .name(format!("casework-dev-{name}-{stream}"))
+            .spawn(task)
+    })
+}
+
+type PumpTask = Box<dyn FnOnce() -> Result<()> + Send + 'static>;
+
+fn service_with_pump_spawner(
+    child: Child,
+    journal: RetainedJournal,
+    mut spawn: impl FnMut(&str, PumpTask) -> std::io::Result<thread::JoinHandle<Result<()>>>,
+) -> Result<Service> {
+    let mut starting = StartingService::new(child);
+    let out = starting
+        .child
+        .as_mut()
+        .context("service child missing")?
+        .stdout
+        .take()
+        .context("service output pipe missing")?;
+    let err = starting
+        .child
+        .as_mut()
+        .context("service child missing")?
         .stderr
         .take()
         .context("service diagnostic pipe missing")?;
-    let journal = RetainedJournal::open(&root.join("logs").join(format!("{name}.log")))?;
     let second = journal.clone();
-    let stdout_pump = thread::spawn(move || pump_retained(out, journal));
-    let stderr_pump = thread::spawn(move || pump_retained(err, second));
-    Ok(Service {
-        child,
-        pumps: vec![stdout_pump, stderr_pump],
-    })
+    starting.pumps.push(
+        spawn("stdout", Box::new(move || pump_retained(out, journal)))
+            .context("cannot start service output reader")?,
+    );
+    starting.pumps.push(
+        spawn("stderr", Box::new(move || pump_retained(err, second)))
+            .context("cannot start service diagnostic reader")?,
+    );
+    starting.finish()
 }
 
 /// Bytes written to a child's standard input, naming the secret substring the
@@ -1965,10 +2103,30 @@ fn stop_database(docker: &Path, state: &State) -> Result<()> {
 }
 
 fn tokens(mint: &Path, state: &State, clients: &Clients) -> Result<()> {
-    for client in &clients.clients {
-        token(mint, state, &client.id)?;
+    issue_tokens(state, clients, |id| token(mint, state, id))
+}
+
+fn issue_tokens(
+    state: &State,
+    clients: &Clients,
+    mut issue: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    let administrator = state.administrator()?;
+    if !clients
+        .clients
+        .iter()
+        .any(|client| client.id == administrator.id)
+    {
+        bail!("retained Administrator is missing from the local clients file");
     }
-    Ok(())
+    for client in &clients.clients {
+        if client.id != administrator.id {
+            issue(&client.id)?;
+        }
+    }
+    // This token authorizes the immediately following directory seed. Issue
+    // it after every other client so a maximum-sized file cannot age it first.
+    issue(&administrator.id)
 }
 
 fn token(mint: &Path, state: &State, id: &str) -> Result<()> {
@@ -2008,6 +2166,20 @@ fn http(
     headers: &[(&str, &str)],
     body: Option<Value>,
 ) -> Result<(u16, Value)> {
+    http_with_timeout(method, url, token, headers, body, HTTP_TIMEOUT)
+}
+
+fn http_with_timeout(
+    method: &str,
+    url: &str,
+    token: Option<&str>,
+    headers: &[(&str, &str)],
+    body: Option<Value>,
+    timeout: Duration,
+) -> Result<(u16, Value)> {
+    if timeout.is_zero() {
+        bail!("local HTTP prerequisite is unavailable");
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -2015,7 +2187,7 @@ fn http(
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(10))
+            .timeout(timeout)
             .build()?;
         let mut request = match method {
             "POST" => client.post(url),
@@ -2050,19 +2222,57 @@ fn http(
 }
 
 fn ready(url: &str, child: &mut Child, terminate: &AtomicBool) -> Result<()> {
-    let deadline = Instant::now() + READY_DEADLINE;
+    ready_before(url, child, terminate, Instant::now() + READY_DEADLINE)
+}
+
+fn ready_before(
+    url: &str,
+    child: &mut Child,
+    terminate: &AtomicBool,
+    deadline: Instant,
+) -> Result<()> {
+    ready_with_probe(child, terminate, deadline, |remaining| {
+        matches!(
+            http_with_timeout(
+                "GET",
+                url,
+                None,
+                &[],
+                None,
+                readiness_http_timeout(remaining),
+            ),
+            Ok((200, _))
+        )
+    })
+}
+
+fn readiness_http_timeout(remaining: Duration) -> Duration {
+    HTTP_TIMEOUT.min(remaining)
+}
+
+fn ready_with_probe(
+    child: &mut Child,
+    terminate: &AtomicBool,
+    deadline: Instant,
+    mut probe: impl FnMut(Duration) -> bool,
+) -> Result<()> {
     loop {
         ensure_active(terminate)?;
         if child.try_wait()?.is_some() {
             bail!("local service exited before readiness; inspect private logs");
         }
-        if matches!(http("GET", url, None, &[], None), Ok((200, _))) {
-            return Ok(());
-        }
-        if Instant::now() > deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             bail!("local service readiness timed out; inspect private logs");
         }
-        thread::sleep(Duration::from_millis(200));
+        if probe(remaining) {
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("local service readiness timed out; inspect private logs");
+        }
+        thread::sleep(Duration::from_millis(200).min(remaining));
     }
 }
 
