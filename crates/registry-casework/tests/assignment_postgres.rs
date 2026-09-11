@@ -16,6 +16,8 @@ use registry_casework_core::{
     OccurrenceState, OperationName, PageStatus, PrepareActionRequest, PreparedSourceAttempt,
     QueuePolicy, RecoveryEvidence, SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy,
     SourceReceipt, SourceRequestPolicy, StaffingDiagnostic, SubjectRef, TransitionHint,
+    MAXIMUM_DIRECTORY_IDENTIFIER_BYTES, MAXIMUM_DIRECTORY_PRINCIPALS,
+    MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -252,7 +254,16 @@ async fn fixture(reads: impl IntoIterator<Item = (Uuid, ReadMode)>) -> Fixture {
     let staff_b = actor("staff-b", CaseworkRole::Staff, "staff");
     let staff_c = actor("staff-c", CaseworkRole::Staff, "staff");
     let supervisor = actor("supervisor", CaseworkRole::Supervisor, "supervisor");
-    store
+    let source = Arc::new(TestSource {
+        reads: reads
+            .into_iter()
+            .map(|(id, mode)| (id.to_string(), mode))
+            .collect(),
+    });
+    let service =
+        CaseworkService::new(store.clone(), project(), [source as Arc<dyn SourceAdapter>])
+            .expect("assignment service");
+    service
         .bootstrap_directory(
             &administrator,
             0,
@@ -270,15 +281,6 @@ async fn fixture(reads: impl IntoIterator<Item = (Uuid, ReadMode)>) -> Fixture {
         )
         .await
         .expect("bootstrap assignment directory");
-    let source = Arc::new(TestSource {
-        reads: reads
-            .into_iter()
-            .map(|(id, mode)| (id.to_string(), mode))
-            .collect(),
-    });
-    let service =
-        CaseworkService::new(store.clone(), project(), [source as Arc<dyn SourceAdapter>])
-            .expect("assignment service");
     Fixture {
         service,
         store,
@@ -289,6 +291,90 @@ async fn fixture(reads: impl IntoIterator<Item = (Uuid, ReadMode)>) -> Fixture {
         staff_c,
         supervisor,
     }
+}
+
+#[tokio::test]
+async fn directory_bootstrap_rejects_unconfigured_and_unbounded_memberships_before_mutation() {
+    let fixture = fixture([]).await;
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    assert_eq!(
+        fixture
+            .service
+            .bootstrap_directory(
+                &administrator,
+                0,
+                &BootstrapDirectoryRequest {
+                    team_id: "review-team".to_owned(),
+                    staff: vec![
+                        fixture.staff_a.principal.clone(),
+                        fixture.staff_b.principal.clone(),
+                        fixture.staff_c.principal.clone(),
+                    ],
+                    supervisors: vec![fixture.supervisor.principal.clone()],
+                    queue_id: QUEUE.to_owned(),
+                },
+                "bootstrap",
+            )
+            .await
+            .expect("exact bootstrap replay"),
+        1
+    );
+    let valid = BootstrapDirectoryRequest {
+        team_id: "second-team".to_owned(),
+        staff: vec![principal("second-staff")],
+        supervisors: vec![principal("second-supervisor")],
+        queue_id: QUEUE.to_owned(),
+    };
+    let invalid_requests = [
+        BootstrapDirectoryRequest {
+            queue_id: "unconfigured-queue".to_owned(),
+            ..valid.clone()
+        },
+        BootstrapDirectoryRequest {
+            team_id: "x".repeat(MAXIMUM_DIRECTORY_IDENTIFIER_BYTES + 1),
+            ..valid.clone()
+        },
+        BootstrapDirectoryRequest {
+            staff: vec![IssuerPrincipal {
+                issuer: "x".repeat(MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES + 1),
+                subject: "bounded-subject".to_owned(),
+            }],
+            ..valid.clone()
+        },
+        BootstrapDirectoryRequest {
+            staff: (0..=MAXIMUM_DIRECTORY_PRINCIPALS)
+                .map(|index| principal(&format!("staff-{index}")))
+                .collect(),
+            ..valid
+        },
+    ];
+    for (index, request) in invalid_requests.iter().enumerate() {
+        assert!(matches!(
+            fixture
+                .service
+                .bootstrap_directory(
+                    &administrator,
+                    1,
+                    request,
+                    &format!("invalid-bootstrap-{index}"),
+                )
+                .await,
+            Err(ServiceError::Store(StoreError::Invalid))
+        ));
+    }
+
+    let (revision, teams) = fixture
+        .store
+        .directory(&administrator)
+        .await
+        .expect("read unchanged directory");
+    assert_eq!(revision, 1);
+    assert_eq!(teams.len(), 1);
+    assert_eq!(teams[0].id, "review-team");
 }
 
 async fn connect_scoped(url: &str) -> tokio_postgres::Client {

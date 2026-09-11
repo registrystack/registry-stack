@@ -836,7 +836,6 @@ async fn bootstrap(
     let (actor, _) = authenticate(&state, &headers).await?;
     state
         .service
-        .store()
         .bootstrap_directory(
             &actor,
             if_match_allow_zero(&headers)?,

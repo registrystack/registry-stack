@@ -6,11 +6,12 @@ use std::time::{Duration, Instant};
 use chrono::{TimeDelta, Utc};
 use registry_casework_core::{
     resolve_absence_cover, validate_absence, AbsenceInput, AbsenceList, AbsenceRecord,
-    ActorContext, AssignmentContext, AssignmentRequest, CaseloadApplyRequest, CaseloadItemOutcome,
-    CaseloadItemResult, CaseloadMoveRequest, CaseloadPreviewPage, CaseworkRole, DelegateRequest,
-    DirectoryMember, DirectoryTargetPage, DirectoryTargetPurpose, DirectoryTeamUpdateRequest,
-    HistoryKind, IssuerPrincipal, Page, PageStatus, SourceAdapterError, StaffingDiagnostic,
-    WorkItem, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES,
+    ActorContext, AssignmentContext, AssignmentRequest, BootstrapDirectoryRequest,
+    CaseloadApplyRequest, CaseloadItemOutcome, CaseloadItemResult, CaseloadMoveRequest,
+    CaseloadPreviewPage, CaseworkRole, DelegateRequest, DirectoryMember, DirectoryTargetPage,
+    DirectoryTargetPurpose, DirectoryTeamUpdateRequest, HistoryKind, IssuerPrincipal, Page,
+    PageStatus, SourceAdapterError, StaffingDiagnostic, WorkItem,
+    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES,
     MAXIMUM_DIRECTORY_IDENTIFIER_BYTES, MAXIMUM_DIRECTORY_PRINCIPALS,
     MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES, MAXIMUM_DIRECTORY_SERVED_QUEUES,
 };
@@ -1200,6 +1201,35 @@ impl PostgresStore {
 }
 
 impl CaseworkService {
+    pub async fn bootstrap_directory(
+        &self,
+        actor: &ActorContext,
+        expected_directory_revision: i64,
+        request: &BootstrapDirectoryRequest,
+        idempotency_key: &str,
+    ) -> Result<i64, ServiceError> {
+        if actor.role != CaseworkRole::Administrator {
+            return Err(StoreError::Forbidden.into());
+        }
+        if expected_directory_revision < 0
+            || !valid_directory_identifier(&request.team_id)
+            || !valid_directory_principals(&request.staff)
+            || !valid_directory_principals(&request.supervisors)
+            || !valid_directory_identifier(&request.queue_id)
+            || !self
+                .project
+                .queues
+                .iter()
+                .any(|configured| configured.id == request.queue_id)
+        {
+            return Err(StoreError::Invalid.into());
+        }
+        self.store
+            .bootstrap_directory(actor, expected_directory_revision, request, idempotency_key)
+            .await
+            .map_err(ServiceError::from)
+    }
+
     pub async fn update_directory_team(
         &self,
         actor: &ActorContext,
