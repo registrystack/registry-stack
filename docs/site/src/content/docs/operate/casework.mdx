@@ -137,7 +137,7 @@ local effect under the migration database credential:
 
 ```sh
 caseworkctl retention erase ./casework --operator ./operator.yaml \
-  --source-id <source-id> --request-kind <request-kind> --request-id <request-id>
+  --source-id "<source-id>" --request-kind "<request-kind>" --request-id "<request-id>"
 ```
 
 The JSON report contains counts and the selector, with no item identifiers or
@@ -165,7 +165,7 @@ migration database credential:
 
 ```sh
 caseworkctl attempt settle ./casework --operator ./operator.yaml \
-  --attempt-id <attempt-id> --outcome not-applied \
+  --attempt-id "<attempt-id>" --outcome not-applied \
   --reason "<why the source owner confirmed this outcome>" \
   --decided-by "<who decided>"
 ```
