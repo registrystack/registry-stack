@@ -78,12 +78,15 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
    `release/scripts/cleanup-release-candidates.py`, with its matching test.
    Do not wait for the first real candidate. Keep `<name>` in
    `PUBLIC_PACKAGES` so cleanup can never reach the released image.
-5. If the image has no reviewed advisory baseline, run one explicitly named
-   baseline-bootstrap candidate outside the release clock. It may build and
-   publish the private exact image evidence, but it is expected to stop at the
-   unconditional advisory-baseline check. It cannot seal or attest a candidate
-   without the reviewed baseline. Do not copy another product's baseline or add
-   a provisional bypass.
+5. If the image has no reviewed advisory baseline, prepare a clean, committed,
+   but unopened release branch and run one explicitly named baseline-bootstrap
+   rehearsal with `advisory_evidence=true` outside the release clock. That input
+   permits only the missing baseline during the initial image-onboarding check,
+   so the read-only canonical Linux job can upload exact review evidence. The
+   ordinary rehearsal job remains strict and is expected to stop at the missing
+   baseline. The workflow has no publication permission, cannot seal or attest
+   a candidate, and does not supply publication bytes. Do not copy another
+   product's baseline or add a provisional bypass.
 6. Use that exact private image and the existing procedure in "Renew an image
    advisory fingerprint" to author and review
    `release/security/<name>-advisory-baseline.json`. Relay alone uses

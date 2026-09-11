@@ -733,12 +733,17 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
-        "Strict rehearsal image onboarding boundary",
+        "Advisory-only rehearsal image onboarding bootstrap boundary",
         ".github/workflows/release-rehearsal.yml",
         (
             "validate:\n    name: Validate release image onboarding before builds",
             "name: Check complete release image onboarding",
+            "REHEARSAL_ADVISORY_EVIDENCE: ${{ inputs.advisory_evidence }}",
             "release_candidate.py check-image-onboarding",
+            'case "${REHEARSAL_ADVISORY_EVIDENCE}" in',
+            "true) onboarding+=(--allow-missing-baseline) ;;",
+            "false) ;;",
+            "advisory_evidence must be a typed boolean",
             "needs: validate",
         ),
     ),
@@ -1053,11 +1058,6 @@ FORBIDDEN_RELEASE_SECURITY_GATES = (
         "Candidate cleanup cannot select branch-controlled workflow code or write refs",
         ".github/workflows/release-candidate-cleanup.yml",
         ("workflow_dispatch:", "contents: write", "git push", "git update-ref"),
-    ),
-    (
-        "Release rehearsal cannot allow a missing advisory baseline",
-        ".github/workflows/release-rehearsal.yml",
-        ("--allow-missing-baseline",),
     ),
     (
         "Native benchmark cannot write or qualify as release rehearsal",

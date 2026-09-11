@@ -99,22 +99,22 @@ class GateInventoryTest(unittest.TestCase):
             ),
         )
 
-    def test_rehearsal_image_onboarding_cannot_gain_the_allowance(self) -> None:
+    def test_rehearsal_image_onboarding_allowance_is_advisory_only(self) -> None:
         policy_texts = self.module.policy_file_texts(
             ROOT,
             self.module.RELEASE_SECURITY_POLICY_PATHS,
         )
         rehearsal_path = ".github/workflows/release-rehearsal.yml"
         policy_texts[rehearsal_path] = policy_texts[rehearsal_path].replace(
-            "            --root .\n",
-            "            --root . \\\n            --allow-missing-baseline\n",
+            "            true) onboarding+=(--allow-missing-baseline) ;;\n",
+            "            true) ;;\n",
             1,
         )
         self.assertIn(
-            "Release rehearsal cannot allow a missing advisory baseline",
+            "Advisory-only rehearsal image onboarding bootstrap boundary",
             self.module.workflow_policy_violations(
                 policy_texts,
-                forbidden=self.module.FORBIDDEN_RELEASE_SECURITY_GATES,
+                required=self.module.REQUIRED_RELEASE_SECURITY_GATES,
             ),
         )
         self.assertEqual(

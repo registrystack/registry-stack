@@ -60,9 +60,19 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertEqual(
             "${{ inputs.version }}", onboarding["env"]["REHEARSAL_VERSION"]
         )
+        self.assertEqual(
+            "${{ inputs.advisory_evidence }}",
+            onboarding["env"]["REHEARSAL_ADVISORY_EVIDENCE"],
+        )
         self.assertIn("check-image-onboarding", onboarding["run"])
         self.assertIn('--version "${REHEARSAL_VERSION}"', onboarding["run"])
-        self.assertNotIn("--allow-missing-baseline", onboarding["run"])
+        self.assertIn(
+            'case "${REHEARSAL_ADVISORY_EVIDENCE}" in', onboarding["run"]
+        )
+        self.assertEqual(1, onboarding["run"].count("--allow-missing-baseline"))
+        self.assertIn("true) onboarding+=(--allow-missing-baseline)", onboarding["run"])
+        self.assertIn("false) ;;", onboarding["run"])
+        self.assertIn("advisory_evidence must be a typed boolean", onboarding["run"])
         self.assertNotIn("${{ inputs.", onboarding["run"])
         self.assertEqual(text.count("Require a branch rehearsal"), 1)
         for job_name in ("rehearse", "canonical-linux-binaries", "node-clients"):
