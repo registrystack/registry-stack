@@ -18,21 +18,19 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
-- A Base Registry Engine deployment with a statically pinned `jwksSource`
-  now names provider-side key rotation in its logs instead of failing
-  silently. Access tokens whose signing key is not in the configured JWKS
-  keep being refused with the same value-free `authentication.refused`, but
-  the server log records on the `registry_breg::auth` target that the
-  refused token cites a signing key outside the configured JWKS and points
-  at the re-pin procedure. The operations guide gained a tested re-pin
-  runbook: fetch the provider's current JWKS over TLS, replace the
-  `documentRef` secret, restart, and verify a fresh login while tokens from
-  the removed keys stay refused. See
+- Base Registry Engine warns about unknown or disallowed access-token key
+  identifiers on the `registry_breg::auth` target, at most once per minute
+  per authenticator. Caller refusals remain value-free. The warning does
+  not establish provider key rotation. The operations guide describes how
+  to confirm rotation and replace a static `documentRef` pin supplied by
+  either a file or an environment variable. Automated coverage verifies
+  authentication refusal, bounded diagnostics, and recovery after replacing
+  an in-memory key set; it does not execute the operational runbook. See
   [operating Base Registry Engine](../operate/breg/).
 
 {/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate;
     crates/registry-breg/tests/http_auth.rs,
-    static_jwks_rotation_is_diagnosed_and_repinning_restores_authentication;
+    static_jwks_key_refusal_is_bounded_and_repinning_restores_authentication;
     docs/site/src/content/docs/operate/breg.mdx, static JWKS rotation. */}
 
 - The Base Registry Engine access-token verifier admits both RFC 9068

@@ -272,18 +272,28 @@ jwksSource:
   documentRef: secret:file/<jwks-document>
 ```
 
-When the identity provider rotates its signing keys — or regenerates them after state loss —
-every token it issues fails verification against the pinned document, and callers all see the
-same value-free `authentication.refused`. The server log names the operational cause on the
-`registry_breg::auth` target: the refused token's signing key is not in the configured JWKS.
-Recover by re-pinning, and treat it as a deliberate trust change, because the new document
-becomes the anchor for bearer verification:
+Tokens signed with a key absent from the pinned document are refused with the value-free
+`authentication.refused`. On the `registry_breg::auth` target, the server warns that a token's
+key identifier is unknown or disallowed, at most once per minute per authenticator. This warning
+applies to both static and discovery sources. An arbitrary token or a deliberately denied key
+can cause the same warning, so the warning alone does not establish provider key rotation.
+
+If fresh logins fail and you independently confirm that the provider rotated its keys or
+regenerated them after state loss, recover a static pin with these steps:
+
+:::caution[Confirm the trust change]
+The replacement document becomes the anchor for bearer verification. Confirm the provider's
+current keys through its trusted configuration and operator before replacing the pin.
+:::
 
 1. Fetch the provider's current JWKS document from its published `jwks_uri` over TLS, the same
    way the initial pinning did. Confirm the keys with the provider operator if the rotation was
    not announced.
-2. Replace the file the `documentRef` names with those bytes, keeping the secret-file rules
-   below (owner, mode, no trailing newline).
+2. Replace the secret that `documentRef` names. For `secret:file/<jwks-document>`, replace the
+   file while keeping the [secret-file rules](#create-the-secret-files). For
+   `secret:env/<NAME>`, when `secretProviders.environment` is enabled, replace the injected
+   environment value in your service configuration with the document bytes. Keep the value out
+   of command arguments and logs.
 3. Restart `breg`; the static document is read only at startup.
 4. Verify with a fresh provider login that authentication succeeds again, and that tokens
    signed by the removed keys are still refused.
@@ -295,7 +305,7 @@ under the optional `jwksCache` bounds.
     crates/registry-breg/tests/runtime_config.rs;
     crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate;
     crates/registry-breg/tests/http_auth.rs,
-    static_jwks_rotation_is_diagnosed_and_repinning_restores_authentication;
+    static_jwks_key_refusal_is_bounded_and_repinning_restores_authentication;
     crates/registry-platform-config/src/secrets.rs, SecretReference;
     products/breg/generated/runtime/runtime.schema.json. */}
 
