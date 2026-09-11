@@ -509,6 +509,9 @@ fn start(args: StartArgs) -> Result<Value> {
         private::validate_tree(&root.join("credentials"))?;
         private::validate_tree(&root.join("secrets"))?;
         if control(&root, "status").is_ok_and(|status| status == "ready") {
+            if args.clients_file.is_some() && state.clients_file != clients_file {
+                bail!("the active local development session still uses {}; stop it before selecting a different --clients-file path", state.clients_file.display());
+            }
             return Ok(state.report());
         }
         // A live owner lock is conclusive even when its control socket is not ready.

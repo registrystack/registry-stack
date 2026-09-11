@@ -705,6 +705,62 @@ fn a_stopped_session_retains_an_explicit_equivalent_clients_file() {
 }
 
 #[test]
+fn an_active_session_refuses_an_equivalent_clients_file_at_a_new_path() {
+    let root = tempfile::tempdir().unwrap();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let original_clients = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let replacement = project.join("replacement-clients.yaml");
+    fs::write(&replacement, &original_clients).unwrap();
+    let captured = capture(&project, &original_clients).unwrap();
+    let mut state = session(&project);
+    state.status = Status::Ready;
+    state.source_digest = captured.digest;
+    state.clients = captured.reported;
+    parent_directory(&project).unwrap();
+    initialize(&state.root(), &state, &captured.clients).unwrap();
+    let control_root = control_directory(&state.root()).unwrap();
+    private::directory(&control_root).unwrap();
+    let socket = control_root.join("control.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 7];
+        stream.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"status\n");
+        stream.write_all(b"ready\n").unwrap();
+    });
+
+    let refusal = format!(
+        "{:#}",
+        start(StartArgs {
+            project: project.clone(),
+            clients_file: Some(replacement),
+            casework_port: None,
+            mint_port: None,
+            database_port: None,
+            casework_bin: None,
+            mint_bin: None,
+            docker_bin: None,
+        })
+        .unwrap_err()
+    );
+    server.join().unwrap();
+
+    assert!(
+        refusal.contains("active local development session"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("stop it"), "{refusal}");
+    assert!(refusal.contains("--clients-file"), "{refusal}");
+    assert_eq!(
+        read_state(&state.root()).unwrap().clients_file,
+        state.clients_file
+    );
+    remove_socket(&state.root()).unwrap();
+}
+
+#[test]
 fn the_report_names_every_local_credential_without_a_secret() {
     let root = tempfile::tempdir().unwrap();
     let project = standalone(root.path());
@@ -1996,7 +2052,10 @@ fn nonzero_guard_exit_is_detected_without_waiting_for_pump_eof() {
         .env("CASEWORKCTL_TEST_NONZERO_GUARD_PID", &service_pid_file)
         .env("CASEWORKCTL_TEST_NONZERO_GUARD_SERVICE", &service_binary);
     let mut service = service_with_guard_command(guard, root.path(), "guarded").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    // The helper itself permits five seconds for the service PID file. Give
+    // the parent that complete startup budget plus scheduling margin when the
+    // full test suite is running concurrently.
+    let deadline = Instant::now() + Duration::from_secs(6);
     while (!service_pid_file.exists() || service.guard_exit().unwrap().is_none())
         && Instant::now() < deadline
     {
