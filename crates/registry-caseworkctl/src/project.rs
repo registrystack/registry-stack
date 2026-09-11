@@ -64,6 +64,14 @@ authentication:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:casework
     scopeClaim: registry_scopes
+    # Signing keys come from issuer discovery by default. Declare the static
+    # alternative instead when the runtime cannot reach the issuer's discovery
+    # document, when the deployment is air-gapped, or when a test issuer's keys
+    # are pinned by hand. It does no rotation of its own: rolling a key means
+    # replacing the referenced document and restarting Casework.
+    # jwksSource:
+    #   kind: static
+    #   documentRef: secret:file/jwks.json
     # The trusted issuer must add this claim only to interactive human sessions.
     # Client-credentials and other service tokens must omit it or use another value.
     humanIdentity:
