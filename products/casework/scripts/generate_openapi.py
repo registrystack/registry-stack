@@ -65,6 +65,7 @@ DTO_MARKERS = {
     "ListWorkItemsQuery",
     "NextWorkItemQuery",
     "HoldingsQuery",
+    "AbsencesQuery",
     "SaveDraftRequest",
     "DecideRequest",
     "RecoverAttemptRequest",
@@ -630,6 +631,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             {
                 "directoryRevision": integer,
                 "items": {"type": "array", "maxItems": 1000, "items": ref("AbsenceRecord")},
+                "nextCursor": nullable(text),
             },
             ["directoryRevision", "items"],
         ),
@@ -1453,7 +1455,10 @@ def document(contract: dict) -> dict:
             parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
         ], description="Returns only directory members currently eligible for the requested use. Each member carries an issuer-qualified identity and may carry the display name stored on an authorized team membership. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence_person lists people the caller may currently manage; absence_cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and teams and absence details are never returned.")},
         "/v1/directory/absences": {
-            "get": operation("List authorized absence records", "AbsenceList", description="Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The response carries the current global directoryRevision required in If-Match for a following absence write. Its items contain at most 1000 caller-authorized records ordered by start time and absenceId."),
+            "get": operation("List authorized absence records", "AbsenceList", parameters=[
+                parameter("cursor", "query", "Opaque 15-minute cursor bound to the caller, selected profile, role, page size, and directory revision. On cursor.expired or a changed directory revision (cursor.invalid), restart without the cursor. Authority is checked again on every page.", required=False),
+                parameter("limit", "query", "Page size from 1 through 1000; defaults to 1000. Values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 1000, "default": 1000}, required=False),
+            ], description="Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The response carries the current global directoryRevision required in If-Match for a following absence write. Its items contain at most 1000 caller-authorized records ordered by start time and absenceId. Follow nextCursor until it is absent to enumerate every record."),
             "post": operation("Record an absence", "AbsenceRecord", mutation=True, allow_zero_revision=True, body="AbsenceInput", status="201", description="Uses the directory revision in If-Match. Staff can manage their own absence with cover from the same team; Supervisors can manage currently supervised staff; Administrators can manage any directory staff. The period is start-inclusive and end-exclusive."),
         },
         "/v1/directory/absences/{absence_id}": {
@@ -1899,7 +1904,7 @@ def verify_source(repository_root: Path) -> None:
         "request.items.len() > 100",
         "CaseloadItemOutcome::AttemptInProgress",
         "StaffingDiagnostic::NoCoverAvailable",
-        "if rows.len() > 1_000",
+        "(1..=1_000).contains(&limit)",
         "valid_directory_identifier(team_id)",
         "valid_directory_people(&request.staff)",
         "valid_directory_people(&request.supervisors)",

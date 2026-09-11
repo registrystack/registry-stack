@@ -106,7 +106,11 @@ the tombstone and the key may be reused.
 The authenticated directory API lists and mutates absence records. Staff can
 manage their own absence when the cover is staff in the same team. Supervisors
 can manage staff they currently supervise, and Administrators can manage any
-directory staff. The ordered list is bounded to 1000 records. Every record uses
+directory staff. The ordered list returns pages of at most 1000 records; use
+`limit` to request a smaller page and follow `nextCursor` until it is absent.
+The 15-minute cursor is bound to the caller, selected profile, role, page size,
+and directory revision. Every page checks current authority. If the directory
+changes or the cursor expires, restart the list without it. Every record uses
 a start-inclusive, end-exclusive UTC period.
 Casework refuses an invalid period, self-cover, overlapping absences for one
 person, or a cover cycle with a value-free 422 problem. Writes require the
@@ -309,7 +313,8 @@ caseworkctl dev stop ./casework
 ```
 
 Doctor distinguishes configuration, database, source, issuer, and directory
-readiness. Directory setup is an ordinary authenticated Administrator API call;
+readiness. Directory readiness requires a serving team for every declared queue.
+Directory setup is an ordinary authenticated Administrator API call;
 administrator status does not grant BReg review or application authority.
 
 The `casework` runtime serves plain HTTP behind operator-controlled TLS

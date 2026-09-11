@@ -415,9 +415,20 @@ class GeneratedOpenApiTests(unittest.TestCase):
         )
         absence_list = schemas["AbsenceList"]
         self.assertEqual(
-            {"directoryRevision", "items"}, set(absence_list["properties"])
+            {"directoryRevision", "items", "nextCursor"}, set(absence_list["properties"])
         )
         self.assertEqual(1000, absence_list["properties"]["items"]["maxItems"])
+        self.assertNotIn("nextCursor", absence_list["required"])
+        absence_parameters = {
+            parameter["name"]: parameter
+            for parameter in self.openapi["paths"]["/v1/directory/absences"]["get"]["parameters"]
+            if parameter["in"] == "query"
+        }
+        self.assertEqual({"limit", "cursor"}, set(absence_parameters))
+        self.assertEqual(
+            {"type": "integer", "minimum": 1, "maximum": 1000, "default": 1000},
+            absence_parameters["limit"]["schema"],
+        )
         self.assertIn(
             "current global directoryRevision",
             self.openapi["paths"]["/v1/directory/absences"]["get"]["description"],
