@@ -1849,7 +1849,9 @@ impl Metadata {
                 "responseEntity": operation.response_entity(), "accessProfile": operation.access_profile(),
                 "entityLabel": operation.entity_label(), "titleFields": operation.title_fields(),
                 "requiredCapabilities": operation.required_capabilities(),
-                "readableFields": operation.readable_fields(), "createWritableFields": operation.create_writable_fields(),
+                "readableFields": operation.readable_fields(),
+                "readableRequestFields": operation.readable_request_fields(),
+                "createWritableFields": operation.create_writable_fields(),
                 "patchWritableFields": operation.patch_writable_fields(), "query": operation.query(),
                 "selectors": operation.selectors().iter().map(|selector| json!({
                     "id": selector.identifier(), "label": selector.label(),

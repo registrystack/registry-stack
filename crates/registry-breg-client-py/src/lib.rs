@@ -813,6 +813,7 @@ fn metadata_operation_value(value: &breg_client_sdk::BRegMetadataOperation) -> V
         "title_fields": value.title_fields(),
         "required_capabilities": value.required_capabilities(),
         "readable_fields": value.readable_fields(),
+        "readable_request_fields": value.readable_request_fields(),
         "create_writable_fields": value.create_writable_fields(),
         "patch_writable_fields": value.patch_writable_fields(),
         "query": value.query(),

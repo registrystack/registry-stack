@@ -151,6 +151,7 @@ client.executeLifecycleActionJson(action, 'exact-action')
 action.bodyJson.toUpperCase()
 action.reviewJson?.toUpperCase()
 metadata.operations.map(operation => operation.query?.filterableFields.map(field => field.apiName))
+metadata.operations.flatMap(operation => operation.readableRequestFields)
 metadata.operations.map(operation => operation.request.allowCreate === false)
 // @ts-expect-error Exact JSON methods require text, not already coerced JavaScript values.
 client.createRecordJson(create, { wide: 9007199254740992 }, 'exact-create')

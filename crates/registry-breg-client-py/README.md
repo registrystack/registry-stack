@@ -12,7 +12,9 @@ revision.
 
 Each item in `contract.operations` includes a snake-case `request` projection.
 Its optional `allow_create` and `allow_patch` values are `True`, `False`, or
-`None`; an explicit `False` is preserved.
+`None`; an explicit `False` is preserved. The descriptor's
+`readable_request_fields` reports which retained request values the selected
+profile may read.
 
 ## Reads
 

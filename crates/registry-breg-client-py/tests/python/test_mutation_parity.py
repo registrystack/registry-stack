@@ -138,6 +138,7 @@ def metadata() -> dict:
         {"fieldNames": "api", "queryParameters": [], "body": "none"},
     )
     get["readPath"] = {"id": "related-companies", "label": "Related companies"}
+    get["readableRequestFields"] = ["reason"]
     get["selectors"] = [
         {
             "id": "by-name",
@@ -415,6 +416,7 @@ class MutationParityTests(unittest.TestCase):
 
     def test_metadata_descriptors_and_immediate_action(self) -> None:
         get = self.contract.operations[0]
+        self.assertEqual(get["readable_request_fields"], ["reason"])
         self.assertEqual(get["selectors"][0]["request_fields"], ["legalName"])
         self.assertEqual(get["read_path"]["id"], "related-companies")
         self.assertEqual(get["fields"][0]["code_labels"], {"active": "Active"})

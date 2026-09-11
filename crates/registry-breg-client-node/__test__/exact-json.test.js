@@ -36,7 +36,8 @@ function operation(kind) {
     path:`/v1/records/items${kind === 'patch' ? '/{record_id}' : ''}`, operation:kind,
     sourceEntity:'item', responseEntity:'item', accessProfile:profile, requiredCapabilities:[],
     entityLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields,
-    readableFields:fields.map(f=>f.id), createWritableFields:kind === 'create' ? fields.map(f=>f.id) : [],
+    readableFields:fields.map(f=>f.id), readableRequestFields:['reason'],
+    createWritableFields:kind === 'create' ? fields.map(f=>f.id) : [],
     patchWritableFields:kind === 'patch' ? fields.map(f=>f.id) : [], selectors:[], query:kind === 'list' ? query : null,
     request:kind === 'list' ? {fieldNames:'api',queryParameters:['$filter','$skiptoken']} : {
       fieldNames:'api',queryParameters:[],body:kind === 'create' ? 'data_envelope' : 'json_patch',
@@ -176,6 +177,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const client = new BaseRegistryClient({baseUrl:`http://127.0.0.1:${server.address().port}`});
     const contract = await client.registryContract(profile);
     const list = contract.operations.find(op=>op.kind === 'list');
+    assert.deepEqual(list.readableRequestFields,['reason']);
     assert.equal(list.query.filterableFields[0].apiName,'bregState');
     assert.equal(list.fields[0].schemaJson,'{"type":"integer"}');
     assert.equal(list.fields[0].codeLabels.active,'Active');
