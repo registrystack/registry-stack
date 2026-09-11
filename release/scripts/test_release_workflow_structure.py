@@ -1758,6 +1758,81 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
 
 
 class SupportingWorkflowStructureTest(unittest.TestCase):
+    def test_public_verification_selects_the_versioned_image_roster(self) -> None:
+        verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")
+        jq_filter = verify.split('jq -e --arg tag "${tag}" \'\n', 1)[1].split(
+            '\n\' "${manifest}"', 1
+        )[0]
+        cases = {
+            "v0.20.2": ["relay"],
+            "v0.21.0": ["evidence", "mint", "relay"],
+            "v0.24.0": ["discovery", "evidence", "mint", "relay"],
+            "v0.26.0": ["breg", "discovery", "evidence", "mint", "relay"],
+            "v0.29.0": ["breg", "discovery", "evidence", "mint", "relay"],
+            "v0.30.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "mint",
+                "relay",
+            ],
+        }
+        manifests = {}
+        for tag, image_names in cases.items():
+            with self.subTest(tag=tag):
+                images = [
+                    {
+                        "name": name,
+                        "digest": "sha256:fixture",
+                        "final_ref": f"ghcr.io/registrystack/{name}:{tag}",
+                        "candidate_ref": (
+                            f"ghcr.io/registrystack/{name}-candidate@sha256:fixture"
+                        ),
+                    }
+                    for name in image_names
+                ]
+                manifest = {
+                    "schema_version": "registry-stack.release-candidate.v2",
+                    "repository": "registrystack/registry-stack",
+                    "release": {"tag": tag, "source_sha": "a" * 40},
+                    "workflow": {
+                        "path": ".github/workflows/release-candidate.yml",
+                        "revision": "b" * 40,
+                        "run_id": 1,
+                        "run_attempt": 1,
+                    },
+                    "images": images,
+                    "advisory": {"verdict": "passed"},
+                }
+                manifests[tag] = manifest
+                result = subprocess.run(
+                    ["jq", "-e", "--arg", "tag", tag, jq_filter],
+                    input=json.dumps(manifest),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+
+        missing_casework = dict(manifests["v0.30.0"])
+        missing_casework["images"] = [
+            image
+            for image in missing_casework["images"]
+            if image["name"] != "casework"
+        ]
+        rejected = subprocess.run(
+            ["jq", "-e", "--arg", "tag", "v0.30.0", jq_filter],
+            input=json.dumps(missing_casework),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(0, rejected.returncode)
+
+        self.assertIn("breg|casework|discovery|evidence|mint|relay)", verify)
+        self.assertIn("`casework` from\n`v0.30.0`", verify)
+
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
         verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")

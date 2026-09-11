@@ -879,21 +879,19 @@ class ReleaseCandidateTest(TestCase):
                     self.module.check_image_onboarding(ROOT, version),
                 )
 
-    def test_image_onboarding_at_0_30_0_needs_only_the_casework_baseline(self) -> None:
-        # casework-candidate is allowlisted in CANDIDATE_PACKAGES, so onboarding
-        # gets past every other check and stops only at the missing reviewed
-        # casework advisory baseline.
-        self.assertEqual(
-            self.module._candidate_image_names("0.30.0"),
-            self.module.check_image_onboarding(
-                ROOT, "0.30.0", allow_missing_baseline=True
-            ),
-        )
+    def test_image_onboarding_at_0_30_0_requires_casework_bootstrap(self) -> None:
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "casework advisory baseline is missing",
         ):
             self.module.check_image_onboarding(ROOT, "0.30.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain casework-candidate",
+        ):
+            self.module.check_image_onboarding(
+                ROOT, "0.30.0", allow_missing_baseline=True
+            )
 
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
         with self.assertRaisesRegex(
