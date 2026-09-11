@@ -428,6 +428,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Base Registry Engine tutorial path filter",
         '"docs/site/scripts/check-breg-tutorial.sh",',
     ),
+    (
+        "Registry Casework tutorial replay",
+        "bash docs/site/scripts/check-casework-tutorial.sh",
+    ),
+    (
+        "Registry Casework tutorial command drift",
+        "run: npm run check:tutorial:casework:dry-run",
+    ),
+    (
+        "Registry Casework tutorial path filter",
+        '"docs/site/scripts/check-casework-tutorial.sh",',
+    ),
 )
 
 RELEASE_SECURITY_POLICY_PATHS = (
