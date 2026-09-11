@@ -26,6 +26,7 @@ use std::{
     os::unix::{
         fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
         net::{UnixListener, UnixStream},
+        process::CommandExt,
     },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -80,6 +81,7 @@ const SUPERVISOR_RELEASE_GRACE: Duration = Duration::from_secs(5);
 const SERVICE_EOF_GRACE: Duration = Duration::from_secs(5);
 const SERVICE_SIGNAL_GRACE: Duration = Duration::from_secs(35);
 const SERVICE_GUARD_STOP_GRACE: Duration = Duration::from_secs(40);
+const SERVICE_POST_KILL_GRACE: Duration = Duration::from_secs(1);
 pub(crate) const SERVICE_GUARD_FORCED_EXIT: u8 = 70;
 
 #[derive(Debug, Args)]
@@ -503,7 +505,7 @@ fn start(args: StartArgs) -> Result<Value> {
         }
         existing => existing,
     };
-    let mut state = if let Some(state) = existing {
+    let mut state = if let Some(mut state) = existing {
         private::validate_tree(&root.join("credentials"))?;
         private::validate_tree(&root.join("secrets"))?;
         if control(&root, "status").is_ok_and(|status| status == "ready") {
@@ -511,6 +513,12 @@ fn start(args: StartArgs) -> Result<Value> {
         }
         // A live owner lock is conclusive even when its control socket is not ready.
         let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
+        // Matching inputs keep every retained record; only remember the
+        // explicit canonical location while this completed session is owned.
+        if args.clients_file.is_some() && state.clients_file != clients_file {
+            state.clients_file = clients_file;
+            state.save()?;
+        }
         state
     } else {
         let previous = previous.as_ref();
@@ -1063,7 +1071,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         )?);
         ready(
             &format!("{}/ready", state.mint_origin()),
-            &mut children.mint.as_mut().context("Mint child missing")?.child,
+            children.mint.as_ref().context("Mint child missing")?,
             &terminate,
         )?;
         ensure_active(&terminate)?;
@@ -1094,11 +1102,10 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         )?);
         ready(
             &format!("{}/ready", state.casework_origin()),
-            &mut children
+            children
                 .casework
-                .as_mut()
-                .context("Casework child missing")?
-                .child,
+                .as_ref()
+                .context("Casework child missing")?,
             &terminate,
         )?;
         // A client token lives 300 seconds, which the child and readiness
@@ -1213,9 +1220,9 @@ struct Children {
     mint: Option<Service>,
 }
 impl Children {
-    fn exited(&mut self) -> Result<bool> {
-        for service in [&mut self.casework, &mut self.mint].into_iter().flatten() {
-            if service.child.try_wait()?.is_some() {
+    fn exited(&self) -> Result<bool> {
+        for service in [&self.casework, &self.mint].into_iter().flatten() {
+            if service.guard_exit()?.is_some() {
                 return Ok(true);
             }
         }
@@ -1238,30 +1245,124 @@ impl Children {
 }
 
 struct Service {
-    child: Child,
+    guard: Child,
+    guard_pid: rustix::process::Pid,
+    guard_pgid: rustix::process::Pid,
     pumps: Vec<thread::JoinHandle<Result<()>>>,
 }
 
+#[derive(Debug)]
+enum GuardExit {
+    Clean,
+    Forced,
+    Abnormal(String),
+}
+
+fn guard_exit(pid: rustix::process::Pid) -> Result<Option<GuardExit>> {
+    use rustix::process::{waitid, WaitId, WaitIdOptions};
+
+    let status = waitid(
+        WaitId::Pid(pid),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    )?;
+    Ok(status.map(|status| match status.exit_status() {
+        Some(0) => GuardExit::Clean,
+        Some(code) if code == i32::from(SERVICE_GUARD_FORCED_EXIT) => GuardExit::Forced,
+        _ => GuardExit::Abnormal(format!("{status:?}")),
+    }))
+}
+
+fn signal_exact_process(pid: rustix::process::Pid, signal: rustix::process::Signal) -> Result<()> {
+    match rustix::process::kill_process(pid, signal) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn signal_exact_group(pgid: rustix::process::Pid, signal: rustix::process::Signal) -> Result<()> {
+    match rustix::process::kill_process_group(pgid, signal) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Clean an outer guard failure while its unreaped group leader still pins the
+/// exact process-group identity. The direct service normally shares this group
+/// and receives a brief TERM opportunity before the final KILL.
+fn cleanup_abnormal_guard(
+    guard: &mut Child,
+    guard_pgid: rustix::process::Pid,
+    grace: Duration,
+) -> Result<()> {
+    let term = signal_exact_group(guard_pgid, rustix::process::Signal::TERM);
+    thread::sleep(grace);
+    let kill = kill_guard_group_and_reap(guard, guard_pgid);
+    term?;
+    kill
+}
+
+fn kill_guard_group_and_reap(guard: &mut Child, guard_pgid: rustix::process::Pid) -> Result<()> {
+    kill_guard_group_and_reap_with(guard, guard_pgid, SERVICE_POST_KILL_GRACE, |pgid| {
+        signal_exact_group(pgid, rustix::process::Signal::KILL)
+    })
+}
+
+fn kill_guard_group_and_reap_with(
+    guard: &mut Child,
+    guard_pgid: rustix::process::Pid,
+    post_kill_grace: Duration,
+    kill_group: impl FnOnce(rustix::process::Pid) -> Result<()>,
+) -> Result<()> {
+    kill_group(guard_pgid).context("cannot KILL timed-out local service group")?;
+    let guard_pid =
+        rustix::process::Pid::from_raw(guard.id() as i32).context("service guard PID invalid")?;
+    let deadline = Instant::now() + post_kill_grace;
+    loop {
+        match guard_exit(guard_pid).context("cannot inspect KILLed local service guard")? {
+            Some(_) => {
+                guard.wait()?;
+                return Ok(());
+            }
+            None if Instant::now() >= deadline => {
+                bail!("KILLed local service guard did not exit within the bounded cleanup wait")
+            }
+            None => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(Duration::from_millis(10).min(remaining));
+            }
+        }
+    }
+}
+
 /// Own a spawned service from the first instruction after `Command::spawn`.
-/// Any partial pipe-reader setup kills and reaps the child before joining the
-/// readers that did start, so no failure can strand a service outside
-/// `Children`.
+/// Any partial pipe-reader setup stops and reaps the whole pinned group. Pump
+/// joins are retained for safe guard exits and detached after abnormal cleanup
+/// so an escaped descendant cannot block the supervisor indefinitely.
 struct StartingService {
     child: Option<Child>,
+    guard_pid: rustix::process::Pid,
+    guard_pgid: rustix::process::Pid,
     pumps: Vec<thread::JoinHandle<Result<()>>>,
 }
 
 impl StartingService {
-    fn new(child: Child) -> Self {
-        Self {
+    fn new(child: Child) -> Result<Self> {
+        let guard_pid = rustix::process::Pid::from_raw(child.id() as i32)
+            .context("service guard PID invalid")?;
+        Ok(Self {
             child: Some(child),
+            guard_pid,
+            guard_pgid: guard_pid,
             pumps: Vec::new(),
-        }
+        })
     }
 
     fn finish(mut self) -> Result<Service> {
+        let guard = self.child.take().context("service child missing")?;
         Ok(Service {
-            child: self.child.take().context("service child missing")?,
+            guard,
+            guard_pid: self.guard_pid,
+            guard_pgid: self.guard_pgid,
             pumps: std::mem::take(&mut self.pumps),
         })
     }
@@ -1270,20 +1371,35 @@ impl StartingService {
 impl Drop for StartingService {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            // Closing liveness first lets a guardian that is still completing
-            // setup stop its already-spawned service on the short EOF budget.
-            // A broken guardian still receives the established bounded stop.
-            let guarded = child.stdin.take().is_some();
-            let stopped = if guarded {
-                let eof_budget = SERVICE_EOF_GRACE + Duration::from_secs(1);
-                matches!(wait_child(&mut child, eof_budget), Ok(Some(_)))
-                    || stop_child_with_grace(&mut child, SERVICE_GUARD_STOP_GRACE).is_ok()
-            } else {
-                stop_child(&mut child).is_ok()
+            // Closing liveness first lets a guard still completing setup stop
+            // its already-spawned service. Keep the group leader unreaped while
+            // it pins the group used for every failure cleanup signal.
+            drop(child.stdin.take());
+            let deadline = Instant::now() + SERVICE_GUARD_STOP_GRACE;
+            let exit = loop {
+                match guard_exit(self.guard_pid) {
+                    Ok(Some(exit)) => break Some(exit),
+                    Ok(None) if Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    _ => break None,
+                }
             };
-            if !stopped {
-                let _ = child.kill();
-                let _ = child.wait();
+            let join_pumps = match exit {
+                Some(GuardExit::Clean | GuardExit::Forced) => child.wait().is_ok(),
+                Some(GuardExit::Abnormal(_)) => {
+                    let _ = cleanup_abnormal_guard(&mut child, self.guard_pgid, SERVICE_EOF_GRACE);
+                    false
+                }
+                None => {
+                    let _ = kill_guard_group_and_reap(&mut child, self.guard_pgid);
+                    false
+                }
+            };
+            if !join_pumps {
+                // A descendant that escaped the owned group may retain a pipe.
+                // Never turn an already-abnormal cleanup into an unbounded join.
+                self.pumps.clear();
             }
         }
         for pump in self.pumps.drain(..) {
@@ -1293,18 +1409,95 @@ impl Drop for StartingService {
 }
 
 impl Service {
+    #[cfg(test)]
+    fn from_guard(guard: Child, pumps: Vec<thread::JoinHandle<Result<()>>>) -> Result<Self> {
+        let guard_pid = rustix::process::Pid::from_raw(guard.id() as i32)
+            .context("service guard PID invalid")?;
+        Ok(Self {
+            guard,
+            guard_pid,
+            guard_pgid: guard_pid,
+            pumps,
+        })
+    }
+
+    fn guard_exit(&self) -> Result<Option<GuardExit>> {
+        guard_exit(self.guard_pid)
+    }
+
     fn stop(&mut self) -> Result<()> {
-        let child_result =
-            stop_child_with_grace(&mut self.child, SERVICE_GUARD_STOP_GRACE).and_then(|status| {
-                if status.code() == Some(i32::from(SERVICE_GUARD_FORCED_EXIT)) {
-                    bail!("owned local child required forced shutdown; inspect retained audit before reuse");
+        self.stop_with_grace(SERVICE_GUARD_STOP_GRACE, SERVICE_EOF_GRACE)
+    }
+
+    fn stop_with_grace(&mut self, grace: Duration, abnormal_grace: Duration) -> Result<()> {
+        let initial = self.guard_exit()?;
+        if initial.is_none() {
+            if let Err(error) = signal_exact_process(self.guard_pid, rustix::process::Signal::TERM)
+            {
+                // macOS can reject a signal delivered during the transition to
+                // a zombie. The non-reaping peek distinguishes that harmless
+                // race from failure to signal a still-live owned guard.
+                if self.guard_exit()?.is_none() {
+                    return Err(error.context("cannot signal live local service guard"));
                 }
-                Ok(())
-            });
+            }
+        }
+        let deadline = Instant::now() + grace;
+        let exit = match initial {
+            Some(exit) => Some(exit),
+            None => loop {
+                if let Some(exit) = self.guard_exit()? {
+                    break Some(exit);
+                }
+                if Instant::now() >= deadline {
+                    break None;
+                }
+                thread::sleep(Duration::from_millis(10));
+            },
+        };
+        let (child_result, join_pumps) = match exit {
+            Some(GuardExit::Clean) => (
+                self.guard.wait().map(|_| ()).map_err(anyhow::Error::from),
+                true,
+            ),
+            Some(GuardExit::Forced) => {
+                let result = self.guard.wait().map(|_| ()).map_err(anyhow::Error::from);
+                (
+                    result.and_then(|()| {
+                        Err(anyhow::anyhow!("owned local child required forced shutdown; inspect retained audit before reuse"))
+                    }),
+                    true,
+                )
+            }
+            Some(GuardExit::Abnormal(status)) => {
+                let result =
+                    cleanup_abnormal_guard(&mut self.guard, self.guard_pgid, abnormal_grace);
+                (
+                    match result {
+                        Ok(()) => Err(anyhow::anyhow!("local service guard exited abnormally ({status}); its owned process group was stopped")),
+                        Err(error) => Err(error.context(format!("local service guard exited abnormally ({status}); unable to prove its owned process group stopped"))),
+                    },
+                    false,
+                )
+            }
+            None => {
+                let result = kill_guard_group_and_reap(&mut self.guard, self.guard_pgid);
+                (
+                    match result {
+                        Ok(()) => Err(anyhow::anyhow!("owned local child required forced shutdown; inspect retained audit before reuse")),
+                        Err(error) => Err(error.context("unable to prove timed-out local service group stopped")),
+                    },
+                    false,
+                )
+            }
+        };
         // A live guard receives TERM first and retains the complete service
-        // grace window. Closing liveness afterwards is the secondary cleanup
-        // request if signaling or waiting for that guard failed.
-        drop(self.child.stdin.take());
+        // grace window. Closing liveness afterwards is secondary cleanup and
+        // cannot be mistaken for proof that the guard or its service exited.
+        drop(self.guard.stdin.take());
+        if !join_pumps {
+            self.pumps.clear();
+        }
         let mut pump_error = None;
         for pump in self.pumps.drain(..) {
             let result = pump
@@ -1775,6 +1968,9 @@ fn service_with_guard_command(mut guard: Command, root: &Path, name: &str) -> Re
     // Validate and compact the retained destination before a child exists. A
     // refused journal must not leave an otherwise untracked service running.
     let journal = RetainedJournal::open(&root.join("logs").join(format!("{name}.log")))?;
+    // The outer guard is the leader that pins this service's process-group
+    // identity until cleanup is complete. Its service inherits the group.
+    guard.process_group(0);
     let child = guard
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1795,7 +1991,7 @@ fn service_with_pump_spawner(
     journal: RetainedJournal,
     mut spawn: impl FnMut(&str, PumpTask) -> std::io::Result<thread::JoinHandle<Result<()>>>,
 ) -> Result<Service> {
-    let mut starting = StartingService::new(child);
+    let mut starting = StartingService::new(child)?;
     let out = starting
         .child
         .as_mut()
@@ -2871,17 +3067,17 @@ fn http_with_timeout(
     })
 }
 
-fn ready(url: &str, child: &mut Child, terminate: &AtomicBool) -> Result<()> {
-    ready_before(url, child, terminate, Instant::now() + READY_DEADLINE)
+fn ready(url: &str, service: &Service, terminate: &AtomicBool) -> Result<()> {
+    ready_before(url, service, terminate, Instant::now() + READY_DEADLINE)
 }
 
 fn ready_before(
     url: &str,
-    child: &mut Child,
+    service: &Service,
     terminate: &AtomicBool,
     deadline: Instant,
 ) -> Result<()> {
-    ready_with_probe(child, terminate, deadline, |remaining| {
+    ready_with_probe(service, terminate, deadline, |remaining| {
         matches!(
             http_with_timeout(
                 "GET",
@@ -2902,14 +3098,14 @@ fn readiness_http_timeout(remaining: Duration) -> Duration {
 }
 
 fn ready_with_probe(
-    child: &mut Child,
+    service: &Service,
     terminate: &AtomicBool,
     deadline: Instant,
     mut probe: impl FnMut(Duration) -> bool,
 ) -> Result<()> {
     loop {
         ensure_active(terminate)?;
-        if child.try_wait()?.is_some() {
+        if service.guard_exit()?.is_some() {
             bail!("local service exited before readiness; inspect private logs");
         }
         let remaining = deadline.saturating_duration_since(Instant::now());

@@ -38,6 +38,14 @@ fn standalone(root: &Path) -> PathBuf {
     project
 }
 
+fn wait_for_process_exit(pid: rustix::process::Pid, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    while rustix::process::test_kill_process(pid).is_ok() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    rustix::process::test_kill_process(pid).is_err()
+}
+
 #[test]
 fn init_clients_bind_the_standalone_template() {
     let root = tempfile::tempdir().unwrap();
@@ -642,6 +650,58 @@ fn a_first_start_without_a_clients_file_names_the_flag() {
     let refusal = format!("{:#}", clients_file(None, None, &project).unwrap_err());
     assert!(refusal.contains("--clients-file"), "{refusal}");
     assert!(refusal.contains("dev-clients.yaml"), "{refusal}");
+}
+
+#[test]
+fn a_stopped_session_retains_an_explicit_equivalent_clients_file() {
+    let root = tempfile::tempdir().unwrap();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let original_clients = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let replacement = project.join("replacement-clients.yaml");
+    fs::write(&replacement, &original_clients).unwrap();
+    let captured = capture(&project, &original_clients).unwrap();
+    let mut state = session(&project);
+    state.source_digest = captured.digest.clone();
+    state.clients = captured.reported;
+    state.container_id = Some("a".repeat(64));
+    state.database_ready = true;
+    state.migrated = true;
+    state.seeded.insert("decisions-team".to_owned());
+    state.directory_revision = 7;
+    state.directory_teams = 1;
+    parent_directory(&project).unwrap();
+    initialize(&state.root(), &state, &captured.clients).unwrap();
+
+    // Stop after retained-state selection, before prerequisite or service work.
+    assert!(start(StartArgs {
+        project: project.clone(),
+        clients_file: Some(replacement.clone()),
+        casework_port: None,
+        mint_port: None,
+        database_port: None,
+        casework_bin: Some(project.join("missing-casework")),
+        mint_bin: None,
+        docker_bin: None,
+    })
+    .is_err());
+
+    let retained = read_state(&state.root()).unwrap();
+    assert_eq!(
+        retained.clients_file,
+        fs::canonicalize(replacement).unwrap()
+    );
+    assert_eq!(
+        clients_file(None, Some(&retained), &project).unwrap(),
+        retained.clients_file
+    );
+    assert_eq!(retained.source_digest, captured.digest);
+    assert_eq!(retained.owner, state.owner);
+    assert_eq!(retained.container_id, state.container_id);
+    assert!(retained.database_ready);
+    assert!(retained.migrated);
+    assert_eq!(retained.seeded, state.seeded);
+    assert_eq!(retained.directory_revision, 7);
+    assert_eq!(retained.directory_teams, 1);
 }
 
 #[test]
@@ -1307,7 +1367,12 @@ fn active_http_prerequisite_stops_promptly_when_interrupted() {
 
 #[test]
 fn service_http_readiness_stops_at_the_phase_deadline() {
-    let mut child = Command::new("/bin/sleep").arg("5").spawn().unwrap();
+    let child = Command::new("/bin/sleep")
+        .arg("5")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut service = Service::from_guard(child, Vec::new()).unwrap();
     let terminate = AtomicBool::new(false);
     let started = Instant::now();
     let deadline = started + Duration::from_millis(75);
@@ -1315,7 +1380,7 @@ fn service_http_readiness_stops_at_the_phase_deadline() {
 
     let refusal = format!(
         "{:#}",
-        ready_with_probe(&mut child, &terminate, deadline, |timeout| {
+        ready_with_probe(&service, &terminate, deadline, |timeout| {
             request_timeouts.push(timeout);
             // Model an HTTP request that consumes its entire allowance. The
             // readiness phase must pass only its remaining budget each time.
@@ -1325,8 +1390,7 @@ fn service_http_readiness_stops_at_the_phase_deadline() {
         .unwrap_err()
     );
     let elapsed = started.elapsed();
-    child.kill().unwrap();
-    child.wait().unwrap();
+    let _ = service.stop_with_grace(Duration::from_millis(50), Duration::from_millis(10));
 
     assert!(refusal.contains("readiness timed out"), "{refusal}");
     assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
@@ -1630,6 +1694,26 @@ fn service_guard_supervisor_helper() {
 }
 
 #[test]
+fn nonzero_outer_guard_helper() {
+    let Some(service_pid_file) =
+        std::env::var_os("CASEWORKCTL_TEST_NONZERO_GUARD_PID").map(PathBuf::from)
+    else {
+        return;
+    };
+    let service_binary = std::env::var_os("CASEWORKCTL_TEST_NONZERO_GUARD_SERVICE").unwrap();
+    let _child = Command::new(service_binary)
+        .arg(&service_pid_file)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !service_pid_file.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(service_pid_file.exists(), "service did not become ready");
+    std::process::exit(23);
+}
+
+#[test]
 fn guarded_service_stops_after_its_supervisor_is_killed() {
     let root = tempfile::tempdir().unwrap();
     let binary = root.path().join("service.sh");
@@ -1738,7 +1822,7 @@ fn service_guard_owns_a_stubborn_child_during_startup_interruption() {
     let service_pid = rustix::process::Pid::from_raw(service_pid).unwrap();
 
     assert!(forced);
-    assert!(rustix::process::test_kill_process(service_pid).is_err());
+    assert!(wait_for_process_exit(service_pid, Duration::from_secs(2)));
 }
 
 #[test]
@@ -1830,7 +1914,226 @@ fn established_stubborn_service_reports_forced_shutdown() {
     let refusal = format!("{:#}", service.stop().unwrap_err());
 
     assert!(refusal.contains("required forced shutdown"), "{refusal}");
-    assert!(rustix::process::test_kill_process(service_pid).is_err());
+    assert!(wait_for_process_exit(service_pid, Duration::from_secs(2)));
+}
+
+#[test]
+fn killed_guard_leaves_the_supervisor_to_clean_its_exact_service_group() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    let binary = root.path().join("stubborn.sh");
+    let service_pid_file = root.path().join("service.pid");
+    fs::write(
+        &binary,
+        b"#!/bin/sh\ntrap '' TERM\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.02; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut service =
+        service(&binary, &[], &service_pid_file, &[], root.path(), "guarded").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !service_pid_file.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(service_pid_file.exists(), "guarded service did not start");
+    let service_pid = rustix::process::Pid::from_raw(
+        fs::read_to_string(&service_pid_file)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        rustix::process::getpgid(Some(service_pid)).unwrap(),
+        service.guard_pgid,
+        "the actual service must inherit the guard's pinned group"
+    );
+
+    rustix::process::kill_process(service.guard_pid, rustix::process::Signal::KILL).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while service.guard_exit().unwrap().is_none() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        service.guard_exit().unwrap().is_some(),
+        "killed guard did not become waitable"
+    );
+    assert!(
+        rustix::process::test_kill_process(service_pid).is_ok(),
+        "the regression requires a service left alive by its killed guard"
+    );
+
+    let refusal = format!(
+        "{:#}",
+        service
+            .stop_with_grace(Duration::from_millis(100), Duration::from_millis(25))
+            .unwrap_err()
+    );
+
+    assert!(refusal.contains("guard exited abnormally"), "{refusal}");
+    assert!(wait_for_process_exit(service_pid, Duration::from_secs(2)));
+}
+
+#[test]
+fn nonzero_guard_exit_is_detected_without_waiting_for_pump_eof() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    let service_pid_file = root.path().join("service.pid");
+    let service_binary = root.path().join("service.sh");
+    fs::write(
+        &service_binary,
+        b"#!/bin/sh\ntrap '' HUP TERM\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.02; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&service_binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut guard = Command::new(std::env::current_exe().unwrap());
+    guard
+        .args([
+            "--exact",
+            "dev::tests::nonzero_outer_guard_helper",
+            "--nocapture",
+        ])
+        .env("CASEWORKCTL_TEST_NONZERO_GUARD_PID", &service_pid_file)
+        .env("CASEWORKCTL_TEST_NONZERO_GUARD_SERVICE", &service_binary);
+    let mut service = service_with_guard_command(guard, root.path(), "guarded").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while (!service_pid_file.exists() || service.guard_exit().unwrap().is_none())
+        && Instant::now() < deadline
+    {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        service_pid_file.exists(),
+        "guard did not create its service"
+    );
+    assert!(
+        service.guard_exit().unwrap().is_some(),
+        "nonzero guard did not become waitable"
+    );
+    let service_pid = rustix::process::Pid::from_raw(
+        fs::read_to_string(&service_pid_file)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(rustix::process::test_kill_process(service_pid).is_ok());
+    let started = Instant::now();
+
+    let refusal = format!(
+        "{:#}",
+        service
+            .stop_with_grace(Duration::from_millis(50), Duration::from_millis(10))
+            .unwrap_err()
+    );
+
+    assert!(refusal.contains("guard exited abnormally"), "{refusal}");
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(wait_for_process_exit(service_pid, Duration::from_secs(2)));
+}
+
+#[test]
+fn live_guard_timeout_kills_the_pinned_group_before_reaping() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    let service_binary = root.path().join("service.sh");
+    let guard_binary = root.path().join("guard.sh");
+    let service_pid_file = root.path().join("service.pid");
+    fs::write(
+        &service_binary,
+        b"#!/bin/sh\ntrap '' TERM\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.02; done\n",
+    )
+    .unwrap();
+    fs::write(
+        &guard_binary,
+        b"#!/bin/sh\ntrap '' TERM\n\"$1\" \"$2\" &\nwhile [ ! -s \"$2\" ]; do sleep 0.01; done\nwhile :; do sleep 0.02; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&service_binary, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&guard_binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut guard = Command::new(&guard_binary);
+    guard.arg(&service_binary).arg(&service_pid_file);
+    let mut service = service_with_guard_command(guard, root.path(), "guarded").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !service_pid_file.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(service_pid_file.exists(), "guarded service did not start");
+    let service_pid = rustix::process::Pid::from_raw(
+        fs::read_to_string(&service_pid_file)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap(),
+    )
+    .unwrap();
+    let started = Instant::now();
+
+    let refusal = format!(
+        "{:#}",
+        service
+            .stop_with_grace(Duration::from_millis(75), Duration::from_millis(10))
+            .unwrap_err()
+    );
+
+    assert!(refusal.contains("required forced shutdown"), "{refusal}");
+    assert!(started.elapsed() >= Duration::from_millis(70));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(wait_for_process_exit(service_pid, Duration::from_secs(2)));
+}
+
+#[test]
+fn post_kill_wait_is_bounded_when_a_guard_does_not_become_waitable() {
+    let mut guard = Command::new("/bin/sleep")
+        .arg("5")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let guard_pid = rustix::process::Pid::from_raw(guard.id() as i32).unwrap();
+    let started = Instant::now();
+
+    // Model a kernel reporting successful group KILL without making the guard
+    // waitable. Cleanup must return at its own bound instead of entering a
+    // blocking Child::wait.
+    let refusal = format!(
+        "{:#}",
+        kill_guard_group_and_reap_with(&mut guard, guard_pid, Duration::from_millis(40), |_pgid| {
+            Ok(())
+        },)
+        .unwrap_err()
+    );
+
+    assert!(refusal.contains("bounded cleanup wait"), "{refusal}");
+    assert!(started.elapsed() >= Duration::from_millis(35));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(guard_exit(guard_pid).unwrap().is_none());
+    rustix::process::kill_process(guard_pid, rustix::process::Signal::KILL).unwrap();
+    guard.wait().unwrap();
+}
+
+#[test]
+fn failed_group_kill_never_enters_a_blocking_guard_wait() {
+    let mut guard = Command::new("/bin/sleep")
+        .arg("5")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let guard_pid = rustix::process::Pid::from_raw(guard.id() as i32).unwrap();
+    let started = Instant::now();
+
+    let refusal = format!(
+        "{:#}",
+        kill_guard_group_and_reap_with(&mut guard, guard_pid, Duration::from_secs(1), |_pgid| Err(
+            anyhow::anyhow!("injected group KILL failure")
+        ),)
+        .unwrap_err()
+    );
+
+    assert!(refusal.contains("cannot KILL"), "{refusal}");
+    assert!(refusal.contains("injected group KILL failure"), "{refusal}");
+    assert!(started.elapsed() < Duration::from_millis(100));
+    assert!(guard_exit(guard_pid).unwrap().is_none());
+    rustix::process::kill_process(guard_pid, rustix::process::Signal::KILL).unwrap();
+    guard.wait().unwrap();
 }
 
 #[test]
@@ -1840,8 +2143,10 @@ fn service_pump_setup_failures_reap_the_child_and_join_started_pumps() {
     private::directory(&logs).unwrap();
     for fail_on in [1, 2] {
         let journal = RetainedJournal::open(&logs.join("casework.log")).unwrap();
-        let child = Command::new("/bin/sleep")
-            .arg("5")
+        let child = Command::new("/bin/sh")
+            .args(["-c", "read ignored || exit 0"])
+            .process_group(0)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -1893,6 +2198,7 @@ fn guardian_pump_setup_failure_reaps_a_stubborn_owned_service() {
     let mut guardian =
         service_guard_command(&binary, &[service_pid_file.as_os_str().to_owned()]).unwrap();
     let child = guardian
+        .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2043,7 +2349,10 @@ fn token_issuance_stops_between_clients_when_interrupted() {
 
 #[test]
 fn service_cleanup_joins_every_log_pump() {
-    let child = Command::new("/usr/bin/true").spawn().unwrap();
+    let child = Command::new("/usr/bin/true")
+        .process_group(0)
+        .spawn()
+        .unwrap();
     let joined = Arc::new(AtomicBool::new(false));
     let marker = Arc::clone(&joined);
     let pump = thread::spawn(move || {
@@ -2052,12 +2361,14 @@ fn service_cleanup_joins_every_log_pump() {
         Ok(())
     });
     let mut children = Children {
-        casework: Some(Service {
-            child,
-            pumps: vec![pump],
-        }),
+        casework: Some(Service::from_guard(child, vec![pump]).unwrap()),
         mint: None,
     };
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !children.exited().unwrap() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(children.exited().unwrap(), "guard did not become waitable");
 
     children.stop().unwrap();
     assert!(joined.load(Ordering::Relaxed));
