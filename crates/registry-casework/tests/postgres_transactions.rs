@@ -556,8 +556,14 @@ async fn transactional_checkpoint_invariants_hold_in_postgresql() {
             ("traceId".to_owned(), "source-trace-a".to_owned()),
         ]),
     };
+    assert!(matches!(
+        runtime
+            .complete_attempt(&holder, attempt.attempt_id, execution_token, &receipt)
+            .await,
+        Err(StoreError::AttemptPending)
+    ));
     runtime
-        .complete_attempt(&holder, attempt.attempt_id, &receipt)
+        .complete_attempt(&holder, attempt.attempt_id, recovery_token, &receipt)
         .await
         .expect("authoritative receipt settles the old-generation attempt");
     runtime
@@ -693,4 +699,83 @@ async fn item_identity_does_not_require_a_subject_ledger_parent(
         .execute("DELETE FROM casework_items WHERE item_id=$1", &[&item_id])
         .await
         .expect("delete isolated adapter-owned item fixture");
+}
+
+/// A schema of its own, so a focused test never races the checkpoint suite that
+/// resets the public schema of the same database.
+async fn isolated_schema(prefix: &str) -> (PostgresStore, tokio_postgres::Client, String) {
+    let base = env::var("CASEWORK_TEST_DATABASE_URL")
+        .expect("CASEWORK_TEST_DATABASE_URL is required for the real PostgreSQL test");
+    let schema = format!("{prefix}_{}", uuid::Uuid::new_v4().simple());
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+        .await
+        .expect("connect dedicated test database");
+    tokio::spawn(async move { connection.await.expect("admin connection") });
+    admin
+        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .expect("create isolated schema");
+    let secret = format!("CASEWORK_SCHEMA_{}", uuid::Uuid::new_v4().simple()).to_ascii_uppercase();
+    env::set_var(&secret, &scoped);
+    let secrets =
+        SecretResolver::new([SecretProvider::Environment], "/private/tmp").expect("test resolver");
+    let config = DatabaseConfig {
+        runtime_url_ref: format!("secret:env/{secret}"),
+        migration_url_ref: format!("secret:env/{secret}"),
+        trusted_root_certificate_ref: None,
+        test_only_plaintext: true,
+    };
+    let store = PostgresStore::connect_migration(&config, &secrets).expect("migration pool");
+    let (client, connection) = tokio_postgres::connect(&scoped, tokio_postgres::NoTls)
+        .await
+        .expect("connect isolated schema");
+    tokio::spawn(async move { connection.await.expect("schema connection") });
+    (store, client, schema)
+}
+
+async fn occurrence_index(client: &tokio_postgres::Client, schema: &str) -> (u32, bool) {
+    let row = client
+        .query_one(
+            "SELECT c.oid,i.indisunique FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_index i ON i.indexrelid=c.oid WHERE n.nspname=$1 AND c.relname='casework_items_occurrence_idx'",
+            &[&schema],
+        )
+        .await
+        .expect("the occurrence identity index exists");
+    (row.get(0), row.get(1))
+}
+
+async fn applied_versions(client: &tokio_postgres::Client) -> Vec<i64> {
+    client
+        .query(
+            "SELECT version FROM casework_schema_migrations ORDER BY version",
+            &[],
+        )
+        .await
+        .expect("read the migration ledger")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+#[tokio::test]
+async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_index() {
+    let (store, client, schema) = isolated_schema("migrate").await;
+    store.migrate().await.expect("first migration");
+    let applied = applied_versions(&client).await;
+    assert_eq!(applied, (1..=8).collect::<Vec<i64>>());
+    let index = occurrence_index(&client, &schema).await;
+    assert!(index.1, "the occurrence identity index is unique");
+
+    store
+        .migrate()
+        .await
+        .expect("a database already at the ledger head migrates cleanly");
+    assert_eq!(applied_versions(&client).await, applied);
+    assert_eq!(
+        occurrence_index(&client, &schema).await,
+        index,
+        "the second migration leaves the occurrence identity index in place"
+    );
 }

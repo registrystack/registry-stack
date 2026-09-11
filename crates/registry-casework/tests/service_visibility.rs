@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -45,6 +45,10 @@ const TOKEN_AUDIENCE: &str = "registry-casework";
 const TOKEN_KID: &str = "casework-test-key";
 const TOKEN_SECRET: &[u8] = b"01234567890123456789012345678901";
 const TOKEN_SECRET_BASE64URL: &str = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE";
+
+/// Every suite in this binary resets the dedicated visibility database, so the
+/// suites take this lock for their whole body and run one at a time.
+static DATABASE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 #[derive(Clone)]
 enum CallerRead {
@@ -675,27 +679,22 @@ fn policy(maximum_source_reads: usize, deadline_ms: u64) -> InboxPolicy {
 
 #[tokio::test]
 async fn service_visibility_boundaries() {
+    let _database = DATABASE.lock().await;
     zero_local_candidates_distinguish_empty_source_from_outage().await;
     warm_empty_source_status_does_not_mask_a_later_outage().await;
     incomplete_multipage_discovery_stays_incomplete_across_requests().await;
     sparse_disclosure_and_cursor_preserve_unvisited_candidates().await;
-    source_outage_is_distinct_from_empty_inbox_and_holdings().await;
     current_directory_controls_queue_visibility().await;
     source_deadline_is_hard_and_retryable().await;
     local_terminal_repair_survives_discovery_outage().await;
-    source_event_diagnostics_are_bounded_and_payload_free().await;
     periodic_reconciliation_refreshes_same_revision_actionability().await;
     request_correction_copy_is_persisted_then_filtered_for_the_caller().await;
-    terminal_attempt_replays_do_not_repeat_source_execution().await;
     post_write_source_failure_retains_the_attempt_reference().await;
     definitive_refusal_during_recovery_releases_the_attempt_fence().await;
     inbox_views_filter_before_candidate_pagination().await;
-    recovery_problem_discloses_only_the_entitled_original_attempt().await;
-    caller_owned_live_attempt_survives_a_fresh_session_without_cross_actor_disclosure().await;
     source_claim_requires_a_current_permitted_operation().await;
     supervisor_release_and_holder_timing_obey_current_authority().await;
     exact_subject_selector_is_complete_and_cursor_bound().await;
-    http_authentication_and_directory_authority_are_enforced().await;
 }
 
 async fn source_claim_requires_a_current_permitted_operation() {
@@ -1258,7 +1257,9 @@ async fn definitive_refusal_during_recovery_releases_the_attempt_fence() {
     }
 }
 
+#[tokio::test]
 async fn caller_owned_live_attempt_survives_a_fresh_session_without_cross_actor_disclosure() {
+    let _database = DATABASE.lock().await;
     let subject_id = Uuid::from_u128(24);
     let source = MockSource::with_reads([(subject_id, CallerRead::Visible("authorized"))]);
     let execute_calls = Arc::clone(&source.execute_calls);
@@ -1474,7 +1475,9 @@ async fn inbox_views_filter_before_candidate_pagination() {
     assert_eq!(completed.items[0].item_id, claimed.item_id);
 }
 
+#[tokio::test]
 async fn recovery_problem_discloses_only_the_entitled_original_attempt() {
+    let _database = DATABASE.lock().await;
     let subject_id = Uuid::from_u128(22);
     let mut source = MockSource::with_reads([(subject_id, CallerRead::Visible("authorized"))]);
     source.approve_reads.insert(subject_id.to_string());
@@ -1860,7 +1863,9 @@ async fn source_deadline_is_hard_and_retryable() {
     assert!(retry.items.is_empty());
 }
 
+#[tokio::test]
 async fn source_outage_is_distinct_from_empty_inbox_and_holdings() {
+    let _database = DATABASE.lock().await;
     let unavailable = Uuid::from_u128(4);
     let empty = fixture([], policy(10, 1_000)).await;
     let inbox = empty
@@ -1954,7 +1959,9 @@ async fn local_terminal_repair_survives_discovery_outage() {
     );
 }
 
+#[tokio::test]
 async fn source_event_diagnostics_are_bounded_and_payload_free() {
+    let _database = DATABASE.lock().await;
     let fixture =
         fixture_with_source(MockSource::with_diagnostic_events(), policy(10, 1_000)).await;
     let configured_project = project(policy(10, 1_000));
@@ -2157,7 +2164,9 @@ async fn periodic_reconciliation_refreshes_same_revision_actionability() {
     }));
 }
 
+#[tokio::test]
 async fn terminal_attempt_replays_do_not_repeat_source_execution() {
+    let _database = DATABASE.lock().await;
     let subject_id = Uuid::from_u128(10);
     let (source, prepare_calls, execute_calls) =
         MockSource::with_successful_action(subject_id, CallerRead::Visible("authorized"));
@@ -2303,7 +2312,9 @@ async fn request_correction_copy_is_persisted_then_filtered_for_the_caller() {
     assert_eq!(filtered.flagged_fields, ["public"]);
 }
 
+#[tokio::test]
 async fn http_authentication_and_directory_authority_are_enforced() {
+    let _database = DATABASE.lock().await;
     reset_database().await;
     let resolver = SecretResolver::new([SecretProvider::Environment], "/")
         .expect("environment-only secret resolver");

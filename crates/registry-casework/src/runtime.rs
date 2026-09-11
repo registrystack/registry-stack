@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +10,8 @@ use registry_platform_audit::{AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::Value;
 use thiserror::Error;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::{
@@ -108,8 +111,10 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             .map_err(|_| RuntimeError::Audit)?,
     );
 
+    let (worker_stopped, worker_stops) = mpsc::channel(WORKER_STOP_CAPACITY);
+    let mut workers = Vec::new();
     let worker_service = service.clone();
-    tokio::spawn(async move {
+    workers.push(supervise("maintenance", worker_stopped.clone(), async move {
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         let mut retention_ticks = 0_u8;
         loop {
@@ -124,6 +129,9 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             if retention_ticks == 0 {
                 if let Err(error) = worker_service.erase_expired_hosted().await {
                     tracing::warn!(error = %error, "Casework hosted retention pass did not complete");
+                }
+                if let Err(error) = worker_service.erase_expired_cursors().await {
+                    tracing::warn!(error = %error, "Casework inbox cursor retention pass did not complete");
                 }
                 if let Err(error) = worker_service.erase_expired_assignment_cursors().await {
                     tracing::warn!(error = %error, "Casework assignment cursor retention pass did not complete");
@@ -145,19 +153,23 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 }
             }
         }
-    });
+    }));
     let source_ids = config.sources.keys().cloned().collect::<Vec<_>>();
     for source_id in source_ids {
         let reconciliation = service.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                if let Err(error) = reconciliation.reconcile_source(&source_id).await {
-                    tracing::warn!(source_id, error = %error, "Casework reconciliation pass did not complete");
+        workers.push(supervise(
+            "source reconciliation",
+            worker_stopped.clone(),
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    if let Err(error) = reconciliation.reconcile_source(&source_id).await {
+                        tracing::warn!(source_id, error = %error, "Casework reconciliation pass did not complete");
+                    }
                 }
-            }
-        });
+            },
+        ));
     }
     let audit_publisher = RuntimeAuditPublisher {
         store,
@@ -165,7 +177,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         sink: audit_sink,
     };
     let audit_health = service.audit_publisher_health();
-    tokio::spawn(async move {
+    workers.push(supervise("audit publication", worker_stopped, async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         let mut failed_stage = None;
         loop {
@@ -176,7 +188,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 publish_audit_pass(&audit_publisher).await,
             );
         }
-    });
+    }));
 
     let app = router(HttpState {
         service,
@@ -186,9 +198,65 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let listener = tokio::net::TcpListener::bind(config.listen)
         .await
         .map_err(RuntimeError::Listen)?;
+    let served = serve_until_worker_stops(listener, app, worker_stops).await;
+    for worker in workers {
+        worker.abort();
+    }
+    served
+}
+
+/// Serve until a supervised background loop stops. The listener never stops on
+/// its own, so a clean return means a worker stopped, and the process reports
+/// that as a failure for whatever supervises it to restart.
+async fn serve_until_worker_stops(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    stops: mpsc::Receiver<&'static str>,
+) -> Result<(), RuntimeError> {
     axum::serve(listener, app)
+        .with_graceful_shutdown(worker_stop(stops))
         .await
-        .map_err(RuntimeError::Listen)
+        .map_err(RuntimeError::Listen)?;
+    Err(RuntimeError::WorkerStopped)
+}
+
+/// One slot per supervised loop, so a stopping worker never blocks on the
+/// listener reading its report.
+const WORKER_STOP_CAPACITY: usize = 16;
+
+/// Run a background loop under a task that outlives it. The loops never return
+/// on their own, so a supervised task that finishes carries a panic, and its
+/// name travels to the listener.
+fn supervise(
+    name: &'static str,
+    stopped: mpsc::Sender<&'static str>,
+    worker: impl Future<Output = ()> + Send + 'static,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        match tokio::spawn(worker).await {
+            Ok(()) => tracing::error!(worker = name, "a Casework background worker returned"),
+            Err(error) => {
+                tracing::error!(worker = name, error = %error, "a Casework background worker panicked");
+            }
+        }
+        if stopped.send(name).await.is_err() {
+            tracing::debug!(worker = name, "the Casework listener had already stopped");
+        }
+    })
+}
+
+/// Resolve once a supervised background loop has stopped. A process whose
+/// clocks no longer fire keeps neither its listener nor its readiness.
+async fn worker_stop(mut stopped: mpsc::Receiver<&'static str>) {
+    match stopped.recv().await {
+        Some(worker) => tracing::error!(
+            worker,
+            "stopping the Casework listener after a background worker stopped"
+        ),
+        None => {
+            tracing::error!("stopping the Casework listener after every background worker stopped")
+        }
+    }
 }
 
 pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, RuntimeError> {
@@ -359,6 +427,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_panicking_background_worker_stops_the_listener() {
+        let (stopped, mut stops) = mpsc::channel(2);
+        supervise("clock", stopped.clone(), async {
+            panic!("the clock worker panicked")
+        })
+        .await
+        .expect("the supervisor outlives the worker panic");
+        supervise("synchronization", stopped, async {})
+            .await
+            .expect("the supervisor outlives a worker that returns");
+        assert_eq!(stops.recv().await, Some("clock"));
+        tokio::time::timeout(Duration::from_secs(5), worker_stop(stops))
+            .await
+            .expect("the listener stops after a background worker stops");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_worker_ends_the_process_with_an_error() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener");
+        let (stopped, stops) = mpsc::channel(1);
+        stopped
+            .send("clock")
+            .await
+            .expect("report a stopped worker");
+        let served = tokio::time::timeout(
+            Duration::from_secs(5),
+            serve_until_worker_stops(listener, axum::Router::new(), stops),
+        )
+        .await
+        .expect("the listener stops after a background worker stops");
+        assert!(matches!(served, Err(RuntimeError::WorkerStopped)));
+    }
+
+    #[tokio::test]
     async fn audit_publication_failure_degrades_health_until_a_pass_recovers() {
         for failure in [
             AuditPublicationFailure::PendingRead,
@@ -405,4 +509,6 @@ pub enum RuntimeError {
     Service(#[from] crate::ServiceError),
     #[error("the Casework listener failed")]
     Listen(#[source] std::io::Error),
+    #[error("a Casework background worker stopped")]
+    WorkerStopped,
 }

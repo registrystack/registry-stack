@@ -27,6 +27,25 @@ const CLOCK_MIGRATION: &str = include_str!("../migrations/0004_clocks.sql");
 const SOURCE_RETENTION_MIGRATION: &str = include_str!("../migrations/0005_source_retention.sql");
 const SOURCE_HISTORY_MIGRATION: &str = include_str!("../migrations/0006_source_history.sql");
 const DIRECTORY_TARGETS_MIGRATION: &str = include_str!("../migrations/0007_directory_targets.sql");
+const RETENTION_INDEX_MIGRATION: &str =
+    include_str!("../migrations/0008_retention_and_inbox_indexes.sql");
+
+/// Every schema version in ledger order.
+const MIGRATIONS: [(i64, &str); 8] = [
+    (1, MIGRATION),
+    (2, HOSTED_MIGRATION),
+    (3, ASSIGNMENT_MIGRATION),
+    (4, CLOCK_MIGRATION),
+    (5, SOURCE_RETENTION_MIGRATION),
+    (6, SOURCE_HISTORY_MIGRATION),
+    (7, DIRECTORY_TARGETS_MIGRATION),
+    (8, RETENTION_INDEX_MIGRATION),
+];
+
+/// Serializes operator-run migrations on one session lock. A second migrator
+/// waits here instead of racing the ledger primary key. The key spells the
+/// ASCII bytes of "casework".
+const MIGRATION_LOCK_KEY: i64 = 0x6361_7365_776f_726b;
 
 pub(crate) type InboxPosition = (Option<DateTime<Utc>>, DateTime<Utc>, Uuid);
 
@@ -112,11 +131,26 @@ impl PostgresStore {
 
     pub async fn migrate(&self) -> Result<(), StoreError> {
         let mut client = self.client().await?;
-        // The checkpoint schema predates a migration ledger. Apply its
-        // idempotent migration once more, then establish the forward-only
-        // ledger in the same transaction before adding hosted storage.
+        client
+            .query_one("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_KEY])
+            .await?;
+        let applied = Self::apply_migrations(&mut client).await;
+        let released = client
+            .query_one("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_KEY])
+            .await;
+        applied?;
+        if released?.get::<_, bool>(0) {
+            Ok(())
+        } else {
+            Err(StoreError::Corrupt)
+        }
+    }
+
+    /// Apply every unapplied migration in order under the ledger. The
+    /// checkpoint schema predates the ledger, so the ledger table is
+    /// established first and version 1 is gated on it like every other version.
+    async fn apply_migrations(client: &mut deadpool_postgres::Client) -> Result<(), StoreError> {
         let transaction = client.transaction().await?;
-        transaction.batch_execute(MIGRATION).await?;
         transaction
             .batch_execute(
                 "CREATE TABLE IF NOT EXISTS casework_schema_migrations (\
@@ -124,131 +158,28 @@ impl PostgresStore {
                  applied_at timestamptz NOT NULL);",
             )
             .await?;
-        transaction
-            .execute(
-                "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(1,now()) ON CONFLICT(version) DO NOTHING",
-                &[],
-            )
-            .await?;
         transaction.commit().await?;
 
-        let transaction = client.transaction().await?;
-        let hosted_applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=2)",
-                &[],
-            )
-            .await?
-            .get(0);
-        if !hosted_applied {
-            transaction.batch_execute(HOSTED_MIGRATION).await?;
-            transaction
-                .execute(
-                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(2,now())",
-                    &[],
+        for (version, migration) in MIGRATIONS {
+            let transaction = client.transaction().await?;
+            let applied: bool = transaction
+                .query_one(
+                    "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=$1)",
+                    &[&version],
                 )
-                .await?;
+                .await?
+                .get(0);
+            if !applied {
+                transaction.batch_execute(migration).await?;
+                transaction
+                    .execute(
+                        "INSERT INTO casework_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
+                        &[&version],
+                    )
+                    .await?;
+            }
+            transaction.commit().await?;
         }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let assignment_applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=3)",
-                &[],
-            )
-            .await?
-            .get(0);
-        if !assignment_applied {
-            transaction.batch_execute(ASSIGNMENT_MIGRATION).await?;
-            transaction
-                .execute(
-                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(3,now())",
-                    &[],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let clocks_applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=4)",
-                &[],
-            )
-            .await?
-            .get(0);
-        if !clocks_applied {
-            transaction.batch_execute(CLOCK_MIGRATION).await?;
-            transaction
-                .execute(
-                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(4,now())",
-                    &[],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let source_retention_applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=5)",
-                &[],
-            )
-            .await?
-            .get(0);
-        if !source_retention_applied {
-            transaction
-                .batch_execute(SOURCE_RETENTION_MIGRATION)
-                .await?;
-            transaction
-                .execute(
-                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(5,now())",
-                    &[],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let source_history_applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=6)",
-                &[],
-            )
-            .await?
-            .get(0);
-        if !source_history_applied {
-            transaction.batch_execute(SOURCE_HISTORY_MIGRATION).await?;
-            transaction
-                .execute(
-                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(6,now())",
-                    &[],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let directory_targets_applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=7)",
-                &[],
-            )
-            .await?
-            .get(0);
-        if !directory_targets_applied {
-            transaction
-                .batch_execute(DIRECTORY_TARGETS_MIGRATION)
-                .await?;
-            transaction
-                .execute(
-                    "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(7,now())",
-                    &[],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
         Ok(())
     }
 
@@ -1328,16 +1259,20 @@ impl PostgresStore {
         .await
     }
 
+    /// Settle an attempt against the source receipt. The execution token of the
+    /// lease that ran the source call fences this the same way it fences every
+    /// other terminal transition.
     pub async fn complete_attempt(
         &self,
         actor: &ActorContext,
         attempt_id: Uuid,
+        execution_token: Uuid,
         receipt: &SourceReceipt,
     ) -> Result<AttemptStatus, StoreError> {
         self.finish_attempt(
             actor,
             attempt_id,
-            None,
+            Some(execution_token),
             Some(receipt),
             AttemptState::Completed,
         )
@@ -1363,7 +1298,7 @@ impl PostgresStore {
             return Err(StoreError::Forbidden);
         }
         let old = parse_attempt_state(&row.get::<_, String>(7))?;
-        if state != AttemptState::Completed && execution_token != Some(row.get::<_, Uuid>(10)) {
+        if execution_token != Some(row.get::<_, Uuid>(10)) {
             return Err(StoreError::AttemptPending);
         }
         if old == AttemptState::Completed {
@@ -1940,7 +1875,7 @@ impl PostgresStore {
             InboxView::CompletedByMe => "completed_by_me",
         };
         let rows=client.query(
-            "WITH clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification_pending')) AS active_due_at FROM casework_clock_occurrences o LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.item_id IS NOT NULL GROUP BY o.item_id), candidates AS (SELECT i.*,CASE WHEN clock_due.item_id IS NULL THEN i.passive_due_at ELSE clock_due.active_due_at END AS effective_due_at FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$1 AND m.subject=$2 LEFT JOIN clock_due ON clock_due.item_id=i.item_id WHERE i.erased_at IS NULL AND m.membership_kind=$3 AND ($4::text IS NULL OR i.queue_id=$4) AND ($6::text IS NULL OR (i.source_id=$6 AND i.subject_kind=$7 AND i.subject_id=$8))) SELECT candidates.* FROM candidates WHERE (($5='mine' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer=$1 AND holder_subject=$2) OR ($5='my_teams' AND state NOT IN ('completed','superseded','cancelled')) OR ($5='team_holdings' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer IS NOT NULL) OR ($5='overdue' AND state NOT IN ('completed','superseded','cancelled') AND effective_due_at<now()) OR ($5='completed_by_me' AND state='completed' AND EXISTS(SELECT 1 FROM casework_history h WHERE h.item_id=candidates.item_id AND h.kind='action_completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND (NOT $9 OR ($10::timestamptz IS NOT NULL AND (effective_due_at>$10 OR effective_due_at IS NULL OR (effective_due_at=$10 AND (first_observed_at>$11 OR (first_observed_at=$11 AND item_id>$12))))) OR ($10::timestamptz IS NULL AND effective_due_at IS NULL AND (first_observed_at>$11 OR (first_observed_at=$11 AND item_id>$12)))) ORDER BY effective_due_at NULLS LAST,first_observed_at,item_id LIMIT $13",
+            "WITH visible_items AS (SELECT i.* FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$1 AND m.subject=$2 WHERE i.erased_at IS NULL AND m.membership_kind=$3 AND ($4::text IS NULL OR i.queue_id=$4) AND ($6::text IS NULL OR (i.source_id=$6 AND i.subject_kind=$7 AND i.subject_id=$8)) AND ($5='completed_by_me' OR i.state NOT IN ('completed','superseded','cancelled'))), clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification_pending')) AS active_due_at FROM casework_clock_occurrences o JOIN visible_items ON visible_items.item_id=o.item_id LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation GROUP BY o.item_id), candidates AS (SELECT visible_items.*,COALESCE(clock_due.active_due_at,visible_items.passive_due_at) AS effective_due_at FROM visible_items LEFT JOIN clock_due ON clock_due.item_id=visible_items.item_id) SELECT candidates.* FROM candidates WHERE (($5='mine' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer=$1 AND holder_subject=$2) OR ($5='my_teams' AND state NOT IN ('completed','superseded','cancelled')) OR ($5='team_holdings' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer IS NOT NULL) OR ($5='overdue' AND state NOT IN ('completed','superseded','cancelled') AND effective_due_at<now()) OR ($5='completed_by_me' AND state='completed' AND EXISTS(SELECT 1 FROM casework_history h WHERE h.item_id=candidates.item_id AND h.kind='action_completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND (NOT $9 OR ($10::timestamptz IS NOT NULL AND (effective_due_at>$10 OR effective_due_at IS NULL OR (effective_due_at=$10 AND (first_observed_at>$11 OR (first_observed_at=$11 AND item_id>$12))))) OR ($10::timestamptz IS NULL AND effective_due_at IS NULL AND (first_observed_at>$11 OR (first_observed_at=$11 AND item_id>$12)))) ORDER BY effective_due_at NULLS LAST,first_observed_at,item_id LIMIT $13",
             &[&actor.principal.issuer,&actor.principal.subject,&match actor.role { CaseworkRole::Staff=>"staff", CaseworkRole::Supervisor=>"supervisor", CaseworkRole::Administrator=>"administrator", CaseworkRole::Requester=>"requester" },&queue,&view,&source_id,&subject_kind,&subject_id,&has_after,&after_due,&after_first_observed_at,&after_id,&limit]
         ).await?;
         let items = rows
@@ -1990,7 +1925,7 @@ impl PostgresStore {
         }
         let client = self.client().await?;
         let rows=client.query(
-            "WITH clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification_pending')) AS active_due_at FROM casework_clock_occurrences o LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.item_id IS NOT NULL GROUP BY o.item_id), candidates AS (SELECT i.*,CASE WHEN clock_due.item_id IS NULL THEN i.passive_due_at ELSE clock_due.active_due_at END AS effective_due_at FROM casework_items i LEFT JOIN clock_due ON clock_due.item_id=i.item_id) SELECT i.holder_issuer,i.holder_subject,i.queue_id,count(*)::bigint,count(*) FILTER(WHERE i.effective_due_at IS NOT NULL AND i.effective_due_at < now())::bigint FROM candidates i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships lead ON lead.team_id=q.team_id AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' WHERE i.erased_at IS NULL AND i.holder_issuer IS NOT NULL AND i.state NOT IN ('completed','superseded','cancelled') GROUP BY i.holder_issuer,i.holder_subject,i.queue_id ORDER BY i.queue_id,i.holder_issuer,i.holder_subject",
+            "WITH held AS (SELECT i.item_id,i.holder_issuer,i.holder_subject,i.queue_id,i.passive_due_at FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships lead ON lead.team_id=q.team_id AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' WHERE i.erased_at IS NULL AND i.holder_issuer IS NOT NULL AND i.state NOT IN ('completed','superseded','cancelled')), clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification_pending')) AS active_due_at FROM casework_clock_occurrences o JOIN held ON held.item_id=o.item_id LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation GROUP BY o.item_id), counted AS (SELECT held.holder_issuer,held.holder_subject,held.queue_id,COALESCE(clock_due.active_due_at,held.passive_due_at) AS effective_due_at FROM held LEFT JOIN clock_due ON clock_due.item_id=held.item_id) SELECT holder_issuer,holder_subject,queue_id,count(*)::bigint,count(*) FILTER(WHERE effective_due_at IS NOT NULL AND effective_due_at<now())::bigint FROM counted GROUP BY holder_issuer,holder_subject,queue_id ORDER BY queue_id,holder_issuer,holder_subject",
             &[&actor.principal.issuer,&actor.principal.subject]
         ).await?;
         rows.into_iter()
@@ -2159,6 +2094,17 @@ impl PostgresStore {
             next_cursor,
             status: PageStatus::Complete,
         })
+    }
+
+    pub async fn erase_expired_cursors(&self) -> Result<usize, StoreError> {
+        let client = self.client().await?;
+        let deleted = client
+            .execute(
+                "WITH due AS (SELECT cursor_id FROM casework_cursors WHERE expires_at<=now() ORDER BY expires_at,cursor_id LIMIT 100 FOR UPDATE SKIP LOCKED) DELETE FROM casework_cursors c USING due WHERE c.cursor_id=due.cursor_id",
+                &[],
+            )
+            .await?;
+        usize::try_from(deleted).map_err(|_| StoreError::Corrupt)
     }
 
     pub async fn erase_expired_source_history_cursors(&self) -> Result<usize, StoreError> {

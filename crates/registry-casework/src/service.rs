@@ -1,15 +1,14 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use registry_casework_core::{
     ActiveSubjectsPage, ActorContext, AttemptState, AttemptStatus, CallerSubjectView,
-    CaseworkAction, CaseworkProject, ClockRuntimeState, DiscoveryCursor, Draft,
-    EphemeralCredential, EventRequest, ExecutePreparedRequest, HistoryEntry, HoldingSummary,
-    InboxPolicy, InboxView, MutationResponse, OccurrenceState, OperationName, Page, PageStatus,
-    PrepareActionRequest, SourceAdapter, SourceAdapterError, SourceBinding, SourceReceipt,
-    SubjectRef, WorkItem, WorkItemPage,
+    CaseworkAction, CaseworkProject, DiscoveryCursor, Draft, EphemeralCredential, EventRequest,
+    ExecutePreparedRequest, HistoryEntry, HoldingSummary, InboxPolicy, InboxView, MutationResponse,
+    OccurrenceState, OperationName, Page, PageStatus, PrepareActionRequest, SourceAdapter,
+    SourceAdapterError, SourceBinding, SourceReceipt, SubjectRef, WorkItem, WorkItemPage,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -435,6 +434,13 @@ impl CaseworkService {
             .await?;
         self.store
             .history_page(actor, source_profile_id, item_id, limit, cursor)
+            .await
+            .map_err(ServiceError::from)
+    }
+
+    pub async fn erase_expired_cursors(&self) -> Result<usize, ServiceError> {
+        self.store
+            .erase_expired_cursors()
             .await
             .map_err(ServiceError::from)
     }
@@ -1126,7 +1132,7 @@ impl CaseworkService {
             Ok(receipt) => {
                 let settled = self
                     .store
-                    .complete_attempt(actor, attempt.attempt_id, &receipt)
+                    .complete_attempt(actor, attempt.attempt_id, execution_token, &receipt)
                     .await?;
                 Ok((settled, Some(receipt)))
             }
@@ -1220,7 +1226,7 @@ impl CaseworkService {
             Ok(receipt) => {
                 let settled = self
                     .store
-                    .complete_attempt(actor, attempt_id, &receipt)
+                    .complete_attempt(actor, attempt_id, execution_token, &receipt)
                     .await?;
                 Ok((settled, Some(receipt)))
             }
@@ -1311,7 +1317,7 @@ impl CaseworkService {
             Ok(receipt) => {
                 let settled = self
                     .store
-                    .complete_attempt(actor, attempt_id, &receipt)
+                    .complete_attempt(actor, attempt_id, execution_token, &receipt)
                     .await?;
                 Ok((settled, Some(receipt)))
             }
@@ -1440,58 +1446,88 @@ impl CaseworkService {
         })
     }
 
+    /// Count the whole supervised caseload in one aggregate. The counts cover
+    /// every held item the supervisor's teams serve, so they are exact however
+    /// large the caseload is and no cursor is issued or consumed. A source that
+    /// cannot answer still yields no counts at all, so an outage stays distinct
+    /// from an empty caseload.
     pub async fn caller_visible_holdings(
         &self,
         actor: &ActorContext,
         source_profile_id: &str,
         token: &str,
-        cursor: Option<&str>,
+        _cursor: Option<&str>,
     ) -> Result<Page<HoldingSummary>, ServiceError> {
         if actor.role != registry_casework_core::CaseworkRole::Supervisor {
             return Err(ServiceError::Forbidden);
         }
-        let page = self
-            .inbox_for_context(
+        if !self
+            .supervised_sources_answer(actor, source_profile_id, token)
+            .await?
+        {
+            return Ok(Page {
+                items: Vec::new(),
+                next_cursor: None,
+                status: PageStatus::SourceUnavailable,
+            });
+        }
+        Ok(Page {
+            items: self.store.holdings(actor).await?,
+            next_cursor: None,
+            status: PageStatus::Complete,
+        })
+    }
+
+    /// Read one supervised subject from every source the caller's teams serve.
+    /// A source that conceals the subject from this caller has answered, so
+    /// only an unreachable source reports false.
+    async fn supervised_sources_answer(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: &str,
+        token: &str,
+    ) -> Result<bool, ServiceError> {
+        let policy = &self.project.inbox;
+        let started = Instant::now();
+        let deadline = Duration::from_millis(policy.page_deadline_milliseconds);
+        let candidates = self
+            .store
+            .inbox_candidates_for_view(
                 actor,
-                source_profile_id,
-                token,
                 InboxView::MyTeams,
-                100,
+                policy.maximum_candidate_scan,
                 None,
                 None,
-                cursor,
-                "holdings",
+                None,
             )
             .await?;
-        let status = page.status;
-        let next_cursor = page.next_cursor;
-        let mut holdings: BTreeMap<(registry_casework_core::IssuerPrincipal, String), (u32, u32)> =
-            BTreeMap::new();
-        let now = chrono::Utc::now();
-        for item in page.items {
-            let overdue = effective_due_at(&item).is_some_and(|due| due < now);
-            if let Some(holder) = item.holder {
-                let counts = holdings.entry((holder, item.queue_id)).or_insert((0, 0));
-                counts.0 += 1;
-                counts.1 += u32::from(overdue);
+        let mut probed = BTreeSet::new();
+        for candidate in candidates.items {
+            let subject = candidate.item.subject;
+            if !probed.insert(subject.source_id.clone()) {
+                continue;
+            }
+            let remaining = deadline.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            let read = tokio::time::timeout(
+                remaining,
+                self.adapter(&subject.source_id)?.read_for_caller(
+                    &subject,
+                    source_profile_id,
+                    EphemeralCredential::new(token),
+                ),
+            )
+            .await;
+            match read {
+                Ok(Ok(_)) | Ok(Err(SourceAdapterError::Concealed | SourceAdapterError::Denied)) => {
+                }
+                Ok(Err(SourceAdapterError::Unavailable)) | Err(_) => return Ok(false),
+                Ok(Err(error)) => return Err(error.into()),
             }
         }
-        let items = holdings
-            .into_iter()
-            .map(
-                |((principal, queue_id), (active_items, overdue_items))| HoldingSummary {
-                    principal,
-                    queue_id,
-                    active_items,
-                    overdue_items,
-                },
-            )
-            .collect();
-        Ok(Page {
-            items,
-            next_cursor,
-            status,
-        })
+        Ok(true)
     }
 
     pub(crate) fn adapter(&self, source_id: &str) -> Result<&Arc<dyn SourceAdapter>, ServiceError> {
@@ -1650,22 +1686,6 @@ fn source_cursor_context(
         ordering: "effective-due-v1",
     })
     .map_err(|_| ServiceError::Configuration)
-}
-
-fn effective_due_at(item: &WorkItem) -> Option<chrono::DateTime<chrono::Utc>> {
-    if item.clock_occurrences.is_empty() {
-        return item.passive_due_at;
-    }
-    item.clock_occurrences
-        .iter()
-        .filter(|clock| {
-            matches!(
-                clock.state,
-                ClockRuntimeState::Running | ClockRuntimeState::VerificationPending
-            )
-        })
-        .filter_map(|clock| clock.due_at)
-        .min()
 }
 
 fn routing_policy_digest(
@@ -1855,63 +1875,5 @@ mod tests {
                 "ordering": "effective-due-v1"
             })
         );
-    }
-
-    #[test]
-    fn effective_due_uses_passive_only_without_a_real_clock() {
-        let passive = chrono::Utc::now();
-        let mut item = WorkItem {
-            item_id: Uuid::new_v4(),
-            subject: SubjectRef {
-                source_id: "source".to_owned(),
-                kind: "request".to_owned(),
-                id: "one".to_owned(),
-            },
-            occurrence_kind: registry_casework_core::OccurrenceKind::Review,
-            stage: None,
-            binding_reference: "binding".to_owned(),
-            binding: SourceBinding {
-                source_revision: "1".to_owned(),
-                version: "1".to_owned(),
-                integrity: None,
-                generation: "1".to_owned(),
-            },
-            state: OccurrenceState::Open,
-            queue_id: "queue".to_owned(),
-            holder: None,
-            held_since: None,
-            assignment: None,
-            revision: 1,
-            first_observed_at: passive,
-            passive_due_at: Some(passive),
-            updated_at: passive,
-            hosted: None,
-            routing: None,
-            clock_occurrences: Vec::new(),
-            actions: Vec::new(),
-            routing_copy: None,
-            live_attempt: None,
-        };
-        assert_eq!(effective_due_at(&item), Some(passive));
-        item.clock_occurrences
-            .push(registry_casework_core::ClockOccurrenceView {
-                clock_occurrence_id: Uuid::new_v4(),
-                subject: item.subject.clone(),
-                clock_id: "clock".to_owned(),
-                state: ClockRuntimeState::Paused,
-                policy_digest: "sha256:policy".to_owned(),
-                calculation_generation: 1,
-                recompute_generation: 0,
-                anchor_at: Some(passive),
-                started_at: Some(passive),
-                due_at: Some(passive),
-                at_risk_at: None,
-                completed_at: None,
-                next_effect: None,
-                upcoming_effects: Vec::new(),
-            });
-        assert_eq!(effective_due_at(&item), None);
-        item.clock_occurrences[0].state = ClockRuntimeState::VerificationPending;
-        assert_eq!(effective_due_at(&item), Some(passive));
     }
 }

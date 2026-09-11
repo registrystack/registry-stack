@@ -750,3 +750,92 @@ async fn response_json(response: axum::response::Response) -> Value {
     )
     .expect("problem JSON")
 }
+
+/// A schema of its own, so this test never races the erasure test that resets
+/// the public schema of the same database.
+async fn cursor_retention_fixture() -> (CaseworkService, tokio_postgres::Client) {
+    let base = env::var(DATABASE_ENV).expect("dedicated retention database URL");
+    let schema = format!("cursors_{}", Uuid::new_v4().simple());
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    let (admin, connection) = tokio_postgres::connect(&base, NoTls)
+        .await
+        .expect("connect dedicated retention database");
+    tokio::spawn(async move { connection.await.expect("admin connection") });
+    admin
+        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .expect("create isolated cursor schema");
+    let secret_name =
+        format!("CASEWORK_CURSOR_SCHEMA_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    env::set_var(&secret_name, &scoped);
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("environment resolver");
+    let config = DatabaseConfig {
+        runtime_url_ref: format!("secret:env/{secret_name}"),
+        migration_url_ref: format!("secret:env/{secret_name}"),
+        trusted_root_certificate_ref: None,
+        test_only_plaintext: true,
+    };
+    PostgresStore::connect_migration(&config, &secrets)
+        .expect("migration store")
+        .migrate()
+        .await
+        .expect("migrations");
+    let store = PostgresStore::connect_runtime(&config, &secrets).expect("runtime store");
+    let service = CaseworkService::new(
+        store,
+        project(),
+        [Arc::new(SourceFixture {
+            reads: Arc::new(AtomicUsize::new(0)),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("service");
+    let (database, connection) = tokio_postgres::connect(&scoped, NoTls)
+        .await
+        .expect("connect isolated cursor schema");
+    tokio::spawn(async move { connection.await.expect("schema connection") });
+    (service, database)
+}
+
+async fn insert_inbox_cursor(database: &tokio_postgres::Client, cursor_id: Uuid, expires_in: &str) {
+    database
+        .execute(
+            &format!("INSERT INTO casework_cursors(cursor_id,issuer,subject,casework_profile_id,source_profile_id,context,last_passive_due_at,last_item_id,expires_at) VALUES($1,'https://issuer.example','staff','staff','reader','mine',NULL,NULL,now()+interval '{expires_in}')"),
+            &[&cursor_id],
+        )
+        .await
+        .expect("insert inbox cursor");
+}
+
+#[tokio::test]
+async fn the_inbox_cursor_sweep_erases_only_expired_cursors() {
+    let (service, database) = cursor_retention_fixture().await;
+    let expired = Uuid::new_v4();
+    let live = Uuid::new_v4();
+    insert_inbox_cursor(&database, expired, "-1 minute").await;
+    insert_inbox_cursor(&database, live, "1 hour").await;
+
+    assert_eq!(
+        service
+            .erase_expired_cursors()
+            .await
+            .expect("bounded inbox cursor cleanup"),
+        1
+    );
+    let remaining: Vec<Uuid> = database
+        .query("SELECT cursor_id FROM casework_cursors", &[])
+        .await
+        .expect("remaining cursors")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(remaining, vec![live]);
+    assert_eq!(
+        service
+            .erase_expired_cursors()
+            .await
+            .expect("a second sweep has nothing to erase"),
+        0
+    );
+}

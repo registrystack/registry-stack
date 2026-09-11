@@ -9,10 +9,11 @@ use chrono::{DateTime, TimeDelta, Utc};
 use registry_casework::{CaseworkService, DatabaseConfig, PostgresStore};
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, BootstrapDirectoryRequest, CallerSubjectView,
-    CaseworkIdentity, CaseworkProject, CaseworkRole, DiscoveryCursor, EphemeralCredential,
-    EventRequest, ExecutePreparedRequest, InboxPolicy, InboxView, IssuerPrincipal,
-    PrepareActionRequest, PreparedSourceAttempt, QueuePolicy, SourceAdapter, SourceAdapterError,
-    SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy, SubjectRef, TransitionHint,
+    CaseworkIdentity, CaseworkProject, CaseworkRole, ClockRuntimeState, DiscoveryCursor,
+    EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy, InboxView,
+    IssuerPrincipal, PageStatus, PrepareActionRequest, PreparedSourceAttempt, QueuePolicy,
+    SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt,
+    SourceRequestPolicy, SubjectRef, TransitionHint,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use tokio_postgres::NoTls;
@@ -394,7 +395,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         )
         .await
         .expect("first ordered page");
-    assert_eq!(item_subjects(&first), ["multi-real", "real"]);
+    assert_eq!(item_subjects(&first), ["paused", "facts-missing"]);
     assert_eq!(first.served_queues, ["default", "secondary"]);
     let second = service
         .inbox_for_view(
@@ -409,7 +410,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         )
         .await
         .expect("second ordered page");
-    assert_eq!(item_subjects(&second), ["passive", "paused"]);
+    assert_eq!(item_subjects(&second), ["multi-real", "real"]);
     let third = service
         .inbox_for_view(
             &staff,
@@ -423,7 +424,7 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         )
         .await
         .expect("third ordered page");
-    assert_eq!(item_subjects(&third), ["facts-missing", "no-due"]);
+    assert_eq!(item_subjects(&third), ["passive", "no-due"]);
     assert!(third.next_cursor.is_none());
 
     let overdue = service
@@ -439,7 +440,10 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         )
         .await
         .expect("effective overdue view");
-    assert_eq!(item_subjects(&overdue), ["multi-real", "real", "passive"]);
+    assert_eq!(
+        item_subjects(&overdue),
+        ["paused", "facts-missing", "multi-real", "real", "passive"]
+    );
 
     let selected = service
         .inbox_for_view(
@@ -459,18 +463,34 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         .await
         .expect("exact subject selector");
     assert_eq!(item_subjects(&selected), ["paused"]);
+    assert_eq!(
+        selected.items[0].passive_due_at,
+        Some(now - TimeDelta::days(9)),
+        "a paused clock leaves the passive due date as the due date the inbox shows"
+    );
+
+    let (paused_item, _) = service
+        .caller_item(&staff, Uuid::from_u128(4), "reader", "token")
+        .await
+        .expect("the paused item is visible on its own");
+    assert_eq!(paused_item.passive_due_at, Some(now - TimeDelta::days(9)));
+    assert_eq!(paused_item.clock_occurrences.len(), 1);
+    assert_eq!(
+        paused_item.clock_occurrences[0].state,
+        ClockRuntimeState::Paused
+    );
 
     let stored_holdings = store.holdings(&supervisor).await.expect("stored holdings");
     assert_eq!(stored_holdings.len(), 1);
     assert_eq!(stored_holdings[0].active_items, 6);
-    assert_eq!(stored_holdings[0].overdue_items, 3);
+    assert_eq!(stored_holdings[0].overdue_items, 5);
     let visible_holdings = service
         .caller_visible_holdings(&supervisor, "reader", "token", None)
         .await
         .expect("caller-visible holdings");
     assert_eq!(visible_holdings.items.len(), 1);
     assert_eq!(visible_holdings.items[0].active_items, 6);
-    assert_eq!(visible_holdings.items[0].overdue_items, 3);
+    assert_eq!(visible_holdings.items[0].overdue_items, 5);
 
     assert_eq!(
         store
@@ -491,4 +511,65 @@ async fn effective_due_selector_cursor_holdings_and_served_queues_share_current_
         .await
         .expect("outsider queue scope")
         .is_empty());
+}
+
+#[tokio::test]
+async fn holdings_count_every_held_item_beyond_a_single_inbox_page() {
+    let (store, database, service) = fixture().await;
+    let staff = actor("staff", "staff", CaseworkRole::Staff);
+    let supervisor = actor("supervisor", "supervisor", CaseworkRole::Supervisor);
+    let administrator = actor(
+        "administrator",
+        "administrator",
+        CaseworkRole::Administrator,
+    );
+    store
+        .bootstrap_directory(
+            &administrator,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team".to_owned(),
+                staff: vec![staff.principal.clone()],
+                supervisors: vec![supervisor.principal.clone()],
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap",
+        )
+        .await
+        .expect("bootstrap directory");
+
+    let now = Utc::now();
+    let held = 150_u128;
+    let overdue = 70_u128;
+    for index in 0..held {
+        let passive_due_at = if index < overdue {
+            now - TimeDelta::days(1)
+        } else {
+            now + TimeDelta::days(1)
+        };
+        insert_item(
+            &database,
+            Uuid::from_u128(1_000 + index),
+            &format!("held-{index}"),
+            now - TimeDelta::minutes(i64::try_from(index).expect("index fits")),
+            Some(passive_due_at),
+            &staff.principal,
+        )
+        .await;
+    }
+
+    let stored = store.holdings(&supervisor).await.expect("stored holdings");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].active_items, 150);
+    assert_eq!(stored[0].overdue_items, 70);
+
+    let visible = service
+        .caller_visible_holdings(&supervisor, "reader", "token", None)
+        .await
+        .expect("caller-visible holdings");
+    assert_eq!(visible.items.len(), 1);
+    assert_eq!(visible.items[0].active_items, 150);
+    assert_eq!(visible.items[0].overdue_items, 70);
+    assert!(visible.next_cursor.is_none());
+    assert_eq!(visible.status, PageStatus::Complete);
 }

@@ -79,7 +79,6 @@ END $$;
 ALTER TABLE casework_items ALTER COLUMN occurrence_key SET NOT NULL;
 ALTER TABLE casework_items
     DROP CONSTRAINT IF EXISTS casework_items_source_id_subject_kind_subject_id_fkey;
-DROP INDEX IF EXISTS casework_items_occurrence_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS casework_items_occurrence_idx
     ON casework_items(source_id, subject_kind, subject_id, occurrence_key);
 CREATE INDEX IF NOT EXISTS casework_items_queue_active_idx
