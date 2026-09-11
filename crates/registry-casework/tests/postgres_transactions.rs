@@ -140,8 +140,7 @@ async fn transactional_checkpoint_invariants_hold_in_postgresql() {
     let store = PostgresStore::connect_migration(&config, &secrets).expect("migration pool");
     store.migrate().await.expect("migrate");
     let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("runtime pool");
-    synchronization_claims_never_attempted_subjects_before_expired_failures(&client, &runtime)
-        .await;
+    synchronization_claims_reserve_fresh_and_retry_capacity(&client, &runtime).await;
     item_identity_does_not_require_a_subject_ledger_parent(&client, &runtime).await;
 
     let admin = actor("admin", CaseworkRole::Administrator, "administrator");
@@ -692,31 +691,77 @@ async fn transactional_checkpoint_invariants_hold_in_postgresql() {
     );
 }
 
-async fn synchronization_claims_never_attempted_subjects_before_expired_failures(
+async fn synchronization_claims_reserve_fresh_and_retry_capacity(
     client: &tokio_postgres::Client,
     store: &PostgresStore,
 ) {
     client
         .batch_execute(
-            "INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT 'fair-global','request',format('a-%s',lpad(value::text,3,'0')),'generation',1,0,true,true,now()-interval '1 second' FROM generate_series(0,99) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) VALUES('fair-global','request','y-oldest-retry','generation',1,0,true,true,now()-interval '1 hour'),('fair-global','request','z-never-attempted','generation',1,0,true,true,NULL),('fair-global','request','zz-live-lease','generation',1,0,true,true,now()+interval '1 hour')",
+            "INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT 'fair-global','request',format('fresh-%s',lpad(value::text,3,'0')),'generation',1,0,true,true,NULL FROM generate_series(0,99) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT 'fair-global','request',format('retry-%s',lpad(value::text,3,'0')),'generation',1,0,true,true,now()-interval '2 hours'+value*interval '1 second' FROM generate_series(0,99) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT format('plan-%s',value%10),'request',format('fresh-%s',lpad(value::text,5,'0')),'generation',1,0,true,true,NULL FROM generate_series(0,9999) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT format('plan-%s',value%10),'request',format('retry-%s',lpad(value::text,5,'0')),'generation',1,0,true,true,now()-interval '2 hours'+value*interval '1 millisecond' FROM generate_series(0,9999) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) VALUES('fair-global','request','zz-live-lease','generation',1,0,true,true,now()+interval '1 hour'); ANALYZE casework_subjects",
         )
         .await
-        .expect("seed globally ordered expired failures and untouched subject");
+        .expect("seed balanced claim classes and realistic planner noise");
+
+    assert_sync_claim_plan(
+        client,
+        "EXPLAIN SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE erased_at IS NULL AND sync_pending=true AND sync_lease_until<now() ORDER BY sync_lease_until,source_id,subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT 100",
+        &["casework_subjects_sync_claim_idx"],
+    )
+    .await;
+    assert_sync_claim_plan(
+        client,
+        "EXPLAIN SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE erased_at IS NULL AND sync_pending=true AND sync_lease_until IS NULL ORDER BY source_id,subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT 100",
+        &[
+            "casework_subjects_not_erased_sync_idx",
+            "casework_subjects_sync_claim_idx",
+        ],
+    )
+    .await;
+    assert_sync_claim_plan(
+        client,
+        "EXPLAIN SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE source_id='plan-0' AND binding_generation='generation' AND erased_at IS NULL AND sync_pending=true AND sync_lease_until<now() ORDER BY sync_lease_until,subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT 100",
+        &["casework_subjects_source_sync_claim_idx"],
+    )
+    .await;
+    assert_sync_claim_plan(
+        client,
+        "EXPLAIN SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE source_id='plan-0' AND binding_generation='generation' AND erased_at IS NULL AND sync_pending=true AND sync_lease_until IS NULL ORDER BY subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT 100",
+        &[
+            "casework_subjects_not_erased_sync_idx",
+            "casework_subjects_source_sync_claim_idx",
+        ],
+    )
+    .await;
+    client
+        .execute(
+            "DELETE FROM casework_subjects WHERE source_id LIKE 'plan-%'",
+            &[],
+        )
+        .await
+        .expect("remove planner backlog before fairness claims");
+
     let global = store
         .claim_sync_batch(100, 30)
         .await
         .expect("claim fair global synchronization batch");
     assert_eq!(global.len(), 100);
-    assert!(
+    assert_eq!(
         global
             .iter()
-            .any(|subject| subject.id == "z-never-attempted"),
-        "an expired lexical prefix must not starve untouched global work"
+            .filter(|subject| subject.id.starts_with("fresh-"))
+            .count(),
+        50,
+        "sustained retries must retain fresh global capacity"
     );
-    assert!(
-        global.iter().any(|subject| subject.id == "y-oldest-retry"),
-        "the oldest expired global attempt must receive a fair retry"
+    assert_eq!(
+        global
+            .iter()
+            .filter(|subject| subject.id.starts_with("retry-"))
+            .count(),
+        50,
+        "sustained fresh arrivals must retain global retry capacity"
     );
+    assert!(global.iter().any(|subject| subject.id == "retry-000"));
     assert!(!global.iter().any(|subject| subject.id == "zz-live-lease"));
     client
         .execute(
@@ -728,33 +773,111 @@ async fn synchronization_claims_never_attempted_subjects_before_expired_failures
 
     client
         .batch_execute(
-            "INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT 'fair-source','request',format('a-%s',lpad(value::text,3,'0')),'generation',1,0,true,true,now()-interval '1 second' FROM generate_series(0,99) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) VALUES('fair-source','request','y-oldest-retry','generation',1,0,true,true,now()-interval '1 hour'),('fair-source','request','z-never-attempted','generation',1,0,true,true,NULL),('fair-source','request','zz-live-lease','generation',1,0,true,true,now()+interval '1 hour')",
+            "INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT 'fair-source','request',format('fresh-%s',lpad(value::text,3,'0')),'generation',1,0,true,true,NULL FROM generate_series(0,99) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT 'fair-source','request',format('retry-%s',lpad(value::text,3,'0')),'generation',1,0,true,true,now()-interval '2 hours'+value*interval '1 second' FROM generate_series(0,99) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) VALUES('fair-source','request','zz-live-lease','generation',1,0,true,true,now()+interval '1 hour')",
         )
         .await
-        .expect("seed source-scoped expired failures and untouched subject");
+        .expect("seed isolated source claim classes");
     let source = store
         .claim_source_sync_batch("fair-source", "generation", 100, 30)
         .await
         .expect("claim fair source synchronization batch");
     assert_eq!(source.len(), 100);
-    assert!(
+    assert_eq!(
         source
             .iter()
-            .any(|subject| subject.id == "z-never-attempted"),
-        "an expired lexical prefix must not starve untouched source work"
+            .filter(|subject| subject.id.starts_with("fresh-"))
+            .count(),
+        50,
+        "sustained retries must retain fresh source capacity"
     );
-    assert!(
-        source.iter().any(|subject| subject.id == "y-oldest-retry"),
-        "the oldest expired source attempt must receive a fair retry"
+    assert_eq!(
+        source
+            .iter()
+            .filter(|subject| subject.id.starts_with("retry-"))
+            .count(),
+        50,
+        "sustained fresh arrivals must retain source retry capacity"
     );
+    assert!(source.iter().any(|subject| subject.id == "retry-000"));
     assert!(!source.iter().any(|subject| subject.id == "zz-live-lease"));
     client
+        .batch_execute("DELETE FROM casework_subjects WHERE source_id='fair-source'; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) VALUES('small-global','request','fresh','generation',1,0,true,true,NULL),('small-global','request','retry','generation',1,0,true,true,now()-interval '1 hour'),('small-global','request','live','generation',1,0,true,true,now()+interval '1 hour')")
+        .await
+        .expect("replace large fixtures with small global batch");
+    assert_eq!(
+        store
+            .claim_sync_batch(1, 30)
+            .await
+            .expect("claim one global retry")[0]
+            .id,
+        "retry"
+    );
+    assert_eq!(
+        store
+            .claim_sync_batch(1, 30)
+            .await
+            .expect("fill the next global batch from fresh work")[0]
+            .id,
+        "fresh"
+    );
+    assert!(store.claim_sync_batch(0, 30).await.unwrap().is_empty());
+    assert!(matches!(
+        store.claim_sync_batch(-1, 30).await,
+        Err(StoreError::Invalid)
+    ));
+    client
+        .batch_execute("DELETE FROM casework_subjects WHERE source_id='small-global'; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT 'sparse-source','request',format('retry-%s',value),'generation',1,0,true,true,now()-interval '1 hour' FROM generate_series(0,2) AS value")
+        .await
+        .expect("seed sparse source retry class");
+    assert_eq!(
+        store
+            .claim_source_sync_batch("sparse-source", "generation", 5, 30)
+            .await
+            .expect("fill source batch from available retries")
+            .len(),
+        3
+    );
+    assert!(store
+        .claim_source_sync_batch("sparse-source", "generation", 0, 30)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(matches!(
+        store
+            .claim_source_sync_batch("sparse-source", "generation", -1, 30)
+            .await,
+        Err(StoreError::Invalid)
+    ));
+    client
         .execute(
-            "DELETE FROM casework_subjects WHERE source_id='fair-source'",
+            "DELETE FROM casework_subjects WHERE source_id='sparse-source'",
             &[],
         )
         .await
-        .expect("remove source fairness fixture");
+        .expect("remove sparse source fixture");
+}
+
+async fn assert_sync_claim_plan(
+    client: &tokio_postgres::Client,
+    query: &str,
+    expected_indexes: &[&str],
+) {
+    let plan = client
+        .query(query, &[])
+        .await
+        .expect("explain bounded sync claim stream")
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        expected_indexes.iter().any(|index| plan.contains(index)),
+        "expected one of {expected_indexes:?} in plan:\n{plan}"
+    );
+    assert!(
+        !plan.contains("Sort"),
+        "bounded sync claim stream must not sort the pending queue:\n{plan}"
+    );
 }
 
 async fn item_identity_does_not_require_a_subject_ledger_parent(
@@ -849,7 +972,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=12).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=13).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -862,6 +985,44 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
         occurrence_index(&client, &schema).await,
         index,
         "the second migration leaves the occurrence identity index in place"
+    );
+}
+
+#[tokio::test]
+async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
+    let (store, client, _schema) = isolated_schema("sync_claim_indexes").await;
+    store.migrate().await.expect("establish current schema");
+    client
+        .batch_execute(
+            "DROP INDEX casework_subjects_sync_claim_idx; \
+             DROP INDEX casework_subjects_source_sync_claim_idx; \
+             DELETE FROM casework_schema_migrations WHERE version=13;",
+        )
+        .await
+        .expect("simulate a database at migration 12");
+
+    store.migrate().await.expect("apply sync claim indexes");
+
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=13).collect::<Vec<_>>()
+    );
+    let indexes: Vec<String> = client
+        .query(
+            "SELECT indexrelid::regclass::text FROM pg_index WHERE indexrelid IN ('casework_subjects_sync_claim_idx'::regclass,'casework_subjects_source_sync_claim_idx'::regclass) ORDER BY indexrelid::regclass::text",
+            &[],
+        )
+        .await
+        .expect("read upgraded sync claim indexes")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(
+        indexes,
+        [
+            "casework_subjects_source_sync_claim_idx",
+            "casework_subjects_sync_claim_idx"
+        ]
     );
 }
 
