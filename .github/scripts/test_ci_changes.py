@@ -1694,6 +1694,19 @@ on:
             with self.subTest(source=source):
                 self.assertTrue(classify(self.workspace, (source,))["docs"])
 
+    def test_casework_command_changes_select_docs_and_product_checks(self) -> None:
+        for path in (
+            "crates/registry-casework/src/runtime.rs",
+            "crates/registry-caseworkctl/src/lib.rs",
+            "crates/registry-caseworkctl/src/main.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["casework_postgres"])
+                selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
+                self.assertIn("casework", selected)
+
     def test_docs_rebuild_from_generator_inputs_without_rendered_changes(self) -> None:
         for path in (
             "crates/registry-cli-docs/Cargo.toml",

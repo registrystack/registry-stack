@@ -271,6 +271,11 @@ CLI_REFERENCE_INPUTS = (
     ("crates/registry-relayctl/src/**", "crates/registry-relayctl/src/lib.rs"),
     ("crates/registry-breg/src/cli.rs", "crates/registry-breg/src/cli.rs"),
     ("crates/registry-bregctl/src/**", "crates/registry-bregctl/src/lib.rs"),
+    (
+        "crates/registry-casework/src/runtime.rs",
+        "crates/registry-casework/src/runtime.rs",
+    ),
+    ("crates/registry-caseworkctl/src/**", "crates/registry-caseworkctl/src/lib.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
