@@ -72,6 +72,9 @@ impl SourceAdapter for VisibleSource {
         _source_profile_id: &str,
         _credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
+        if subject.id.starts_with("concealed-") {
+            return Err(SourceAdapterError::Concealed);
+        }
         Ok(CallerSubjectView {
             display_reference: match subject.id.as_str() {
                 "reference-concealed" => None,
@@ -134,7 +137,7 @@ fn binding() -> SourceBinding {
     }
 }
 
-fn project() -> CaseworkProject {
+fn project_with_inbox(inbox: InboxPolicy) -> CaseworkProject {
     CaseworkProject {
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
@@ -176,17 +179,23 @@ fn project() -> CaseworkProject {
         hosted_kinds: Vec::new(),
         calendars: Vec::new(),
         clocks: Vec::new(),
-        inbox: InboxPolicy {
-            default_page_size: 2,
-            maximum_candidate_scan: 100,
-            maximum_source_reads: 100,
-            maximum_concurrent_source_reads: 1,
-            page_deadline_milliseconds: 5_000,
-        },
+        inbox,
     }
 }
 
-async fn fixture() -> (PostgresStore, tokio_postgres::Client, CaseworkService) {
+fn project() -> CaseworkProject {
+    project_with_inbox(InboxPolicy {
+        default_page_size: 2,
+        maximum_candidate_scan: 100,
+        maximum_source_reads: 100,
+        maximum_concurrent_source_reads: 1,
+        page_deadline_milliseconds: 5_000,
+    })
+}
+
+async fn fixture_with_project(
+    project: CaseworkProject,
+) -> (PostgresStore, tokio_postgres::Client, CaseworkService) {
     let base = env::var(DATABASE_ENV).expect("dedicated inbox test database URL");
     let schema = format!("inbox_{}", Uuid::new_v4().simple());
     let separator = if base.contains('?') { '&' } else { '?' };
@@ -220,11 +229,15 @@ async fn fixture() -> (PostgresStore, tokio_postgres::Client, CaseworkService) {
     tokio::spawn(async move { connection.await.expect("inbox schema connection") });
     let service = CaseworkService::new(
         store.clone(),
-        project(),
+        project,
         [Arc::new(VisibleSource) as Arc<dyn SourceAdapter>],
     )
     .expect("inbox service");
     (store, database, service)
+}
+
+async fn fixture() -> (PostgresStore, tokio_postgres::Client, CaseworkService) {
+    fixture_with_project(project()).await
 }
 
 async fn insert_item(
@@ -268,6 +281,91 @@ fn item_subjects(page: &registry_casework_core::WorkItemPage) -> Vec<&str> {
         .iter()
         .map(|item| item.subject.id.as_str())
         .collect()
+}
+
+#[tokio::test]
+async fn configured_scan_budget_reaches_visible_work_beyond_one_hundred_candidates() {
+    let inbox = InboxPolicy {
+        default_page_size: 1,
+        maximum_candidate_scan: 150,
+        maximum_source_reads: 150,
+        maximum_concurrent_source_reads: 1,
+        page_deadline_milliseconds: 5_000,
+    };
+    let (store, database, service) = fixture_with_project(project_with_inbox(inbox)).await;
+    let staff = actor("staff", "staff", CaseworkRole::Staff);
+    let administrator = actor(
+        "administrator",
+        "administrator",
+        CaseworkRole::Administrator,
+    );
+    store
+        .bootstrap_directory(
+            &administrator,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team".to_owned(),
+                staff: vec![staff.principal.clone()],
+                supervisors: Vec::new(),
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap-scan-budget",
+        )
+        .await
+        .expect("bootstrap directory");
+    store
+        .set_source_status(SOURCE_ID, GENERATION, true, false)
+        .await
+        .expect("source is synchronized");
+
+    let now = Utc::now();
+    for index in 0..101_u128 {
+        insert_item(
+            &database,
+            Uuid::from_u128(20_000 + index),
+            &format!("concealed-{index:03}"),
+            now + TimeDelta::seconds(i64::try_from(index).expect("index fits")),
+            None,
+            &staff.principal,
+        )
+        .await;
+    }
+    insert_item(
+        &database,
+        Uuid::from_u128(21_000),
+        "visible-after-concealed",
+        now + TimeDelta::seconds(101),
+        None,
+        &staff.principal,
+    )
+    .await;
+
+    let page = service
+        .inbox_for_view_query(
+            &staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            1,
+            None,
+            None,
+            None,
+            InboxSort::Age,
+            None,
+        )
+        .await
+        .expect("scan configured candidate budget in one request");
+
+    assert_eq!(item_subjects(&page), ["visible-after-concealed"]);
+    assert_eq!(page.status, PageStatus::Complete);
+    assert!(page.next_cursor.is_none());
+
+    let capped = store
+        .inbox_candidates(&staff, 150, None, None)
+        .await
+        .expect("public candidate page remains bounded");
+    assert_eq!(capped.items.len(), 100);
+    assert!(capped.next_cursor.is_some());
 }
 
 async fn set_reference_and_type(

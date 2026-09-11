@@ -1999,6 +1999,7 @@ impl PostgresStore {
         after: Option<(Option<DateTime<Utc>>, Uuid)>,
         queue: Option<&str>,
     ) -> Result<Page<WorkItem>, StoreError> {
+        let limit = limit.min(100);
         let after = match after {
             Some((effective_due_at, item_id)) => {
                 let item = self.item(item_id).await?;
@@ -2046,7 +2047,7 @@ impl PostgresStore {
         reference: Option<&str>,
         sort: InboxSort,
     ) -> Result<Page<InboxCandidate>, StoreError> {
-        let limit = i64::try_from(limit.min(100)).map_err(|_| StoreError::Invalid)?;
+        let limit = i64::try_from(limit).map_err(|_| StoreError::Invalid)?;
         let (after_due, after_first_observed_at, after_subject_kind, after_id, has_after) = after
             .map_or((None, None, None, None, false), |position| {
                 (
