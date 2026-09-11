@@ -1946,7 +1946,8 @@ struct RawOidcVerifierConfig {
     /// The one admitted access-token `typ` semantics. Configuring the
     /// RFC 9068 access-token media type as `at+jwt` or
     /// `application/at+jwt` admits both spellings of that one type; any
-    /// other value (for example `JWT`) admits only that exact value.
+    /// other value (for example `JWT`) admits only that token type, matched
+    /// case-insensitively.
     access_token_type: String,
     scope_claim: String,
     scope_separator: char,
