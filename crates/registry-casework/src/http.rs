@@ -1270,7 +1270,10 @@ impl From<StoreError> for HttpError {
             StoreError::AttemptPending => Self::RecoveryPending(None),
             StoreError::Invalid => Self::Invalid,
             StoreError::Unavailable | StoreError::Postgres(_) => Self::ServiceUnavailable,
-            StoreError::Configuration | StoreError::Corrupt | StoreError::Json(_) => Self::Internal,
+            StoreError::Configuration
+            | StoreError::SecretConfiguration(_)
+            | StoreError::Corrupt
+            | StoreError::Json(_) => Self::Internal,
         }
     }
 }

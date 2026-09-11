@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Name the failing secret reference and the rule it broke when the database
+  connection, the audit journal, or a static OIDC JWKS document cannot resolve
+  its secret at startup, and name the source whose binding was refused. The
+  refusal never carries the resolved secret value.
 - Add an explicit source-owned display reference for exact, case-sensitive
   inbox lookup, current-caller disclosure rechecks, and `due`, `age`, or `type`
   inbox ordering with cursor context bound to the selected lookup and sort.
