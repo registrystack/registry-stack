@@ -701,6 +701,7 @@
       "additionalProperties": false,
       "properties": {
         "accessTokenType": {
+          "description": "The one admitted access-token `typ` semantics. Configuring the\nRFC 9068 access-token media type as `at+jwt` or\n`application/at+jwt` admits both spellings of that one type; any\nother value (for example `JWT`) admits only that exact value.",
           "maxLength": 2048,
           "minLength": 1,
           "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
