@@ -1,12 +1,16 @@
 ---
-import tables from '../data/generated/breg-api.json';
+import bregTables from '../data/generated/breg-api.json';
+import caseworkTables from '../data/generated/casework-api.json';
 
 interface Props {
   id: string;
+  source?: 'breg-api' | 'casework-api';
 }
 
-const table = tables.find((entry) => entry.id === Astro.props.id);
-if (!table) throw new Error(`Unknown API reference table: ${Astro.props.id}`);
+const sources = { 'breg-api': bregTables, 'casework-api': caseworkTables };
+const source = Astro.props.source ?? 'breg-api';
+const table = sources[source].find((entry) => entry.id === Astro.props.id);
+if (!table) throw new Error(`Unknown ${source} reference table: ${Astro.props.id}`);
 
 const segments = (text: string) =>
   text.split('`').map((part, index) => ({ code: index % 2 === 1, text: part }));

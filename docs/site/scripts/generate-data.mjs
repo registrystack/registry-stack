@@ -29,6 +29,7 @@ const required = {
   'openapi-sources': ['id', 'name', 'owner', 'source', 'artifact', 'status', 'reference_path'],
   'breg-events': ['id', 'title', 'columns', 'rows'],
   'breg-api': ['id', 'title', 'columns', 'rows'],
+  'casework-api': ['id', 'title', 'columns', 'rows'],
 };
 
 const generated = [];

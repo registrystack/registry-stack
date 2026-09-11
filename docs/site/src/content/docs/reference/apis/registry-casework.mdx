@@ -12,6 +12,8 @@ standards_referenced:
   - openapi
 ---
 
+import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
+
 [Open the Registry Casework API operations](../casework/)
 
 The generated reference is the authoritative route and schema inventory for the
@@ -36,6 +38,16 @@ records, and expired clock-recompute previews.
 {/* Evidence: crates/registry-casework/src/{http,problem}.rs;
     crates/registry-casework-core/src/http.rs;
     products/casework/generated/registry-casework.openapi.json. */}
+
+## Problem codes
+
+Every Casework problem response carries one `code` from this closed catalogue,
+always answered with the HTTP status listed beside it.
+
+<ApiReferenceTable id="problem-codes" source="casework-api" />
+
+{/* Evidence: crates/registry-casework/tests/problem_code_catalogue.rs;
+    docs/site/src/data/casework-api.yaml. */}
 
 ## Profiles and disclosure
 
