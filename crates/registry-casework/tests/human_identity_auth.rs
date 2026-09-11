@@ -179,6 +179,69 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
     idp.stop().await;
 }
 
+#[tokio::test]
+async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
+    let idp = MockIdp::start().await;
+
+    let mut overlapping = project();
+    let mut alternate = profile("staff-by-employee", "casework:staff", CaseworkRole::Staff);
+    alternate.principal_claim = "employee_id".to_owned();
+    overlapping.access_profiles.push(alternate);
+    overlapping.hosted_kinds[0]
+        .deciding_profiles
+        .push("staff-by-employee".to_owned());
+    assert_eq!(
+        overlapping.check(),
+        Err(registry_casework_core::ConfigError::AccessProfileScopes)
+    );
+
+    let mut separated = project();
+    let mut alternate = profile(
+        "staff-by-employee",
+        "casework:staff-by-employee",
+        CaseworkRole::Staff,
+    );
+    alternate.principal_claim = "employee_id".to_owned();
+    separated.access_profiles.push(alternate);
+    separated.hosted_kinds[0]
+        .deciding_profiles
+        .push("staff-by-employee".to_owned());
+    assert_eq!(separated.check(), Ok(()));
+    let authenticator = authenticator_for_project(&idp, &separated);
+
+    let original_scope = idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": QUEUE_MEMBER_PRINCIPAL,
+        "employee_id": "employee-123",
+        "scope": "casework:staff",
+        "registry_actor_kind": "human"
+    }));
+    assert_eq!(
+        authenticator
+            .authenticate(&original_scope, "staff-by-employee")
+            .await
+            .expect_err("one valid claim cannot replace the alternate profile's scope"),
+        AuthenticationError::Profile
+    );
+
+    let alternate_scope = idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": QUEUE_MEMBER_PRINCIPAL,
+        "employee_id": "employee-123",
+        "scope": "casework:staff-by-employee",
+        "registry_actor_kind": "human"
+    }));
+    let actor = authenticator
+        .authenticate(&alternate_scope, "staff-by-employee")
+        .await
+        .expect("the independently scoped alternate principal is accepted");
+    assert_eq!(actor.principal.subject, "employee-123");
+    assert_eq!(actor.profile_id, "staff-by-employee");
+    assert_eq!(actor.role, CaseworkRole::Staff);
+
+    idp.stop().await;
+}
+
 fn authenticator(idp: &MockIdp) -> CaseworkAuthenticator {
     authenticator_with_human_identity(idp, HumanIdentityConfig::default())
 }
@@ -187,13 +250,25 @@ fn authenticator_with_human_identity(
     idp: &MockIdp,
     human_identity: HumanIdentityConfig,
 ) -> CaseworkAuthenticator {
+    authenticator_for_project_with_human_identity(idp, &project(), human_identity)
+}
+
+fn authenticator_for_project(idp: &MockIdp, project: &CaseworkProject) -> CaseworkAuthenticator {
+    authenticator_for_project_with_human_identity(idp, project, HumanIdentityConfig::default())
+}
+
+fn authenticator_for_project_with_human_identity(
+    idp: &MockIdp,
+    project: &CaseworkProject,
+    human_identity: HumanIdentityConfig,
+) -> CaseworkAuthenticator {
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
         FetchUrlPolicy::dev(),
     ));
     CaseworkAuthenticator::new(
-        &project(),
+        project,
         oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
         keys,
         human_identity,
