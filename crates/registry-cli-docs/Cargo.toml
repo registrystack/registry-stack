@@ -21,7 +21,7 @@ registry-relay-v2.workspace = true
 registry-relayctl.workspace = true
 registry-breg = { workspace = true, features = ["runtime"] }
 registry-bregctl.workspace = true
-registry-caseworkctl = { path = "../registry-caseworkctl" }
-registry-casework = { path = "../registry-casework" }
+registry-caseworkctl.workspace = true
+registry-casework.workspace = true
 serde.workspace = true
 serde_json.workspace = true

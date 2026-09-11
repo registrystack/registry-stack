@@ -20,8 +20,8 @@ anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
 registry-platform-buildinfo.workspace = true
-registry-casework-core = { path = "../registry-casework-core" }
-registry-casework = { path = "../registry-casework" }
+registry-casework-core.workspace = true
+registry-casework.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
