@@ -3,7 +3,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -28,6 +29,7 @@ use crate::model::CompiledRegistry;
 const MAX_CLAIM_NAME_BYTES: usize = 128;
 const MAX_SCOPE_VALUES: usize = 128;
 const MAX_SCOPE_VALUE_BYTES: usize = 512;
+const KEY_REFUSAL_WARNING_INTERVAL: Duration = Duration::from_secs(60);
 
 const REGISTERED_CLAIMS: &[&str] = &[
     "iss",
@@ -114,6 +116,7 @@ pub enum AuthenticationError {
 /// [`VerifiedRequestClaims`].
 pub struct RegistryAuthenticator {
     verifier: TokenVerifier,
+    last_key_refusal_warning: Mutex<Option<Instant>>,
     audience: String,
     principal_claim: String,
     purpose_claim: Option<String>,
@@ -134,6 +137,7 @@ impl RegistryAuthenticator {
         let audience = verifier_config.audiences[0].clone();
         Ok(Self {
             verifier: TokenVerifier::new(verifier_config, key_source),
+            last_key_refusal_warning: Mutex::new(None),
             audience,
             principal_claim: claims.principal_claim,
             purpose_claim: claims.purpose_claim,
@@ -149,17 +153,16 @@ impl RegistryAuthenticator {
         validate_compact_access_token(token)
             .map_err(|_| AuthenticationError::MalformedCredential)?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
-            // The caller-facing refusal stays value-free and
-            // indistinct; operators get the one distinction that
-            // names an operational cause instead of a bad
-            // credential: a key outside the configured JWKS is how
-            // provider-side rotation presents.
-            if matches!(error, OidcError::UnknownKid) {
+            // UnknownKid precedes signature verification and also covers denied
+            // keys. It cannot establish rotation, regardless of the key source.
+            if matches!(error, OidcError::UnknownKid)
+                && admit_key_refusal_warning(&self.last_key_refusal_warning, Instant::now())
+            {
                 tracing::warn!(
                     target: "registry_breg::auth",
-                    message = "refused an access token whose signing key is not in the \
-                               configured JWKS; for a static jwksSource the provider rotated \
-                               its keys: re-pin the document and restart"
+                    message = "refused an access token with an unknown or disallowed key \
+                               identifier; this does not establish provider key rotation; \
+                               check issuer key configuration and key policy before changing trust"
                 );
             }
             AuthenticationError::VerificationRefused
@@ -217,6 +220,21 @@ impl RegistryAuthenticator {
         )
         .map_err(|_| AuthenticationError::InvalidClaims)
     }
+}
+
+fn admit_key_refusal_warning(last_warning: &Mutex<Option<Instant>>, now: Instant) -> bool {
+    // One timestamp per authenticator bounds both memory and warning volume,
+    // including concurrent requests with distinct caller-controlled key IDs.
+    let Ok(mut last) = last_warning.lock() else {
+        return false;
+    };
+    if last.is_some_and(|previous| {
+        now.saturating_duration_since(previous) < KEY_REFUSAL_WARNING_INTERVAL
+    }) {
+        return false;
+    }
+    *last = Some(now);
+    true
 }
 
 impl fmt::Debug for RegistryAuthenticator {
@@ -533,4 +551,34 @@ fn authentication_refused() -> Response {
         "The bearer credential is missing or refused.",
         "authentication.refused",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_refusal_warnings_are_bounded_across_concurrent_misses_and_resume_after_interval() {
+        let last_warning = Mutex::new(None);
+        let now = Instant::now();
+        std::thread::scope(|scope| {
+            let handles = (0..16)
+                .map(|_| scope.spawn(|| admit_key_refusal_warning(&last_warning, now)))
+                .collect::<Vec<_>>();
+            let admitted = handles
+                .into_iter()
+                .map(|handle| handle.join().expect("warning worker"))
+                .filter(|admitted| *admitted)
+                .count();
+            assert_eq!(admitted, 1);
+        });
+        assert!(!admit_key_refusal_warning(
+            &last_warning,
+            now + KEY_REFUSAL_WARNING_INTERVAL - Duration::from_nanos(1)
+        ));
+        assert!(admit_key_refusal_warning(
+            &last_warning,
+            now + KEY_REFUSAL_WARNING_INTERVAL
+        ));
+    }
 }

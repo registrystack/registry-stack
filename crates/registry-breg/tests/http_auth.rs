@@ -779,7 +779,7 @@ async fn the_rfc9068_typ_pair_admits_both_spellings_as_one_token_type() {
 }
 
 #[tokio::test]
-async fn static_jwks_rotation_is_diagnosed_and_repinning_restores_authentication() {
+async fn static_jwks_key_refusal_is_bounded_and_repinning_restores_authentication() {
     let harness = Harness::new().await;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -838,14 +838,39 @@ async fn static_jwks_rotation_is_diagnosed_and_repinning_restores_authentication
         .authenticate(&rotated)
         .await
         .expect_err("a token from the rotated key is refused");
+    for index in 0..16 {
+        let arbitrary = sign_ed25519_compact_jwt(
+            fixtures::ED25519_PRIVATE_JWK,
+            "JWT",
+            &format!("untrusted-key-canary-{index}"),
+            valid_claims(),
+        );
+        assert_eq!(
+            authenticator.authenticate(&arbitrary).await,
+            Err(AuthenticationError::VerificationRefused)
+        );
+    }
     drop(capture);
     assert_eq!(error, AuthenticationError::VerificationRefused);
     let logs =
         String::from_utf8_lossy(&captured.0.lock().expect("captured log buffer")).into_owned();
     assert!(
-        logs.contains("signing key is not in the configured JWKS"),
-        "the refusal names the rotated-key condition; captured: {logs}"
+        logs.contains("unknown or disallowed key identifier"),
+        "the refusal names only the known condition; captured: {logs}"
     );
+    assert_eq!(
+        logs.matches("unknown or disallowed key identifier").count(),
+        1
+    );
+    assert!(logs.contains("does not establish provider key rotation"));
+    for value in [
+        &rotated,
+        PRINCIPAL,
+        "untrusted-key-canary",
+        "registry-platform-testing-ed25519-2",
+    ] {
+        assert!(!logs.contains(value), "diagnostics must remain value-free");
+    }
 
     // Re-pin: replace the static document with the provider's current
     // keys and rebuild, as a restart with the refreshed secret does.
@@ -865,6 +890,59 @@ async fn static_jwks_rotation_is_diagnosed_and_repinning_restores_authentication
         .await
         .expect_err("a token from the removed key stays refused");
     assert_eq!(stale, AuthenticationError::VerificationRefused);
+}
+
+#[tokio::test]
+async fn discovery_key_misses_and_denied_keys_do_not_diagnose_rotation() {
+    let harness = Harness::new().await;
+    let source = key_source(&harness.idp);
+    source
+        .ensure_key_set()
+        .await
+        .expect("fixture JWKS is reachable");
+    for denied in [false, true] {
+        let mut config = verifier_config(&harness.idp);
+        let kid = if denied {
+            "registry-platform-testing-ed25519-1"
+        } else {
+            "untrusted-key-canary"
+        };
+        if denied {
+            config.denied_kids.insert(kid.to_owned());
+        }
+        let authenticator = RegistryAuthenticator::new(
+            &harness.registry,
+            config,
+            source.clone(),
+            authority_claims(),
+        )
+        .expect("discovery verifier is valid");
+        let token =
+            sign_ed25519_compact_jwt(fixtures::ED25519_PRIVATE_JWK, "JWT", kid, valid_claims());
+        let captured = CapturedLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let capture = tracing::subscriber::set_default(subscriber);
+        for _ in 0..4 {
+            assert_eq!(
+                authenticator.authenticate(&token).await,
+                Err(AuthenticationError::VerificationRefused)
+            );
+        }
+        drop(capture);
+        let logs = String::from_utf8_lossy(&captured.0.lock().expect("captured logs")).into_owned();
+        assert_eq!(
+            logs.matches("unknown or disallowed key identifier").count(),
+            1
+        );
+        assert!(logs.contains("does not establish provider key rotation"));
+        assert!(!logs.contains("re-pin"));
+        for value in [&token, kid, PRINCIPAL] {
+            assert!(!logs.contains(value), "diagnostics must remain value-free");
+        }
+    }
 }
 
 #[tokio::test]
