@@ -241,14 +241,14 @@ curl --silent --show-error --fail \
   --url "$DHIS2_BASE_URL/api/openapi.yaml" \
   --output .local/dhis2.openapi.yaml
 
-evidencectl new dhis2-immunization \
+evidencectl init dhis2-immunization \
   --openapi .local/dhis2.openapi.yaml \
   --profile local
 
 cd dhis2-immunization
 ```
 
-`evidencectl new` retains the OpenAPI document and creates empty `selectors/`, `sources/`,
+`evidencectl init` retains the OpenAPI document and creates empty `selectors/`, `sources/`,
 `adapters/`, `schemas/`, `questions/`, `derivations/`, and `fixtures/` directories.
 It generates only disposable local Evidence Gateway signing, audit, and subject-binding material.
 It does not invent the source policy or the answer.
@@ -654,7 +654,7 @@ Compile the editable source and question into one immutable local generation, th
 Mint and Evidence Gateway:
 
 ```sh
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 ```text

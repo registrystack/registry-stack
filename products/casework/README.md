@@ -16,6 +16,12 @@ caseworkctl check ./casework
 caseworkctl test ./casework
 ```
 
+Check reports `complete` or `incomplete` with field-addressed findings. Test
+repeats that authoring status and can still run the bounded synthetic fixtures
+while authoring is incomplete. A passing fixture report has the
+`offline_synthetic` proof boundary and `productionClosure: false`; it does not
+establish source reachability or deployment readiness.
+
 The maintained authored form is
 [`examples/standalone-decision/casework.yaml`](examples/standalone-decision/casework.yaml).
 It declares one `decision` kind, one queue, its bounded JSON Schema display,
@@ -296,11 +302,12 @@ The package contains only `casework.yaml`, its exact declared source
 descriptions, and `casework.package.json`. The v1alpha1 manifest records the
 policy digest and a sorted path, SHA-256 digest, and byte count for every
 included file. Keep operator bindings and secrets outside the package. In the
-production operator configuration, set `project` to
-`./casework-policy-package/casework.yaml`. The service requires and verifies
-the adjacent manifest when `tlsTermination` is
+production runtime configuration, set `package.root` to the absolute path of
+the installed package directory. The runtime selects only the fixed
+`casework.yaml` inside that directory. The service requires and verifies the
+adjacent manifest when `listener.tlsTermination` is
 `operator-controlled-upstream`. Local `development-loopback` can use the
-authored project directly. `source add --apply` updates reviewed authoring
+authored project directory as `package.root`. `source add --apply` updates reviewed authoring
 inputs; it does not activate a production package. The deployment operator
 installs and atomically selects the reviewed package, then restarts or rolls out
 Casework. Activating a new package does not rewrite running clock occurrences;
@@ -311,9 +318,9 @@ After the operator supplies the separate runtime configuration and credentials,
 the local workflow is:
 
 ```sh
-caseworkctl db migrate ./casework --operator ./casework/operator.yaml
-caseworkctl dev start ./casework --operator ./casework/operator.yaml
-caseworkctl doctor ./casework --operator ./casework/operator.yaml
+caseworkctl db migrate ./casework --runtime-config ./casework/runtime.yaml
+caseworkctl dev start ./casework --runtime-config ./casework/runtime.yaml
+caseworkctl doctor --runtime-config /absolute/path/to/casework/runtime.yaml
 caseworkctl dev events ./casework
 caseworkctl dev stop ./casework
 ```
@@ -323,20 +330,29 @@ readiness. Directory readiness requires a serving team for every declared queue.
 Directory setup is an ordinary authenticated Administrator API call;
 administrator status does not grant BReg review or application authority.
 
+The `casework` runtime configuration uses `apiVersion:
+registry.registrystack.org/casework-runtime/v1alpha1` and `kind:
+CaseworkRuntimeConfig`. Its package, file-secret, and audit paths are absolute.
+Each provider is explicitly enabled. A `secret:env/NAME` reference resolves
+only when `secretProviders.environment: {}` is also declared. The maintained
+example is [`runtime.example.yaml`](examples/professional-review/runtime.example.yaml);
+the complete field contract is in [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md).
+
 The `casework` runtime serves plain HTTP behind operator-controlled TLS
 termination. Runtime configuration must declare
-`tlsTermination: operator-controlled-upstream`; `networkExposure` defaults to
+`listener.tlsTermination: operator-controlled-upstream`;
+`listener.networkExposure` defaults to
 `private-address`, which accepts loopback and private addresses and rejects
 public and wildcard binds. A container that needs a wildcard bind must declare
-`networkExposure: container-private` and keep the published listener on a
+`listener.networkExposure: container-private` and keep the published listener on a
 private container network. Browser requests go to the App Kit host, which calls
 Casework server to server, so the Casework API does not enable CORS. Apply HSTS
 on the proxy's TLS responses. The runtime applies its remaining security
 headers and `Cache-Control: no-store` before returning a response.
 
 For direct local development without a proxy, declare
-`tlsTermination: development-loopback`. That mode accepts only a loopback
-listener with `networkExposure: private-address`; it cannot be combined with a
+`listener.tlsTermination: development-loopback`. That mode accepts only a loopback
+listener with `listener.networkExposure: private-address`; it cannot be combined with a
 private LAN address, a wildcard listener, or `container-private`.
 
 Project validation requires unique source IDs. Each required scope is a
@@ -395,7 +411,7 @@ source disclosure within the same source generation, with their retained
 binding and no actions.
 
 Source-backed retention is an explicit operator decision for one exact source
-request. `caseworkctl retention erase PROJECT [--operator FILE] --source-id ID
+request. `caseworkctl retention erase PROJECT [--runtime-config FILE] --source-id ID
 --request-kind KIND --request-id ID` previews a count-only report under
 migration database authority; repeat it with `--apply` only after review. Apply
 removes local payload copies and cancels local clock work while retaining
@@ -405,7 +421,7 @@ the external audit JSONL file.
 
 Settling an uncertain source attempt is an explicit operator decision for one
 attempt whose outcome recovery cannot observe. `caseworkctl attempt settle
-PROJECT [--operator FILE] --attempt-id UUID --outcome applied|not-applied
+PROJECT [--runtime-config FILE] --attempt-id UUID --outcome applied|not-applied
 --reason TEXT --decided-by TEXT` previews the settlement under migration
 database authority; repeat it with `--apply` only after the source owner has
 confirmed the outcome. Only an uncertain attempt whose execution lease has

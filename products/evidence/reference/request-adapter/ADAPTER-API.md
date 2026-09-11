@@ -12,7 +12,7 @@ source does not carry a redundant `adapterAbiVersion` field unless the product
 later demonstrates a need to run multiple adapter ABIs under one bundle
 version.
 
-`evidencectl build` is an authoring-to-bundle compiler, not another adapter
+`evidencectl package` is an authoring-to-bundle compiler, not another adapter
 runtime. It carries reviewed scripts and their referenced schemas into one
 closed candidate, then asks the real `evidence` binary to compile and evaluate
 them. Production build metadata cannot add an ABI entry point, helper,

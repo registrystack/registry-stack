@@ -1,6 +1,6 @@
 # Evidence authoring project
 
-`evidencectl new` wrote this project. It is a working example, not a blank
+`evidencectl init` wrote this project. It is a working example, not a blank
 page: every identifier is a placeholder chosen to be obviously synthetic, and
 every file carries comments saying what a block does and what you change.
 
@@ -17,7 +17,7 @@ every file carries comments saying what a block does and what you change.
 | `schemas/record-status-facts.schema.yaml` | The shape extraction must produce before the derivation reads it. |
 | `questions/record-status.yaml` | The question: one fixed request, the subject it selects, the source it reads, the answers it may disclose, and the governance the assertion carries. |
 | `derivations/record-status.rhai` | Bounded derivation: it turns the facts into the answers the question declares, and nothing else. |
-| `fixtures/record-status.yaml` | The synthetic cases `evidencectl fixtures run` replays offline, against a database built from the fixture text, with no network. |
+| `fixtures/record-status.yaml` | The synthetic cases `evidencectl test` replays offline, against a database built from the fixture text, with no network. |
 | `secrets/` | Disposable local key material. It is owner-only, unbound, and never a deployment key; `.gitignore` keeps it out of version control. |
 
 ## What the example models
@@ -35,10 +35,11 @@ nothing here reads as advice about what your question should ask.
 ## Next commands
 
 ```sh
-evidencectl fixtures run --project . --explain
+evidencectl check .
+evidencectl test . --explain
 ```
 
-`fixtures run` replays the synthetic cases through the evaluator the runtime
+`test` replays the synthetic cases through the evaluator the runtime
 uses. They cover true and false answers, no match, ambiguity, the row bound,
 extract age, source failure, parameter binding, statement refusal, hostile
 selector text, the output gate, and anti-reconstruction. `--explain` reports
@@ -48,8 +49,10 @@ Edit the source, statement, schemas, extraction, derivation, and fixtures
 together. Each one bounds the next, so a change to any of them is a change to
 what the assertion may say.
 
-`evidencectl build` compiles this project and one deployment target into a
-candidate, and `evidencectl doctor` reads that candidate. Neither reads an
+`evidencectl package` compiles this project and one deployment target into a
+candidate. `evidencectl artifact inspect` checks candidate custody, while
+`evidencectl doctor --runtime-config <absolute-file>` checks live startup
+dependencies. None of these commands reads an
 editable project, so both come after the fixtures pass.
 
 ## Documentation

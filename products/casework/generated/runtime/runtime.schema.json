@@ -1,0 +1,374 @@
+{
+  "$defs": {
+    "AuditConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "hashKeyRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        },
+        "path": {
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "hashKeyRef"
+      ],
+      "type": "object"
+    },
+    "AuthenticationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "oidc": {
+          "$ref": "#/$defs/OidcConfig"
+        }
+      },
+      "required": [
+        "oidc"
+      ],
+      "type": "object"
+    },
+    "BregBinding": {
+      "additionalProperties": false,
+      "description": "Launcher-owned BReg connection material for one authored Casework source.",
+      "properties": {
+        "baseUrl": {
+          "type": "string"
+        },
+        "clientAssertionKeyRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        },
+        "clientIdRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        },
+        "connectTimeoutMilliseconds": {
+          "default": 10000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "eventSource": {
+          "type": "string"
+        },
+        "eventType": {
+          "default": "casework-lifecycle-v1",
+          "type": "string"
+        },
+        "readerProfile": {
+          "type": "string"
+        },
+        "requestTimeoutMilliseconds": {
+          "default": 30000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokenEndpoint": {
+          "type": "string"
+        },
+        "trustedRootCertificatesRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "webhookSecretRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "readerProfile",
+        "tokenEndpoint",
+        "clientIdRef",
+        "clientAssertionKeyRef",
+        "webhookSecretRef",
+        "eventSource"
+      ],
+      "type": "object"
+    },
+    "DatabaseConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "migrationUrlRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        },
+        "runtimeUrlRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        },
+        "testOnlyPlaintext": {
+          "default": false,
+          "type": "boolean"
+        },
+        "trustedRootCertificateRef": {
+          "default": null,
+          "pattern": "^secret:(?:env|file)/",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "runtimeUrlRef",
+        "migrationUrlRef"
+      ],
+      "type": "object"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "HumanIdentityConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "default": "registry_actor_kind",
+          "type": "string"
+        },
+        "value": {
+          "default": "human",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ListenerConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "bind": {
+          "default": "127.0.0.1:8100",
+          "type": "string"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure"
+        },
+        "tlsTermination": {
+          "$ref": "#/$defs/TlsTermination"
+        }
+      },
+      "required": [
+        "tlsTermination"
+      ],
+      "type": "object"
+    },
+    "ListenerNetworkExposure": {
+      "description": "The operator-declared private network placement of the HTTP listener.",
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
+    "OidcConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "humanIdentity": {
+          "$ref": "#/$defs/HumanIdentityConfig"
+        },
+        "issuer": {
+          "type": "string"
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/OidcJwksSource"
+        },
+        "jwksUri": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scopeClaim": {
+          "default": "registry_scopes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issuer",
+        "audience"
+      ],
+      "type": "object"
+    },
+    "OidcJwksSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "documentRef": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "documentRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimePackageConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "properties": {
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TlsTermination": {
+      "description": "Declares the trusted transport boundary for the runtime's plaintext HTTP listener.\n\nProduction listeners require operator-controlled upstream TLS termination.\nDirect plaintext is limited to the explicit loopback-only development mode.",
+      "enum": [
+        "operator-controlled-upstream",
+        "development-loopback"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/casework/runtime/runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/casework-runtime/v1alpha1",
+      "type": "string"
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditConfig"
+    },
+    "authentication": {
+      "$ref": "#/$defs/AuthenticationConfig"
+    },
+    "database": {
+      "$ref": "#/$defs/DatabaseConfig"
+    },
+    "kind": {
+      "const": "CaseworkRuntimeConfig",
+      "type": "string"
+    },
+    "listener": {
+      "$ref": "#/$defs/ListenerConfig"
+    },
+    "package": {
+      "$ref": "#/$defs/RuntimePackageConfig"
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
+    },
+    "sources": {
+      "additionalProperties": {
+        "$ref": "#/$defs/BregBinding"
+      },
+      "default": {},
+      "propertyNames": {
+        "minLength": 1
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "package",
+    "listener",
+    "secretProviders",
+    "database",
+    "authentication",
+    "audit"
+  ],
+  "title": "Registry Casework runtime configuration",
+  "type": "object"
+}

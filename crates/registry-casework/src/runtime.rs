@@ -24,10 +24,10 @@ pub fn command() -> Command {
         .version(registry_platform_buildinfo::DISPLAY_VERSION)
         .about("Run and maintain Registry Casework")
         .arg(
-            Arg::new("config")
-                .long("config")
+            Arg::new("runtime-config")
+                .long("runtime-config")
                 .value_name("FILE")
-                .help("Operator configuration file.")
+                .help("Absolute path to the runtime configuration file.")
                 .required(true),
         )
         .subcommand_required(true)
@@ -37,7 +37,7 @@ pub fn command() -> Command {
 
 pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
     let path = matches
-        .get_one::<String>("config")
+        .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
         Some("migrate") => migrate_from_path(path).await,
@@ -63,12 +63,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         ),
         None => tracing::info!("loading authored Casework policy for loopback development"),
     }
-    let project = CaseworkProject::load(&config.project)?;
+    let project_path = config.policy_path();
+    let project = CaseworkProject::load(&project_path)?;
     let secrets = secret_resolver(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)?;
     store.ready().await?;
 
-    let project_root = config.project.parent().unwrap_or_else(|| Path::new("."));
+    let project_root = config.package.root.as_path();
     let mut adapters: Vec<Arc<dyn SourceAdapter>> = Vec::new();
     for source in &project.sources {
         let binding = config
@@ -97,7 +98,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let service = CaseworkService::new(store.clone(), project.clone(), adapters)?;
 
     let audit_secret = secrets
-        .resolve(&config.audit.secret_ref)
+        .resolve(&config.audit.hash_key_ref)
         .map_err(|_| RuntimeError::Audit)?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
         audit_secret.expose_secret().to_vec(),
@@ -209,7 +210,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         authenticator,
         project: Arc::new(project),
     });
-    let listener = tokio::net::TcpListener::bind(config.listen)
+    let listener = tokio::net::TcpListener::bind(config.listener.bind)
         .await
         .map_err(RuntimeError::Listen)?;
     let served = serve_until_worker_stops(listener, app, worker_stops).await;
@@ -274,9 +275,20 @@ async fn worker_stop(mut stopped: mpsc::Receiver<&'static str>) {
 }
 
 pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, RuntimeError> {
+    let mut providers = Vec::new();
+    if config.secret_providers.file.is_some() {
+        providers.push(SecretProvider::File);
+    }
+    if config.secret_providers.environment.is_some() {
+        providers.push(SecretProvider::Environment);
+    }
     SecretResolver::new(
-        [SecretProvider::Environment, SecretProvider::File],
-        &config.secret_providers.file.root,
+        providers,
+        config
+            .secret_providers
+            .file
+            .as_ref()
+            .map_or_else(|| Path::new(""), |file| file.root.as_path()),
     )
     .map_err(|_| RuntimeError::SecretConfiguration)
 }

@@ -20,15 +20,15 @@ before `evidence serve` runs it.
 
 ## The project layout
 
-`evidencectl new` starts local authoring from an OpenAPI document or from a synthetic SQLite
+`evidencectl init` starts local authoring from an OpenAPI document or from a synthetic SQLite
 starter:
 
 ```sh
 project_dir="<dir>"
 openapi_source="<file-or-url>"
-evidencectl new "$project_dir" --openapi "$openapi_source" --profile local
+evidencectl init "$project_dir" --openapi "$openapi_source" --profile local
 
-evidencectl new "$project_dir" --transport sqlite-extract --profile local
+evidencectl init "$project_dir" --transport sqlite-extract --profile local
 ```
 
 ```text
@@ -49,10 +49,10 @@ evidencectl new "$project_dir" --transport sqlite-extract --profile local
 The OpenAPI path retains the document bytes exactly and creates empty authoring directories.
 `evidencectl source suggest --project <dir>` then drafts one HTTP source and its editable artifacts.
 The SQLite path creates a neutral synthetic source, statement, question, derivation, schemas, and
-fixture that `evidencectl fixtures run --project <dir>` can evaluate immediately. Neither path
+fixture that `evidencectl test <dir>` can evaluate immediately. Neither path
 creates Mint configuration, a production target, a real extract, or a deployable bundle. Both
 automatically create disposable local signing and HMAC material. After you add a question to an
-HTTP project, `evidencectl dev`
+HTTP project, `evidencectl dev start`
 compiles the authoring objects into a private local runtime and delegates validation to the real
 Evidence Gateway loader. Each development session also scaffolds disposable P-256 keys for Registry
 Mint, its caller, and the optional SD-JWT VC holder.
@@ -62,6 +62,34 @@ serializations during local development. Omission means signed JWS only. Signed 
 and `sdJwtVc` on a reviewed structured answer also requires the explicit `sd-jwt-vc` permission.
 Production format authority comes from the deployment target's bundle-wide ceiling and exact
 authority grants, not from this local compiler convenience.
+
+Check an editable project before running its fixtures:
+
+```sh
+evidencectl check "<editable-project>"
+evidencectl explain "<editable-project>"
+```
+
+The offline check reports incomplete authoring as field-addressed findings and can still exit
+successfully. Add `--deny-findings` when any gap must refuse the command. Explain applies the same
+authoring validation, then reports its status, findings, revision, and inventory of questions,
+sources, selectors, derivations, and local access without reading secrets or contacting a
+dependency.
+
+Select one deployment target explicitly when you need a closure check:
+
+```sh
+evidencectl check "<editable-project>" \
+  --target "<editable-project>/environments/production/evidence" \
+  --production
+```
+
+This applies the target's declared production or evidence-grade assurance profile and validates
+its governance, runtime structure, public keys, source connections, and governed bundle. It does
+not require target-host paths or secrets to exist, run fixtures, or prove live readiness.
+
+{/* Evidence: crates/registry-evidencectl/src/check.rs, check() and explain();
+    crates/registry-evidencectl/src/lib.rs, CheckArgs and ExplainArgs. */}
 
 ## The runtime file
 
@@ -339,14 +367,16 @@ never a response, fact, derived, or selector value, and each fixture's own
 `diagnostics_exclude` canaries are checked against it before it is printed. The flag is offline
 only: `evidence serve` has no equivalent.
 
-`evidencectl fixtures run --project <dir>` drives both commands across a complete deployment
-project: it runs `check`, then `evaluate` against every fixture path the bundle's requirements
-reference, and reports `PASS` or `FAIL` per step
+`evidencectl test <dir>` accepts an editable or deployment project. For a
+deployment project, it runs `check`, then `evaluate` against every fixture path
+the bundle's requirements reference, and reports `PASS` or `FAIL` per step
 (`crates/registry-evidencectl/src/fixtures.rs`). Add `--explain` to relay each fixture's trace with
-its step, or as that fixture's `trace` field under `--json`. The incomplete workspace created by
-`evidencectl new` has no bundle, runtime, or fixture cases, so it cannot pass this gate. After an
-operator supplies those deployment artifacts, both `check` and `fixtures run` must pass before
-`evidence serve` runs the revision.
+its step, or as that fixture's `trace` field under `--format json`. The incomplete workspace created by
+the OpenAPI form of `evidencectl init` has no fixture cases, so it cannot pass
+this gate until the author adds them. For an editable project with fixtures,
+Evidencectl privately compiles a bundle before invoking the same runtime-owned
+bundle checks. Both `check` and `test` must pass before `evidence serve` runs
+the revision.
 
 ## Build a production candidate
 
@@ -375,8 +405,7 @@ without transformation.
 Build a new candidate directory with explicit target and output paths:
 
 ```sh
-evidencectl build \
-  --project "<editable-project>" \
+evidencectl package "<editable-project>" \
   --target "<editable-project>/environments/production/evidence" \
   --output "<new-candidate-directory>"
 ```

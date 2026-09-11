@@ -31,9 +31,9 @@ COPY --from=runtime-root /workspace/runtime-root/ /
 
 WORKDIR /var/lib/registry-casework
 
-EXPOSE 8091
+EXPOSE 8100
 
 # Casework serves GET /health. Distroless has no shell or HTTP client, so the
 # deployment platform owns the probe.
 ENTRYPOINT ["/usr/local/bin/casework"]
-CMD ["--config", "/etc/registry-casework/operator.yaml", "serve"]
+CMD ["--runtime-config", "/etc/registry-casework/runtime.yaml", "serve"]

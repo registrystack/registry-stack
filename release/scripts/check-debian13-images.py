@@ -139,7 +139,7 @@ HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.casework"): {
         "binary": "casework",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/casework"]',
-        "command": 'CMD ["--config", "/etc/registry-casework/operator.yaml", "serve"]',
+        "command": 'CMD ["--runtime-config", "/etc/registry-casework/runtime.yaml", "serve"]',
     },
 }
 

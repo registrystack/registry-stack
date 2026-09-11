@@ -4,7 +4,7 @@
 //!
 //! Every filesystem assertion here is about a mode or an owner the Evidence
 //! runtime refuses at startup. The filesystem is intentionally assembled as a
-//! doctor fixture because `evidencectl new` no longer invents a runnable
+//! artifact-inspection fixture because `evidencectl init` no longer invents a runnable
 //! deployment. No `evidence` binary is involved anywhere in this file:
 //! `doctor` is a filesystem walk, and an adopter who cannot yet start the
 //! service is exactly the one who needs it. Nothing here prints key material.
@@ -1365,11 +1365,11 @@ fn doctor_names_the_next_commands_when_the_project_is_still_editable() {
         "the refusal must name the shape it was handed: {message}"
     );
     assert!(
-        message.contains("evidencectl build"),
+        message.contains("evidencectl package"),
         "the refusal must name the command that produces a candidate: {message}"
     );
     assert!(
-        message.contains("evidencectl fixtures run"),
+        message.contains("evidencectl test"),
         "the refusal must name the command that checks an editable project: {message}"
     );
 }
@@ -1391,7 +1391,7 @@ fn doctor_names_the_build_command_for_a_directory_that_is_neither_shape() {
         "the refusal must name the shape it needs: {message}"
     );
     assert!(
-        message.contains("evidencectl build"),
+        message.contains("evidencectl package"),
         "the refusal must name the command that produces one: {message}"
     );
 }

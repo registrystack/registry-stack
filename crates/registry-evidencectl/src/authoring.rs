@@ -17,6 +17,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
+use jsonschema::{error::ValidationErrorKind, Draft, JSONSchema};
 use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
 use serde_json::{json, Map, Value};
 use url::{Host, Url};
@@ -64,6 +65,10 @@ const AUTHORITY_PROFILE_ID: &str = "local-caller";
 /// into can exceed it.
 const MAX_PROFILE_AUTHORITY_GRANTS: usize = 128;
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
+const BUNDLE_SCHEMA: &str = include_str!("../../../products/evidence/contracts/bundle.schema.yaml");
+const OFFLINE_CHECK_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+const OFFLINE_CHECK_PUBLIC_JWK_FILE: &str =
+    "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompiledConceptForm {
@@ -120,6 +125,22 @@ pub(crate) struct CompiledAccessPolicy {
     pub(crate) requester_tag: String,
     pub(crate) questions: Vec<String>,
 }
+
+/// A field-addressed refusal from a typed authored document.
+#[derive(Debug)]
+pub(crate) struct AuthoredDiagnostic {
+    pub(crate) code: &'static str,
+    pub(crate) path: String,
+    pub(crate) message: String,
+}
+
+impl std::fmt::Display for AuthoredDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for AuthoredDiagnostic {}
 
 #[derive(Debug)]
 pub(crate) struct CompiledProductionProject {
@@ -309,7 +330,7 @@ fn validate_local_dev_sources(sources: &BTreeMap<String, Value>) -> Result<()> {
         .any(|source| source.get("transport").and_then(Value::as_str) == Some("sqlite-extract"))
     {
         bail!(
-            "local serving does not bind SQLite extracts; prove this editable project with `evidencectl fixtures run --project <dir>`"
+            "local serving does not bind SQLite extracts; prove this editable project with `evidencectl test <dir>`"
         );
     }
     Ok(())
@@ -402,6 +423,57 @@ pub(crate) fn compile_fixture_project(
     compile_fixture_project_with_connections(project_root, staging_root, evidence_bin, json!({}))
 }
 
+/// Compile the same fixture-capable local bundle for an offline check without
+/// consulting disposable development signing state in the editable project.
+pub(crate) fn compile_check_project(
+    project_root: &Path,
+    staging_root: &Path,
+    evidence_bin: &Path,
+) -> Result<CompiledFixtureProject> {
+    let project_root = validate_project_root(project_root)?;
+    validate_private_empty_staging(staging_root)?;
+    let inputs = read_inputs(&project_root, false)?;
+    validate_production_inputs(&project_root, &inputs)?;
+    let mut plan = compile_plan_with_connections(
+        inputs,
+        CompileProfile::Local {
+            ports: LocalServicePorts::default(),
+            active_public_jwk_file: OFFLINE_CHECK_PUBLIC_JWK_FILE.to_owned(),
+            active_public_jwk: OFFLINE_CHECK_PUBLIC_JWK.as_bytes().to_vec(),
+        },
+        json!({}),
+    )?;
+    expand_check_signing_validity(&mut plan.bundle);
+    validate_compiled_bundle_shape(&plan.bundle)?;
+    let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin)?;
+    let fixture_paths = plan
+        .questions
+        .iter()
+        .map(|question| {
+            question
+                .fixture_artifact
+                .clone()
+                .expect("fixture inputs were validated")
+        })
+        .collect();
+    Ok(CompiledFixtureProject {
+        bundle_path,
+        fixture_paths,
+    })
+}
+
+fn expand_check_signing_validity(bundle: &mut Value) {
+    let maximum = bundle["requirements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|requirement| requirement["validitySeconds"].as_u64())
+        .max()
+        .unwrap_or(300)
+        .max(300);
+    bundle["signing"]["maximumAssertionValiditySeconds"] = json!(maximum);
+}
+
 pub(crate) fn compile_fixture_project_with_connections(
     project_root: &Path,
     staging_root: &Path,
@@ -437,6 +509,168 @@ pub(crate) fn compile_fixture_project_with_connections(
         bundle_path,
         fixture_paths,
     })
+}
+
+fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
+    let schema: Value = serde_norway::from_str(BUNDLE_SCHEMA)
+        .context("the embedded Evidence bundle schema is invalid")?;
+    if let Some(sources) = bundle.get("sources").and_then(Value::as_object) {
+        for (source_id, source) in sources {
+            let Some(transport) = source.get("transport") else {
+                continue;
+            };
+            let branch = schema
+                .pointer("/$defs/source/oneOf")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|branch| branch.get("$ref").and_then(Value::as_str))
+                .find(|reference| {
+                    reference
+                        .strip_prefix('#')
+                        .and_then(|pointer| schema.pointer(pointer))
+                        .and_then(|branch| branch.pointer("/properties/transport/const"))
+                        == Some(transport)
+                });
+            let Some(branch) = branch else { continue };
+            let source_schema = json!({
+                "$schema": schema["$schema"],
+                "$defs": schema["$defs"],
+                "$ref": branch,
+            });
+            let source_validator = JSONSchema::options()
+                .with_draft(Draft::Draft202012)
+                .should_validate_formats(true)
+                .compile(&source_schema)
+                .map_err(|_| anyhow!("the embedded Evidence source schema could not compile"))?;
+            if let Err(errors) = source_validator.validate(source) {
+                if let Some((instance_path, member)) = errors
+                    .filter_map(|error| match &error.kind {
+                        ValidationErrorKind::AdditionalProperties { unexpected } => unexpected
+                            .iter()
+                            .next()
+                            .map(|member| (error.instance_path.to_string(), member.clone())),
+                        _ => None,
+                    })
+                    .next()
+                {
+                    let member_path = if instance_path.is_empty() {
+                        format!("/{member}")
+                    } else {
+                        format!("{instance_path}/{member}")
+                    };
+                    return Err(AuthoredDiagnostic {
+                        code: "source-member-unknown",
+                        path: format!("sources/{source_id}.yaml:{member_path}"),
+                        message: "the compiled source contains a member outside the closed Evidence source shape".to_owned(),
+                    }
+                    .into());
+                }
+            };
+        }
+    }
+    let validator = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .compile(&schema)
+        .map_err(|_| anyhow!("the embedded Evidence bundle schema could not compile"))?;
+    if let Err(mut errors) = validator.validate(bundle) {
+        let error = errors.next().expect("schema validation returned one error");
+        let mut instance_path = error.instance_path.to_string();
+        let additional_member = match &error.kind {
+            ValidationErrorKind::AdditionalProperties { unexpected } => unexpected.first(),
+            _ => None,
+        };
+        if let Some(member) = additional_member {
+            instance_path.push('/');
+            instance_path.push_str(member);
+        }
+        return Err(AuthoredDiagnostic {
+            code: if additional_member.is_some() && instance_path.starts_with("/sources/") {
+                "source-member-unknown"
+            } else {
+                "authoring-bundle-shape"
+            },
+            path: compiled_bundle_authoring_path(&instance_path),
+            message: "the compiled authoring does not satisfy the closed Evidence bundle shape"
+                .to_owned(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn compiled_bundle_authoring_path(instance_path: &str) -> String {
+    let parts = instance_path
+        .trim_start_matches('/')
+        .split('/')
+        .collect::<Vec<_>>();
+    if let ["sources", source, rest @ ..] = parts.as_slice() {
+        let suffix = if rest.is_empty() {
+            String::new()
+        } else {
+            format!(":/{}", rest.join("/"))
+        };
+        format!("sources/{source}.yaml{suffix}")
+    } else {
+        instance_path.to_owned()
+    }
+}
+
+/// Validate explicit local access policy authoring without opening the local
+/// secret directory or any client private key.
+///
+/// The ordinary local compiler reads these policies only when preparing a
+/// runnable development process. Offline `check` and `explain` use this seam
+/// so the same owning parser and cross-reference rules apply without crossing
+/// into secret resolution.
+pub(crate) fn validate_offline_local_access(
+    project_root: &Path,
+) -> Result<Vec<CompiledAccessPolicy>> {
+    validate_plain_path_components(project_root, "authoring project")?;
+    let project_root = validate_project_root(project_root)?;
+    let mut question_ids = BTreeSet::new();
+    for path in question_paths(&project_root)? {
+        let bytes = read_regular_file(&path, MAX_QUESTION_BYTES, "question")?;
+        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
+        let question: Question =
+            serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
+                code: "question-parse",
+                path: authored_member_path(
+                    &project_relative_path(&project_root, &path),
+                    &error.path().to_string(),
+                ),
+                message: "question does not match the closed authored question shape".to_owned(),
+            })?;
+        first_finding(
+            validate_question(&question),
+            &project_relative_path(&project_root, &path),
+        )?;
+        if path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
+            return Err(AuthoredDiagnostic {
+                code: "question-id-filename-mismatch",
+                path: authored_member_path(&project_relative_path(&project_root, &path), "id"),
+                message: "question id must match its questions/<id>.yaml filename".to_owned(),
+            }
+            .into());
+        }
+        if !question_ids.insert(question.id) {
+            return Err(AuthoredDiagnostic {
+                code: "question-id-duplicate",
+                path: authored_member_path(&project_relative_path(&project_root, &path), "id"),
+                message: "question ids must be unique".to_owned(),
+            }
+            .into());
+        }
+    }
+    Ok(read_access_policies(&project_root, &question_ids)?
+        .into_iter()
+        .map(|policy| CompiledAccessPolicy {
+            id: policy.id,
+            requester_tag: policy.requester_tag,
+            questions: policy.questions,
+        })
+        .collect())
 }
 
 struct Inputs {
@@ -671,9 +905,20 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
     let mut derivation_paths = BTreeSet::new();
     for question_path in question_paths(project_root)? {
         let question_bytes = read_regular_file(&question_path, MAX_QUESTION_BYTES, "question")?;
-        let question: Question = serde_norway::from_slice(&question_bytes)
-            .with_context(|| format!("parsing question {}", question_path.display()))?;
-        first_finding(validate_question(&question))?;
+        let deserializer = serde_norway::Deserializer::from_slice(&question_bytes);
+        let question: Question =
+            serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
+                code: "question-parse",
+                path: authored_member_path(
+                    &project_relative_path(&project_root, &question_path),
+                    &error.path().to_string(),
+                ),
+                message: "question does not match the closed authored question shape".to_owned(),
+            })?;
+        first_finding(
+            validate_question(&question),
+            &project_relative_path(&project_root, &question_path),
+        )?;
         if question_path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
             bail!("question id must match its questions/<id>.yaml filename");
         }
@@ -692,7 +937,10 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         )?;
         let derivation =
             String::from_utf8(derivation_bytes).context("authored derivation must be UTF-8")?;
-        first_finding(validate_authored_answer(&derivation))?;
+        first_finding(
+            validate_authored_answer(&derivation),
+            &project_relative_path(&project_root, &derivation_path),
+        )?;
         questions.push(AuthoredQuestion {
             question,
             derivation,
@@ -787,18 +1035,10 @@ fn validate_deployment_inputs(
 }
 
 fn project_relative_fixture(project_root: &Path, value: &str) -> Result<PathBuf> {
-    let relative = Path::new(value);
-    let components = relative.components().collect::<Vec<_>>();
-    if components.len() != 2
-        || components.first() != Some(&Component::Normal(FIXTURES_DIRECTORY.as_ref()))
-        || !matches!(components.get(1), Some(Component::Normal(_)))
-        || relative
-            .extension()
-            .and_then(|extension| extension.to_str())
-            != Some("yaml")
-    {
+    if !valid_fixture_reference(value) {
         bail!("governance fixtures must be project-relative fixtures/<name>.yaml files");
     }
+    let relative = Path::new(value);
     let directory = project_root.join(FIXTURES_DIRECTORY);
     let metadata = fs::symlink_metadata(&directory)
         .with_context(|| format!("inspecting fixture directory {}", directory.display()))?;
@@ -806,6 +1046,10 @@ fn project_relative_fixture(project_root: &Path, value: &str) -> Result<PathBuf>
         bail!("fixtures must be held in a plain directory");
     }
     Ok(project_root.join(relative))
+}
+
+pub(crate) fn valid_fixture_reference(value: &str) -> bool {
+    valid_two_part_reference(value, FIXTURES_DIRECTORY, "yaml")
 }
 
 fn reject_local_production_values(bundle: &Value) -> Result<()> {
@@ -839,11 +1083,15 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
         .get("sources")
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("the deployment bundle has no sources object"))?;
-    for source in sources.values() {
+    for (source_id, source) in sources {
         let transport = source
             .get("transport")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("every production source must declare its transport"))?;
+            .ok_or_else(|| AuthoredDiagnostic {
+                code: "source-transport-missing",
+                path: format!("sources/{source_id}.yaml:/transport"),
+                message: "every production source must declare its transport".to_owned(),
+            })?;
         match transport {
             "http-json" => {
                 let https = source
@@ -855,7 +1103,16 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
                     .and_then(Value::as_str)
                     .is_some_and(|kind| kind != "none" && kind != "review-required");
                 if !https || !authenticated {
-                    bail!("every production source must use authenticated HTTPS");
+                    return Err(AuthoredDiagnostic {
+                        code: "source-production-channel",
+                        path: if !https {
+                            format!("sources/{source_id}.yaml:/baseUrl")
+                        } else {
+                            format!("sources/{source_id}.yaml:/authentication/kind")
+                        },
+                        message: "every production source must use authenticated HTTPS".to_owned(),
+                    }
+                    .into());
                 }
             }
             // A statement source reads one extract file the operator mounted
@@ -868,8 +1125,14 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
             // Restating them here would duplicate `evidence bundle-check`
             // rather than add a production condition.
             "sqlite-extract" => {}
-            other => {
-                bail!("production source transport `{other}` has no stated production conditions")
+            _ => {
+                return Err(AuthoredDiagnostic {
+                    code: "source-production-transport",
+                    path: format!("sources/{source_id}.yaml:/transport"),
+                    message: "the production source transport has no stated production conditions"
+                        .to_owned(),
+                }
+                .into())
             }
         }
     }
@@ -926,9 +1189,21 @@ fn read_access_policies(
             bail!("access-policies may contain only <id>.yaml files");
         }
         let bytes = read_regular_file(&path, MAX_ACCESS_POLICY_BYTES, "access policy")?;
-        let policy: AccessPolicy = serde_norway::from_slice(&bytes)
-            .with_context(|| format!("parsing access policy {}", path.display()))?;
-        first_finding(validate_access_policy(&policy))?;
+        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
+        let policy: AccessPolicy =
+            serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
+                code: "access-policy-parse",
+                path: authored_member_path(
+                    &project_relative_path(project_root, &path),
+                    &error.path().to_string(),
+                ),
+                message: "access policy does not match the closed authored access policy shape"
+                    .to_owned(),
+            })?;
+        first_finding(
+            validate_access_policy(&policy),
+            &project_relative_path(project_root, &path),
+        )?;
         if path.file_stem().and_then(|value| value.to_str()) != Some(&policy.id) {
             bail!("access policy id must match its access/policies/<id>.yaml filename");
         }
@@ -940,7 +1215,16 @@ fn read_access_policies(
             .iter()
             .any(|question| !question_ids.contains(question))
         {
-            bail!("access policy names a question that does not exist in this project");
+            return Err(AuthoredDiagnostic {
+                code: "access-policy-question-missing",
+                path: authored_member_path(
+                    &project_relative_path(project_root, &path),
+                    "questions",
+                ),
+                message: "access policy names a question that does not exist in this project"
+                    .to_owned(),
+            }
+            .into());
         }
         let questions = policy.questions;
         let requester_tag = access_policy_requester_tag(&policy.id, &questions)?;
@@ -1031,11 +1315,31 @@ fn read_named_objects(
 /// The checks report departures as values, so that a caller with a place to
 /// show them can show all of them. A compiler has no such place: it stops at
 /// the first one, with the sentence adopters have always read.
-fn first_finding(findings: Vec<Finding>) -> Result<()> {
+fn first_finding(findings: Vec<Finding>, artifact: &str) -> Result<()> {
     if let Some(finding) = findings.into_iter().next() {
-        bail!("{}", finding.message);
+        return Err(AuthoredDiagnostic {
+            code: finding.code,
+            path: format!("{artifact}:{}", finding.field),
+            message: finding.message,
+        }
+        .into());
     }
     Ok(())
+}
+
+fn project_relative_path(project_root: &Path, path: &Path) -> String {
+    path.strip_prefix(project_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn authored_member_path(artifact: &str, member: &str) -> String {
+    if member.is_empty() {
+        artifact.to_owned()
+    } else {
+        format!("{artifact}:/{member}")
+    }
 }
 
 fn read_regular_file(path: &Path, maximum_bytes: u64, description: &str) -> Result<Vec<u8>> {
@@ -1094,18 +1398,10 @@ fn question_paths(project_root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn project_relative_derivation(project_root: &Path, value: &str) -> Result<PathBuf> {
-    let relative = Path::new(value);
-    let components = relative.components().collect::<Vec<_>>();
-    if components.len() != 2
-        || components.first() != Some(&Component::Normal(DERIVATIONS_DIRECTORY.as_ref()))
-        || !matches!(components.get(1), Some(Component::Normal(_)))
-        || relative
-            .extension()
-            .and_then(|extension| extension.to_str())
-            != Some("rhai")
-    {
+    if !valid_derivation_reference(value) {
         bail!("derivation must be a project-relative derivations/<name>.rhai file");
     }
+    let relative = Path::new(value);
     let directory = project_root.join(DERIVATIONS_DIRECTORY);
     let metadata = fs::symlink_metadata(&directory)
         .with_context(|| format!("inspecting derivation directory {}", directory.display()))?;
@@ -1113,6 +1409,20 @@ fn project_relative_derivation(project_root: &Path, value: &str) -> Result<PathB
         bail!("derivations must be held in a plain directory");
     }
     Ok(project_root.join(relative))
+}
+
+pub(crate) fn valid_derivation_reference(value: &str) -> bool {
+    valid_two_part_reference(value, DERIVATIONS_DIRECTORY, "rhai")
+}
+
+fn valid_two_part_reference(value: &str, directory: &str, extension: &str) -> bool {
+    let relative = Path::new(value);
+    let components = relative.components().collect::<Vec<_>>();
+    !relative.is_absolute()
+        && components.len() == 2
+        && components.first() == Some(&Component::Normal(directory.as_ref()))
+        && matches!(components.get(1), Some(Component::Normal(_)))
+        && relative.extension().and_then(|value| value.to_str()) == Some(extension)
 }
 
 fn validate_openapi_version(document: &Value) -> Result<()> {
@@ -2024,23 +2334,59 @@ fn referenced_source_artifacts(source: &Value) -> Result<Vec<String>> {
 }
 
 fn validate_bundle_relative_artifact(value: &str) -> Result<()> {
-    let path = Path::new(value);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-        || path.components().count() != 2
-        || !matches!(
-            path.components().next(),
-            Some(Component::Normal(directory))
-                if directory == "adapters" || directory == "queries" || directory == "schemas"
-        )
-    {
+    if !valid_source_artifact_reference(value) {
         bail!(
             "referenced source artifacts must be adapters/<file>, queries/<file>, or schemas/<file>"
         );
     }
     Ok(())
+}
+
+pub(crate) fn valid_source_artifact_reference(value: &str) -> bool {
+    let path = Path::new(value);
+    !path.is_absolute()
+        && !path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        && path.components().count() == 2
+        && matches!(
+            path.components().next(),
+            Some(Component::Normal(directory))
+                if directory == "adapters" || directory == "queries" || directory == "schemas"
+        )
+}
+
+/// Inspect an already syntax-validated project-relative artifact without
+/// following a symlink in its parent or leaf.
+pub(crate) fn plain_project_asset_exists(project_root: &Path, value: &str) -> Result<bool> {
+    let components = Path::new(value).components().collect::<Vec<_>>();
+    if components.is_empty()
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        bail!("project artifact reference must contain only normal path components");
+    }
+    let mut path = project_root.to_path_buf();
+    for (index, component) in components.iter().enumerate() {
+        let Component::Normal(component) = component else {
+            unreachable!("components were checked")
+        };
+        path.push(component);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error).context("inspecting a declared project artifact"),
+        };
+        let leaf = index + 1 == components.len();
+        if metadata.file_type().is_symlink()
+            || (leaf && (!metadata.is_file() || metadata.nlink() != 1))
+            || (!leaf && !metadata.is_dir())
+        {
+            bail!("declared project artifact must use plain directories and one plain file");
+        }
+    }
+    Ok(true)
 }
 
 fn compile_concept(
@@ -5032,7 +5378,7 @@ factSchema: schemas/source-facts.schema.yaml
         let error = validate_local_dev_sources(&sources)
             .expect_err("local serving accepted an unbound statement source")
             .to_string();
-        assert!(error.contains("evidencectl fixtures run --project <dir>"));
+        assert!(error.contains("evidencectl test <dir>"));
 
         validate_local_dev_sources(&BTreeMap::from([(
             "records".to_owned(),
@@ -5102,7 +5448,7 @@ factSchema: schemas/source-facts.schema.yaml
             validate_production_sources(&bundle)
                 .expect_err("an ungoverned transport is refused rather than waved through")
                 .to_string(),
-            "production source transport `carrier-pigeon` has no stated production conditions"
+            "the production source transport has no stated production conditions"
         );
         let bundle = json!({"sources": {"people": {"baseUrl": "https://records.example.test"}}});
         assert_eq!(
@@ -7110,5 +7456,22 @@ factSchema: schemas/family-facts.schema.yaml
             format!("{error:#}"),
             "Evidence rejected the compiled local generation: bundle compilation failed"
         );
+    }
+
+    #[test]
+    fn check_only_signing_ceiling_covers_authored_validity_without_lowering_baseline() {
+        let mut long = json!({
+            "requirements": [{"validitySeconds": 86_400}],
+            "signing": {"maximumAssertionValiditySeconds": 300},
+        });
+        expand_check_signing_validity(&mut long);
+        assert_eq!(long["signing"]["maximumAssertionValiditySeconds"], 86_400);
+
+        let mut short = json!({
+            "requirements": [{"validitySeconds": 60}],
+            "signing": {"maximumAssertionValiditySeconds": 300},
+        });
+        expand_check_signing_validity(&mut short);
+        assert_eq!(short["signing"]["maximumAssertionValiditySeconds"], 300);
     }
 }

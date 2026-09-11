@@ -126,7 +126,7 @@ before constructing or signing an assertion.
 Capture the edited project in a new immutable local generation:
 
 ```sh
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 ```text
@@ -227,7 +227,7 @@ Return to the registry terminal and press `Ctrl+C`.
 
 ## If the local services refuse to start
 
-`evidencectl dev --detach` refuses a project that still holds a local session, reporting
+`evidencectl dev start .` refuses a project that still holds a local session, reporting
 `local development state already exists and is not a completed stopped session`. That happens when
 the first tutorial's services were left running. Stop and remove that session, then start the new
 generation:

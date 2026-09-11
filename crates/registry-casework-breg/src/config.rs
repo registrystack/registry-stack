@@ -44,6 +44,7 @@ type ValidatedDescription = (
 );
 
 /// Launcher-owned BReg connection material for one authored Casework source.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BregBinding {

@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
-use crate::{authoring, evidence_binary, scaffold, source_import, target};
+use crate::{authoring, evidence_binary, scaffold, source_import, target, OutputFormat};
 
 const MAX_PROVIDER_OUTPUT: u64 = 4 * 1024 * 1024;
 
@@ -138,7 +138,7 @@ struct RowScope {
     value_file: PathBuf,
 }
 
-pub(crate) fn run(args: SourceAddArgs) -> Result<ExitCode> {
+pub(crate) fn run(args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode> {
     let binary = args
         .bregctl_bin
         .clone()
@@ -155,9 +155,33 @@ pub(crate) fn run(args: SourceAddArgs) -> Result<ExitCode> {
         }
         Ok(report)
     })?;
-    serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
-    println!();
+    match format {
+        OutputFormat::Json => {
+            serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
+            println!();
+        }
+        OutputFormat::Human => print_human_report(&report),
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+fn print_human_report(report: &Value) {
+    println!(
+        "Evidence source connection {}: {}",
+        report["status"].as_str().unwrap_or("completed"),
+        report["sourceId"].as_str().unwrap_or("configured source")
+    );
+    if let Some(project) = report["project"].as_str() {
+        println!("Project: {project}");
+    }
+    if let Some(target) = report["target"].as_str() {
+        println!("Target: {target}");
+    }
+    for next in report["next"].as_array().into_iter().flatten() {
+        if let Some(next) = next.as_str() {
+            println!("Next: {next}");
+        }
+    }
 }
 
 /// The public provider commands this composition drives belong to one build,
@@ -342,7 +366,13 @@ fn configure(
     report["assertionKeyFile"] = json!(key_path);
     report["next"] = json!([
         "Author or review the Evidence question, derivation, and fixtures that use this source.",
-        "Run evidencectl fixtures run --local with the reported project and target, then start BReg to activate its prepared package and run evidencectl dev --detach with that project and target."
+        format!(
+            "Run `evidencectl test {} --target {} --local`, then start BReg to activate its prepared package and run `evidencectl dev --target {} start {}`.",
+            project.display(),
+            target_path.display(),
+            target_path.display(),
+            project.display()
+        )
     ]);
     Ok(report)
 }

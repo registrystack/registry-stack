@@ -22,21 +22,55 @@ Evidencectl is outside the frozen Evidence Gateway Version 1 runtime contract. I
 change before a compatibility promise covers it. Evidencectl compiles editable authoring input into
 a closed bundle. The `evidence` runtime remains the authority for bundle validation and semantic
 acceptance, fixture evaluation, secret validation, and startup acceptance.
+The canonical adopter commands do not change the numeric Evidence Version 1
+`runtime.yaml` grammar or the existing `evidence-project.yaml` marker.
 
-## Production build commands
+## Project workflow
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
-| `evidencectl build --project <project> --target <target> --output <new-candidate>` | Editable project and one explicit production target | Creates a new candidate with `runtime.yaml` and closed `bundle/` | Overwrite output, contact source services, OIDC, or Mint, create production secrets, or start a listener |
-| `evidencectl doctor --project <candidate>` | Completed candidate on its target host | Advises on runtime, bundle, secret, audit, acquisition capability, and ordered acquisition-plan posture | Change project files or replace `evidence check` |
-| `evidencectl doctor --project <candidate> --mint-config <mint.yaml>` | Completed candidate and separately authored Mint configuration | Adds read-only mechanical protocol compatibility checks | Register callers, copy Mint files, infer authority, or mint a token |
-| `evidencectl fixtures run --project <project>` | A deployment project with `runtime.yaml`, or an editable project with `questions/` and `sources/`, plus referenced synthetic fixtures | Uses runtime `check` and `evaluate` for a deployment; privately compiles an editable project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
-| `evidencectl fixtures run --project <candidate> --explain` | The same, and asks each evaluation to explain itself | Relays each fixture's stage trace beside its step, or as that fixture's `trace` field under `--json` | Print a response, fact, derived, or selector value, or explain a served request |
+| `evidencectl check <project>` | Editable project | Reports authoring completeness and field-addressed findings | Claim deployment closure, run fixtures, resolve secrets, or contact a dependency |
+| `evidencectl check <project> --target <target>` | Editable project and one explicit target | Adds the target's governance, runtime structure, public keys, source connections, and governed-bundle validation | Require target-host paths or secrets to exist, run fixtures, or contact a dependency |
+| `evidencectl check <project> --target <target> --production` | Editable project and one explicit production or evidence-grade target | Refuses incomplete deployment closure under that target's own assurance profile | Select a target, upgrade its profile, or prove live readiness |
+| `evidencectl explain <project> [--target <target>]` | Editable project and optional explicit target | Applies the same offline authoring validation, then reports status, findings, revision, and the authored inventory; includes target governance only when selected | Contact sources or expose secret and subject values |
+| `evidencectl package <project> --target <target> --output <new-candidate>` | Editable project and one explicit production target | Creates a new candidate with `runtime.yaml` and closed `bundle/` | Overwrite output, contact source services, OIDC, or Mint, create production secrets, or start a listener |
+| `evidencectl test <project>` | A deployment project with `runtime.yaml`, or an editable project with `questions/` and `sources/`, plus referenced synthetic fixtures | Uses runtime `check` and `evaluate` for a deployment; privately compiles an editable project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
+| `evidencectl test <candidate> --explain` | The same, and asks each evaluation to explain itself | Relays each fixture's stage trace beside its step, or as that fixture's `trace` field under `--format json` | Print a response, fact, derived, or selector value, or explain a served request |
+| `evidencectl doctor --runtime-config <absolute-file>` | Runtime file on its target host | Runs the runtime-owned startup dependency preflight without opening the public listener | Send an Evidence request or establish that a fixture passed |
+| `evidencectl artifact inspect <candidate>` | Completed candidate | Inspects artifact custody without contacting dependencies | Establish live dependency readiness |
+| `evidencectl artifact inspect <candidate> --mint-config <mint.yaml>` | Completed candidate and separately authored Mint configuration | Adds a read-only mechanical protocol compatibility comparison | Register callers, copy Mint files, infer authority, or mint a token |
 
-`build` is create-only. It rejects an existing output directory, unauthenticated or non-HTTPS
+`package` is create-only. It rejects an existing output directory, unauthenticated or non-HTTPS
 production HTTP sources, source transports with no stated production conditions, missing governance
 metadata or fixtures, unresolved review markers, unknown fields, symlink traversal, and references
-outside the allowed project directories. A failed build publishes no candidate.
+outside the allowed project directories. A failed package publishes no candidate.
+
+An ordinary `check` can succeed with `status: incomplete` and visible findings. Add
+`--deny-findings` when any finding must refuse the command. All findings carry `severity`, `code`,
+`artifact`, `path`, `message`, and `suggestedAction`. Human output is the default. Add the global
+`--format json` option for the same result as structured JSON.
+
+The workflow exit classes are `0` for success, `1` for a domain refusal or denied finding, `2` for
+command-line usage, and `3` for an operational failure. These classes belong to adopter tooling;
+they do not change the Evidence runtime verifier's frozen exit contract.
+
+{/* Evidence: crates/registry-evidencectl/src/lib.rs, Cli, Command, OutputFormat,
+    run_check_command(), and run_explain_command();
+    crates/registry-evidencectl/src/check.rs, check() and explain();
+    crates/registry-evidencectl/src/runtime.rs, DoctorArgs and run(). */}
+
+## Compatibility spellings
+
+The released `new`, `fixtures run`, and `build` spellings remain available during the command
+transition. New projects, examples, and current procedures use `init`, `test`, and `package`.
+The hidden `doctor --project <candidate>` compatibility form retains artifact inspection;
+use `artifact inspect <candidate>` for that operation and reserve `doctor --runtime-config` for
+live startup dependency checks. Do not combine a canonical positional project with its former
+`--project` flag; conflicting old and new forms are usage errors.
+Request preparation uses `--response-format signed-jws|sd-jwt-vc` so the
+response choice cannot collide with global report formatting. The released
+`request prepare --format` spelling remains accepted only for those two legacy
+response values. Supplying both response selectors is a usage error.
 
 ## Production input reference
 
@@ -66,11 +100,11 @@ responses, or real identifiers.
 
 ## Local-only commands
 
-`evidencectl new` requires a destination and exactly one authoring source:
+`evidencectl init` requires a destination and exactly one authoring source:
 
 ```sh
-evidencectl new <directory> --openapi <path-or-https-url> --profile local
-evidencectl new <directory> --transport sqlite-extract --profile local
+evidencectl init <directory> --openapi <path-or-https-url> --profile local
+evidencectl init <directory> --transport sqlite-extract --profile local
 ```
 
 OpenAPI mode creates an authoring workspace whose source, question, and fixture directories remain
@@ -78,7 +112,7 @@ empty. SQLite mode creates a synthetic source, question, query, adapters, schema
 fixture. Both create disposable, unbound Evidence Gateway key material in the ignored owner-only
 `secrets/` directory. Neither creates a production target, Mint configuration, or deployable bundle.
 
-`evidencectl dev` always creates session-scoped P-256 pairs for Registry Mint and an SD-JWT VC
+`evidencectl dev start [<project>]` creates session-scoped P-256 pairs for Registry Mint and an SD-JWT VC
 holder. It creates an implicit caller pair only when the project has no explicit access
 policy; explicit local clients use their keys under `.evidence/clients/`. Nothing under
 `.evidence/dev` or `.evidence/clients` enters a production target.
@@ -97,7 +131,7 @@ Public, reviewable local access configuration lives under `access/`. Owner-only 
 live only under `.evidence/clients/`. Generated Registry Mint registrations under
 `.evidence/dev/generated/clients/` are disposable and contain public keys only.
 
-Client add and revoke request a Registry Mint reload only when `evidencectl dev` has a ready local
+Client add and revoke request a Registry Mint reload only when `evidencectl dev start` has a ready local
 session. They do not restart or reload Evidence Gateway. Registry Mint does not acknowledge completion of
 the reload, so the next token exchange provides the functional check. A policy change requires a
 new Evidence Gateway generation.
@@ -132,7 +166,7 @@ production candidate input.
 ```
 
 Commit all six with the rest of the project. They are generated, nonsecret configuration matched to
-the schemas the checks apply, and the `.gitignore` that `evidencectl new` writes excludes `secrets/`
+the schemas the checks apply, and the `.gitignore` that `evidencectl init` writes excludes `secrets/`
 and `.evidence/` only. A later run refreshes exactly what an earlier run recorded writing. A managed
 file someone has edited by hand stops the command, which names that file and changes nothing.
 

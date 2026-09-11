@@ -43,20 +43,20 @@ build the same unreleased source; they do not pull or represent a published
 Casework image.
 
 First [package the reviewed policy](../../configure/casework/#package-reviewed-policy).
-Set the operator file's `project` to
-`/etc/registry-casework/package/casework.yaml`, its secret root to
+Set the runtime file's `package.root` to
+`/etc/registry-casework/package`, its secret root to
 `/run/secrets/registry-casework`, its audit path below
 `/var/lib/registry-casework/audit`, and its listener to a container-private
 address. Then provide absolute host paths to the three read-only inputs:
 
 ```sh
-export CASEWORK_OPERATOR_FILE="$PWD/operator.yaml"
+export CASEWORK_RUNTIME_CONFIG_FILE="$PWD/runtime.yaml"
 export CASEWORK_PACKAGE_DIR="$PWD/casework-policy-package"
 export CASEWORK_SECRET_ROOT="$PWD/secrets"
 
 docker compose -f docker/compose/docker-compose.casework.yaml build
 docker compose -f docker/compose/docker-compose.casework.yaml run --rm \
-  casework --config /etc/registry-casework/operator.yaml migrate
+  casework --runtime-config /etc/registry-casework/runtime.yaml migrate
 docker compose -f docker/compose/docker-compose.casework.yaml up -d
 ```
 
@@ -72,32 +72,35 @@ operator-owned dependencies.
 
 Provide one PostgreSQL database and two credentials. The migration credential
 owns and changes the Casework schema. The runtime credential serves requests and
-workers. Store both URLs behind the operator file's secret references rather
+workers. Store both URLs behind the runtime file's secret references rather
 than writing credentials into YAML.
 
-Provide the OIDC issuer named by the operator file. Its discovery document and
+Provide the OIDC issuer named by the runtime file. Its discovery document and
 keys must be reachable at startup unless the configuration selects a static JWKS
 document. Keep the audit file on durable storage and provide an audit secret of
 at least 32 bytes through the configured file secret provider.
 
 Place a TLS proxy or ingress in front of the Casework listener. The production
 runtime serves HTTP only on the private or container-private boundary declared
-by the operator file.
+by the runtime file.
 
 {/* Evidence: crates/registry-casework/src/{config,runtime,store}.rs;
     crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES. */}
 
 ## Migrate and start
 
-Apply embedded migrations using the operator configuration bound to the reviewed
+Apply embedded migrations using the runtime configuration bound to the reviewed
 package:
 
 ```sh
-casework --config ./operator.yaml migrate
-casework --config ./operator.yaml serve
+casework --runtime-config /absolute/path/to/runtime.yaml migrate
+caseworkctl doctor --runtime-config /absolute/path/to/runtime.yaml
+casework --runtime-config /absolute/path/to/runtime.yaml serve
 ```
 
-Run `serve` under the host's service manager. Startup refuses an unverified
+Doctor checks the selected configuration, database, issuer, source, and
+directory readiness without opening the public listener or mutating application
+state. Run `serve` under the host's service manager. Startup refuses an unverified
 production package, an invalid listener boundary, mismatched source bindings,
 unavailable database state, invalid OIDC configuration, or an unusable audit
 secret. Fix the reported dependency or binding and restart; do not bypass the
@@ -136,7 +139,7 @@ When the source owner authorizes erasure for one exact request, preview the
 local effect under the migration database credential:
 
 ```sh
-caseworkctl retention erase ./casework --operator ./operator.yaml \
+caseworkctl retention erase ./casework --runtime-config ./runtime.yaml \
   --source-id "<source-id>" --request-kind "<request-kind>" --request-id "<request-id>"
 ```
 
@@ -164,7 +167,7 @@ confirm the outcome with the source owner. Then preview the settlement under the
 migration database credential:
 
 ```sh
-caseworkctl attempt settle ./casework --operator ./operator.yaml \
+caseworkctl attempt settle ./casework --runtime-config ./runtime.yaml \
   --attempt-id "<attempt-id>" --outcome not-applied \
   --reason "<why the source owner confirmed this outcome>" \
   --decided-by "<who decided>"

@@ -123,7 +123,7 @@ deployment before production use.
 Create an editable Evidence Gateway project and disposable local keys:
 
 ```sh
-evidencectl new registered-parent \
+evidencectl init registered-parent \
   --openapi opencrvs-events.openapi.yaml \
   --profile local
 cd registered-parent
@@ -603,7 +603,7 @@ Compile the editable artifacts into a private local generation and start Evidenc
 Mint:
 
 ```sh
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 ```text

@@ -457,9 +457,9 @@ evidence --runtime "<candidate>/runtime.yaml" \
   | jq -r '.cases[] | "\(.id)\t\(.failure // "passed")"'
 ```
 
-`evidencectl fixtures run --project <candidate> --explain` asks the same of
+`evidencectl test <candidate> --explain` asks the same of
 every fixture a project references using the JSON form. The human report
-pretty-prints each value-free document under its step line; `--json` places the
+pretty-prints each value-free document under its step line; `--format json` places the
 same document at that fixture's `trace` field. The driver totals
 `evaluatedCases` from those documents and does not interpret Evidence
 semantics.

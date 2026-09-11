@@ -331,7 +331,7 @@ fn suggestion_openapi(args: &SuggestArgs) -> Result<types::SpecSource> {
         (Some(project), None) => {
             if !project.is_dir() {
                 bail!(
-                    "authoring project directory {} not found; create it with `evidencectl new` first",
+                    "authoring project directory {} not found; create it with `evidencectl init` first",
                     project.display()
                 );
             }
@@ -386,7 +386,7 @@ fn deliver_into_project(
 ) -> Result<ExitCode> {
     if !project.is_dir() {
         bail!(
-            "authoring project directory {} not found; create one with `evidencectl new` first",
+            "authoring project directory {} not found; create one with `evidencectl init` first",
             project.display()
         );
     }

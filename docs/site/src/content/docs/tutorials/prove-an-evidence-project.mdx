@@ -14,9 +14,9 @@ locale: en
 standards_referenced: []
 ---
 
-Start with an editable project: the directory `evidencectl new` created, holding `questions/`,
+Start with an editable project: the directory `evidencectl init` created, holding `questions/`,
 `derivations/`, `fixtures/`, and its source objects. It has no `runtime.yaml` and no `bundle/`;
-those belong to the candidate `evidencectl build` produces later. If you need to create a project,
+those belong to the candidate `evidencectl package` produces later. If you need to create a project,
 [connect an institution source from OpenAPI](../connect-an-institution-source/) or
 [get your first assertion](../first-evidence-assertion/) before adding fixtures. Fixtures are
 executable claims about your own Evidence Gateway project. They are not sample data for a first
@@ -95,10 +95,13 @@ then keep only cases that express your project.
 From any directory, run:
 
 ```sh
-evidencectl fixtures run --project "<evidence-project>"
+evidencectl check "<evidence-project>" --deny-findings
+evidencectl test "<evidence-project>"
 ```
 
-Evidencectl asks the `evidence` binary for its version first and refuses one that is not its own,
+The first command validates authored completeness without contacting a source, identity provider,
+or database. It reports each gap with its file path and a corrective action. The second command
+asks the `evidence` binary for its version first and refuses one that is not its own,
 then compiles the editable project into a private staging bundle, runs `evidence bundle-check`
 against it, discovers the fixture files the compiled bundle captured, and drives each one through
 `evidence bundle-evaluate`; pass `--evidence-bin` when the matching binary is not the first
@@ -116,7 +119,7 @@ PASS: fixtures/adult-status.yaml (8 cases)
 Use JSON output in CI:
 
 ```sh
-evidencectl fixtures run --project "<evidence-project>" --json > fixture-report.json
+evidencectl test "<evidence-project>" --format json > fixture-report.json
 ```
 
 Treat any failed case, missing reference, unknown field, or unsupported expectation as a failed
@@ -128,7 +131,7 @@ A failure names the contract that broke, which says a case failed but not where 
 run to explain itself:
 
 ```sh
-evidencectl fixtures run --project "<evidence-project>" --explain
+evidencectl test "<evidence-project>" --explain
 ```
 
 Each fixture prints one JSON trace after its result line. The trace holds one entry per case, with
@@ -143,7 +146,7 @@ To explain one fixture on its own, or one case inside it, name them. The paths a
 compiled bundle captured, which are the project's own `fixtures/` paths:
 
 ```sh
-evidencectl fixtures run --project "<evidence-project>" \
+evidencectl test "<evidence-project>" \
   --fixture "fixtures/<cases>.yaml" --case "<case-id>" --explain
 ```
 
@@ -155,7 +158,7 @@ public problem and the audit chain instead.
 
 ## Check the deployable inputs
 
-An editable project has no runtime document to check. Once `evidencectl build` has produced a
+An editable project has no runtime document to check. Once `evidencectl package` has produced a
 candidate, that candidate is what carries `runtime.yaml` beside `bundle/`, and `evidence check`
 runs against it:
 
@@ -175,7 +178,7 @@ mount them read-only, then rerun the check against those exact bytes.
 ## Hand off the reviewed inputs
 
 Evidencectl has no generic `promote` command. Your deployment system owns approval, artifact
-transport, rollback, and environment binding. Use `evidencectl build` to create a new candidate
+transport, rollback, and environment binding. Use `evidencectl package` to create a new candidate
 from the editable project and one explicit production target.
 
 Build and hand off only when these facts are recorded together:

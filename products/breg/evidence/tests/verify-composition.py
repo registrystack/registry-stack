@@ -244,7 +244,7 @@ def verify_source_add_review(workspace: Path, binaries: dict[str, Path]) -> dict
     help_text = run(binaries["evidencectl"], "source", "add", "--help", environment=environment)
     assert "bregctl" in help_text and "PATH" in help_text and "--apply" in help_text
     # The withdrawn review flag must not survive as an accepted argument.
-    assert "--dry-run" in refuse(*add_arguments, "--dry-run")
+    assert "evidencectl.usage" in refuse(*add_arguments, "--dry-run")
     mismatched = refuse(*add_arguments, "--bregctl-bin", binaries["evidence"])
     assert version in mismatched and "BREGCTL_BIN" in mismatched, mismatched
     # A review and an apply both stop at the one public preparation this
@@ -432,7 +432,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
                              "--source-id", source_id, "--selector-profile", "by-code")
             state_before_preview = {path: path.read_bytes() for path in
                 [state_root / "state.json", registry / "registry.yaml", registry / "dev-clients.yaml"]}
-            preview = json.loads(command("evidencectl", *add_arguments[:-2]))
+            preview = json.loads(command("evidencectl", *add_arguments[:-2], "--format", "json"))
             assert preview["status"] == "preview"
             assert all("--apply" in step for step in preview["next"])
             assert all(preview[key] == source_id for key in ["client", "accessProfile", "selectorProfile"])
@@ -492,7 +492,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
                 [state_root / "state.json", registry / "registry.yaml", registry / "dev-clients.yaml"]}
             preview = json.loads(command("evidencectl", "source", "add", registry, "--project", project,
                 "--entity", "record", "--selector-field", "code", "--fields", "status",
-                "--all-records"))
+                "--all-records", "--format", "json"))
             assert preview["status"] == "preview"
             assert all("--apply" in step for step in preview["next"])
             assert all(preview[key] == "registry-record"

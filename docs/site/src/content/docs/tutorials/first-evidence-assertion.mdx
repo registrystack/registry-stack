@@ -167,7 +167,7 @@ none of those source values. Return to the first terminal and press `Ctrl+C` to 
 Create a local project from the source's OpenAPI description:
 
 ```sh
-evidencectl new adult-status \
+evidencectl init adult-status \
   --openapi tutorial-source.openapi.yaml \
   --profile local
 cd adult-status
@@ -361,7 +361,7 @@ Source mock ready: mode=materialized origin=http://127.0.0.1:4010 served=3 skipp
 Start Evidence Gateway and Registry Mint:
 
 ```sh
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 ```text
@@ -492,7 +492,7 @@ expected response format:
 evidencectl request prepare adult-status \
   --purpose age-check \
   --subject person_id=person-123 \
-  --format sd-jwt-vc \
+  --response-format sd-jwt-vc \
   --name first-vc
 ```
 
@@ -579,7 +579,7 @@ record or access token.
 Choose two different unused ports when you start the local services:
 
 ```sh
-evidencectl dev --detach --evidence-port 8180 --mint-port 8181
+evidencectl dev --evidence-port 8180 --mint-port 8181 start .
 ```
 
 Evidence Gateway uses the selected ports consistently in its runtime, Mint authorization, readiness

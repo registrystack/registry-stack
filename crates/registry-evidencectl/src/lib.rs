@@ -3,14 +3,15 @@
 //! implements Evidence semantics itself and shells out to the runtime binary
 //! for them.
 
-use std::process::ExitCode;
+use std::{ffi::OsString, io::Write as _, path::PathBuf, process::ExitCode};
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
 mod access;
 mod audit_view;
 mod authoring;
 mod build;
+mod check;
 mod client;
 mod dev;
 mod doctor;
@@ -19,6 +20,7 @@ mod fixtures;
 mod jwks;
 mod keygen;
 mod request;
+mod runtime;
 mod scaffold;
 mod source_add;
 mod source_cli;
@@ -37,12 +39,32 @@ mod verify;
     about = "Evidence adopter tooling: keys, source authoring, fixture runs"
 )]
 struct Cli {
+    /// Select human-readable or machine-readable output.
+    #[arg(
+        id = "output_format",
+        long = "format",
+        global = true,
+        value_enum,
+        default_value_t = OutputFormat::Human
+    )]
+    output_format: OutputFormat,
+
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Create a new editable Evidence project.
+    Init(scaffold::NewArgs),
+    /// Validate authored policy and, when selected, deployment closure offline.
+    Check(CheckArgs),
+    /// Explain the authored inventory and optional target-owned governance.
+    Explain(ExplainArgs),
+    /// Run the project's synthetic Evidence fixtures.
+    Test(TestArgs),
+    /// Compile an editable project into a reviewed deployment candidate.
+    Package(PackageArgs),
     /// Configure progressive relying-party clients and fetch contract candidates.
     #[command(subcommand)]
     Client(client::ClientCommand),
@@ -67,8 +89,11 @@ enum Command {
     /// Create and inspect complete deployment targets.
     #[command(subcommand)]
     Target(target::TargetCommand),
-    /// Report every project artifact whose mode or owner the runtime refuses.
-    Doctor(doctor::DoctorArgs),
+    /// Check one runtime configuration and its startup dependencies.
+    Doctor(runtime::DoctorArgs),
+    /// Compatibility operations over deployment artifacts.
+    #[command(subcommand)]
+    Artifact(ArtifactCommand),
     /// Run the private local Registry Mint and Evidence Gateway pair.
     Dev(dev::DevArgs),
     /// Prepare a closed request for the active local project.
@@ -86,6 +111,105 @@ enum Command {
     DevSupervisor(dev::SupervisorArgs),
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub(crate) enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
+#[derive(Debug, Args)]
+struct CheckArgs {
+    /// Editable Evidence project directory.
+    project: PathBuf,
+    /// Explicit deployment target whose governance and runtime structure are checked.
+    #[arg(long)]
+    target: Option<PathBuf>,
+    /// Require a production or evidence-grade target and complete deployment closure.
+    #[arg(long)]
+    production: bool,
+    /// Refuse an otherwise valid but incomplete authoring project.
+    #[arg(long)]
+    deny_findings: bool,
+}
+
+#[derive(Debug, Args)]
+struct ExplainArgs {
+    /// Editable Evidence project directory.
+    project: PathBuf,
+    /// Include this deployment target's effective governance.
+    #[arg(long)]
+    target: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct TestArgs {
+    /// Editable or deployment Evidence project directory.
+    project: PathBuf,
+    /// Complete deployment target to use when compiling an editable project.
+    #[arg(long)]
+    target: Option<PathBuf>,
+    /// Generate local caller governance while retaining the target's source connections.
+    #[arg(long, requires = "target")]
+    local: bool,
+    /// Run only the exact bundle-relative fixture path named here.
+    #[arg(long)]
+    fixture: Option<String>,
+    /// Run only the exact case identifier in the selected fixture.
+    #[arg(long, requires = "fixture")]
+    case: Option<String>,
+    /// Include the runtime's structured value-free evaluation trace.
+    #[arg(long)]
+    explain: bool,
+    #[arg(long, hide = true)]
+    evidence_bin: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct PackageArgs {
+    /// Editable Evidence project directory.
+    project: PathBuf,
+    /// Explicit deployment target.
+    #[arg(long)]
+    target: PathBuf,
+    /// New candidate directory to create.
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Debug, Subcommand)]
+enum ArtifactCommand {
+    /// Inspect deployment artifact custody without contacting dependencies.
+    Inspect(ArtifactInspectArgs),
+}
+
+#[derive(Debug)]
+struct SafeCliFailure {
+    operational: bool,
+    code: &'static str,
+    artifact: String,
+    path: &'static str,
+    message: String,
+    suggested_action: String,
+}
+
+impl std::fmt::Display for SafeCliFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SafeCliFailure {}
+
+#[derive(Debug, Args)]
+struct ArtifactInspectArgs {
+    /// Deployment project containing runtime.yaml beside bundle/.
+    project: PathBuf,
+    /// Mechanically compare this Registry Mint configuration with Evidence authentication.
+    #[arg(long)]
+    mint_config: Option<PathBuf>,
+}
+
 /// Return the complete command tree without running Evidence adopter tooling.
 pub fn command() -> clap::Command {
     let mut command = Cli::command();
@@ -95,19 +219,117 @@ pub fn command() -> clap::Command {
 
 /// Parse process arguments and run one adopter-tooling operation.
 pub fn main_entry() -> ExitCode {
-    let cli = Cli::parse();
+    let arguments = normalized_process_args();
+    let requested_format = requested_output_format(&arguments);
+    let cli = match Cli::try_parse_from(arguments) {
+        Ok(cli) => cli,
+        Err(error)
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            let _ = error.print();
+            return ExitCode::SUCCESS;
+        }
+        Err(_) => {
+            write_usage_failure(requested_format);
+            return ExitCode::from(2);
+        }
+    };
+    let format = cli.output_format;
     let result = match cli.command {
+        Command::Init(args) => {
+            let artifact = args.directory.display().to_string();
+            safe_command(
+                scaffold::run_with_format(args, format),
+                "evidence.init.refused",
+                artifact,
+                "Evidence could not create the requested project destination.",
+                "Use a new destination and correct the starter or import input named by the command.",
+            )
+        }
+        Command::Check(args) => {
+            let artifact = args.project.display().to_string();
+            safe_command(
+                run_check_command(args, format),
+                "evidence.check.failed",
+                artifact,
+                "Evidence could not inspect the selected authoring project.",
+                "Correct the selected project or target artifact and rerun check.",
+            )
+        }
+        Command::Explain(args) => {
+            let artifact = args.project.display().to_string();
+            safe_command(
+                run_explain_command(args, format),
+                "evidence.explain.failed",
+                artifact,
+                "Evidence could not explain the selected authoring project.",
+                "Correct the selected project or target artifact and rerun explain.",
+            )
+        }
+        Command::Test(args) => {
+            let artifact = args.project.display().to_string();
+            safe_command(
+                fixtures::run(fixtures::FixturesCommand::Run(fixtures::RunArgs {
+                    project: args.project,
+                    evidence_bin: args.evidence_bin,
+                    target: args.target,
+                    local: args.local,
+                    fixture: args.fixture,
+                    case: args.case,
+                    json: format == OutputFormat::Json,
+                    explain: args.explain,
+                })),
+                "evidence.test.failed",
+                artifact,
+                "Evidence could not complete the selected offline fixture run.",
+                "Correct the selected project, target, or fixture artifact and rerun test.",
+            )
+        }
+        Command::Package(args) => {
+            let artifact = args.project.display().to_string();
+            safe_command(
+                build::run_with_format(
+                    build::BuildArgs {
+                        project: args.project,
+                        target: args.target,
+                        output: args.output,
+                    },
+                    format,
+                ),
+                "evidence.package.failed",
+                artifact,
+                "Evidence could not compile the selected deployment candidate.",
+                "Correct the selected project or target findings and rerun package with a new output directory.",
+            )
+        }
         Command::Client(command) => client::run(command),
         Command::Access(command) => access::run(command),
         Command::Keygen(command) => keygen::run(command),
         Command::Jwks(args) => jwks::run(args),
-        Command::New(args) => scaffold::run(args),
-        Command::Build(args) => build::run(args),
-        Command::Fixtures(command) => fixtures::run(command),
-        Command::Source(command) => source_cli::run(command),
+        Command::New(args) => scaffold::run_with_format(args, format),
+        Command::Build(args) => build::run_with_format(args, format),
+        Command::Fixtures(fixtures::FixturesCommand::Run(mut args)) => {
+            args.json |= format == OutputFormat::Json;
+            fixtures::run(fixtures::FixturesCommand::Run(args))
+        }
+        Command::Source(command) => source_cli::run(command, format),
         Command::Target(command) => target::run(command),
-        Command::Doctor(args) => doctor::run(args),
-        Command::Dev(args) => dev::run(args),
+        Command::Doctor(args) => safe_command(
+            runtime::run(args, format),
+            "evidence.doctor.failed",
+            "runtime configuration".to_owned(),
+            "Evidence could not inspect the selected runtime configuration.",
+            "Correct the runtime configuration or unavailable startup dependency and rerun doctor.",
+        ),
+        Command::Artifact(ArtifactCommand::Inspect(args)) => doctor::run(doctor::DoctorArgs {
+            project: args.project,
+            mint_config: args.mint_config,
+            json: format == OutputFormat::Json,
+        }),
+        Command::Dev(args) => safe_dev_command(dev::run_with_format(args, format)),
         Command::Request(command) => request::run(command),
         Command::Verify(args) => verify::run(args),
         Command::Audit(command) => audit_view::run(command),
@@ -117,10 +339,280 @@ pub fn main_entry() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("evidencectl: {error:#}");
-            ExitCode::FAILURE
+            if let Some(failure) = error.downcast_ref::<SafeCliFailure>() {
+                write_safe_failure(failure, format);
+                return ExitCode::from(if failure.operational { 3 } else { 1 });
+            }
+            let operational = error
+                .chain()
+                .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
+            let (status, code, exit) = if operational {
+                ("operational-failure", "evidencectl.operational-failure", 3)
+            } else {
+                ("domain-refusal", "evidencectl.domain-refusal", 1)
+            };
+            let detail = format!("{error:#}");
+            let safe_message = if operational {
+                "Evidence adopter tooling could not complete the requested operation."
+            } else {
+                "Evidence adopter tooling refused the requested authored or configuration input."
+            };
+            match format {
+                OutputFormat::Human => eprintln!("evidencectl: {detail}"),
+                OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": status,
+                        "diagnostics": [{
+                            "severity": "error",
+                            "code": code,
+                            "artifact": "evidencectl",
+                            "path": "$",
+                            "message": safe_message,
+                            "suggestedAction": "Correct the reported problem and retry the command."
+                        }]
+                    })
+                ),
+            }
+            ExitCode::from(exit)
         }
     }
+}
+
+fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
+    arguments
+        .iter()
+        .enumerate()
+        .any(|(index, argument)| {
+            argument == "--format=json"
+                || (argument == "--format"
+                    && arguments
+                        .get(index + 1)
+                        .is_some_and(|value| value == "json"))
+        })
+        .then_some(OutputFormat::Json)
+        .unwrap_or(OutputFormat::Human)
+}
+
+fn usage_failure_json() -> serde_json::Value {
+    serde_json::json!({
+        "status": "usage-error",
+        "diagnostics": [{
+            "severity": "error",
+            "code": "evidencectl.usage",
+            "artifact": "command line",
+            "path": "$",
+            "message": "The Evidence command line is incomplete or contains conflicting or unsupported arguments.",
+            "suggestedAction": "Run evidencectl --help or the selected command with --help, then retry using the documented arguments."
+        }]
+    })
+}
+
+fn usage_failure_human() -> String {
+    let diagnostic = &usage_failure_json()["diagnostics"][0];
+    format!(
+        "{}[{}] {} {}: {}\n  next: {}\n",
+        diagnostic["severity"].as_str().unwrap_or("error"),
+        diagnostic["code"].as_str().unwrap_or("evidencectl.usage"),
+        diagnostic["artifact"].as_str().unwrap_or("command line"),
+        diagnostic["path"].as_str().unwrap_or("$"),
+        diagnostic["message"]
+            .as_str()
+            .unwrap_or("invalid arguments"),
+        diagnostic["suggestedAction"]
+            .as_str()
+            .unwrap_or("Run evidencectl --help."),
+    )
+}
+
+fn write_usage_failure(format: OutputFormat) {
+    match format {
+        OutputFormat::Human => eprint!("{}", usage_failure_human()),
+        OutputFormat::Json => println!("{}", usage_failure_json()),
+    }
+}
+
+fn safe_command(
+    result: anyhow::Result<ExitCode>,
+    code: &'static str,
+    artifact: String,
+    message: &'static str,
+    suggested_action: &'static str,
+) -> anyhow::Result<ExitCode> {
+    result.map_err(|error| {
+        let operational = error
+            .chain()
+            .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
+        SafeCliFailure {
+            operational,
+            code,
+            artifact,
+            path: "$",
+            message: message.to_owned(),
+            suggested_action: if operational {
+                "Verify required files and services, and select the matching Evidence binary, then retry the command.".to_owned()
+            } else {
+                suggested_action.to_owned()
+            },
+        }
+        .into()
+    })
+}
+
+fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode> {
+    match result {
+        Err(error) => {
+            if let Some(conflict) = error.downcast_ref::<dev::PortConflict>() {
+                return Err(SafeCliFailure {
+                    operational: true,
+                    code: "evidence.dev.port-unavailable",
+                    artifact: format!("127.0.0.1:{}", conflict.port),
+                    path: "$",
+                    message: format!(
+                        "Local port {} is already in use, so the local {} cannot start.",
+                        conflict.port, conflict.service
+                    ),
+                    suggested_action: format!(
+                        "Free 127.0.0.1:{}, or rerun dev start with {} <port>.",
+                        conflict.port, conflict.flag
+                    ),
+                }
+                .into());
+            }
+            safe_command(
+                Err(error),
+                "evidence.dev.failed",
+                "local development project".to_owned(),
+                "Evidence could not complete the requested local lifecycle operation.",
+                "Correct the local project or service dependency and retry the lifecycle operation.",
+            )
+        }
+        Ok(code) => Ok(code),
+    }
+}
+
+fn write_safe_failure(failure: &SafeCliFailure, format: OutputFormat) {
+    match format {
+        OutputFormat::Human => eprint!("{}", safe_failure_human(failure)),
+        OutputFormat::Json => println!("{}", safe_failure_json(failure)),
+    }
+}
+
+fn safe_failure_human(failure: &SafeCliFailure) -> String {
+    format!(
+        "error[{}] {} {}: {}\n  next: {}\n",
+        failure.code, failure.artifact, failure.path, failure.message, failure.suggested_action
+    )
+}
+
+fn safe_failure_json(failure: &SafeCliFailure) -> serde_json::Value {
+    serde_json::json!({
+        "status": if failure.operational { "operational-failure" } else { "domain-refusal" },
+        "diagnostics": [{
+            "severity": "error",
+            "code": failure.code,
+            "artifact": failure.artifact,
+            "path": failure.path,
+            "message": failure.message,
+            "suggestedAction": failure.suggested_action,
+        }]
+    })
+}
+
+/// Preserve the released request-response `--format` spelling now that the
+/// top-level flag owns output rendering. Its two closed values are
+/// unambiguous; new help uses `--response-format`.
+fn normalized_process_args() -> Vec<OsString> {
+    normalize_arguments(std::env::args_os().collect())
+}
+
+fn normalize_arguments(mut arguments: Vec<OsString>) -> Vec<OsString> {
+    let in_request_prepare = arguments
+        .windows(2)
+        .any(|pair| pair[0] == "request" && pair[1] == "prepare");
+    if !in_request_prepare {
+        return arguments;
+    }
+    let mut index = 0;
+    while index < arguments.len() {
+        if arguments[index] == "--format"
+            && arguments
+                .get(index + 1)
+                .is_some_and(|value| value == "signed-jws" || value == "sd-jwt-vc")
+        {
+            arguments[index] = OsString::from("--response-format");
+            index += 2;
+            continue;
+        }
+        if arguments[index] == "--format=signed-jws" {
+            arguments[index] = OsString::from("--response-format=signed-jws");
+        } else if arguments[index] == "--format=sd-jwt-vc" {
+            arguments[index] = OsString::from("--response-format=sd-jwt-vc");
+        }
+        index += 1;
+    }
+    arguments
+}
+
+fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
+    let project = args.project.display().to_string();
+    match check::check(
+        &args.project,
+        args.target.as_deref(),
+        args.production,
+        args.deny_findings,
+    ) {
+        Ok(report) => {
+            write_check_report(&report, format)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => match error.downcast::<check::DeniedFindings>() {
+            Ok(denied) => {
+                let report = serde_json::json!({
+                    "command": "check",
+                    "status": "refused",
+                    "proof": "none",
+                    "project": project,
+                    "findings": denied.0,
+                });
+                write_check_report(&report, format)?;
+                Ok(ExitCode::from(1))
+            }
+            Err(error) => Err(error),
+        },
+    }
+}
+
+fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
+    let project = args.project.display().to_string();
+    match check::explain(&args.project, args.target.as_deref()) {
+        Ok(report) => {
+            write_check_report(&report, format)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => match error.downcast::<check::DeniedFindings>() {
+            Ok(denied) => {
+                let report = serde_json::json!({
+                    "command": "explain",
+                    "status": "refused",
+                    "proof": "none",
+                    "project": project,
+                    "findings": denied.0,
+                });
+                write_check_report(&report, format)?;
+                Ok(ExitCode::from(1))
+            }
+            Err(error) => Err(error),
+        },
+    }
+}
+
+fn write_check_report(report: &serde_json::Value, format: OutputFormat) -> anyhow::Result<()> {
+    match format {
+        OutputFormat::Human => check::render_human(report, &mut std::io::stdout())?,
+        OutputFormat::Json => writeln!(std::io::stdout(), "{}", serde_json::to_string(report)?)?,
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -138,16 +630,101 @@ mod tests {
 
     #[test]
     fn dev_syntax_separates_start_options_from_lifecycle_subcommands() {
-        let missing_detach = Cli::try_parse_from(["evidencectl", "dev"])
-            .expect_err("starting the local pair requires --detach");
-        assert_eq!(missing_detach.kind(), ErrorKind::MissingRequiredArgument);
-
+        assert!(Cli::try_parse_from(["evidencectl", "dev", "start"]).is_ok());
+        assert!(Cli::try_parse_from(["evidencectl", "dev", "start", "project"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "dev",
+            "start",
+            "project",
+            "--evidence-port",
+            "18080",
+            "--mint-port",
+            "18081",
+        ])
+        .is_ok());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "--detach"]).is_ok());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "stop"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["evidencectl", "dev", "stop", "--project", "project",]).is_ok()
+        );
 
         let mixed_mode = Cli::try_parse_from(["evidencectl", "dev", "--detach", "stop"])
             .expect_err("start options must not combine with a lifecycle subcommand");
         assert_eq!(mixed_mode.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn canonical_commands_require_positional_projects_and_explicit_targets() {
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "init",
+            "project",
+            "--starter",
+            "starter",
+            "--profile",
+            "local"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(["evidencectl", "check", "project"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["evidencectl", "explain", "project", "--target", "target"])
+                .is_ok()
+        );
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "test",
+            "project",
+            "--target",
+            "target",
+            "--local"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "package",
+            "project",
+            "--target",
+            "target",
+            "--output",
+            "candidate"
+        ])
+        .is_ok());
+
+        for arguments in [
+            vec!["evidencectl", "check"],
+            vec!["evidencectl", "explain"],
+            vec!["evidencectl", "test"],
+            vec![
+                "evidencectl",
+                "package",
+                "--target",
+                "target",
+                "--output",
+                "candidate",
+            ],
+        ] {
+            let error = Cli::try_parse_from(arguments).expect_err("PROJECT is required");
+            assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        }
+    }
+
+    #[test]
+    fn production_check_and_runtime_doctor_require_explicit_inputs() {
+        assert!(Cli::try_parse_from(["evidencectl", "check", "project", "--production"]).is_ok());
+
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "doctor",
+            "--runtime-config",
+            "/srv/evidence/runtime.yaml",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(
+            ["evidencectl", "doctor", "--project", "candidate", "--json",]
+        )
+        .is_ok());
+        assert!(Cli::try_parse_from(["evidencectl", "artifact", "inspect", "candidate",]).is_ok());
     }
 
     #[test]
@@ -181,6 +758,151 @@ mod tests {
         ]))
         .expect_err("subject input forms are mutually exclusive");
         assert_eq!(duplicate_subject.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn request_response_format_compatibility_preserves_both_format_meanings() {
+        let base = [
+            "evidencectl",
+            "request",
+            "prepare",
+            "question",
+            "--purpose",
+            "eligibility",
+            "--name",
+            "retained-request",
+        ];
+        for arguments in [
+            base.into_iter()
+                .chain(["--response-format", "signed-jws", "--format", "json"])
+                .map(OsString::from)
+                .collect::<Vec<_>>(),
+            ["evidencectl", "--format", "json"]
+                .into_iter()
+                .chain(base.into_iter().skip(1))
+                .chain(["--response-format", "signed-jws"])
+                .map(OsString::from)
+                .collect::<Vec<_>>(),
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_ok());
+        }
+
+        let equals = normalize_arguments(
+            base.into_iter()
+                .chain(["--format=sd-jwt-vc"])
+                .map(OsString::from)
+                .collect(),
+        );
+        assert!(equals
+            .iter()
+            .any(|value| value == "--response-format=sd-jwt-vc"));
+        assert!(Cli::try_parse_from(equals).is_ok());
+
+        let duplicate = normalize_arguments(
+            base.into_iter()
+                .chain(["--format", "sd-jwt-vc", "--response-format", "signed-jws"])
+                .map(OsString::from)
+                .collect(),
+        );
+        assert_eq!(
+            Cli::try_parse_from(duplicate)
+                .expect_err("old and new response-format spellings conflict")
+                .kind(),
+            ErrorKind::ArgumentConflict
+        );
+
+        let unrelated = vec![
+            OsString::from("evidencectl"),
+            OsString::from("verify"),
+            OsString::from("--format=sd-jwt-vc"),
+        ];
+        assert_eq!(normalize_arguments(unrelated.clone()), unrelated);
+    }
+
+    #[test]
+    fn canonical_failure_renderers_exclude_rejected_values_in_both_formats() {
+        const CANARY: &str = "selector-value-never-render";
+        let error = safe_command(
+            Err(anyhow::anyhow!(CANARY)),
+            "evidence.check.failed",
+            "project/evidence-project.yaml".to_owned(),
+            "Evidence could not inspect the selected authoring project.",
+            "Correct the selected project or target artifact and rerun check.",
+        )
+        .expect_err("refusal");
+        let failure = error
+            .downcast_ref::<SafeCliFailure>()
+            .expect("safe failure");
+        let human = safe_failure_human(failure);
+        let json = safe_failure_json(failure).to_string();
+        assert!(!human.contains(CANARY));
+        assert!(!json.contains(CANARY));
+        for expected in [failure.message.as_str(), failure.suggested_action.as_str()] {
+            assert!(human.contains(expected));
+            assert!(json.contains(expected));
+        }
+    }
+
+    #[test]
+    fn busy_dev_port_keeps_the_safe_numeric_recovery_in_both_formats() {
+        let error = safe_dev_command(Err(dev::PortConflict {
+            port: 48123,
+            service: "Evidence Gateway",
+            flag: "--evidence-port",
+        }
+        .into()))
+        .expect_err("busy port");
+        let failure = error
+            .downcast_ref::<SafeCliFailure>()
+            .expect("safe failure");
+        assert!(failure.operational);
+        assert_eq!(failure.code, "evidence.dev.port-unavailable");
+        for report in [
+            safe_failure_human(failure),
+            safe_failure_json(failure).to_string(),
+        ] {
+            assert!(report.contains("48123"), "{report}");
+            assert!(report.contains("already in use"), "{report}");
+            assert!(report.contains("--evidence-port"), "{report}");
+        }
+    }
+
+    #[test]
+    fn usage_failure_renderers_are_value_free_and_preserve_six_fields() {
+        const CANARY: &str = "unknown-selector-value-never-render";
+        let arguments = normalize_arguments(
+            [
+                "evidencectl",
+                "--format",
+                "json",
+                "check",
+                "project",
+                CANARY,
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        );
+        assert_eq!(requested_output_format(&arguments), OutputFormat::Json);
+        assert!(Cli::try_parse_from(arguments).is_err());
+        let json = usage_failure_json();
+        let human = usage_failure_human();
+        assert!(!json.to_string().contains(CANARY));
+        assert!(!human.contains(CANARY));
+        let diagnostic = &json["diagnostics"][0];
+        for field in [
+            "severity",
+            "code",
+            "artifact",
+            "path",
+            "message",
+            "suggestedAction",
+        ] {
+            assert!(diagnostic.get(field).is_some(), "missing {field}");
+        }
+        for field in ["message", "suggestedAction"] {
+            assert!(human.contains(diagnostic[field].as_str().unwrap()));
+        }
     }
 
     #[test]

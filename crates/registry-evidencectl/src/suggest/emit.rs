@@ -286,7 +286,7 @@ pub fn write_into_authoring_project(
             .with_context(|| format!("inspecting authoring directory {}", path.display()))?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             bail!(
-                "authoring directory {} must be a plain directory created by `evidencectl new`",
+                "authoring directory {} must be a plain directory created by `evidencectl init`",
                 path.display()
             );
         }

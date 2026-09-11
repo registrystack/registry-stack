@@ -9,17 +9,29 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     net::{TcpListener, TcpStream},
-    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+    os::unix::{
+        fs::{OpenOptionsExt as _, PermissionsExt as _},
+        net::{UnixListener, UnixStream},
+    },
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    sync::OnceLock,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+    },
     thread,
     time::{Duration, Instant},
 };
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use chrono::Utc;
-use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
+use p256::ecdsa::{
+    signature::{hazmat::PrehashSigner as _, Signer as _},
+    Signature, SigningKey,
+};
 use serde_json::{json, Value};
 
 const TOKEN_AUDIENCE: &str = "registry-evidence-production-test";
@@ -45,14 +57,27 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     fixture.stage_authoring_project();
     fixture.stage_https_identity();
     fixture.stage_target();
+    let _transit = fixture.start_transit();
 
-    let first = fixture.build(evidence);
+    assert_success(
+        evidencectl()
+            .arg("check")
+            .arg(&fixture.project)
+            .arg("--target")
+            .arg(&fixture.target)
+            .arg("--production")
+            .env("EVIDENCE_BIN", evidence)
+            .output()
+            .expect("offline production check starts"),
+        "offline production check",
+    );
+    let first = fixture.package(evidence);
     let first_revision = bundle_revision(&first);
     let first_bytes = snapshot_files(&fixture.candidate);
     fs::rename(&fixture.candidate, &fixture.first_candidate)
         .expect("archive the first create-only candidate");
 
-    let second = fixture.build(evidence);
+    let second = fixture.package(evidence);
     let revision = bundle_revision(&second);
     assert_eq!(
         revision, first_revision,
@@ -80,10 +105,9 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     );
     assert_success(
         evidencectl()
-            .args(["fixtures", "run", "--project"])
+            .arg("test")
             .arg(&fixture.candidate)
-            .arg("--evidence-bin")
-            .arg(evidence)
+            .env("EVIDENCE_BIN", evidence)
             .output()
             .expect("fixture driver starts"),
         "target-host fixtures",
@@ -92,6 +116,17 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
 
     let mut https = fixture.start_https();
     fixture.wait_for_https(&mut https);
+    assert_success(
+        evidencectl()
+            .arg("doctor")
+            .arg("--runtime-config")
+            .arg(fixture.candidate.join("runtime.yaml"))
+            .env("EVIDENCE_BIN", evidence)
+            .env("SSL_CERT_FILE", &fixture.ca)
+            .output()
+            .expect("runtime doctor starts"),
+        "runtime doctor",
+    );
     let mut service = fixture.start_evidence(evidence);
     fixture.wait_for_evidence(&mut service);
 
@@ -199,6 +234,7 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
     fixture.stage_authoring_project();
     fixture.stage_https_identity();
     fixture.stage_target();
+    let _transit = fixture.start_transit();
     let build = fixture.build(evidence);
     let revision = bundle_revision(&build);
     fixture.provision_target_secrets();
@@ -329,6 +365,228 @@ fn production_build_accepts_the_real_bundle_check_revision() {
 }
 
 #[test]
+#[ignore = "exact gate: runs the real authoring compiler and sibling Evidence bundle check"]
+fn offline_production_check_closes_without_target_host_mounts() {
+    let fixture = Fixture::new();
+    let evidence = evidence_binary();
+    fixture.stage_authoring_project();
+    fs::write(
+        fixture.project.join("evidence-project.yaml"),
+        "version: 1\nproject: evidence-authoring\n",
+    )
+    .expect("Evidence project marker");
+    fixture.stage_target();
+
+    assert!(!fixture.candidate.exists());
+    assert!(!fixture.secrets.exists());
+    assert!(!fixture.project.join("secrets").exists());
+    assert!(!fixture.audit_path.exists());
+    let output = assert_success(
+        evidencectl()
+            .args(["--format", "json", "check"])
+            .arg(&fixture.project)
+            .arg("--target")
+            .arg(&fixture.target)
+            .arg("--production")
+            .env("EVIDENCE_BIN", evidence)
+            .output()
+            .expect("offline production check starts"),
+        "offline production check",
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("check JSON report");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["proof"], "deployment-closure");
+    assert_eq!(report["assuranceProfile"], "production");
+    assert_eq!(report["fixtureProof"], false);
+    assert_eq!(report["networkAccess"], false);
+    assert_eq!(report["secretResolution"], false);
+    assert_eq!(report["targetHostPathChecks"], false);
+    assert!(!fixture.candidate.exists());
+    assert!(!fixture.secrets.exists());
+    assert!(!fixture.project.join("secrets").exists());
+    assert!(!fixture.audit_path.exists());
+}
+
+#[test]
+#[ignore = "exact gate: runs the real project-only compiler and sibling Evidence bundle check"]
+fn offline_project_check_needs_no_disposable_signing_state() {
+    let fixture = Fixture::new();
+    let evidence = evidence_binary();
+    fixture.stage_authoring_project();
+    fs::write(
+        fixture.project.join("evidence-project.yaml"),
+        "version: 1\nproject: evidence-authoring\n",
+    )
+    .expect("Evidence project marker");
+    assert!(!fixture.project.join("secrets").exists());
+
+    let output = assert_success(
+        evidencectl()
+            .args(["--format", "json", "check"])
+            .arg(&fixture.project)
+            .env("EVIDENCE_BIN", evidence)
+            .output()
+            .expect("offline project check starts"),
+        "offline project check",
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("check JSON report");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["proof"], "authoring");
+    assert_eq!(report["fixtureProof"], false);
+    assert!(!fixture.project.join("secrets").exists());
+
+    fixture.stage_target();
+    let governance_path = fixture.target.join("governance.yaml");
+    let governance = fs::read_to_string(&governance_path).expect("target governance");
+    let stricter_governance = governance.replace(
+        "maximumAssertionValiditySeconds: 86400",
+        "maximumAssertionValiditySeconds: 300",
+    );
+    assert_ne!(
+        stricter_governance, governance,
+        "the target validity ceiling mutation must apply"
+    );
+    fs::write(&governance_path, stricter_governance).expect("stricter target governance");
+    let target_check = evidencectl()
+        .args(["--format", "json", "check"])
+        .arg(&fixture.project)
+        .arg("--target")
+        .arg(&fixture.target)
+        .env("EVIDENCE_BIN", evidence)
+        .output()
+        .expect("target-bound offline check starts");
+    assert_eq!(
+        target_check.status.code(),
+        Some(1),
+        "the selected target must retain its stricter validity ceiling: {}",
+        String::from_utf8_lossy(&target_check.stdout)
+    );
+}
+
+#[test]
+#[ignore = "exact gate: runs complete explain through the compiler and bundle schema"]
+fn explain_refuses_unknown_source_members_without_disclosing_values() {
+    const CANARY: &str = "SOURCE_SECRET_CANARY";
+    let fixture = Fixture::new();
+    let evidence = evidence_binary();
+    fixture.stage_authoring_project();
+    fs::write(
+        fixture.project.join("evidence-project.yaml"),
+        "version: 1\nproject: evidence-authoring\n",
+    )
+    .expect("Evidence project marker");
+    let source_path = fixture.project.join("sources/people.yaml");
+    let mut source = fs::read_to_string(&source_path).expect("authored source");
+    source.push_str(&format!("\nunknownSourceMember: {CANARY}\n"));
+    fs::write(&source_path, source).expect("invalid authored source");
+
+    let output = evidencectl()
+        .args(["--format", "json", "explain"])
+        .arg(&fixture.project)
+        .env("EVIDENCE_BIN", evidence)
+        .output()
+        .expect("explain starts");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!output
+        .stdout
+        .windows(CANARY.len())
+        .any(|part| part == CANARY.as_bytes()));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("refusal JSON report");
+    assert!(report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| {
+            finding["code"] == "source-member-unknown"
+                && finding["path"] == "sources/people.yaml:/unknownSourceMember"
+        }));
+}
+
+#[test]
+#[ignore = "exact gate: runs the real offline checker under an ordinary process umask"]
+fn offline_check_makes_private_staging_under_umask_022() {
+    let fixture = Fixture::new();
+    let evidence = evidence_binary();
+    fixture.stage_authoring_project();
+    fs::write(
+        fixture.project.join("evidence-project.yaml"),
+        "version: 1\nproject: evidence-authoring\n",
+    )
+    .expect("Evidence project marker");
+    fixture.stage_target();
+
+    let output = assert_success(
+        Command::new("sh")
+            .args(["-c", "umask 022\nexec \"$@\"", "evidencectl-check"])
+            .arg(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["--format", "json", "check"])
+            .arg(&fixture.project)
+            .arg("--target")
+            .arg(&fixture.target)
+            .arg("--production")
+            .env("EVIDENCE_BIN", evidence)
+            .output()
+            .expect("offline check starts under umask 022"),
+        "offline check under umask 022",
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("check JSON report");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["proof"], "deployment-closure");
+}
+
+#[test]
+#[ignore = "exact gate: runs the real evidence-grade authoring compiler"]
+fn explicit_evidence_grade_target_applies_its_own_strict_source_rules() {
+    let fixture = Fixture::new();
+    let evidence = evidence_binary();
+    fixture.stage_authoring_project();
+    fs::write(
+        fixture.project.join("evidence-project.yaml"),
+        "version: 1\nproject: evidence-authoring\n",
+    )
+    .expect("Evidence project marker");
+    fixture.stage_target();
+    let governance_path = fixture.target.join("governance.yaml");
+    let governance = fs::read_to_string(&governance_path)
+        .expect("target governance")
+        .replace(
+            "assuranceProfile: production",
+            "assuranceProfile: evidence-grade",
+        );
+    fs::write(&governance_path, governance).expect("evidence-grade governance");
+    let source_path = fixture.project.join("sources/people.yaml");
+    let original_source = fs::read_to_string(&source_path).expect("authored source");
+    let source = original_source.replace("baseUrl: https://", "baseUrl: http://");
+    assert_ne!(
+        source, original_source,
+        "the strict-source mutation must apply"
+    );
+    assert!(source.contains("baseUrl: http://"));
+    fs::write(&source_path, source).expect("insecure authored source");
+
+    let output = evidencectl()
+        .args(["--format", "json", "check"])
+        .arg(&fixture.project)
+        .arg("--target")
+        .arg(&fixture.target)
+        .env("EVIDENCE_BIN", evidence)
+        .output()
+        .expect("evidence-grade check starts");
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("refusal JSON report");
+    assert_eq!(report["status"], "refused");
+    assert!(report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| {
+            finding["severity"] == "error"
+                && finding["code"] == "source-production-channel"
+                && finding["path"] == "sources/people.yaml:/baseUrl"
+        }));
+}
+
+#[test]
 #[ignore = "exact gate: runs the real production builder across all four authoring shapes"]
 fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     let fixture = Fixture::new();
@@ -336,6 +594,7 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     fixture.stage_authoring_project();
     fixture.stage_four_shape_project();
     fixture.stage_target();
+    let _transit = fixture.start_transit();
     fixture.authorize_four_shapes();
 
     let output = fixture.build(evidence);
@@ -583,6 +842,23 @@ struct MintDeployment {
     caller_private: PathBuf,
 }
 
+struct TransitServer {
+    stop: Arc<AtomicBool>,
+    socket: PathBuf,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for TransitServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = UnixStream::connect(&self.socket);
+        if let Some(worker) = self.worker.take() {
+            worker.join().expect("synthetic Transit server");
+        }
+        let _ = fs::remove_file(&self.socket);
+    }
+}
+
 struct Fixture {
     temporary: tempfile::TempDir,
     root: PathBuf,
@@ -611,14 +887,15 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        // macOS exposes its default temporary root through `/var`, which is a
-        // symlink. Production build correctly refuses that ancestry, so keep
-        // the exact gate under the workspace's already-created target tree.
+        // Keep the Transit socket below the Unix path limit while naming the
+        // canonical non-symlinked macOS temporary root explicitly.
         let temporary = tempfile::Builder::new()
-            .prefix("production-handoff-")
-            .tempdir_in(workspace_root().join("target"))
+            .prefix("evidence-handoff-")
+            .tempdir_in("/private/tmp")
             .expect("acceptance tempdir");
         let root = temporary.path().to_path_buf();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("acceptance tempdir mode");
         let project = root.join("authoring");
         let target = project.join("deployment-targets/production");
         let candidate = root.join("candidate");
@@ -648,6 +925,38 @@ impl Fixture {
             target,
             candidate,
             secrets,
+        }
+    }
+
+    fn start_transit(&self) -> TransitServer {
+        let socket = self.root.join("transit-proxy.sock");
+        let listener = UnixListener::bind(&socket).expect("bind synthetic Transit socket");
+        listener
+            .set_nonblocking(true)
+            .expect("synthetic Transit nonblocking listener");
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let root = self.root.clone();
+        let worker = thread::spawn(move || {
+            while !worker_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        if worker_stop.load(Ordering::Acquire) {
+                            break;
+                        }
+                        serve_transit_request(&root, &mut stream);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("synthetic Transit accept failed: {error}"),
+                }
+            }
+        });
+        TransitServer {
+            stop,
+            socket,
+            worker: Some(worker),
         }
     }
 
@@ -1503,6 +1812,20 @@ authorityProfiles:
         assert_success(output, "production build")
     }
 
+    fn package(&self, evidence: &Path) -> Output {
+        let output = evidencectl()
+            .arg("package")
+            .arg(&self.project)
+            .arg("--target")
+            .arg(&self.target)
+            .arg("--output")
+            .arg(&self.candidate)
+            .env("EVIDENCE_BIN", evidence)
+            .output()
+            .expect("package starts");
+        assert_success(output, "production package")
+    }
+
     fn provision_target_secrets(&self) {
         fs::create_dir(self.audit_path.parent().expect("audit directory"))
             .expect("audit directory");
@@ -1834,6 +2157,7 @@ authorityProfiles:
             // controlled by the target and retained request in this fixture.
             "expectedSubjects": [{"role":"subject","binding":binding}],
             "expectedOutputs": [{"concept":CONCEPT,"form":"boolean"}],
+            "revokedKeyIds": [],
             "maximumAssertionLifetimeSeconds": 86400,
             "clockSkewSeconds": 30,
         });
@@ -1852,6 +2176,210 @@ impl Drop for Fixture {
         }
         let _ = &self.temporary;
     }
+}
+
+fn serve_transit_request(root: &Path, stream: &mut UnixStream) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("synthetic Transit read timeout");
+    let response = read_transit_request(stream).and_then(|(method, path, body)| {
+        if method == "GET" {
+            let key_name = path
+                .strip_prefix("/v1/transit/keys/")
+                .ok_or("unsupported Transit metadata path")?;
+            transit_metadata(root, key_name)
+        } else if method == "POST" {
+            let key_name = path
+                .strip_prefix("/v1/transit/sign/")
+                .and_then(|path| path.strip_suffix("/sha2-256"))
+                .ok_or("unsupported Transit signing path")?;
+            transit_signature(root, key_name, &body)
+        } else {
+            Err("unsupported Transit method")
+        }
+    });
+    let (status, document) = match response {
+        Ok(document) => (200, document),
+        Err(message) => (400, json!({"errors": [message]})),
+    };
+    let bytes = serde_json::to_vec(&document).expect("synthetic Transit response JSON");
+    let reason = if status == 200 { "OK" } else { "Bad Request" };
+    write!(
+        stream,
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        bytes.len()
+    )
+    .expect("synthetic Transit response headers");
+    stream
+        .write_all(&bytes)
+        .expect("synthetic Transit response body");
+}
+
+fn read_transit_request(
+    stream: &mut UnixStream,
+) -> Result<(String, String, Vec<u8>), &'static str> {
+    let mut request = Vec::new();
+    let header_end = loop {
+        let mut chunk = [0_u8; 4096];
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|_| "Transit request could not be read")?;
+        if read == 0 {
+            return Err("Transit request ended before its headers");
+        }
+        request.extend_from_slice(&chunk[..read]);
+        if request.len() > 128 * 1024 {
+            return Err("Transit request exceeded the fixture bound");
+        }
+        if let Some(position) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+            break position + 4;
+        }
+    };
+    let headers = std::str::from_utf8(&request[..header_end])
+        .map_err(|_| "Transit request headers were not UTF-8")?;
+    let mut lines = headers.lines();
+    let mut request_line = lines
+        .next()
+        .ok_or("Transit request line was missing")?
+        .split_whitespace();
+    let method = request_line
+        .next()
+        .ok_or("Transit request method was missing")?
+        .to_owned();
+    let path = request_line
+        .next()
+        .ok_or("Transit request path was missing")?
+        .to_owned();
+    let content_length = lines
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .map(|(_, value)| value.trim().parse::<usize>())
+        .transpose()
+        .map_err(|_| "Transit content length was invalid")?
+        .unwrap_or(0);
+    if content_length > 64 * 1024 {
+        return Err("Transit request body exceeded the fixture bound");
+    }
+    while request.len() < header_end + content_length {
+        let mut chunk = [0_u8; 4096];
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|_| "Transit request body could not be read")?;
+        if read == 0 {
+            return Err("Transit request ended before its body");
+        }
+        request.extend_from_slice(&chunk[..read]);
+    }
+    Ok((
+        method,
+        path,
+        request[header_end..header_end + content_length].to_vec(),
+    ))
+}
+
+fn transit_metadata(root: &Path, key_name: &str) -> Result<Value, &'static str> {
+    let private = transit_private_jwk(root, key_name)?;
+    let public_key = transit_public_pem(&private)?;
+    Ok(json!({
+        "data": {
+            "type": "ecdsa-p256",
+            "derived": false,
+            "exportable": false,
+            "allow_plaintext_backup": false,
+            "supports_signing": true,
+            "latest_version": 1,
+            "min_encryption_version": 1,
+            "keys": {"1": {"public_key": public_key}}
+        }
+    }))
+}
+
+fn transit_signature(root: &Path, key_name: &str, body: &[u8]) -> Result<Value, &'static str> {
+    let private = transit_private_jwk(root, key_name)?;
+    let request: Value =
+        serde_json::from_slice(body).map_err(|_| "Transit signing JSON invalid")?;
+    if request["key_version"] != 1
+        || request["marshaling_algorithm"] != "jws"
+        || request["prehashed"] != true
+    {
+        return Err("Transit signing contract invalid");
+    }
+    let digest = request["input"]
+        .as_str()
+        .ok_or("Transit signing input missing")
+        .and_then(|input| {
+            STANDARD
+                .decode(input)
+                .map_err(|_| "Transit signing input invalid")
+        })?;
+    if digest.len() != 32 {
+        return Err("Transit signing digest invalid");
+    }
+    let secret = private["d"]
+        .as_str()
+        .ok_or("Transit private JWK scalar missing")
+        .and_then(|value| {
+            URL_SAFE_NO_PAD
+                .decode(value)
+                .map_err(|_| "Transit private JWK scalar invalid")
+        })?;
+    let key = SigningKey::from_slice(&secret).map_err(|_| "Transit private JWK invalid")?;
+    let signature: Signature = key
+        .sign_prehash(&digest)
+        .map_err(|_| "Transit signing failed")?;
+    Ok(json!({
+        "data": {
+            "signature": format!("vault:v1:{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+        }
+    }))
+}
+
+fn transit_private_jwk(root: &Path, key_name: &str) -> Result<Value, &'static str> {
+    let path = match key_name {
+        "evidence-signing" => root.join("transit-evidence-key/signing-p256-private-jwk"),
+        "mint-signing" => root.join("mint/transit-key/signing-p256-private-jwk"),
+        _ => return Err("unknown Transit key"),
+    };
+    let bytes = fs::read(path).map_err(|_| "Transit fixture key unavailable")?;
+    serde_json::from_slice(&bytes).map_err(|_| "Transit fixture key invalid")
+}
+
+fn transit_public_pem(private: &Value) -> Result<String, &'static str> {
+    let x = private["x"]
+        .as_str()
+        .ok_or("Transit public JWK x missing")
+        .and_then(|value| {
+            URL_SAFE_NO_PAD
+                .decode(value)
+                .map_err(|_| "Transit public JWK x invalid")
+        })?;
+    let y = private["y"]
+        .as_str()
+        .ok_or("Transit public JWK y missing")
+        .and_then(|value| {
+            URL_SAFE_NO_PAD
+                .decode(value)
+                .map_err(|_| "Transit public JWK y invalid")
+        })?;
+    if x.len() != 32 || y.len() != 32 {
+        return Err("Transit public JWK coordinate invalid");
+    }
+    let mut spki = vec![
+        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
+    ];
+    spki.extend_from_slice(&x);
+    spki.extend_from_slice(&y);
+    let encoded = STANDARD.encode(spki);
+    let body = encoded
+        .as_bytes()
+        .chunks(64)
+        .map(|line| std::str::from_utf8(line).expect("base64 is ASCII"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!(
+        "-----BEGIN PUBLIC KEY-----\n{body}\n-----END PUBLIC KEY-----\n"
+    ))
 }
 
 fn evidencectl() -> Command {

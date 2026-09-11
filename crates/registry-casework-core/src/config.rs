@@ -78,7 +78,18 @@ pub struct CaseworkProject {
 impl CaseworkProject {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigLoadError> {
         let bytes = std::fs::read(path).map_err(ConfigLoadError::Read)?;
-        let project: Self = serde_norway::from_slice(&bytes).map_err(ConfigLoadError::Parse)?;
+        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
+        let project: Self = serde_path_to_error::deserialize(deserializer).map_err(|error| {
+            let path = error.path().to_string();
+            ConfigLoadError::Parse {
+                path: if path.is_empty() {
+                    "/".to_owned()
+                } else {
+                    path
+                },
+                source: error.into_inner(),
+            }
+        })?;
         project.check().map_err(ConfigLoadError::Check)?;
         Ok(project)
     }
@@ -137,6 +148,43 @@ impl CaseworkProject {
             return Err(ConfigError::AccessProfileScopes);
         }
         let hosted_kinds: BTreeSet<_> = self.hosted_kinds.iter().map(|kind| &kind.id).collect();
+        for (kind_index, kind) in self.hosted_kinds.iter().enumerate() {
+            if !queues.contains(&kind.queue) {
+                return Err(ConfigError::Reference {
+                    path: format!("hostedKinds[{kind_index}].queue"),
+                    target: "queue",
+                });
+            }
+            for (profile_index, profile_id) in kind.deciding_profiles.iter().enumerate() {
+                if self
+                    .access_profiles
+                    .iter()
+                    .find(|profile| profile.id == *profile_id)
+                    .is_none_or(|profile| {
+                        !matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
+                    })
+                {
+                    return Err(ConfigError::Reference {
+                        path: format!(
+                            "hostedKinds[{kind_index}].decidingProfiles[{profile_index}]"
+                        ),
+                        target: "staff or supervisor access profile",
+                    });
+                }
+            }
+        }
+        for (profile_index, profile) in self.access_profiles.iter().enumerate() {
+            if profile.role == CaseworkRole::Requester {
+                for (kind_index, kind) in profile.kinds.iter().enumerate() {
+                    if !hosted_kinds.contains(kind) {
+                        return Err(ConfigError::Reference {
+                            path: format!("accessProfiles[{profile_index}].kinds[{kind_index}]"),
+                            target: "hosted kind",
+                        });
+                    }
+                }
+            }
+        }
         if self.hosted_kinds.len() > crate::MAXIMUM_HOSTED_KINDS
             || hosted_kinds.len() != self.hosted_kinds.len()
             || !self.hosted_kinds.is_empty()
@@ -144,21 +192,7 @@ impl CaseworkProject {
                     .access_profiles
                     .iter()
                     .any(|profile| profile.role == CaseworkRole::Requester)
-            || self.hosted_kinds.iter().any(|kind| {
-                kind.check().is_err()
-                    || !queues.contains(&kind.queue)
-                    || kind.deciding_profiles.iter().any(|profile_id| {
-                        self.access_profiles
-                            .iter()
-                            .find(|profile| profile.id == *profile_id)
-                            .is_none_or(|profile| {
-                                !matches!(
-                                    profile.role,
-                                    CaseworkRole::Staff | CaseworkRole::Supervisor
-                                )
-                            })
-                    })
-            })
+            || self.hosted_kinds.iter().any(|kind| kind.check().is_err())
             || self
                 .access_profiles
                 .iter()
@@ -168,10 +202,6 @@ impl CaseworkProject {
                             || profile.kinds.len() > crate::MAXIMUM_HOSTED_KINDS
                             || profile.kinds.iter().collect::<BTreeSet<_>>().len()
                                 != profile.kinds.len()
-                            || profile
-                                .kinds
-                                .iter()
-                                .any(|kind| !hosted_kinds.contains(kind))
                     }
                     CaseworkRole::Staff
                     | CaseworkRole::Supervisor
@@ -182,6 +212,34 @@ impl CaseworkProject {
         }
         if self.sources.is_empty() && self.hosted_kinds.is_empty() {
             return Err(ConfigError::NoConfiguredWork);
+        }
+        let calendar_ids = self
+            .calendars
+            .iter()
+            .map(|calendar| calendar.id.as_str())
+            .collect::<BTreeSet<_>>();
+        for (clock_index, clock) in self.clocks.iter().enumerate() {
+            if let ClockPolicy::Activity {
+                calendar, steps, ..
+            } = clock
+            {
+                if !calendar_ids.contains(calendar.as_str()) {
+                    return Err(ConfigError::Reference {
+                        path: format!("clocks[{clock_index}].calendar"),
+                        target: "calendar",
+                    });
+                }
+                for (step_index, step) in steps.iter().enumerate() {
+                    if !queues.contains(&step.action.reassign.queue) {
+                        return Err(ConfigError::Reference {
+                            path: format!(
+                                "clocks[{clock_index}].steps[{step_index}].action.reassign.queue"
+                            ),
+                            target: "queue",
+                        });
+                    }
+                }
+            }
         }
         check_clock_policies(&self.calendars, &self.clocks, &queues)
             .map_err(|_| ConfigError::Clocks)?;
@@ -194,7 +252,7 @@ impl CaseworkProject {
         if source_ids.len() != self.sources.len() {
             return Err(ConfigError::Identifier);
         }
-        for source in &self.sources {
+        for (source_index, source) in self.sources.iter().enumerate() {
             if source.id.is_empty()
                 || source.adapter.is_empty()
                 || source.description.is_empty()
@@ -202,14 +260,20 @@ impl CaseworkProject {
             {
                 return Err(ConfigError::Identifier);
             }
-            for request in &source.requests {
+            for (request_index, request) in source.requests.iter().enumerate() {
+                let request_path = format!("sources[{source_index}].requests[{request_index}]");
+                if !queues.contains(&request.queue) {
+                    return Err(ConfigError::Reference {
+                        path: format!("{request_path}.queue"),
+                        target: "queue",
+                    });
+                }
                 if request.entity.is_empty()
                     || request.display_reference.as_ref().is_some_and(|reference| {
                         reference.field.is_empty()
                             || reference.field.len() > 512
                             || reference.field.chars().any(char::is_control)
                     })
-                    || !queues.contains(&request.queue)
                     || request.target.as_ref().is_some_and(|target| {
                         target.id.is_empty()
                             || parse_elapsed_seconds(&target.after.elapsed).is_none()
@@ -224,13 +288,19 @@ impl CaseworkProject {
                     &queues,
                     None,
                 )
-                .map_err(|_| ConfigError::Routing)?;
+                .map_err(|error| ConfigError::Semantic {
+                    path: format!("{request_path}.{}", error.path),
+                    member: "routing policy",
+                })?;
                 if request
                     .clock
                     .as_deref()
                     .is_some_and(|clock| !clock_ids.contains(clock))
                 {
-                    return Err(ConfigError::Clocks);
+                    return Err(ConfigError::Reference {
+                        path: format!("{request_path}.clock"),
+                        target: "clock",
+                    });
                 }
             }
         }
@@ -407,7 +477,7 @@ impl InboxPolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ConfigError {
     #[error("the Casework project envelope is invalid")]
     Envelope,
@@ -431,16 +501,45 @@ pub enum ConfigError {
     Clocks,
     #[error("the inbox work and response bounds are invalid")]
     InboxBounds,
+    #[error("{path} references an unknown or ineligible {target}")]
+    Reference { path: String, target: &'static str },
+    #[error("{member} is invalid at {path}")]
+    Semantic { path: String, member: &'static str },
+}
+
+impl ConfigError {
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Reference { path, .. } | Self::Semantic { path, .. } => path,
+            _ => "/",
+        }
+    }
 }
 
 #[derive(Debug, Error)]
 pub enum ConfigLoadError {
     #[error("the Casework project could not be read")]
     Read(#[source] std::io::Error),
-    #[error("the Casework project is not valid YAML")]
-    Parse(#[source] serde_norway::Error),
+    #[error("the Casework project is not valid YAML at {path}")]
+    Parse {
+        path: String,
+        #[source]
+        source: serde_norway::Error,
+    },
     #[error(transparent)]
     Check(#[from] ConfigError),
+}
+
+impl ConfigLoadError {
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Check(error) => error.path(),
+            Self::Read(_) => "/",
+            Self::Parse { path, .. } => path,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -530,7 +629,10 @@ mod tests {
     fn requester_grants_are_closed_over_declared_kinds() {
         let mut candidate = project();
         candidate.access_profiles[3].kinds = vec!["undeclared".to_owned()];
-        assert_eq!(candidate.check(), Err(ConfigError::HostedKinds));
+        assert_eq!(
+            candidate.check().unwrap_err().path(),
+            "accessProfiles[3].kinds[0]"
+        );
 
         let mut candidate = project();
         candidate.access_profiles[2].kinds = vec!["decision".to_owned()];
@@ -804,7 +906,10 @@ mod tests {
     fn administrator_is_not_a_hosted_deciding_profile() {
         let mut project = project();
         project.hosted_kinds[0].deciding_profiles = vec!["administrator".to_owned()];
-        assert_eq!(project.check(), Err(ConfigError::HostedKinds));
+        assert_eq!(
+            project.check().unwrap_err().path(),
+            "hostedKinds[0].decidingProfiles[0]"
+        );
     }
 
     #[test]
@@ -865,5 +970,26 @@ clocks:
         assert_eq!(project.check(), Ok(()));
         assert_eq!(project.queues.len(), 4);
         assert_eq!(project.sources[0].requests[0].routing.len(), 2);
+
+        let mut invalid = project.clone();
+        invalid.sources[0].requests[0].routing[1].queue = "missing".to_owned();
+        assert_eq!(
+            invalid.check().unwrap_err().path(),
+            "sources[0].requests[0].routing[1].queue"
+        );
+
+        let mut invalid = project.clone();
+        invalid.sources[0].requests[0].clock = Some("missing".to_owned());
+        assert_eq!(
+            invalid.check().unwrap_err().path(),
+            "sources[0].requests[0].clock"
+        );
+
+        let mut invalid = project.clone();
+        let ClockPolicy::Activity { calendar, .. } = &mut invalid.clocks[0] else {
+            panic!("fixture has an activity clock")
+        };
+        *calendar = "missing".to_owned();
+        assert_eq!(invalid.check().unwrap_err().path(), "clocks[0].calendar");
     }
 }

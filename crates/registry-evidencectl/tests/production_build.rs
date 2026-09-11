@@ -126,7 +126,7 @@ fn a_rejected_bundle_and_fixture_name_the_command_that_shows_the_diagnosis() {
     let message = stderr(&output);
     assert!(
         message.contains(&format!(
-            "Run `evidencectl fixtures run --project {}` to read the diagnosis Evidence prints.",
+            "Run `evidencectl test {}` to read the diagnosis Evidence prints.",
             project.display()
         )),
         "the refusal names the command that shows the diagnosis: {message}"
@@ -146,7 +146,7 @@ fn a_rejected_bundle_and_fixture_name_the_command_that_shows_the_diagnosis() {
     let message = stderr(&output);
     assert!(
         message.contains(&format!(
-            "Run `evidencectl fixtures run --project {} --fixture fixtures/answer.yaml` to read the diagnosis Evidence prints.",
+            "Run `evidencectl test {} --fixture fixtures/answer.yaml` to read the diagnosis Evidence prints.",
             project.display()
         )),
         "the refusal names the rejected fixture with the command: {message}"
@@ -1075,7 +1075,7 @@ fn assert_report(output: &Output, candidate: &Path) {
     assert_eq!(
         stdout,
         format!(
-            "Bundle revision: {REVISION}\nCandidate: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and deployment secret material remain unverified until `evidencectl doctor --project {}` and the target-host Evidence check.\n",
+            "Bundle revision: {REVISION}\nCandidate: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}/runtime.yaml` and the target-host Evidence check.\n",
             candidate.display(),
             candidate.display(),
         )

@@ -63,7 +63,7 @@ an impossible operation. Evidence publishes one record with a distinct derived
 also prevents cross-requirement matches. Build the production candidate with:
 
 ```sh
-evidencectl build --project <project> --target <target> --output <candidate>
+evidencectl package <project> --target <target> --output <candidate>
 ```
 
 The command compiles, validates, seals, and atomically publishes
@@ -928,13 +928,13 @@ Startup opens one connection for each `concurrencyLimit` permit, reads the
 metadata, and runs the statement against the real extract. A statement whose
 result columns disagree with `columns`, a parameter no binding supplies, and a
 binding the statement never names all fail before the listener binds.
-`evidencectl build` reaches this same statement check earlier, without a
+`evidencectl package` reaches this same statement check earlier, without a
 mounted extract, through `evidence bundle-check`: an internal Evidencectl seam
 hidden from `evidence --help`, not a command an adopter runs directly. It
 settles that the artifact holds exactly one statement, that the statement
 parses, and that the authorizer accepts it. It cannot settle columns,
 parameters, metadata, or age, because only the extract can. That check never
-reports a false failure, only an incomplete pass. `evidencectl fixtures run`
+reports a false failure, only an incomplete pass. `evidencectl test`
 reaches `bundle-check` the same way, but only for an editable project; run
 against a deployment project like this one, it instead runs `evidence check`
 with the runtime file's real bindings, which is the check described above.
@@ -1318,10 +1318,10 @@ credentials to another authority.
 ## Authoring and production-build workflow
 
 Treat an editable project like reviewed source code. The OpenAPI form of
-`evidencectl new` creates empty authoring directories. The `--transport
+`evidencectl init` creates empty authoring directories. The `--transport
 sqlite-extract` form creates a source-neutral synthetic statement, source,
 schemas, question, derivation, and fixture that can run immediately with
-`evidencectl fixtures run --project <dir> --explain`. Both forms create
+`evidencectl test <dir> --explain`. Both forms create
 owner-only disposable local P-256 Evidence signing material plus distinct audit
 and subject-binding masters. Neither creates deployment input or a real
 extract. `evidencectl dev` creates session-scoped P-256 Mint, caller, and holder
@@ -1368,8 +1368,7 @@ under [`../../deployment-targets/`](../../deployment-targets/).
 Run the create-only compiler with explicit target and output paths:
 
 ```sh
-evidencectl build \
-  --project <editable-project> \
+evidencectl package <editable-project> \
   --target <editable-project>/deployment-targets/<environment> \
   --output <new-candidate-directory>
 ```
@@ -1409,8 +1408,8 @@ to the service identity, and run the grouped handoff once whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
 
 ```sh
-evidencectl doctor --project '<candidate>'
-evidencectl fixtures run --project '<candidate>'
+evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
+evidencectl test '<candidate>'
 evidence --runtime '<candidate>/runtime.yaml' check --require-runtime-dependencies
 evidence --runtime '<candidate>/runtime.yaml' serve
 ```
@@ -1422,7 +1421,7 @@ a newly reviewed bundle revision and reruns the fixture matrix.
 
 When no suitable OIDC issuer exists, author Mint separately and run
 `mint check --config <mint.yaml>`. The optional
-`evidencectl doctor --project <candidate> --mint-config <mint.yaml>` check is
+`evidencectl artifact inspect <candidate> --mint-config <mint.yaml>` check is
 read-only: it compares issuer, derived JWKS URI, audiences, allowed signing
 algorithm, `at+jwt` admission, and configured principal, requester-tag,
 evidence-audience, grant-id, grant-authority, and optional actor claim names.

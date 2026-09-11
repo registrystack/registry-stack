@@ -27,14 +27,15 @@ decision:
 ```sh
 caseworkctl init ./casework --template standalone-decision
 caseworkctl check ./casework
+caseworkctl explain ./casework
 caseworkctl test ./casework
 ```
 
 `init` refuses an existing destination. If the destination already exists,
 choose a new directory or review the existing project rather than overwriting it.
 The starter creates `casework.yaml`, synthetic fixtures, and
-`operator.example.yaml`. Copy the operator example to `operator.yaml`; keep the
-operator file and its secrets out of the policy package.
+`runtime.example.yaml`. Copy the runtime example to `runtime.yaml`; keep the
+runtime file and its secrets out of the policy package.
 
 For work from Base Registry Engine (BReg), start with
 `--template professional-review`, then preview
@@ -52,30 +53,65 @@ caseworkctl test ./casework
 The apply step changes reviewed local authoring inputs. It does not activate a
 production package or grant a person source authority.
 
+`check`, `explain`, and `test` are offline. An authoring check can succeed with
+visible findings when a declared source description has not been imported. Add
+`--deny-findings` to refuse any finding, or `--production` to require complete
+deployment policy. `test` reports the same authoring status and findings before
+evaluating synthetic fixtures, so fixtures may pass while authoring remains
+incomplete. Its proof boundary is offline and synthetic; it does not establish
+production closure, source reachability, or a completed human and source-system
+journey.
+
+Caseworkctl prints human-readable reports by default. Add the global `--format
+json` option for structured output. It exits `0` on success, `1` for a domain
+refusal or denied finding, `2` for command-line usage, and `3` for an
+operational failure.
+
+{/* Evidence: crates/registry-caseworkctl/src/lib.rs, Cli, Command, CheckArgs,
+    OutputFormat, DOMAIN_REFUSAL_EXIT, and OPERATIONAL_FAILURE_EXIT;
+    crates/registry-caseworkctl/src/project.rs, check() and test(). */}
+
 {/* Evidence: crates/registry-caseworkctl/src/{lib,project,source_add}.rs;
     products/casework/examples/{standalone-decision,professional-review}/casework.yaml. */}
 
-## Bind the operator configuration
+## Bind the runtime configuration
 
-Set the operator file's `project` to the selected `casework.yaml`. Configure a
-private listener, the file secret root, separate runtime and migration database
-URL references, the OIDC issuer and audience, the human-identity assertion, and
-the audit path and secret reference. Add one operator source binding for every
-source declared by policy. A standalone project has no source bindings.
+Set `package.root` to the absolute path of the selected package directory. The
+runtime loads `casework.yaml` from that root and verifies the adjacent package
+manifest for production. The required `listener` block selects its bind,
+TLS-termination, and network-exposure boundary. `secretProviders` explicitly
+enables the optional file provider, environment provider, or both; a file
+provider root is absolute, and an environment secret reference is valid only
+when the environment provider is enabled. Configure separate runtime and
+migration database URL references, the OpenID Connect (OIDC) issuer and
+audience, the human-identity assertion, and absolute `audit.path` with its
+`hashKeyRef`. The runtime `sources` map is keyed by the exact source IDs
+declared in policy. A standalone project has no source bindings.
 
-Production uses `tlsTermination: operator-controlled-upstream`. Put a TLS proxy
-or ingress in front of the private listener. Use `networkExposure:
+The runtime document starts with
+`apiVersion: registry.registrystack.org/casework-runtime/v1alpha1` and
+`kind: CaseworkRuntimeConfig`. Operated resource paths are absolute. The
+development listener defaults to `127.0.0.1:8100`; set another private address
+explicitly when the deployment requires it.
+
+Production uses `listener.tlsTermination: operator-controlled-upstream`. Put a TLS proxy
+or ingress in front of the private listener. Use `listener.networkExposure:
 container-private` only for a wildcard listener confined to a private container
 network. Direct plaintext development uses `development-loopback` with a
 loopback listener and `private-address` exposure.
 
 Configure the issuer to reserve the Staff, Supervisor, and Administrator scopes
-for interactive human sessions carrying the exact human assertion. Issue the
-Requester scope to service clients. Directory membership remains a second,
-runtime-controlled authority check.
+for interactive human sessions carrying the exact human assertion. Each
+`accessProfiles[]` entry selects its own `principalClaim`; there is no runtime
+wide `authentication.oidc.principalClaim`. Issue the Requester scope to service
+clients. Directory membership remains a second, runtime-controlled authority
+check. A source-backed operation also requires the caller to select a separate
+source profile, which Casework passes to the source under that caller's token.
 
-{/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig and RuntimeConfig::check;
-    crates/registry-casework/src/auth.rs; products/casework/examples/professional-review/operator.example.yaml. */}
+{/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig, RuntimeConfig::check,
+    RUNTIME_CONFIG_API_VERSION, and RUNTIME_CONFIG_KIND;
+    crates/registry-casework/src/auth.rs;
+    products/casework/examples/professional-review/runtime.example.yaml. */}
 
 ## Package reviewed policy
 
@@ -86,8 +122,8 @@ caseworkctl package ./casework --output ./casework-policy-package
 ```
 
 The command refuses an existing output directory. Review
-`casework.package.json`, then set the production operator file's `project` to
-`./casework-policy-package/casework.yaml`. Production startup verifies the
+`casework.package.json`, then set the production runtime file's `package.root`
+to the package directory's absolute path. Production startup verifies the
 manifest's policy digest, file digests, and byte counts. Install and select the
 reviewed directory atomically before restarting or rolling out Casework.
 

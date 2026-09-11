@@ -1,4 +1,4 @@
-//! Acceptance tests for the minimal `evidencectl new` authoring paths.
+//! Acceptance tests for the minimal `evidencectl init` authoring paths.
 
 #![cfg(unix)]
 
@@ -53,7 +53,8 @@ fn local_sqlite_extract_creates_a_runnable_synthetic_starter() {
     let printed = stdout(&output);
     assert!(printed.contains("editable SQLite-extract authoring project"));
     assert!(printed.contains("queries"));
-    assert!(printed.contains("evidencectl fixtures run --project"));
+    assert!(printed.contains("evidencectl check"));
+    assert!(printed.contains("evidencectl test"));
     assert!(printed.contains("synthetic source, question, and fixture"));
     assert!(!printed.contains("source suggest"));
 }
@@ -70,7 +71,8 @@ fn local_starter_creates_offline_project_and_target_settings_example() {
     let printed = stdout(&output);
     assert!(printed.contains("editable starter authoring project"));
     assert!(printed.contains("Starter files were copied from"));
-    assert!(printed.contains("evidencectl fixtures run --project"));
+    assert!(printed.contains("evidencectl check"));
+    assert!(printed.contains("evidencectl test"));
     assert!(!printed.contains("source suggest"));
 }
 
@@ -85,7 +87,8 @@ fn a_starter_without_sources_defers_the_fixture_run_to_its_readme() {
     let printed = stdout(&output);
     assert!(printed.contains(&format!("Next: follow {}/README.md", path(&project))));
     assert!(!printed.contains("to prove the copied starter"));
-    assert!(printed.contains("before `evidencectl fixtures run --project"));
+    assert!(printed.contains("before `evidencectl check"));
+    assert!(printed.contains("and `evidencectl test"));
 }
 
 #[test]
@@ -403,7 +406,7 @@ fn the_starter_ships_a_readme_that_names_every_file_it_wrote() {
         assert!(readme.contains(named), "the README names {named}");
     }
     assert!(
-        readme.contains("evidencectl fixtures run --project ."),
+        readme.contains("evidencectl test ."),
         "the README names the next command: {readme}"
     );
 }

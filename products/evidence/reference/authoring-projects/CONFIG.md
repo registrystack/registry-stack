@@ -49,6 +49,23 @@ An inline operation requires `source.openapi.yaml`. A project whose questions
 all name a `source.ref` may omit it. When present, it declares
 `openapi: 3.0.x` or `3.1.x`; any other version is rejected.
 
+Run `evidencectl check <project>` to parse and compile these authored inputs
+offline. The command can succeed with `status: incomplete`; each gap remains a
+visible finding with `severity`, `code`, `artifact`, `path`, `message`, and
+`suggestedAction`. Add `--deny-findings` when any finding must refuse the
+command. `evidencectl explain <project>` applies the same authoring validation
+and reports its status, findings, revision, and complete inventory without
+reading secrets, contacting a dependency, or running a fixture.
+
+Add `--target <target>` to either command when you need that explicit target's
+governance. Check then validates the target's runtime structure, public keys,
+source connections, and governed bundle. It does not require target-host paths
+or secrets to exist. `--production` requires the same target and accepts only a
+target whose own `assuranceProfile` is `production` or `evidence-grade`; it
+does not select or upgrade a profile. Fixture execution remains a separate
+`evidencectl test <project> [--target <target>]` step, and live dependency
+readiness remains `evidencectl doctor --runtime-config <absolute-file>`.
+
 As soon as one question names an `operation`, that description is read under a
 closed profile. Its top-level keys are `openapi`, `info`, `servers`, `paths`,
 and `components`, so anything else, `tags` and a top-level `security`
@@ -59,14 +76,14 @@ HTTP origin with an explicit non-zero port: `http://127.0.0.1:8080` or
 `description` beside the `url`, and a second server are each refused. A project
 whose questions all name a `source.ref` is held to the version alone.
 
-`evidencectl dev --detach --target <local-target>` reuses that local target's
+`evidencectl dev --target <local-target> start .` reuses that local target's
 `sourceConnections` and outbound TLS settings in the generated local caller
 rehearsal. It requires `assuranceProfile: local`. Evidence and Mint still use
 the generated local authentication, keys, and caller governance, and source
 secret references resolve through the project's existing `secrets/` directory.
-Use `evidencectl build --target <target>` for a candidate carrying the target's
-complete governance and runtime configuration. Existing `dev --detach` needs
-no target or connection map.
+Use `evidencectl package <project> --target <target> --output <new-candidate>`
+for a candidate carrying the target's complete governance and runtime
+configuration. Existing `dev --detach` needs no target or connection map.
 
 Only the marker and a question have a Rust type behind them, so only those two
 carry a generated schema. `crates/registry-evidence-authoring/src/schema.rs`
@@ -103,7 +120,7 @@ editor and parse-shape feedback, not as a successful compile.
 
 ### Local secrets and signing identity
 
-`evidencectl new` creates `secrets/`, adds it to `.gitignore`, and generates
+`evidencectl init` creates `secrets/`, adds it to `.gitignore`, and generates
 disposable local key material. A local compile requires that directory to be a
 plain, non-symlink directory owned by the current user with exact mode `0700`.
 The generated signing private JWK and the two independent HMAC masters remain
@@ -133,7 +150,7 @@ the project a caller thinks it read. A directory without one is not an error.
 | `version` | yes | Marker format version. `1` is the only value this crate parses. |
 | `project` | yes | The kind of project the marker names. `evidence-authoring` is the only kind today. |
 
-`evidencectl new` writes exactly two lines, held to that text by
+`evidencectl init` writes exactly two lines, held to that text by
 `crates/registry-evidence-authoring/src/marker.rs`:
 
 ```yaml
@@ -639,7 +656,7 @@ namespace stops the evaluation:
 fixture is not an approved synthetic acceptance definition
 ```
 
-The identifier `evidencectl new` writes is already approved. Replace the example
+The identifier `evidencectl init` writes is already approved. Replace the example
 requirement, concepts, schema, and rows around it and leave that one key as
 generated. A document that does not declare `synthetic_only: true` is refused
 for that alone.
@@ -648,11 +665,11 @@ for that alone.
 source and refuses a project whose source reads a published extract:
 
 ```text
-local serving does not bind SQLite extracts; prove this editable project with `evidencectl fixtures run --project <dir>`
+local serving does not bind SQLite extracts; prove this editable project with `evidencectl test <dir>`
 ```
 
 Fixtures are the proof loop for that transport. The first time such an answer
-travels over HTTP is after `evidencectl build` against a deployment target, so a
+travels over HTTP is after `evidencectl package` against a deployment target, so a
 project on this transport reaches HTTP a step later than an authored HTTP source
 does.
 

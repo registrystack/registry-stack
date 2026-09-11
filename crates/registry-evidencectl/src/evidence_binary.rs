@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 
 /// How long a delegated `evidence` run may take before evidencectl stops it.
 ///
@@ -40,25 +40,32 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub(crate) fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         if !path.is_file() {
-            bail!("evidence binary not found at {}", path.display());
+            return Err(operational_error(format!(
+                "evidence binary not found at {}",
+                path.display()
+            )));
         }
         return Ok(path.to_path_buf());
     }
     if let Ok(env_path) = env::var("EVIDENCE_BIN") {
         let path = PathBuf::from(&env_path);
         if !path.is_file() {
-            bail!(
+            return Err(operational_error(format!(
                 "evidence binary not found at {} (from EVIDENCE_BIN)",
                 path.display()
-            );
+            )));
         }
         return Ok(path);
     }
     find_on_path("evidence").ok_or_else(|| {
-        anyhow!(
-            "evidence binary not found: pass --evidence-bin, set EVIDENCE_BIN, or add `evidence` to PATH"
+        operational_error(
+            "evidence binary not found: pass --evidence-bin, set EVIDENCE_BIN, or add `evidence` to PATH",
         )
     })
+}
+
+fn operational_error(message: impl Into<String>) -> anyhow::Error {
+    std::io::Error::new(std::io::ErrorKind::NotFound, message.into()).into()
 }
 
 /// Resolve the Evidence runtime binary and refuse one that is not this
@@ -102,18 +109,22 @@ fn ensure_matching_version_within(evidence_bin: &Path, deadline: Duration) -> Re
         None
     };
     let Some(reported) = reported else {
-        bail!(
+        return Err(operational_invalid_data(format!(
             "{} did not report an Evidence runtime version; evidencectl {expected} delegates every fixture decision to the matching evidence binary, so pass --evidence-bin pointing at it, set EVIDENCE_BIN, or put it on PATH",
             evidence_bin.display()
-        );
+        )));
     };
     if reported != expected {
-        bail!(
+        return Err(operational_invalid_data(format!(
             "evidence at {} reports version {reported}, and this evidencectl is {expected}; the two must match, so pass --evidence-bin pointing at evidence {expected}, set EVIDENCE_BIN to it, or put it on PATH",
             evidence_bin.display()
-        );
+        )));
     }
     Ok(())
+}
+
+fn operational_invalid_data(message: impl Into<String>) -> anyhow::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()).into()
 }
 
 /// Ask the binary to identify itself, under the bounds every delegated run is

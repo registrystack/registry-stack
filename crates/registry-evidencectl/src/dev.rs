@@ -40,7 +40,7 @@ use crate::{
         compile_local_project_with_target_inputs, CompiledAccessPolicy, CompiledConceptForm,
         CompiledProject, CompiledQuestion, LocalServicePorts,
     },
-    keygen,
+    keygen, OutputFormat,
 };
 
 const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v5";
@@ -58,6 +58,25 @@ const MAX_HTTP_BODY_BYTES: u64 = 64 * 1024;
 const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 45;
 const SHUTDOWN_TIMEOUT_SECONDS: u64 = 35;
 
+#[derive(Debug)]
+pub(crate) struct PortConflict {
+    pub(crate) port: u16,
+    pub(crate) service: &'static str,
+    pub(crate) flag: &'static str,
+}
+
+impl std::fmt::Display for PortConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "local port {} is already in use, so the local {} cannot listen on it; free 127.0.0.1:{}, or start this session with {} <port>",
+            self.port, self.service, self.port, self.flag
+        )
+    }
+}
+
+impl std::error::Error for PortConflict {}
+
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 pub struct DevArgs {
@@ -65,43 +84,46 @@ pub struct DevArgs {
     action: Option<DevAction>,
 
     /// Return after Registry Mint and Evidence Gateway are ready on loopback.
-    #[arg(long, required = true)]
+    #[arg(long)]
     detach: bool,
 
     /// Loopback port for the local Evidence Gateway service.
-    #[arg(long, default_value_t = 8080)]
-    evidence_port: u16,
+    #[arg(long, global = true)]
+    evidence_port: Option<u16>,
 
     /// Loopback port for the local Mint service.
-    #[arg(long, default_value_t = 8081)]
-    mint_port: u16,
+    #[arg(long, global = true)]
+    mint_port: Option<u16>,
 
     /// Project root. Defaults to the current directory.
-    #[arg(long, default_value = ".", hide = true)]
-    project: PathBuf,
+    #[arg(long, hide = true)]
+    project: Option<PathBuf>,
 
     /// Reuse a local target's source connections and outbound TLS in the generated
     /// local caller rehearsal. Target service authentication is not replayed.
-    #[arg(long)]
+    #[arg(long, global = true)]
     target: Option<PathBuf>,
 
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, global = true)]
     evidence_bin: Option<PathBuf>,
 
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, global = true)]
     mint_bin: Option<PathBuf>,
 
     #[arg(
         long,
         default_value_t = DEFAULT_READY_TIMEOUT_SECONDS,
         value_parser = clap::value_parser!(u64).range(1..=120),
-        hide = true
+        hide = true,
+        global = true
     )]
     ready_timeout_seconds: u64,
 }
 
 #[derive(Debug, Subcommand)]
 enum DevAction {
+    /// Start or restart the retained local Registry Mint and Evidence pair.
+    Start(StartArgs),
     /// Stop the active local Registry Mint and Evidence Gateway pair.
     Stop(StopArgs),
     /// Remove one completed stopped local generation.
@@ -110,13 +132,23 @@ enum DevAction {
 
 #[derive(Debug, Args)]
 struct StopArgs {
-    #[arg(long, default_value = ".", hide = true)]
-    project: PathBuf,
+    /// Project root. Defaults to the current directory.
+    project: Option<PathBuf>,
+    /// Compatibility spelling for the project root.
+    #[arg(long = "project", hide = true, conflicts_with = "project")]
+    legacy_project: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 struct CleanArgs {
     #[arg(long, default_value = ".", hide = true)]
+    project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct StartArgs {
+    /// Project root. Defaults to the current directory.
+    #[arg(default_value = ".")]
     project: PathBuf,
 }
 
@@ -335,35 +367,84 @@ impl Drop for OwnedChildren {
     }
 }
 
-pub fn run(args: DevArgs) -> Result<ExitCode> {
+pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<ExitCode> {
     match args.action {
-        Some(DevAction::Stop(stop)) => {
-            if args.detach {
-                bail!("`dev stop` does not accept `--detach`");
+        Some(DevAction::Start(start)) => {
+            if args.detach || args.project.is_some() {
+                bail!("`dev start` does not accept the compatibility flags --detach or --project");
             }
-            stop_dev(&stop.project)
-        }
-        Some(DevAction::Clean(clean)) => {
-            if args.detach {
-                bail!("`dev clean` does not accept `--detach`");
-            }
-            clean_dev(&clean.project)
-        }
-        None => {
-            if !args.detach {
-                bail!("the local development lifecycle requires `evidencectl dev --detach`");
-            }
-            let ports = LocalServicePorts::new(args.evidence_port, args.mint_port)?;
+            let ports = selected_ports(&start.project, args.evidence_port, args.mint_port)?;
             start_detached(
-                &args.project,
+                &start.project,
                 args.evidence_bin.as_deref(),
                 args.mint_bin.as_deref(),
                 args.ready_timeout_seconds,
                 ports,
                 args.target.as_deref(),
+                format,
+            )
+        }
+        Some(DevAction::Stop(stop)) => {
+            if args.detach {
+                bail!("`dev stop` does not accept `--detach`");
+            }
+            let project = stop
+                .project
+                .as_deref()
+                .or(stop.legacy_project.as_deref())
+                .unwrap_or_else(|| Path::new("."));
+            stop_dev(project, format)
+        }
+        Some(DevAction::Clean(clean)) => {
+            if args.detach {
+                bail!("`dev clean` does not accept `--detach`");
+            }
+            clean_dev(&clean.project, format)
+        }
+        None => {
+            if !args.detach {
+                bail!("the local development lifecycle requires `evidencectl dev --detach`");
+            }
+            let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
+            let ports = selected_ports(project, args.evidence_port, args.mint_port)?;
+            start_detached(
+                project,
+                args.evidence_bin.as_deref(),
+                args.mint_bin.as_deref(),
+                args.ready_timeout_seconds,
+                ports,
+                args.target.as_deref(),
+                format,
             )
         }
     }
+}
+
+fn selected_ports(
+    project: &Path,
+    evidence_port: Option<u16>,
+    mint_port: Option<u16>,
+) -> Result<LocalServicePorts> {
+    let retained = if evidence_port.is_none() || mint_port.is_none() {
+        canonical_project(project)
+            .ok()
+            .and_then(|project| read_state(&project.join(".evidence/dev/state.json")).ok())
+            .filter(|state| state.status == DevStatus::Stopped)
+            .and_then(|state| {
+                Some((
+                    state.evidence_origin.rsplit(':').next()?.parse().ok()?,
+                    state.mint_origin.rsplit(':').next()?.parse().ok()?,
+                ))
+            })
+    } else {
+        None
+    };
+    LocalServicePorts::new(
+        evidence_port
+            .or(retained.map(|ports| ports.0))
+            .unwrap_or(8080),
+        mint_port.or(retained.map(|ports| ports.1)).unwrap_or(8081),
+    )
 }
 
 pub fn run_supervisor(args: SupervisorArgs) -> Result<ExitCode> {
@@ -915,6 +996,7 @@ fn start_detached(
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
+    format: OutputFormat,
 ) -> Result<ExitCode> {
     let project = canonical_project(project)?;
     let generated_root = ensure_private_generated_root(&project)?;
@@ -940,6 +1022,7 @@ fn start_detached(
         ready_timeout_seconds,
         ports,
         target,
+        format,
     );
     if let Err(error) = result {
         let kept = preserve_failed_start_logs(&dev_root);
@@ -973,9 +1056,17 @@ fn probe_local_ports(ports: LocalServicePorts) -> Result<()> {
         (ports.mint, "Registry Mint", "--mint-port"),
     ] {
         if let Err(error) = TcpListener::bind(("127.0.0.1", port)) {
-            bail!(
-                "local port {port} is already in use, so the local {service} cannot listen on it ({error}); free 127.0.0.1:{port}, or start this session with {flag} <port>"
-            );
+            if error.kind() == std::io::ErrorKind::AddrInUse {
+                return Err(PortConflict {
+                    port,
+                    service,
+                    flag,
+                }
+                .into());
+            }
+            return Err(error).with_context(|| {
+                format!("checking whether the local {service} can listen on 127.0.0.1:{port}")
+            });
         }
     }
     Ok(())
@@ -1025,14 +1116,20 @@ fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
     fs::remove_dir_all(dev_root).context("failed to replace the completed local session")
 }
 
-fn clean_dev(project: &Path) -> Result<ExitCode> {
+fn clean_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(project)?;
     let generated_root = existing_private_generated_root(&project)?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
     validate_private_directory(&dev_root)?;
     remove_completed_dev_root(&project, &dev_root)?;
-    println!("Removed stopped local Evidence state");
+    match format {
+        OutputFormat::Human => println!("Removed stopped local Evidence state"),
+        OutputFormat::Json => println!(
+            "{}",
+            json!({"operation":"dev-clean","status":"removed","project":project})
+        ),
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1044,6 +1141,7 @@ fn prepare_and_start(
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
+    format: OutputFormat,
 ) -> Result<ExitCode> {
     let evidence_bin = canonical_tool_binary(resolve_tool_binary(
         "evidence",
@@ -1068,7 +1166,9 @@ fn prepare_and_start(
                     connections,
                     outbound_tls,
                 )?;
-                println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and Mint use generated local governance.");
+                if format == OutputFormat::Human {
+                    println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and Mint use generated local governance.");
+                }
                 compiled
             }
             None => compile_local_project_with_ports(project, dev_root, &evidence_bin, ports)?,
@@ -1180,8 +1280,23 @@ fn prepare_and_start(
         publish_supervisor_failure(dev_root, FailureKind::Supervisor)?;
         return Err(error);
     }
-    println!("Evidence ready at {evidence_origin}");
-    println!("Mint ready at {mint_origin}");
+    match format {
+        OutputFormat::Human => {
+            println!("Evidence ready at {evidence_origin}");
+            println!("Mint ready at {mint_origin}");
+        }
+        OutputFormat::Json => println!(
+            "{}",
+            json!({
+                "operation": "dev-start",
+                "status": "ready",
+                "project": project,
+                "evidenceOrigin": evidence_origin,
+                "mintOrigin": mint_origin,
+                "proofBoundary": "both retained local services reached readiness"
+            })
+        ),
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1236,7 +1351,7 @@ fn publish_thumbprint_named_public_jwk(staged: &Path) -> Result<PathBuf> {
     Ok(published)
 }
 
-fn stop_dev(project: &Path) -> Result<ExitCode> {
+fn stop_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(project)?;
     let generated_root = or_inactive_session(existing_private_generated_root(&project))?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
@@ -1264,7 +1379,13 @@ fn stop_dev(project: &Path) -> Result<ExitCode> {
     if stopped.status != DevStatus::Stopped || stopped.caller.is_some() {
         bail!("the local supervisor did not publish the closed stopped state");
     }
-    println!("Local Evidence stopped");
+    match format {
+        OutputFormat::Human => println!("Local Evidence stopped"),
+        OutputFormat::Json => println!(
+            "{}",
+            json!({"operation":"dev-stop","status":"stopped","project":project})
+        ),
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -2457,7 +2578,7 @@ requirements:
         assert!(ready.caller.is_some());
         assert!(ready.access_policies.is_empty());
         assert!(
-            clean_dev(&project).is_err(),
+            clean_dev(&project, OutputFormat::Human).is_err(),
             "active state is never removed"
         );
         assert!(dev.is_dir(), "refused cleanup preserves active state");
@@ -2552,7 +2673,7 @@ requirements:
         assert_eq!(stopped.runtime_path, runtime);
         assert_eq!(stopped.questions[0].concepts[0].alias, "is_adult");
 
-        clean_dev(&project).expect("clean stopped session");
+        clean_dev(&project, OutputFormat::Human).expect("clean stopped session");
         assert!(!dev.exists());
     }
 
@@ -2717,8 +2838,8 @@ requirements:
     #[test]
     fn stop_dev_reports_a_friendly_refusal_when_no_generated_root_exists() {
         let project = tempfile::tempdir().expect("tempdir");
-        let error =
-            stop_dev(project.path()).expect_err("stop must refuse a project with no dev session");
+        let error = stop_dev(project.path(), OutputFormat::Human)
+            .expect_err("stop must refuse a project with no dev session");
         let diagnostic = format!("{error:#}");
         assert_eq!(
             diagnostic,
@@ -2741,8 +2862,8 @@ requirements:
         fs::set_permissions(&dev_root, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
             .expect("mode dev root");
 
-        let error =
-            stop_dev(project.path()).expect_err("stop must refuse a project with no dev state");
+        let error = stop_dev(project.path(), OutputFormat::Human)
+            .expect_err("stop must refuse a project with no dev state");
         let diagnostic = format!("{error:#}");
         assert_eq!(
             diagnostic,
@@ -2766,7 +2887,7 @@ requirements:
 
         // Only a missing generated root, dev directory, or state file is an
         // inactive session. Every other fault keeps its own diagnostic.
-        let error = stop_dev(project.path())
+        let error = stop_dev(project.path(), OutputFormat::Human)
             .expect_err("stop must refuse a dev directory that is not private");
         let diagnostic = format!("{error:#}");
         assert_ne!(

@@ -1,9 +1,9 @@
 # Source-built Casework adapter for local evaluation. The policy package,
-# operator settings, file-backed secrets, audit state, and PostgreSQL service
+# runtime settings, file-backed secrets, audit state, and PostgreSQL service
 # remain operator-owned inputs.
 #
 # Required environment:
-#   CASEWORK_OPERATOR_FILE  operator.yaml configured for container paths
+#   CASEWORK_RUNTIME_CONFIG_FILE  runtime.yaml configured for container paths
 #   CASEWORK_PACKAGE_DIR    output from caseworkctl package
 #   CASEWORK_SECRET_ROOT    owner-only file-secret directory
 name: registry-casework
@@ -20,7 +20,7 @@ services:
     security_opt: [no-new-privileges:true]
     restart: unless-stopped
     volumes:
-      - ${CASEWORK_OPERATOR_FILE:?set CASEWORK_OPERATOR_FILE}:/etc/registry-casework/operator.yaml:ro
+      - ${CASEWORK_RUNTIME_CONFIG_FILE:?set CASEWORK_RUNTIME_CONFIG_FILE}:/etc/registry-casework/runtime.yaml:ro
       - ${CASEWORK_PACKAGE_DIR:?set CASEWORK_PACKAGE_DIR}:/etc/registry-casework/package:ro
       - ${CASEWORK_SECRET_ROOT:?set CASEWORK_SECRET_ROOT}:/run/secrets/registry-casework:ro
       - casework-audit:/var/lib/registry-casework
@@ -30,7 +30,7 @@ services:
     networks: [casework-net]
     # Publish only to an operator-controlled upstream proxy when needed:
     # ports:
-    #   - "127.0.0.1:8091:8091"
+    #   - "127.0.0.1:8100:8100"
 
 networks:
   casework-net: {}

@@ -107,7 +107,7 @@ unsafe bundle safe.
 
 ### Production candidate handoff
 
-`evidencectl build` compiles an editable project and one explicit production
+`evidencectl package` compiles an editable project and one explicit production
 target into a new candidate directory. It is a create-only authoring command,
 not an approval, promotion, deployment, key-generation, caller-registration,
 or service-start command. It runs the real `evidence` binary through its
@@ -133,13 +133,16 @@ Run the following grouped handoff after provisioning and whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
 
 ```sh
-evidencectl doctor --project '<candidate>'
-evidencectl fixtures run --project '<candidate>'
+evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
+evidencectl test '<candidate>'
 evidence --runtime '<candidate>/runtime.yaml' serve
 ```
 
-`doctor` is advisory for local artifact posture; the real runtime remains the
-authority for startup. Route traffic only after `/ready`. For one approved
+`doctor` delegates the runtime-owned startup dependency preflight without
+opening the public listener, sending an Evidence request, or appending an
+application audit event. Audit initialization may briefly hold its operational
+lock. The runtime remains the authority for startup. Route traffic only after
+`/ready`. For one approved
 synthetic deployment subject, retain the signed response, verify it against an
 independently prepared `production` policy and trusted keys, and run
 `evidence verify-audit` over the resulting audit chain.
@@ -148,7 +151,7 @@ An existing HTTPS OIDC issuer and Registry Mint are equal authentication
 choices for Evidence. Mint is a separate process and separately authored
 configuration. When used, the operator runs `mint check --config <mint.yaml>`
 and the read-only paired check
-`evidencectl doctor --project <candidate> --mint-config <mint.yaml>`. The
+`evidencectl artifact inspect <candidate> --mint-config <mint.yaml>`. The
 paired check compares only issuer, JWKS URI, audiences, signing algorithm,
 token type, and configured principal, requester-tag, evidence-audience,
 grant-id, grant-authority, and optional actor claim names. It does not decide
@@ -266,7 +269,7 @@ The publication workflow is:
 1. Review the complete bundle and its combined disclosure surface.
 2. Run `evidence check` and every referenced fixture, and record the exact
    governed bundle revision.
-3. Run the production `evidencectl build` flow, which generates and seals
+3. Run the production `evidencectl package` flow, which generates and seals
    `catalog.jsonld`, then publish the generic OpenAPI, provider advertisement,
    and static onboarding material. Configure token issuance and verifier trust
    through the same governed process.

@@ -56,7 +56,7 @@ HTTP 406.
 Run the candidate checks and deploy the exact reviewed revision:
 
 ```sh
-evidencectl fixtures run --project "<evidence-project>"
+evidencectl test "<evidence-project>"
 evidence check --runtime <evidence-project>/runtime.yaml
 ```
 
@@ -94,7 +94,7 @@ testing, `evidencectl request prepare` records that expectation:
 evidencectl request prepare "<question>" \
   --purpose "<purpose>" \
   --subject "<role>:<field>=<value>" \
-  --format sd-jwt-vc \
+  --response-format sd-jwt-vc \
   --name "<request-name>"
 ```
 

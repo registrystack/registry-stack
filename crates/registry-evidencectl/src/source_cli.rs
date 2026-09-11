@@ -13,7 +13,7 @@ use anyhow::{bail, Context as _, Result};
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
-use crate::{authoring, build, source_add, source_import, source_mock, suggest};
+use crate::{authoring, build, source_add, source_import, source_mock, suggest, OutputFormat};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SourceCommand {
@@ -72,9 +72,9 @@ pub(crate) struct SourceDetachArgs {
     pub(crate) project: PathBuf,
 }
 
-pub(crate) fn run(command: SourceCommand) -> Result<ExitCode> {
+pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        SourceCommand::Add(args) => source_add::run(args),
+        SourceCommand::Add(args) => source_add::run(args, format),
         SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args)),
         SourceCommand::Mock(command) => source_mock::run(command),
         SourceCommand::Diff(args) => diff(args),

@@ -53,12 +53,13 @@ privileged source profile to make an operation succeed.
 ## Plan the deployment boundary
 
 One Casework process needs PostgreSQL, one OpenID Connect issuer, a private HTTP
-listener behind operator-controlled TLS, and a keyed audit file. Production
-loads a reviewed policy package and verifies its adjacent manifest before the
-listener opens. The deployment operator owns selecting that package and rolling
-out or restarting the process. Policy replacement does not rewrite running
-clock occurrences; holiday changes use a separate Administrator preview and
-apply operation.
+listener behind operator-controlled TLS, and a keyed audit file. Its versioned
+`runtime.yaml` selects the reviewed policy directory through `package.root` and
+keeps deployment bindings outside that package. Production verifies the
+adjacent manifest before the listener opens. The deployment operator owns
+selecting that package and rolling out or restarting the process. Policy
+replacement does not rewrite running clock occurrences; holiday changes use a
+separate Administrator preview and apply operation.
 
 The App Kit provides the current staff interface for BReg-backed work. A
 standalone deployment supplies the HTTP API and maintained clients, with no

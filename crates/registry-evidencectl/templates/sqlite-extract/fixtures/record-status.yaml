@@ -1,4 +1,4 @@
-# The fixture set `evidencectl fixtures run` replays offline. It is the proof
+# The fixture set `evidencectl test` replays offline. It is the proof
 # that the source, statement, schemas, extraction, and derivation still agree
 # with each other, so it is edited with them rather than after them.
 fixture: registry.evidence.reference.sqlite-record-status-starter/v1

@@ -66,7 +66,7 @@ const MAX_EDITOR_FILE_BYTES: u64 = 1024 * 1024;
 const EDITOR_REPORT_SCHEMA_VERSION: &str = "evidencectl.editor.v1";
 /// The mode a published file carries. This is generated, non-secret
 /// configuration meant to be read and committed beside the rest of a project,
-/// so it matches what `evidencectl new` writes rather than the owner-only
+/// so it matches what `evidencectl init` writes rather than the owner-only
 /// discipline key material is held to. Publication hard links the staged file,
 /// which shares its inode, so the staged name carries the same mode inside a
 /// transaction directory only its owner can enter.
@@ -341,7 +341,7 @@ fn require_authoring_project_root(root: &Path) -> Result<()> {
             if carries_authored_pair(root) {
                 Ok(())
             } else {
-                bail!("project root must contain a regular {PROJECT_MARKER_FILE}, or the {OPENAPI_FILE} and {QUESTIONS_DIRECTORY} directory an authoring project carries; run `evidencectl new` first")
+                bail!("project root must contain a regular {PROJECT_MARKER_FILE}, or the {OPENAPI_FILE} and {QUESTIONS_DIRECTORY} directory an authoring project carries; run `evidencectl init` first")
             }
         }
         Err(error) => {

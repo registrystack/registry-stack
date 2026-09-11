@@ -324,6 +324,20 @@ fn configurable_ports_drive_every_generated_url_and_listener() {
     assert_success(&fixture.dev_stop(), "stop configured ports");
     wait_unavailable(&format!("127.0.0.1:{evidence_port}"));
     wait_unavailable(&format!("127.0.0.1:{mint_port}"));
+    let restarted = fixture.dev_restart(&evidence, &mint);
+    assert_success(&restarted, "canonical restart on retained configured ports");
+    assert_eq!(
+        String::from_utf8_lossy(&restarted.stdout),
+        format!(
+            "Evidence ready at http://127.0.0.1:{evidence_port}\nMint ready at http://127.0.0.1:{mint_port}\n"
+        )
+    );
+    assert!(ready(
+        &format!("http://127.0.0.1:{evidence_port}/ready"),
+        json!({"status":"ready"})
+    ));
+    assert!(jwks_ready_at(mint_port));
+    assert_success(&fixture.dev_stop(), "stop restarted configured ports");
     assert_success(&fixture.dev_clean(), "clean configured ports");
 }
 
@@ -1039,6 +1053,20 @@ impl Project {
             .arg(&self.root)
             .output()
             .expect("dev stop")
+    }
+
+    fn dev_restart(&self, evidence: &Path, mint: &Path) -> Output {
+        evidencectl()
+            .args(["dev", "start"])
+            .arg(&self.root)
+            .arg("--evidence-bin")
+            .arg(evidence)
+            .arg("--mint-bin")
+            .arg(mint)
+            .arg("--ready-timeout-seconds")
+            .arg("20")
+            .output()
+            .expect("canonical dev restart")
     }
 
     fn dev_clean(&self) -> Output {

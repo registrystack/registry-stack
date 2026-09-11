@@ -1,6 +1,6 @@
 # Evidence authoring project
 
-`evidencectl new` wrote this project around the API description it retained. It
+`evidencectl init` wrote this project around the API description it retained. It
 is a starting point rather than an example: the directories below are empty on
 purpose, because only the operation you select can decide what they hold.
 
@@ -16,7 +16,7 @@ purpose, because only the operation you select can decide what they hold.
 | `schemas/` | The shapes a source response and an extraction must have before the next stage reads them. |
 | `questions/` | Questions: one fixed request each, with the answers it may disclose and the governance the assertion carries. |
 | `derivations/` | Bounded derivation: it turns facts into the answers a question declares, and nothing else. |
-| `fixtures/` | The synthetic cases `evidencectl fixtures run` replays offline, with no network. |
+| `fixtures/` | The synthetic cases `evidencectl test` replays offline, with no network. |
 | `secrets/` | Disposable local key material. It is owner-only, unbound, and never a deployment key; `.gitignore` keeps it out of version control. |
 
 ## Next commands
@@ -31,11 +31,13 @@ writes a draft you review rather than a source you deploy.
 
 A question, its schemas, its extraction, its derivation, and its fixtures are
 written after the source. Each one bounds the next, so a change to any of them
-is a change to what the assertion may say. `evidencectl fixtures run` replays
+is a change to what the assertion may say. `evidencectl test` replays
 them offline once they exist.
 
-`evidencectl build` compiles this project and one deployment target into a
-candidate, and `evidencectl doctor` reads that candidate. Neither reads an
+`evidencectl package` compiles this project and one deployment target into a
+candidate. `evidencectl artifact inspect` checks candidate custody, while
+`evidencectl doctor --runtime-config <absolute-file>` checks live startup
+dependencies. None of these commands reads an
 editable project, so both come after the fixtures pass.
 
 ## Documentation

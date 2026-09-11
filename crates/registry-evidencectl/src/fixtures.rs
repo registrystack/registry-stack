@@ -98,6 +98,9 @@ struct FixtureReport {
 
 #[derive(Debug, Serialize)]
 struct RunReport {
+    operation: &'static str,
+    #[serde(rename = "proofBoundary")]
+    proof_boundary: &'static str,
     check: CheckReport,
     fixtures: Vec<FixtureReport>,
     passed: bool,
@@ -214,6 +217,9 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let overall_passed =
         check_passed && fixtures.iter().all(|fixture| fixture.passed) && evaluated_cases > 0;
     let report = RunReport {
+        operation: "test",
+        proof_boundary:
+            "offline synthetic fixture evaluation; no live dependency readiness was checked",
         check: CheckReport {
             passed: check_passed,
             stderr: check_outcome.stderr,
@@ -562,6 +568,7 @@ fn print_diagnostics(report: &RunReport, to_stderr: bool) {
         "{passed_count} passed, {failed_count} failed ({} cases evaluated)",
         report.evaluated_cases
     ));
+    lines.push(format!("Proof: {}", report.proof_boundary));
     // Said only where it is the reason for the verdict: beside a failing step
     // it would read as a second problem rather than the same one.
     if failed_count == 0 && report.evaluated_cases == 0 {
