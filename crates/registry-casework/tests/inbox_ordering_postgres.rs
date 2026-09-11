@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -24,8 +25,22 @@ const SOURCE_ID: &str = "inbox-source";
 const SUBJECT_KIND: &str = "request";
 const GENERATION: &str = "inbox-generation-1";
 
-#[derive(Clone)]
-struct VisibleSource;
+#[derive(Clone, Default)]
+struct VisibleSource {
+    discovery_unavailable: Arc<AtomicBool>,
+}
+
+impl VisibleSource {
+    fn with_discovery_control() -> (Self, Arc<AtomicBool>) {
+        let discovery_unavailable = Arc::new(AtomicBool::new(false));
+        (
+            Self {
+                discovery_unavailable: Arc::clone(&discovery_unavailable),
+            },
+            discovery_unavailable,
+        )
+    }
+}
 
 #[async_trait]
 impl SourceAdapter for VisibleSource {
@@ -56,6 +71,9 @@ impl SourceAdapter for VisibleSource {
         _cursor: Option<&DiscoveryCursor>,
         _limit: usize,
     ) -> Result<ActiveSubjectsPage, SourceAdapterError> {
+        if self.discovery_unavailable.load(Ordering::SeqCst) {
+            return Err(SourceAdapterError::Unavailable);
+        }
         Ok(ActiveSubjectsPage {
             subjects: vec![SubjectRef {
                 source_id: SOURCE_ID.to_owned(),
@@ -196,6 +214,13 @@ fn project() -> CaseworkProject {
 async fn fixture_with_project(
     project: CaseworkProject,
 ) -> (PostgresStore, tokio_postgres::Client, CaseworkService) {
+    fixture_with_source(project, VisibleSource::default()).await
+}
+
+async fn fixture_with_source(
+    project: CaseworkProject,
+    source: VisibleSource,
+) -> (PostgresStore, tokio_postgres::Client, CaseworkService) {
     let base = env::var(DATABASE_ENV).expect("dedicated inbox test database URL");
     let schema = format!("inbox_{}", Uuid::new_v4().simple());
     let separator = if base.contains('?') { '&' } else { '?' };
@@ -230,7 +255,7 @@ async fn fixture_with_project(
     let service = CaseworkService::new(
         store.clone(),
         project,
-        [Arc::new(VisibleSource) as Arc<dyn SourceAdapter>],
+        [Arc::new(source) as Arc<dyn SourceAdapter>],
     )
     .expect("inbox service");
     (store, database, service)
@@ -366,6 +391,95 @@ async fn configured_scan_budget_reaches_visible_work_beyond_one_hundred_candidat
         .expect("public candidate page remains bounded");
     assert_eq!(capped.items.len(), 100);
     assert!(capped.next_cursor.is_some());
+}
+
+#[tokio::test]
+async fn queue_filter_keeps_incomplete_source_discovery_relevant_after_reassignment() {
+    let (source, discovery_unavailable) = VisibleSource::with_discovery_control();
+    let (store, database, service) = fixture_with_source(project(), source).await;
+    let staff = actor("staff", "staff", CaseworkRole::Staff);
+    let administrator = actor(
+        "administrator",
+        "administrator",
+        CaseworkRole::Administrator,
+    );
+    store
+        .bootstrap_directory(
+            &administrator,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team".to_owned(),
+                staff: vec![staff.principal.clone()],
+                supervisors: Vec::new(),
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap-filtered-discovery",
+        )
+        .await
+        .expect("bootstrap directory");
+    database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('secondary','team',1)",
+            &[],
+        )
+        .await
+        .expect("serve reassignment queue");
+
+    let page = service
+        .inbox_for_view(
+            &staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            1,
+            Some("secondary"),
+            None,
+            None,
+        )
+        .await
+        .expect("filtered inbox retains source discovery state");
+
+    assert!(page.items.is_empty());
+    assert_eq!(page.status, PageStatus::BudgetExhausted);
+    assert!(page.next_cursor.is_some());
+
+    let source_status = database
+        .query_one(
+            "SELECT remote_complete,unavailable FROM casework_source_status WHERE source_id=$1 AND binding_generation=$2",
+            &[&SOURCE_ID, &GENERATION],
+        )
+        .await
+        .expect("source discovery status was assessed");
+    let remote_complete: bool = source_status.get(0);
+    let unavailable: bool = source_status.get(1);
+    assert!(!remote_complete);
+    assert!(!unavailable);
+
+    discovery_unavailable.store(true, Ordering::SeqCst);
+    let outage = service
+        .inbox_for_view(
+            &staff,
+            "reader",
+            "token",
+            InboxView::MyTeams,
+            1,
+            Some("secondary"),
+            None,
+            None,
+        )
+        .await
+        .expect("filtered inbox reports source outage");
+    assert!(outage.items.is_empty());
+    assert_eq!(outage.status, PageStatus::SourceUnavailable);
+    let unavailable: bool = database
+        .query_one(
+            "SELECT unavailable FROM casework_source_status WHERE source_id=$1 AND binding_generation=$2",
+            &[&SOURCE_ID, &GENERATION],
+        )
+        .await
+        .expect("source outage status was retained")
+        .get(0);
+    assert!(unavailable);
 }
 
 async fn set_reference_and_type(

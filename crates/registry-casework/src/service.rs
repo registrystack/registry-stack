@@ -833,6 +833,8 @@ impl CaseworkService {
             .collect::<BTreeMap<_, _>>();
         let mut unavailable = false;
         let mut discovery_pending = false;
+        // Routing and clock steps can move source work away from its request's
+        // default queue, so a queue filter cannot narrow source completeness.
         let relevant_sources = self
             .project
             .sources
@@ -840,8 +842,7 @@ impl CaseworkService {
             .filter(|source| {
                 subject.is_none_or(|subject| source.id == subject.source_id)
                     && source.requests.iter().any(|request| {
-                        queue.is_none_or(|queue| request.queue == queue)
-                            && subject.is_none_or(|subject| request.entity == subject.kind)
+                        subject.is_none_or(|subject| request.entity == subject.kind)
                             && reference.is_none_or(|_| request.display_reference.is_some())
                     })
             })
