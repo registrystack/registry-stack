@@ -18,6 +18,7 @@ const QUEUE_MEMBER_PRINCIPAL: &str = "urn:test:person:queue-member";
 #[tokio::test]
 async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_service_identity() {
     let idp = MockIdp::start().await;
+    assert_eq!(project().check(), Ok(()));
     let authenticator = authenticator(&idp);
 
     for (profile, scope, role) in [
@@ -67,6 +68,23 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
         .expect("the explicitly configured Requester profile accepts a service identity");
     assert_eq!(requester.role, CaseworkRole::Requester);
     assert_eq!(requester.principal.subject, QUEUE_MEMBER_PRINCIPAL);
+
+    let requester_with_human_assertion = token(&idp, "casework:request", Some(json!("human")));
+    let requester = authenticator
+        .authenticate(&requester_with_human_assertion, "requester")
+        .await
+        .expect("a human assertion does not prevent selecting the Requester profile");
+    assert_eq!(requester.role, CaseworkRole::Requester);
+    for human_profile in ["staff", "supervisor", "administrator"] {
+        assert_eq!(
+            authenticator
+                .authenticate(&requester_with_human_assertion, human_profile)
+                .await
+                .expect_err("the dedicated Requester scope cannot select a human profile"),
+            AuthenticationError::Profile
+        );
+    }
+
     assert_eq!(
         authenticator
             .authenticate(
@@ -223,8 +241,8 @@ fn project() -> CaseworkProject {
             },
         ],
         queues: vec![QueuePolicy {
-            id: "default".to_owned(),
-            label: "Default".to_owned(),
+            id: "decisions".to_owned(),
+            label: "Decisions".to_owned(),
         }],
         sources: Vec::new(),
         hosted_kinds: vec![standalone_decision_starter_kind()],
