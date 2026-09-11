@@ -31,6 +31,9 @@ impl Session {
     fn ctl(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
             .args(args)
+            // The journal assertion below needs the default service event even
+            // when a maintainer's shell sets a quieter global tracing filter.
+            .env("RUST_LOG", "info")
             .output()
             .expect("native ctl command launches")
     }

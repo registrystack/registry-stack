@@ -11,6 +11,7 @@ use registry_casework_core::{
 };
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 const CASEWORK_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
@@ -688,11 +689,20 @@ fn secret_file_refusal(root: &Path, name: &str) -> Option<&'static str> {
     if metadata.nlink() != 1 {
         return Some("hard-linked elsewhere");
     }
-    // Read only to classify. Nothing from the content is retained or reported.
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => zeroize::Zeroizing::new(bytes),
+    // Read only to classify. Bound the read before allocation exactly as the
+    // shared resolver does; nothing from the content is retained or reported.
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
         Err(_) => return Some("unreadable"),
     };
+    if file
+        .take((registry_platform_config::MAX_SECRET_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return Some("unreadable");
+    }
     if bytes.is_empty() {
         return Some("empty");
     }
@@ -1144,6 +1154,16 @@ mod tests {
         write("readable", b"0123456789abcdef", 0o644);
         write("empty", b"", 0o600);
         write("with-nul", b"abc\0def", 0o600);
+        write(
+            "at-limit",
+            &vec![b'x'; registry_platform_config::MAX_SECRET_BYTES],
+            0o600,
+        );
+        write(
+            "over-limit",
+            &vec![b'x'; registry_platform_config::MAX_SECRET_BYTES + 1],
+            0o600,
+        );
 
         assert_eq!(secret_file_refusal(&secrets, "ready"), None);
         assert_eq!(
@@ -1155,6 +1175,11 @@ mod tests {
             Some("readable beyond its owner; set mode 0400 or 0600")
         );
         assert_eq!(secret_file_refusal(&secrets, "empty"), Some("empty"));
+        assert_eq!(secret_file_refusal(&secrets, "at-limit"), None);
+        assert_eq!(
+            secret_file_refusal(&secrets, "over-limit"),
+            Some("larger than the shared secret bound of 64 KiB")
+        );
         assert_eq!(
             secret_file_refusal(&secrets, "with-nul"),
             Some("holds a NUL byte; write secrets as text, such as openssl rand -hex 32")

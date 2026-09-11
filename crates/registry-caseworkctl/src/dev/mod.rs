@@ -53,6 +53,9 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(120);
 /// Longest the supervisor waits for the owned database, and for each started
 /// service, to answer as ready.
 const READY_DEADLINE: Duration = Duration::from_secs(45);
+/// The stop response covers two graceful child shutdowns followed by the
+/// database stop. Each of those operations keeps its own tighter deadline.
+const STOP_RESPONSE_DEADLINE: Duration = Duration::from_secs(8 * 60);
 /// Recorded when an installed prerequisite does not report a usable version.
 const UNREPORTED_VERSION: &str = "unreported";
 /// Longest version line kept from a prerequisite that prints a banner.
@@ -169,6 +172,9 @@ struct State {
     container_id: Option<String>,
     tls_files_copied: bool,
     database_ready: bool,
+    /// Whether this retained database has completed at least one migration.
+    /// Migrations remain idempotent and run again on every start so an upgraded
+    /// toolset cannot reuse an older schema.
     migrated: bool,
     /// Directory teams this session has already seeded, by team identifier.
     seeded: BTreeSet<String>,
@@ -545,7 +551,6 @@ fn start(args: StartArgs) -> Result<Value> {
         .stderr(Stdio::from(log))
         .spawn()
         .context("cannot launch native local supervisor")?;
-    let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         let state = read_state(&root)?;
         if matches!(state.status, Status::Ready)
@@ -562,11 +567,9 @@ fn start(args: StartArgs) -> Result<Value> {
             failed.save()?;
             return Err(start_failure(cause.as_deref(), &root));
         }
-        if Instant::now() > deadline {
-            signal(&mut supervisor)?;
-            supervisor.wait()?;
-            bail!("local start timed out; inspect private logs and retry the same command");
-        }
+        // Each prerequisite command and readiness probe owns its documented
+        // deadline. Do not put a shorter aggregate deadline over a valid slow
+        // first start whose bounded phases run sequentially.
         thread::sleep(Duration::from_millis(100));
     }
 }
@@ -621,8 +624,10 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     }
     // No PID-based recovery: unrelated reused PIDs must never be signalled.
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
-    for port in [state.casework_port, state.mint_port] {
-        probe(port)?;
+    if service_ports_must_be_free(&state.status) {
+        for port in [state.casework_port, state.mint_port] {
+            probe(port)?;
+        }
     }
     let docker = executable("docker", docker_bin)?;
     // Remove mode tolerates a container already taken by hand: reclaim verifies
@@ -658,6 +663,10 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
         reclaim(&docker, &mut state)?;
     }
     Ok(state.report())
+}
+
+fn service_ports_must_be_free(status: &Status) -> bool {
+    !matches!(status, Status::Stopped)
 }
 
 /// Remove the owned container and its named data volume, then forget them in
@@ -798,12 +807,20 @@ fn control(root: &Path, message: &str) -> Result<String> {
         bail!("unowned control path refused");
     }
     let mut stream = UnixStream::connect(path)?;
-    stream.set_read_timeout(Some(Duration::from_secs(75)))?;
+    stream.set_read_timeout(Some(control_response_deadline(message)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     stream.write_all(format!("{message}\n").as_bytes())?;
     let mut bytes = Vec::new();
     stream.take(64).read_to_end(&mut bytes)?;
     Ok(String::from_utf8(bytes)?.trim().to_owned())
+}
+
+fn control_response_deadline(message: &str) -> Duration {
+    if message == "stop" {
+        STOP_RESPONSE_DEADLINE
+    } else {
+        Duration::from_secs(2)
+    }
 }
 
 pub(crate) fn run_supervisor(args: SupervisorArgs) -> Result<()> {
@@ -839,26 +856,25 @@ pub(crate) fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         )?);
         ready(
             &format!("{}/ready", state.mint_origin()),
-            children.mint.as_mut().context("Mint child missing")?,
+            &mut children.mint.as_mut().context("Mint child missing")?.child,
             &terminate,
         )?;
         ensure_active(&terminate)?;
-        if !state.migrated {
-            // Migrations are idempotent and guarded by an advisory lock, and
-            // they are the only step that uses the migration credential.
-            command(
-                Command::new(&args.casework_bin)
-                    .arg("--config")
-                    .arg(root.join("operator.yaml"))
-                    .arg("migrate"),
-                &root,
-                "migrate",
-                None,
-            )?;
-            grants(&args.docker_bin, &state)?;
-            state.migrated = true;
-            state.save()?;
-        }
+        // Migrations are idempotent and guarded by an advisory lock. Run them
+        // on every start so a retained database is upgraded with the binaries
+        // that now own it; this is the only step using the migration credential.
+        command(
+            Command::new(&args.casework_bin)
+                .arg("--config")
+                .arg(root.join("operator.yaml"))
+                .arg("migrate"),
+            &root,
+            "migrate",
+            None,
+        )?;
+        grants(&args.docker_bin, &state)?;
+        state.migrated = true;
+        state.save()?;
         ensure_active(&terminate)?;
         children.casework = Some(service(
             &args.casework_bin,
@@ -870,10 +886,11 @@ pub(crate) fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         )?);
         ready(
             &format!("{}/ready", state.casework_origin()),
-            children
+            &mut children
                 .casework
                 .as_mut()
-                .context("Casework child missing")?,
+                .context("Casework child missing")?
+                .child,
             &terminate,
         )?;
         // A client token lives 300 seconds, which the child and readiness
@@ -977,13 +994,13 @@ fn read_control_command(stream: &mut impl Read) -> Result<Vec<u8>> {
 
 #[derive(Default)]
 struct Children {
-    casework: Option<Child>,
-    mint: Option<Child>,
+    casework: Option<Service>,
+    mint: Option<Service>,
 }
 impl Children {
     fn exited(&mut self) -> Result<bool> {
-        for child in [&mut self.casework, &mut self.mint].into_iter().flatten() {
-            if child.try_wait()?.is_some() {
+        for service in [&mut self.casework, &mut self.mint].into_iter().flatten() {
+            if service.child.try_wait()?.is_some() {
                 return Ok(true);
             }
         }
@@ -992,13 +1009,38 @@ impl Children {
     fn stop(&mut self) -> Result<()> {
         let mut error = None;
         for owned in [&mut self.casework, &mut self.mint] {
-            if let Some(mut child) = owned.take() {
-                if let Err(cause) = stop_child(&mut child) {
+            if let Some(mut service) = owned.take() {
+                if let Err(cause) = service.stop() {
                     error = Some(cause);
                 }
             }
         }
         match error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+struct Service {
+    child: Child,
+    pumps: Vec<thread::JoinHandle<Result<()>>>,
+}
+
+impl Service {
+    fn stop(&mut self) -> Result<()> {
+        let child_result = stop_child(&mut self.child);
+        let mut pump_error = None;
+        for pump in self.pumps.drain(..) {
+            let result = pump
+                .join()
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("service log reader failed")));
+            if pump_error.is_none() {
+                pump_error = result.err();
+            }
+        }
+        child_result?;
+        match pump_error {
             Some(error) => Err(error),
             None => Ok(()),
         }
@@ -1072,7 +1114,7 @@ fn executable(name: &str, explicit: Option<&Path>) -> Result<PathBuf> {
 /// canonical path of the file that runs, and the version it reports for
 /// itself. Diagnostics stay in the owner-only log directory.
 fn binary(root: &Path, path: &Path) -> Result<Binary> {
-    let (success, bytes) = output(
+    let output = output(
         Command::new(path).arg("--version"),
         root,
         &format!(
@@ -1081,9 +1123,9 @@ fn binary(root: &Path, path: &Path) -> Result<Binary> {
         ),
         None,
     )?;
-    let reported = String::from_utf8_lossy(&bytes);
+    let reported = String::from_utf8_lossy(&output.stdout);
     let reported = reported.lines().next().unwrap_or_default().trim();
-    let version = if !success || reported.is_empty() {
+    let version = if !output.success || reported.is_empty() {
         UNREPORTED_VERSION.to_string()
     } else {
         reported.chars().take(MAX_VERSION).collect()
@@ -1164,7 +1206,7 @@ fn service(
     trailing: &[&str],
     root: &Path,
     name: &str,
-) -> Result<Child> {
+) -> Result<Service> {
     let mut child = Command::new(binary)
         .args(leading)
         .arg(config)
@@ -1186,13 +1228,12 @@ fn service(
         .context("service diagnostic pipe missing")?;
     let log = private::append(&root.join("logs").join(format!("{name}.log")))?;
     let second = log.try_clone()?;
-    thread::spawn(move || {
-        let _ = pump(out, log);
-    });
-    thread::spawn(move || {
-        let _ = pump(err, second);
-    });
-    Ok(child)
+    let stdout_pump = thread::spawn(move || pump(out, log));
+    let stderr_pump = thread::spawn(move || pump(err, second));
+    Ok(Service {
+        child,
+        pumps: vec![stdout_pump, stderr_pump],
+    })
 }
 
 /// Bytes written to a child's standard input, naming the secret substring the
@@ -1200,6 +1241,12 @@ fn service(
 struct Input<'a> {
     bytes: &'a [u8],
     secret: Option<&'a [u8]>,
+}
+
+struct NativeOutput {
+    success: bool,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 /// Replace every run of bytes that also occurs in `secret` with a fixed marker,
@@ -1232,14 +1279,14 @@ fn redact(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
     redacted
 }
 
-/// Run one owned prerequisite, returning whether it succeeded together with
-/// its captured stdout. Diagnostics stay in the owner-only log directory.
+/// Run one owned prerequisite, returning its bounded, redacted streams.
+/// Diagnostics also stay in the owner-only log directory.
 fn output(
     command: &mut Command,
     root: &Path,
     name: &str,
     input: Option<Input<'_>>,
-) -> Result<(bool, Vec<u8>)> {
+) -> Result<NativeOutput> {
     let log = log_file(root, name)?;
     let secret = input
         .as_ref()
@@ -1264,18 +1311,20 @@ fn output(
         let mut bytes = Vec::new();
         pump(stdout, &mut bytes).map(|()| bytes)
     });
-    // Diagnostics that could carry a secret are captured and redacted before
-    // they are persisted; otherwise they stream straight into the log.
+    // Capture every diagnostic stream so a failed native command can surface
+    // its bounded machine-readable refusal. Redact before either returning or
+    // persisting bytes that could carry a secret.
     let redacting = secret.clone();
-    let err = thread::spawn(move || match redacting {
-        Some(secret) => {
-            let mut captured = Zeroizing::new(Vec::new());
-            pump(stderr, &mut *captured)?;
-            let mut log = log;
-            log.write_all(&redact(&captured, &secret))?;
-            Ok(())
-        }
-        None => pump(stderr, log),
+    let err = thread::spawn(move || {
+        let mut captured = Zeroizing::new(Vec::new());
+        pump(stderr, &mut *captured)?;
+        let persisted = match redacting {
+            Some(secret) => redact(&captured, &secret),
+            None => std::mem::take(&mut *captured),
+        };
+        let mut log = log;
+        log.write_all(&persisted)?;
+        Ok::<_, anyhow::Error>(persisted)
     });
     if let Some(input) = &input {
         child
@@ -1298,7 +1347,8 @@ fn output(
     let mut bytes = out
         .join()
         .map_err(|_| anyhow::anyhow!("command output reader failed"))??;
-    err.join()
+    let stderr = err
+        .join()
         .map_err(|_| anyhow::anyhow!("command diagnostic reader failed"))??;
     if let Some(secret) = &secret {
         let echoed = Zeroizing::new(std::mem::take(&mut bytes));
@@ -1310,7 +1360,11 @@ fn output(
         let mut log = log_file(root, &format!("{name}-report"))?;
         log.write_all(&bytes)?;
     }
-    Ok((status.success(), bytes))
+    Ok(NativeOutput {
+        success: status.success(),
+        stdout: bytes,
+        stderr,
+    })
 }
 
 /// Name the first failing check from the machine-readable report a native
@@ -1333,17 +1387,37 @@ fn command(
     name: &str,
     input: Option<Input<'_>>,
 ) -> Result<Vec<u8>> {
-    let (success, bytes) = output(command, root, name, input)?;
-    if !success {
+    let output = output(command, root, name, input)?;
+    if !output.success {
         let logs = root.join("logs").display().to_string();
-        match refused_check(&bytes) {
+        let refusal = refused_check(&output.stderr)
+            .or_else(|| refused_check(&output.stdout))
+            .or_else(|| native_migration_refusal(name, &output.stderr));
+        match refusal {
             Some(check) => bail!(
                 "native {name} refused: {check}. The full report and owner-only diagnostics are in {logs}"
             ),
             None => bail!("native {name} failed; inspect owner-only diagnostics in {logs}"),
         }
     }
-    Ok(bytes)
+    Ok(output.stdout)
+}
+
+fn native_migration_refusal(name: &str, diagnostics: &[u8]) -> Option<String> {
+    if name != "migrate" {
+        return None;
+    }
+    let diagnostics = String::from_utf8_lossy(diagnostics);
+    let line = diagnostics
+        .lines()
+        .find(|line| !line.trim().is_empty())?
+        .trim()
+        .strip_prefix("casework: ")?
+        .trim();
+    if line.is_empty() {
+        return None;
+    }
+    Some(line.chars().take(MAX_REFUSAL).collect())
 }
 
 /// The refusal a failed start reports, naming the supervisor's own cause when

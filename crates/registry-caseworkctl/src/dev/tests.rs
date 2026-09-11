@@ -103,6 +103,51 @@ fn binding_refuses_a_requester_with_a_human_claim() {
 }
 
 #[test]
+fn binding_accepts_a_client_with_every_required_profile_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    fs::write(
+        project.join("casework.yaml"),
+        STANDALONE_YAML.replace(
+            "requiredScopes: [casework:staff]",
+            "requiredScopes: [casework:staff, casework:read]",
+        ),
+    )
+    .unwrap();
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let text = STANDALONE_DEV_CLIENTS.replace(
+        "scopes: [casework:staff]",
+        "scopes: [casework:staff, casework:read]",
+    );
+    let clients = config::clients(text.as_bytes()).unwrap();
+
+    config::bind(&clients, &policy).unwrap();
+}
+
+#[test]
+fn binding_refuses_a_client_missing_one_required_profile_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    fs::write(
+        project.join("casework.yaml"),
+        STANDALONE_YAML.replace(
+            "requiredScopes: [casework:staff]",
+            "requiredScopes: [casework:staff, casework:read]",
+        ),
+    )
+    .unwrap();
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+
+    let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
+    assert!(refusal.contains("staff"), "{refusal}");
+    assert!(
+        refusal.contains("all of that profile's required scopes"),
+        "{refusal}"
+    );
+}
+
+#[test]
 fn binding_refuses_an_unserved_queue_and_a_missing_administrator() {
     let root = tempfile::tempdir().unwrap();
     let project = standalone(root.path());
@@ -430,4 +475,69 @@ fn the_report_names_every_local_credential_without_a_secret() {
     let text = report.to_string();
     assert!(!text.contains("token\":\""), "{text}");
     assert!(!text.contains("password"), "{text}");
+}
+
+#[test]
+fn stop_control_waits_for_the_complete_sequential_cleanup_budget() {
+    let child_shutdowns = Duration::from_secs(35 * 2);
+    // A timed-out Docker prerequisite gets its own graceful child shutdown
+    // before the supervisor can send the final response.
+    let database_shutdown = CHILD_DEADLINE * 3;
+    assert!(control_response_deadline("stop") >= child_shutdowns + database_shutdown);
+    assert!(control_response_deadline("status") < control_response_deadline("stop"));
+}
+
+#[test]
+fn a_stopped_session_can_be_reclaimed_after_its_ports_are_reused() {
+    assert!(!service_ports_must_be_free(&Status::Stopped));
+    assert!(service_ports_must_be_free(&Status::Starting));
+    assert!(service_ports_must_be_free(&Status::Ready));
+    assert!(service_ports_must_be_free(&Status::Stopping));
+    assert!(service_ports_must_be_free(&Status::Failed));
+}
+
+#[test]
+fn migration_failures_use_the_bounded_native_diagnostic_stream() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    let refusal = format!(
+        "{:#}",
+        command(
+            Command::new("/bin/sh").args([
+                "-c",
+                "printf 'casework: schema upgrade refused safely\\n' >&2; exit 1",
+            ]),
+            root.path(),
+            "migrate",
+            None,
+        )
+        .unwrap_err()
+    );
+    assert!(
+        refusal.contains("schema upgrade refused safely"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("owner-only diagnostics"), "{refusal}");
+}
+
+#[test]
+fn service_cleanup_joins_every_log_pump() {
+    let child = Command::new("/usr/bin/true").spawn().unwrap();
+    let joined = Arc::new(AtomicBool::new(false));
+    let marker = Arc::clone(&joined);
+    let pump = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(20));
+        marker.store(true, Ordering::Relaxed);
+        Ok(())
+    });
+    let mut children = Children {
+        casework: Some(Service {
+            child,
+            pumps: vec![pump],
+        }),
+        mint: None,
+    };
+
+    children.stop().unwrap();
+    assert!(joined.load(Ordering::Relaxed));
 }

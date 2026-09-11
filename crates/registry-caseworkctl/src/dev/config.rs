@@ -146,6 +146,17 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
                     client.id, client.access_profile
                 )
             })?;
+        if !profile
+            .required_scopes
+            .iter()
+            .all(|scope| client.scopes.contains(scope))
+        {
+            bail!(
+                "client {} binds profile {}, so it must carry all of that profile's required scopes",
+                client.id,
+                profile.id
+            );
+        }
         let human = client.claims.get(HUMAN_CLAIM).map(String::as_str);
         match profile.role {
             CaseworkRole::Requester if human.is_some() => bail!(
