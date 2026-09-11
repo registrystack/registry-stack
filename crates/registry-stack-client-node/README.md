@@ -87,10 +87,8 @@ standalone client packages remain available for earlier versions, but the
 release process does not publish new standalone versions once this package
 is active.
 
-Casework is available from a candidate package built from source that contains
-the Casework crates. The already-published `0.29.0` package predates Casework;
-matching the workspace version in a local candidate does not replace those
-published bytes or claim that the registry package contains this module.
+The `casework` namespace is part of the unified package beginning with
+Registry Stack v0.30.0.
 
 ## Casework notes
 

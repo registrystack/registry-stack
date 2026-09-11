@@ -25,7 +25,8 @@ authentication, errors, and verification rules are different. These namespaces
 also keep the unified distribution's files disjoint from earlier standalone
 client distributions, so installing or uninstalling either package cannot
 remove files owned by the other. The unified package is published beginning
-with Registry Stack v0.26.1.
+with Registry Stack v0.26.1. The `casework` namespace is part of the unified
+package beginning with Registry Stack v0.30.0.
 Existing standalone client packages remain available for earlier versions, but
 later releases use this unified entry point.
 
