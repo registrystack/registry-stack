@@ -1,0 +1,326 @@
+---
+title: Retain, erase, and settle
+description: What a Registry Casework deployment keeps and for how long, how to erase the local payload copies of one source request, how to settle a source attempt whose outcome Casework never observed, and who holds the audit file.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-11"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+You operate a running Registry Casework deployment, hold its migration database credential, and
+need to account for what the deployment keeps, remove the local payload copies a source owner has
+authorized you to remove, or close out a source attempt whose outcome Casework could not observe.
+Casework expires hosted work on its own clocks and keeps source-backed work until you act. The two
+operator commands here each change one exact selection, take no copy first, and write nothing until
+you repeat them with `--apply`.
+
+## What Casework retains
+
+Two retention regimes run side by side. Hosted work carries its own declared periods and the
+runtime enforces them. Source-backed work carries no clock at all: it stays until an operator
+erases it for one exact source request.
+
+| State | Kept for | What removes it |
+| --- | --- | --- |
+| Hosted item payload, requester notes, and staff hosted history | `terminalDays` from the moment the item completed or was cancelled | The runtime retention pass |
+| Requester terminal feed events | The same `terminalDays` from the terminal time | The runtime retention pass |
+| Protected accountability record: the raw issuer-qualified deciding identity and the staff reason | `accountabilityDays` from the same terminal time, never shorter than `terminalDays` | The runtime retention pass |
+| Hosted idempotency response | Until the item payload expires, then a payload-free tombstone until the accountability deadline | The runtime retention pass, after which the key is free again |
+| Source-backed subjects, work items, private drafts, attempts, receipts, history, and durable events | No expiry; they stay for the life of the database | `caseworkctl retention erase --apply` |
+| The keyed audit JSONL file and its rotated siblings | Your retention policy alone | No Casework command |
+
+Each hosted kind declares `terminalDays` and `accountabilityDays` in the project, and the project
+is refused unless `terminalDays` is at least 1, `accountabilityDays` is at least `terminalDays`,
+and `accountabilityDays` is at most 3,650. Pin the two periods to the institution's own decision
+record: Casework enforces the numbers it was given and holds no view on what they must be.
+
+{/* Evidence: crates/registry-casework-core/src/hosted.rs, HostedRetentionPolicy and
+    MAXIMUM_HOSTED_RETENTION_DAYS;
+    products/casework/examples/standalone-decision/casework.yaml;
+    products/casework/README.md. */}
+
+The retention pass runs inside `casework serve`, on every thirtieth tick of the two-second
+maintenance loop, so about once a minute. It works in bounded batches of at most 100 rows per
+table per pass, skipping locked rows, which keeps it from competing with live traffic and means a
+large backlog drains over several passes rather than in one. It deletes expired terminal events,
+deletes the notes and staff hosted history of an expired item, clears that item's requester binding
+and display, and deletes the protected accountability record at its own later expiry. A failed pass
+logs a warning and the next tick retries.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path();
+    crates/registry-casework/src/hosted.rs, erase_expired_hosted_at() and RETENTION_BATCH_SIZE. */}
+
+Requester clients must poll inside the terminal period, because an expired item is no longer
+reachable through the requester read, the notes, the staff history, or the terminal feed. When a
+hosted item's payload expires, Casework erases the stored idempotency response and keeps only a
+request hash and hashed binding metadata in a tombstone. An exact retry against that tombstone
+returns the `idempotency.expired` problem with HTTP 410, so the caller reconciles the original
+operation instead of creating a second item; a changed request under the same key still returns
+`idempotency.key-reused`. Once the accountability deadline passes, the tombstone is forgotten and
+the key may be reused.
+
+{/* Evidence: crates/registry-casework/src/hosted.rs, erase_expired_hosted_at();
+    crates/registry-casework-core/src/http.rs, IDEMPOTENCY_EXPIRED_PROBLEM and
+    IDEMPOTENCY_KEY_REUSED_PROBLEM;
+    crates/registry-casework/src/problem.rs, IdempotencyExpired. */}
+
+## Before you run either command
+
+Run both commands on the operator host, where the secret root and the migration database
+credential are readable. Each one loads the authored project directory, resolves the operator file
+(`operator.yaml` inside that directory unless you pass `--operator`), and refuses when the operator
+file's `project` key does not resolve to that directory's `casework.yaml`. Each connects with the
+migration credential, not the runtime credential.
+
+Both commands preview by default and write nothing until you repeat the exact invocation with
+`--apply`. A successful run prints one JSON object on standard output and exits 0. A refusal prints
+`{"ok": false}` with a single `caseworkctl.refused` diagnostic on standard error and exits 1, so a
+wrapper script can tell the two apart without parsing prose.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, load_runtime() and retention_erase();
+    crates/registry-caseworkctl/src/lib.rs, main_entry() and RetentionCommand;
+    crates/registry-casework/src/config.rs, RuntimeConfig. */}
+
+## Erase source-backed payload copies
+
+A source owner decides what an authoritative record keeps. This command removes only the copies
+Casework holds locally about one exact source request, named by its source identifier, request
+kind, and request identifier. Preview it first:
+
+```sh
+caseworkctl retention erase /etc/registry-casework/package \
+  --operator /etc/registry-casework/operator.yaml \
+  --source-id professional-register \
+  --request-kind "<request-kind>" \
+  --request-id "<request-id>"
+```
+
+The report is counts and the selector you passed, with no work item identifiers and no erased
+values: `items`, `drafts`, `correctionContexts`, `attemptPayloads`, `receiptPayloads`,
+`historyDetails`, `eventDetails`, `idempotencyResponses`, `auditRecords`, `clockOccurrences`, and
+`clockPreviews`, beside `blockedLiveAttempts` and `applied`. Read `blockedLiveAttempts` before
+anything else: a nonzero count means a pending or uncertain source attempt is still open on this
+request, and the apply run will refuse rather than erase, so that Casework never buries an action
+whose outcome nobody has established. Recover or settle that attempt first. Then check the counts
+against the source owner's retention decision.
+
+:::danger[Applying this erasure cannot be undone]
+The apply run removes the local payload bytes for good and takes no copy first. Export whatever
+the institution's policy keeps before you run it, and confirm the selector names the request the
+source owner authorized: the report shows counts, so a wrong selector looks like a plausible
+result rather than an error. Casework holds no way back, and a source-side copy is not one either.
+:::
+
+```sh
+caseworkctl retention erase /etc/registry-casework/package \
+  --operator /etc/registry-casework/operator.yaml \
+  --source-id professional-register \
+  --request-kind "<request-kind>" \
+  --request-id "<request-id>" \
+  --apply
+```
+
+One transaction marks the local subject inactive and the items erased, deletes the private drafts
+and the correction context, strips the decision reason, flagged fields, displayed binding,
+recovery evidence, and receipt metadata from settled attempts, empties the detail of every history
+row and durable event row, drops the stored idempotency responses, clears the retained detail,
+reason, and source receipt from the audit outbox rows, and cancels the outstanding clock work for
+that request. It keeps the rows themselves as bounded tombstones, so the item lifecycle stays
+accountable while its values are gone, and it appends one `casework.source_retention_erased` audit
+record carrying the selector and the same counts. The apply report repeats the preview counts with
+`applied` set to `true`.
+
+Erasure stays local to this deployment: the command reaches no Base Registry Engine (BReg)
+instance, sends no request to the source, and leaves the audit JSONL file as it is, so any detail
+already published to that file stays there until your own retention policy removes it.
+
+{/* Evidence: crates/registry-casework/src/source_retention.rs, erase_source_retention() and
+    preview_source_retention();
+    crates/registry-casework-core/src/source_retention.rs, SourceRetentionReport;
+    crates/registry-caseworkctl/src/project.rs, retention_erase();
+    products/casework/README.md. */}
+
+### Verify and recover
+
+A completed apply run exits 0 and reports `applied: true`. Re-running the preview afterwards is the
+check: the payload counts come back as zeros, because nothing selectable is left to erase.
+
+A refusal names its cause without naming the request. `a source attempt is still pending recovery`
+means an attempt on this request is pending or uncertain; recover it through the holder's client,
+or settle it, then run the erasure again. `the requested resource was not found` means no local
+subject matches the three selector values, which is the usual shape of a typo in one of them.
+`the request is invalid` means one selector value is empty, longer than 512 bytes, or carries a
+control character. `operator configuration is bound to a different Casework project` means the
+project directory and the operator file disagree; name the directory whose `casework.yaml` the
+operator file points at.
+
+{/* Evidence: crates/registry-casework/src/source_retention.rs, validate_selector() and
+    lock_subject();
+    crates/registry-casework/src/store.rs, StoreError;
+    crates/registry-caseworkctl/src/project.rs, load_runtime(). */}
+
+## Settle an uncertain source attempt
+
+An attempt turns uncertain when Casework sent a decision to the source and could not confirm what
+happened to it. The holder's client recovers such an attempt by replaying it, and periodic readback
+of the source repairs most of the rest. What remains is the case where neither can observe the
+outcome. Establish with the source owner what the source actually did, then preview the settlement:
+
+```sh
+caseworkctl attempt settle /etc/registry-casework/package \
+  --operator /etc/registry-casework/operator.yaml \
+  --attempt-id "<attempt-id>" \
+  --outcome not-applied \
+  --reason "<what the source owner confirmed, and how>" \
+  --decided-by "<who decided>"
+```
+
+The attempt identifier is the one Casework returned in the `Registry-Casework-Attempt` header
+beside the `work-item.recovery-pending` problem the holder saw. Use `--outcome applied` when the
+source applied the decision and `--outcome not-applied` when it did not. The preview takes the same
+locks and runs the same checks as the settlement, then rolls back: it reports `attemptId`,
+`itemId`, `operation`, `bindingReference`, your `outcome`, `reason`, and `decidedBy`, and the
+`attemptState` and `itemState` the settlement would produce, with `applied` still `false`. The
+`bindingReference` is a `sha256:` digest over the subject and the displayed binding, not a source
+value.
+
+`--reason` accepts at most 2,000 bytes and `--decided-by` at most 256 bytes; both must be non-empty
+text without control characters. Both are recorded verbatim in the work item's history, which every
+Staff member and Supervisor serving that queue can read, so write them for that audience.
+
+:::caution[A settled attempt cannot be settled again]
+Applying moves the attempt out of the uncertain state permanently, and the history event stating
+the outcome, the reason, and the decider stays on the work item. Settle only what the source owner
+has confirmed. A wrong `applied` leaves the work item waiting for a source revision that never
+arrives, until the next readback observes the source and returns the item to its queue, which
+discards the holder's claim.
+:::
+
+```sh
+caseworkctl attempt settle /etc/registry-casework/package \
+  --operator /etc/registry-casework/operator.yaml \
+  --attempt-id "<attempt-id>" \
+  --outcome not-applied \
+  --reason "<what the source owner confirmed, and how>" \
+  --decided-by "<who decided>" \
+  --apply
+```
+
+One transaction changes the attempt, its work item, and the item's history together.
+`not-applied` refuses the attempt and returns the work item to its holder, who can act on it again.
+`applied` completes the attempt with no source receipt and leaves the work item synchronizing, and
+marks the subject for synchronization so the next source observation reconciles it. Either way the
+run writes a fresh execution token, which fences any executor still holding the old one, and
+appends one `attempt_settled` history event carrying the attempt, binding reference, operation,
+outcome, reason, and decider, with no actor, because a settlement is an operator act rather than a
+caseworker's decision. This command reaches no BReg instance.
+
+{/* Evidence: crates/registry-casework/src/store.rs, settle_attempt() and
+    preview_attempt_settlement();
+    crates/registry-casework-core/src/attempt_settlement.rs, AttemptSettlementReport,
+    MAXIMUM_SETTLEMENT_REASON_BYTES, and MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES;
+    crates/registry-casework-core/src/http.rs, ATTEMPT_REFERENCE_HEADER and
+    WORK_ITEM_RECOVERY_PENDING_PROBLEM;
+    crates/registry-casework-core/src/transition.rs, transition();
+    crates/registry-caseworkctl/src/project.rs, attempt_settle(). */}
+
+### Verify and recover
+
+A completed apply run exits 0 and reports `applied: true` with the states the attempt and the item
+now hold. Confirm the same states through the work item's history, where the `attempt_settled`
+entry now sits.
+
+Four refusals cover the cases worth planning for. `the source attempt still holds a live execution
+lease; wait for it to expire` means a client acquired the attempt within the last 330 seconds and
+may still be completing it; wait, then preview again. `the source attempt is completed` (or
+`refused`, or `pending`) means only an uncertain attempt can be settled, and a terminal attempt
+already has its outcome. `no source attempt has this identifier` means the UUID names nothing in
+this database. `the work item is claimed` (or another state) means the item is no longer awaiting
+its source outcome, so recovery or readback has already resolved it and no settlement is needed.
+
+{/* Evidence: crates/registry-casework/src/store.rs, AttemptSettlementError and
+    settle_uncertain_attempt();
+    crates/registry-casework-core/src/model.rs, AttemptState and OccurrenceState. */}
+
+## Keep the audit file
+
+Casework appends every audited event to a keyed hash-chained JSONL file through a single-writer
+sink that rotates at 10 MiB and retains 50 files. That file is yours to hold: its lifetime, its
+off-host copies, and its disposal are your retention policy alone, and no Casework command prunes,
+exports, or erases it, including the two here. Ship it off host when completeness matters outside
+one machine's disk.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path();
+    crates/registry-platform-audit/src/lib.rs, JsonlFileSink, DEFAULT_MAX_SIZE_BYTES, and
+    DEFAULT_MAX_FILES. */}
+
+The chain is keyed with the audit secret named by the operator file's `audit.secretRef`, which
+authenticates the retained file against a writer that cannot read the deployment secret. Provide at
+least 32 bytes of NUL-free text through a secret provider, never in the operator file:
+
+```sh
+(umask 077 && openssl rand -hex 32 > /run/secrets/registry-casework/casework-audit-key)
+chmod 0400 /run/secrets/registry-casework/casework-audit-key
+```
+
+A file secret sits immediately below the configured secret root, belongs to the runtime user, and
+carries mode 0400 or 0600 with no symlink and no second hard link. Its exact bytes are the key,
+including a trailing newline, so rewriting the file with a different byte breaks the chain the
+retained file was written under. An empty value, a value over the provider's size limit, or one
+carrying a NUL byte is refused without echoing it. `caseworkctl doctor` resolves the reference as a
+readiness check and reports success without printing the bytes.
+
+{/* Evidence: crates/registry-platform-config/src/secrets.rs, validate_secret(),
+    validate_file_metadata(), and read_secret_file();
+    crates/registry-platform-audit/src/lib.rs, AuditChainHasher and MIN_AUDIT_SECRET_BYTES;
+    crates/registry-caseworkctl/src/project.rs, doctor(). */}
+
+Publication runs as its own loop, once a second, moving audited events from the database outbox to
+the file and marking each one published. A pass that cannot read the outbox, append to the file, or
+mark an event published makes `GET /ready` fail while the process keeps serving, and logs one
+warning naming the failed stage and nothing else. A later successful pass restores readiness and
+logs the recovery. Treat a `/ready` failure with that warning as a disk, permission, or lock
+problem at the audit path rather than a database outage, and check that no second writer holds the
+sentinel lock beside the file.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, publish_audit_pass() and
+    update_audit_health();
+    crates/registry-casework/src/service.rs, AuditPublisherHealth;
+    crates/registry-casework/src/http.rs, ready(). */}
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| The erasure preview reports a nonzero `blockedLiveAttempts` | A pending or uncertain attempt is open on that request. Recover it through the holder's client, or settle it, then preview again. |
+| `retention erase --apply` refuses with `a source attempt is still pending recovery` | An attempt reached one of those states between your preview and your apply run. Resolve it and repeat both runs. |
+| `retention erase` refuses with `the requested resource was not found` | No local subject matches all three selector values. Confirm the source identifier, request kind, and request identifier with the source owner. |
+| Either command refuses with `operator configuration is bound to a different Casework project` | The project directory and the operator file's `project` key name different projects. Pass the directory holding the `casework.yaml` that the operator file points at. |
+| `attempt settle` refuses with `the source attempt still holds a live execution lease` | A client acquired the attempt within the last 330 seconds. Wait for the lease to expire, then preview again. |
+| `attempt settle` refuses with `only an uncertain attempt can be settled` | The attempt is pending, completed, or refused. A terminal attempt already carries its outcome; a pending one is still recoverable by its holder. |
+| `attempt settle` refuses with `only a work item awaiting its source outcome can be settled` | Recovery or source readback already moved the item out of synchronizing. No settlement is needed. |
+| A hosted item disappeared from the requester read and the terminal feed | Its `terminalDays` period closed. The accountability record may still exist; a Supervisor leading a team that serves the queue can resolve one completed terminal `eventId` through the accountability route until `accountabilityDays` closes too. |
+| An exact retry returns `idempotency.expired` with HTTP 410 | The item payload expired and only a payload-free tombstone remains. Reconcile the original operation before choosing a new key. |
+| `GET /ready` fails with an audit publication warning in the log | The audit path, its permissions, or its single-writer lock is the likely cause. Fix the path and let the next pass restore readiness. |
+
+{/* Evidence: crates/registry-casework/src/hosted.rs, hosted_accountability();
+    crates/registry-casework/src/http.rs, hosted_accountability();
+    crates/registry-casework/src/store.rs, AttemptSettlementError. */}
+
+## Next
+
+- [Run Registry Casework](../casework/) for the deployment this page maintains.
+- [Configure policy and authority](../../configure/casework/) for the hosted kinds that declare
+  `terminalDays` and `accountabilityDays`.
+- [Retention and persistent state](../retention-and-persistent-state/) for what the other Registry
+  Stack runtimes retain.
+- [Harden a production deployment](../../security/hardening-checklist/) for the controls around the
+  migration credential and the secret root these commands rely on.
+- [Read the Casework API](../../reference/apis/registry-casework/) for the problems and headers
+  named here.

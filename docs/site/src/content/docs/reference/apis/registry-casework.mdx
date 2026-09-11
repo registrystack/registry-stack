@@ -1,11 +1,11 @@
 ---
 title: Registry Casework API
-description: Authentication, authority, response, and source-selection context for the generated Casework OpenAPI operations.
+description: Authentication, source selection, revisions, idempotency, problem codes, and route families for the generated Registry Casework OpenAPI operations.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-10"
+last_reviewed: "2026-09-11"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -14,69 +14,143 @@ standards_referenced:
 
 import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
 
-[Open the Registry Casework API operations](../casework/)
+Registry Casework serves one HTTP surface for source-backed work and for the hosted work it owns. Every
+call presents a bearer token and the Casework profile selected for that call, and the presence of a
+source profile decides which kind of work a shared route addresses. The contract is current and carries
+no frozen compatibility promise.
 
-The generated reference is the authoritative route and schema inventory for the
-unreleased Casework candidate in the current development source. It is rendered
-from `products/casework/generated/registry-casework.openapi.json`. No published
-Registry Stack release currently carries this Casework contract.
+[Open the Registry Casework API operations](../casework/) for every route, parameter, schema, and
+reachable problem code. This page holds the authentication, selection, revision, and recovery rules
+those operations assume.
 
 ## Contract boundary
 
-Casework uses one fixed HTTP surface for source-backed and hosted work. Most
-operations require a bearer token and `Registry-Casework-Profile`. A
-source-backed item additionally requires `Registry-Source-Profile`; omitting
-that header on shared work-item routes selects hosted work. Operations reject a
-source profile where the route is hosted-only or directory-only.
+Every request presents `Authorization: Bearer <token>` and `Registry-Casework-Profile`, naming the one
+profile the caller selected for that call. A profile name is bounded to 128 bytes. Liveness and
+readiness are the only routes that take neither header, and a source-delivered event authenticates with
+the configured webhook signature and timestamp headers instead.
 
-Mutations use item or directory revisions through `If-Match` where the operation
-description requires one. Retriable creates and mutations require an
-`Idempotency-Key`. The generated operation documents list each reachable problem
-code and recovery status, including expired cursors, expired hosted idempotency
-records, and expired clock-recompute previews.
+{/* Evidence: crates/registry-casework-core/src/http.rs, CASEWORK_PROFILE_HEADER and
+    MAXIMUM_CASEWORK_PROFILE_BYTES; crates/registry-casework/src/http.rs, router(). */}
 
-{/* Evidence: crates/registry-casework/src/{http,problem}.rs;
-    crates/registry-casework-core/src/http.rs;
+`Registry-Source-Profile` names the separate source authority the caller selected. On a work-item route
+that serves both kinds of work, presenting the source profile addresses source-backed work under that
+authority, and omitting it addresses hosted work. A route that reads or acts on source-owned state
+requires the source profile, and a hosted-only or directory-only route refuses a request that carries
+one. The two paths stay separate even when one client instance drives both.
+
+{/* Evidence: crates/registry-casework-core/src/http.rs, SOURCE_PROFILE_HEADER;
+    crates/registry-casework/src/http.rs, source_profile_optional() and reject_source_profile();
     products/casework/generated/registry-casework.openapi.json. */}
+
+A revisioned mutation carries the item or directory revision the caller displayed in `If-Match`. A
+retriable create or mutation carries an `Idempotency-Key` the caller chooses, bounded to 128 bytes, and
+Casework never retries one on the caller's behalf. After a lost response, the attempt recovery routes
+return the original attempt under the same key, so recovery does not depend on the attempt identifier
+reaching the caller.
+
+{/* Evidence: crates/registry-casework-core/src/http.rs, IF_MATCH_HEADER, IDEMPOTENCY_KEY_HEADER, and
+    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES; crates/registry-casework/src/http.rs, recover_by_key(). */}
+
+A refusal answers `application/problem+json` with `type`, `title`, `status`, `detail`, `code`, and
+`traceId`. The `type` is the code with each dot replaced by a slash under
+`https://id.registrystack.org/problems/registry-casework/`, and `detail` is the fixed sentence that
+belongs to the code. No field repeats a submitted value. A refused hosted submission adds
+`Registry-Casework-Validation-Path`, a bounded JSON path, and `Registry-Casework-Validation-Reason`, one
+value from a closed set, so a caller can point at the offending field without the service echoing it. A
+refusal that holds a durable attempt adds `Registry-Casework-Attempt`.
+
+{/* Evidence: crates/registry-casework/src/http.rs, problem_response() and ProblemBody;
+    crates/registry-casework-core/src/http.rs, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
+    ATTEMPT_REFERENCE_HEADER, and CASEWORK_PROBLEM_TYPE_BASE. */}
 
 ## Problem codes
 
-Every Casework problem response carries one `code` from this closed catalogue,
-always answered with the HTTP status listed beside it.
+Every Casework problem response carries one `code` from this closed catalogue, always answered with the
+HTTP status listed beside it.
 
 <ApiReferenceTable id="problem-codes" source="casework-api" />
 
-{/* Evidence: crates/registry-casework/tests/problem_code_catalogue.rs;
-    docs/site/src/data/casework-api.yaml. */}
+{/* Problem code table generated from docs/site/src/data/casework-api.yaml by
+    docs/site/scripts/generate-data.mjs. Run npm run generate from docs/site. */}
+
+{/* Evidence: crates/registry-casework/src/problem.rs, ProblemCode;
+    crates/registry-casework/tests/problem_code_catalogue.rs,
+    every_registered_code_has_a_published_row(); docs/site/src/data/casework-api.yaml. */}
+
+## Route families
+
+The served routes group into these families. Authority is checked per route and per item, so membership
+in a family grants nothing on its own.
+
+| Family | Base paths | Callers |
+| --- | --- | --- |
+| Service description | `/v1/casework` | Any authenticated profile |
+| Work items and holdings | `/v1/work-items`, `/v1/holdings` | Staff and Supervisor |
+| Hosted items | `/v1/hosted-items` | Requester |
+| Hosted accountability | `/v1/hosted-accountability/{eventId}` | Supervisor |
+| Directory and absences | `/v1/directory`, `/v1/directory/absences` | Administrator, with own or supervised absences for Staff and Supervisor |
+| Caseload movement | `/v1/directory/caseload` | Supervisor |
+| Clocks and holidays | `/v1/directory/clocks`, `/v1/directory/holidays` | Administrator |
+| Source events | `/events/sources/{sourceId}` | The configured source, by signature |
+| Liveness and readiness | `/health`, `/ready` | Any caller, without a token |
+
+{/* Evidence: crates/registry-casework/src/http.rs, router(). */}
+
+### Work item history
+
+Two history reads sit under the same work item and answer different questions.
+`GET /v1/work-items/{itemId}/hosted-history` is the staff read of hosted lifecycle history, open to a
+human Staff or Supervisor profile under current deciding-profile and served-queue authority, and it
+refuses a request that carries `Registry-Source-Profile`.
+`GET /v1/work-items/{itemId}/history` is the source-scoped variant and requires
+`Registry-Source-Profile`, returning entries under the caller's current source visibility. Both order entries by `occurredAt` and `eventId` and page with an opaque
+cursor.
+
+{/* Evidence: crates/registry-casework/src/http.rs, hosted_staff_history() and reject_source_profile();
+    products/casework/generated/registry-casework.openapi.json. */}
 
 ## Profiles and disclosure
 
 - Staff works eligible items and may delegate an item it holds.
-- Supervisor controls assignment and caseload for currently led teams, reads
-  holdings, and resolves retained hosted accountability for served queues.
-- Administrator manages directory teams, holiday revisions, and clock
-  recomputation without gaining item payload access.
-- Requester creates and follows only hosted items bound to the same service
-  principal and selected Requester profile. It cannot claim or decide work.
+- Supervisor controls assignment and caseload for currently led teams, reads holdings, and resolves
+  retained hosted accountability for served queues.
+- Administrator manages directory teams, holiday revisions, and clock recomputation without gaining
+  item payload access.
+- Requester creates and follows only hosted items bound to the same service principal and selected
+  Requester profile, and cannot claim or decide work.
 
-Hosted terminal feeds expose stable event identifiers and opaque actor
-references. The separate accountability read returns raw issuer-qualified actor
-identity and staff reason only to an authorized Supervisor, records that read in
-the audit journal, and stops returning the record after accountability expiry.
+Hosted terminal feeds expose stable event identifiers and opaque actor references. The separate
+accountability read returns raw issuer-qualified actor identity and staff reason only to an authorized
+Supervisor, records that read in the audit journal, and stops returning the record after accountability
+expiry.
 
 {/* Evidence: crates/registry-casework/src/{auth,assignment,hosted}.rs;
     products/casework/README.md. */}
 
 ## Source of truth
 
-The product generator builds the OpenAPI document from Rust-owned DTOs, problem
-codes, route inventory, extraction rules, and operation contracts. The product
-check regenerates it and refuses byte drift. A running Casework process exposes
-health and readiness routes, but does not serve the OpenAPI artifact itself.
+The implementation is the source of truth, and the generated document is the published form of it. The
+product generator builds the OpenAPI document from Rust-owned DTOs, problem codes, route inventory,
+extraction rules, and operation contracts, and declares the API version `v1alpha1`. The product check
+regenerates the document and refuses byte drift. A running Casework process serves the routes in that
+document, and does not serve the document itself.
 
 {/* Evidence: products/casework/scripts/{generate_openapi.py,check-checkpoint.sh};
-    crates/registry-casework/src/{http,problem}.rs. */}
+    products/casework/generated/registry-casework.openapi.json;
+    crates/registry-casework/src/http.rs, router(). */}
 
-For deployment policy and authority, use
-[configure Registry Casework](../../../configure/casework/). For runtime setup
-and readiness, use [run Registry Casework from source](../../../operate/casework/).
+The problem code table is generated from maintained data checked against the runtime catalogue by the
+product test suite. The route families table, the header rules, and the profile list are maintained by
+hand against the cited source.
+
+{/* Evidence: crates/registry-casework/tests/problem_code_catalogue.rs,
+    every_published_row_names_a_registered_code_under_its_status(); docs/site/src/data/casework-api.yaml. */}
+
+## Next
+
+- [Configure Registry Casework](../../../configure/casework/) for policy, profiles, and authority.
+- [Operate Registry Casework](../../../operate/casework/) for runtime settings and readiness.
+- [Client API reference](../../client-api/) for the Rust, Node.js, and Python clients over these routes.
+- [How Registry Casework works](../../../explanation/how-casework-works/) for the model behind claims,
+  drafts, and attempts.
