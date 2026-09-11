@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add an explicit source-owned display reference for exact, case-sensitive
+  inbox lookup, current-caller disclosure rechecks, and `due`, `age`, or `type`
+  inbox ordering with cursor context bound to the selected lookup and sort.
+- Return `/v1/work-items/next` as a bounded `WorkItemPage`, including empty
+  successful pages and a continuation when caller-visible scanning exhausts
+  its per-request budget.
+- Persist source-reconciliation progress across bounded passes and apply the
+  configured concurrency limit to caller-scoped source reads while preserving
+  deterministic response order.
 - Add directory-scoped absence cover, explicit assignment and delegation for
   hosted or source-backed work, and bounded review-then-apply caseload moves
   with per-item visibility, eligibility, attempt, and revision results. Add

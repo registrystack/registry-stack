@@ -115,6 +115,9 @@ loaded directory revision in `If-Match` and an `Idempotency-Key`.
 Administrators create or replace one team's staff, supervisors, and served
 queues under the loaded directory revision. A served queue can belong to only
 one team; remove it from the current team before assigning it elsewhere.
+Each membership may carry a nullable display name for directory and scoped
+target views. Accountable actor identities remain issuer-qualified principals
+without display names.
 Authority changes take effect immediately. Bounded maintenance releases held
 items whose holder is no longer eligible and records visible lifecycle events.
 Items with unresolved source attempts remain held for a later retry. The
@@ -144,7 +147,11 @@ item cannot turn an undisclosed or stale item into a request-wide disclosure.
 ## Authored routing and clocks
 
 A source request can name up to 32 projected logical fields, up to 64 ordered
-routing rules, and one clock. A rule records an id and operator-facing
+routing rules, one optional `displayReference` field, and one clock. The
+display reference must name a source-owned string field. Casework retains its
+current value only as an exact, case-sensitive inbox lookup candidate, and
+releases it only when the current caller's source read discloses the same
+value. Missing or null values remain absent. A rule records an id and operator-facing
 `because`, matches review or apply activity, an optional review stage, and up to
 16 field predicates, then selects a declared queue. Predicates are closed to
 `equals` or `oneOf`; a `oneOf` list contains at most 32 distinct JSON values.
@@ -157,6 +164,18 @@ configured projection fields and `review_state` are added to request reads.
 Lifecycle event projection remains record-only. Projection supplies bounded
 routing facts to Casework. It does not grant display, mutation, decision, or
 application authority to a Casework caller.
+
+Source-backed inboxes accept one selector: either the three-part source subject
+or an exact `reference` of at most 512 Unicode scalar values with no control
+characters. The `sort` parameter is closed to `due`, `age`, or `type`; `due`
+is the default. Cursor context binds the selector by a one-way reference hash
+and the selected sort. Hosted inboxes reject source selectors and source sorts.
+
+`GET /v1/work-items/next` returns the same `WorkItemPage` envelope with at most
+one item. Empty `complete` and `budget_exhausted` pages are successful `200`
+responses and retain `servedQueues`; callers follow `nextCursor` when present.
+Its opaque cursor is bound to the actor, both selected profiles, optional queue,
+the next-item feed, and fixed `due` ordering.
 
 `CaseworkProject` accepts at most 16 named calendars and 32 named clocks. A
 calendar declares an IANA timezone, one or more distinct working weekdays, and
@@ -174,6 +193,10 @@ records a bounded reason and reassigns to a declared queue. These authored
 types and their calendar evaluator are maintained independently of runtime
 scheduling, so a deployment must not infer that a configured clock ran without
 a recorded runtime occurrence.
+
+A paused source clock does not make an item overdue through the passive
+queue-age target. A separate clock occurrence that is still running keeps its
+own deadline in effect.
 
 The authenticated service description includes authored calendars and clocks
 for Staff, Supervisor, and Administrator profiles so an operator can inspect
@@ -317,8 +340,9 @@ subject, client identifier, or scope. This boundary relies on the configured
 trusted issuer to classify sessions correctly.
 
 The generated source reader has only BReg `get` and `list`, reads the target
-record reference plus explicitly configured routing projection, requests no
-reviewer reason fields, and carries no decision or application operation.
+record reference plus explicitly configured routing and display reference
+fields, requests no reviewer reason fields, and carries no decision or
+application operation.
 Human review and application calls use the person's token and explicitly
 selected BReg profile.
 

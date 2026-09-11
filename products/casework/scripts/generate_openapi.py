@@ -84,6 +84,7 @@ DTO_MARKERS = {
 SCHEMA_STRUCTS = {
     "crates/registry-casework-core/src/model.rs": {
         "IssuerPrincipal": "IssuerPrincipal",
+        "DirectoryMember": "DirectoryMember",
         "SourceBinding": "SourceBinding",
         "SubjectRef": "SubjectRef",
         "CaseworkAction": "CaseworkAction",
@@ -129,6 +130,7 @@ SCHEMA_STRUCTS = {
         "QueuePolicy": "QueuePolicy",
         "SourcePolicy": "SourcePolicy",
         "SourceRequestPolicy": "SourceRequestPolicy",
+        "DisplayReferencePolicy": "DisplayReferencePolicy",
         "PassiveTargetPolicy": "PassiveTargetPolicy",
         "ElapsedDuration": "ElapsedDuration",
         "InboxPolicy": "InboxPolicy",
@@ -316,6 +318,13 @@ def schemas(problem_entries: list[dict]) -> dict:
             "stage": nullable(text),
             "binding": ref("SourceBinding"),
             "bindingReference": text,
+            "displayReference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+                "description": "Human-facing source reference disclosed by the source to the current caller. Present only for source-backed items whose request policy explicitly names a reference field and whose current caller read discloses that field.",
+            },
             "state": {"type": "string", "enum": ["open", "claimed", "waiting_applicant", "waiting_application", "synchronizing", "completed", "superseded", "cancelled"]},
             "queueId": text,
             "holder": nullable(ref("IssuerPrincipal")),
@@ -737,21 +746,22 @@ def schemas(problem_entries: list[dict]) -> dict:
         "HistoryPage": obj({"items": array(ref("HistoryEntry")), "nextCursor": nullable(text), "status": {"const": "complete"}}, ["items", "status"]),
         "HoldingSummary": obj({"principal": ref("IssuerPrincipal"), "queueId": text, "activeItems": {"type": "integer", "minimum": 0}, "overdueItems": {"type": "integer", "minimum": 0}}, ["principal", "queueId", "activeItems", "overdueItems"]),
         "HoldingsPage": obj({"items": array(ref("HoldingSummary")), "nextCursor": nullable(text), "status": page_status}, ["items", "status"]),
-        "TeamRecord": obj({"id": text, "members": array(ref("IssuerPrincipal")), "supervisors": array(ref("IssuerPrincipal")), "servedQueues": array(text), "revision": integer}, ["id", "members", "supervisors", "servedQueues", "revision"]),
-        "DirectoryResponse": obj({"revision": integer, "teams": array(ref("TeamRecord"))}, ["revision", "teams"]),
-        "DirectoryTargetPage": obj({"items": array(ref("IssuerPrincipal")), "nextCursor": nullable(text), "status": page_status}, ["items", "status"]),
-        "BootstrapDirectoryRequest": obj({"teamId": text, "staff": array(ref("IssuerPrincipal")), "supervisors": array(ref("IssuerPrincipal")), "queueId": text}, ["teamId", "staff", "supervisors", "queueId"]),
-        "DirectoryTeamPrincipal": obj(
+        "DirectoryMember": obj(
             {
                 "issuer": {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"},
                 "subject": {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"},
+                "displayName": nullable({"type": "string", "minLength": 1, "maxLength": 500, "x-maximum-utf8-bytes": 500, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}),
             },
             ["issuer", "subject"],
         ),
+        "TeamRecord": obj({"id": text, "members": array(ref("DirectoryMember")), "supervisors": array(ref("DirectoryMember")), "servedQueues": array(text), "revision": integer}, ["id", "members", "supervisors", "servedQueues", "revision"]),
+        "DirectoryResponse": obj({"revision": integer, "teams": array(ref("TeamRecord"))}, ["revision", "teams"]),
+        "DirectoryTargetPage": obj({"items": array(ref("DirectoryMember")), "nextCursor": nullable(text), "status": page_status}, ["items", "status"]),
+        "BootstrapDirectoryRequest": obj({"teamId": text, "staff": array(ref("IssuerPrincipal")), "supervisors": array(ref("IssuerPrincipal")), "queueId": text}, ["teamId", "staff", "supervisors", "queueId"]),
         "DirectoryTeamUpdateRequest": obj(
             {
-                "staff": {"type": "array", "maxItems": 100, "uniqueItems": True, "items": ref("DirectoryTeamPrincipal")},
-                "supervisors": {"type": "array", "maxItems": 100, "uniqueItems": True, "items": ref("DirectoryTeamPrincipal")},
+                "staff": {"type": "array", "maxItems": 100, "uniqueItems": True, "items": ref("DirectoryMember")},
+                "supervisors": {"type": "array", "maxItems": 100, "uniqueItems": True, "items": ref("DirectoryMember")},
                 "servedQueues": {"type": "array", "maxItems": 100, "uniqueItems": True, "items": {"type": "string", "minLength": 1, "maxLength": 128, "x-maximum-utf8-bytes": 128, "pattern": "^[A-Za-z0-9._-]+$"}},
             },
             ["staff", "supervisors", "servedQueues"],
@@ -1098,10 +1108,12 @@ def schemas(problem_entries: list[dict]) -> dict:
         ),
         "ElapsedDuration": obj({"elapsed": text}, ["elapsed"]),
         "PassiveTargetPolicy": obj({"id": text, "after": ref("ElapsedDuration")}, ["id", "after"]),
+        "DisplayReferencePolicy": obj({"field": authored_identifier}, ["field"]),
         "SourceRequestPolicy": obj(
             {
                 "entity": text,
                 "queue": text,
+                "displayReference": nullable(ref("DisplayReferencePolicy")),
                 "projection": {
                     "type": "array",
                     "maxItems": 32,
@@ -1403,14 +1415,16 @@ def document(contract: dict) -> dict:
         "/v1/hosted-accountability/{event_id}": {"get": operation("Resolve one retained hosted decision actor", "HostedAccountabilityRecord", parameters=[EVENT_ID], description="Supervisor-only protected accountability read. Current team leadership is checked before returning the raw issuer-qualified actor, selected deciding profile, outcome, and staff reason. The read is audited and returns no cancellation record.")},
         "/v1/work-items": {"get": operation("List a caller-authorized inbox view", "WorkItemPage", source=True, source_required=False, parameters=[
             parameter("view", "query", "Required view evaluated before pagination.", {"type": "string", "enum": ["mine", "my_teams", "team_holdings", "overdue", "completed_by_me"]}),
+            parameter("sort", "query", "Source-backed ordering. due orders by effective due date with undated items last, then age and item id; age orders oldest first; type orders by source-neutral subject kind, then age and item id. Defaults to due. Hosted inboxes reject age and type.", {"type": "string", "enum": ["due", "age", "type"], "default": "due"}, required=False),
             parameter("queue", "query", "Optional queue identifier.", required=False),
             parameter("sourceId", "query", "Exact source identifier. For source-backed requests, supply this together with subjectKind and subjectId or omit all three. The component must be nonempty and is carried without normalization.", {"type": "string", "minLength": 1}, required=False),
             parameter("subjectKind", "query", "Exact source-neutral subject kind. Supply together with sourceId and subjectId or omit all three. The component must be nonempty and is carried without normalization.", {"type": "string", "minLength": 1}, required=False),
             parameter("subjectId", "query", "Exact source-neutral subject identifier. Supply together with sourceId and subjectKind or omit all three. The component must be nonempty, is carried without normalization, and is not restricted to UUID syntax.", {"type": "string", "minLength": 1}, required=False),
+            parameter("reference", "query", "Exact case-sensitive human reference. Available only for source-backed requests whose source policy explicitly names a displayReference field. Mutually exclusive with the three-part subject selector.", {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}, required=False),
             parameter("cursor", "query", "Opaque cursor bound to this authorized query.", required=False),
             parameter("limit", "query", "Bounded page size; values above 100 are served as 100.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
-        ], description="With Registry-Source-Profile, reads BReg-backed work under that separate authority. An optional complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject; callers must follow every page and handle every visible occurrence rather than assuming the subject is unique. The cursor is bound to the full selector. Without Registry-Source-Profile, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order; hosted requests reject the subject selector.")},
-        "/v1/work-items/next": {"get": operation("Get the next caller-visible item", "WorkItem", source=True, parameters=[parameter("queue", "query", "Optional queue identifier.", required=False), parameter("cursor", "query", "Opaque cursor.", required=False)])},
+        ], description="With Registry-Source-Profile, reads BReg-backed work under that separate authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. An exact reference lookup first uses the explicitly retained source field as a bounded candidate index, then returns an item only when the current caller read still discloses the same reference. Callers must follow every page and handle every visible occurrence rather than assuming a subject or reference is unique. The cursor is bound to the full selector, including a hash of the reference, and the selected sort; the raw reference is not stored in the cursor context. Without Registry-Source-Profile, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order; hosted requests reject subject and reference selectors and non-default sorts.")},
+        "/v1/work-items/next": {"get": operation("Get the next caller-visible item", "WorkItemPage", source=True, parameters=[parameter("queue", "query", "Optional queue identifier.", required=False), parameter("cursor", "query", "Opaque cursor bound to the authenticated actor, selected Casework and source profiles, optional queue, the next-item feed, and due ordering.", required=False)], description="Returns a WorkItemPage containing at most one caller-visible item. Empty complete and budget_exhausted pages remain successful responses; follow nextCursor when present. servedQueues is preserved on every page.")},
         "/v1/work-items/{item_id}": {"get": operation("Read one currently visible item", "WorkItem", source=True, source_required=False, parameters=[ITEM_ID])},
         "/v1/work-items/{item_id}/clocks": {"get": operation("Read the item's clock occurrences", "ClockOccurrenceList", source=True, parameters=[ITEM_ID], description="Staff or Supervisor read under the same current source visibility as the item. Registry-Source-Profile is required. Returns occurrences ordered by clockId and clockOccurrenceId with pinned policy digest and separate calculation and recompute generations.")},
         "/v1/work-items/{item_id}/claim": {"post": operation("Claim an item", "MutationResponse", source=True, source_required=False, mutation=True, idempotency_contract=SHARED_HOSTED_IDEMPOTENCY, parameters=[ITEM_ID])},
@@ -1428,7 +1442,7 @@ def document(contract: dict) -> dict:
         "/v1/work-items/{item_id}/attempts/recover": {"post": operation("Recover the original attempt selected by idempotency key", "MutationResponse", source=True, body="RecoverAttemptRequest", parameters=[ITEM_ID, IDEMPOTENCY])},
         "/v1/work-items/{item_id}/attempts/{attempt_id}/recover": {"post": operation("Recover this exact original attempt", "MutationResponse", source=True, body="RecoverAttemptRequest", parameters=[ITEM_ID, ATTEMPT_ID])},
         "/v1/work-items/{item_id}/history": {"get": operation("Read paginated item history", "HistoryPage", source=True, parameters=[ITEM_ID, parameter("cursor", "query", "Opaque 15-minute cursor bound to the human principal, selected Casework profile, selected source profile, and item. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by eventId.", required=False), parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Staff or Supervisor only under current source visibility. Results are ordered by occurredAt and eventId.")},
-        "/v1/holdings": {"get": operation("Read current caller-visible bounded holdings", "HoldingsPage", source=True, parameters=[parameter("cursor", "query", "Opaque cursor.", required=False)])},
+        "/v1/holdings": {"get": operation("Read current caller-visible bounded holdings", "HoldingsPage", source=True, parameters=[parameter("cursor", "query", "Opaque cursor for the next caller-visible holdings page. Follow every page and sum matching principal and queue groups to obtain totals across the caller-visible caseload. When status is source_unavailable, the page contains zero counts and nextCursor retries the failed page.", required=False), parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Supervisor-only caller-visible holdings. Counts are grouped by principal and queue within this page; the same group may occur on later pages, so consumers must follow every page and sum matching groups. A source_unavailable page contains zero counts and supplies a cursor that retries the failed page.")},
         "/v1/directory": {"get": operation("Read the current authorized directory", "DirectoryResponse")},
         "/v1/directory/targets": {"get": operation("List current directory targets", "DirectoryTargetPage", parameters=[
             parameter("purpose", "query", "Required target-discovery purpose. assignment requires queue and forbids person fields; absence_person forbids queue and person fields; absence_cover requires both exact personIssuer and personSubject and forbids queue.", {"type": "string", "enum": ["assignment", "absence_person", "absence_cover"]}),
@@ -1437,7 +1451,7 @@ def document(contract: dict) -> dict:
             parameter("personSubject", "query", "Exact subject of the managed absent person. Required together with personIssuer for absence_cover and forbidden otherwise.", {"type": "string", "minLength": 1, "maxLength": 2048, "x-maximum-utf8-bytes": 2048, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"}, required=False),
             parameter("cursor", "query", "Opaque 15-minute cursor bound to the authenticated human principal, selected Casework profile, purpose, queue, and person fields. Malformed, unknown, or context-mismatched values are cursor.invalid. On cursor.expired, restart without it and deduplicate by issuer and subject.", required=False),
             parameter("limit", "query", "Page size from 1 through 100; values outside that range are request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False),
-        ], description="Returns only issuer-qualified principals currently eligible for the requested use. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence_person lists people the caller may currently manage; absence_cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and names, teams, and absence details are never returned.")},
+        ], description="Returns only directory members currently eligible for the requested use. Each member carries an issuer-qualified identity and may carry the display name stored on an authorized team membership. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence_person lists people the caller may currently manage; absence_cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and teams and absence details are never returned.")},
         "/v1/directory/absences": {
             "get": operation("List authorized absence records", "AbsenceList", description="Staff see their own absences, Supervisors see absences for staff they currently supervise, and Administrators see all absence records. The response carries the current global directoryRevision required in If-Match for a following absence write. Its items contain at most 1000 caller-authorized records ordered by start time and absenceId."),
             "post": operation("Record an absence", "AbsenceRecord", mutation=True, allow_zero_revision=True, body="AbsenceInput", status="201", description="Uses the directory revision in If-Match. Staff can manage their own absence with cover from the same team; Supervisors can manage currently supervised staff; Administrators can manage any directory staff. The period is start-inclusive and end-exclusive."),
@@ -1466,9 +1480,12 @@ def document(contract: dict) -> dict:
             "responses": {"202": response(description="Signature accepted; authoritative readback is scheduled.")},
         }},
     }
-    paths["/v1/work-items/next"]["get"]["responses"]["204"] = response(
-        description="No currently visible item."
-    )
+    paths["/v1/work-items/next"]["get"]["responses"]["200"]["content"]["application/json"]["schema"] = {
+        "allOf": [
+            ref("WorkItemPage"),
+            {"type": "object", "properties": {"items": {"maxItems": 1}}},
+        ]
+    }
     apply_operation_contract(paths, contract, catalog)
     apply_hosted_validation_headers(paths)
     result = {
@@ -1652,6 +1669,18 @@ def rust_struct_fields(source: str, name: str) -> set[str]:
     return set(re.findall(r"^\s*pub\s+([a-z_]+)\s*:", match.group("body"), re.M))
 
 
+def rust_snake_case_unit_enum_values(source: str, name: str) -> list[str]:
+    match = re.search(
+        rf'#\[serde\(rename_all = "snake_case"\)\]\s*pub enum {re.escape(name)}\s*\{{(?P<body>.*?)^\}}',
+        source,
+        re.S | re.M,
+    )
+    if not match:
+        raise ValueError(f"Rust snake_case enum is missing: {name}")
+    variants = re.findall(r"^\s*([A-Z][A-Za-z0-9]*)\s*,\s*$", match.group("body"), re.M)
+    return [re.sub(r"(?<!^)(?=[A-Z])", "_", variant).lower() for variant in variants]
+
+
 def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
     openapi_schemas = openapi["components"]["schemas"]
     for relative, structs in SCHEMA_STRUCTS.items():
@@ -1682,6 +1711,13 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
             raise ValueError(f"OpenAPI page shape drifted for {schema_name}")
     if set(openapi_schemas["HistoryPage"]["properties"]) != page_fields:
         raise ValueError("OpenAPI page shape drifted for HistoryPage")
+    model_source = (
+        repository_root / "crates/registry-casework-core/src/model.rs"
+    ).read_text(encoding="utf-8")
+    if set(openapi_schemas["HistoryEntry"]["properties"]["kind"]["enum"]) != set(
+        rust_snake_case_unit_enum_values(model_source, "HistoryKind")
+    ):
+        raise ValueError("OpenAPI HistoryKind values drifted from Rust")
     hosted_source = (
         repository_root / "crates/registry-casework-core/src/hosted.rs"
     ).read_text(encoding="utf-8")

@@ -128,6 +128,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             },
             set(schemas["HistoryEntry"]["properties"]["kind"]["enum"]),
         )
+
         work_item = schemas["WorkItem"]["properties"]
         self.assertEqual("date-time", work_item["heldSince"]["format"])
         self.assertNotIn("heldSince", schemas["WorkItem"]["required"])
@@ -171,6 +172,27 @@ class GeneratedOpenApiTests(unittest.TestCase):
             "Present even when items is empty",
             work_item_page["properties"]["servedQueues"]["description"],
         )
+        next_operation = self.openapi["paths"]["/v1/work-items/next"]["get"]
+        self.assertIn("200", next_operation["responses"])
+        self.assertNotIn("204", next_operation["responses"])
+        next_schema = next_operation["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]
+        self.assertEqual(
+            {"$ref": "#/components/schemas/WorkItemPage"},
+            next_schema["allOf"][0],
+        )
+        self.assertEqual(
+            1,
+            next_schema["allOf"][1]["properties"]["items"]["maxItems"],
+        )
+        self.assertIn("Empty complete", next_operation["description"])
+        self.assertIn("budget_exhausted", next_operation["description"])
+        next_parameters = {
+            parameter["name"]: parameter for parameter in next_operation["parameters"]
+        }
+        self.assertIn("next-item feed", next_parameters["cursor"]["description"])
+        self.assertIn("due ordering", next_parameters["cursor"]["description"])
         list_parameters = {
             parameter["name"]: parameter for parameter in list_operation["parameters"]
         }
@@ -184,6 +206,19 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertIn("follow every page", list_operation["description"])
         self.assertIn("cursor is bound to the full selector", list_operation["description"])
         self.assertEqual(100, limit["schema"]["maximum"])
+
+    def test_history_kind_values_match_the_rust_enum(self) -> None:
+        model_source = (ROOT / "crates/registry-casework-core/src/model.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            set(GENERATOR.rust_snake_case_unit_enum_values(model_source, "HistoryKind")),
+            set(
+                self.openapi["components"]["schemas"]["HistoryEntry"]["properties"][
+                    "kind"
+                ]["enum"]
+            ),
+        )
 
     def test_source_unavailable_can_identify_a_durable_mutation_attempt(self) -> None:
         for path in (
@@ -284,9 +319,20 @@ class GeneratedOpenApiTests(unittest.TestCase):
         for field in ("staff", "supervisors", "servedQueues"):
             self.assertEqual(100, schema["properties"][field]["maxItems"])
             self.assertTrue(schema["properties"][field]["uniqueItems"])
-        principal = self.openapi["components"]["schemas"]["DirectoryTeamPrincipal"]
+        principal = self.openapi["components"]["schemas"]["DirectoryMember"]
         self.assertEqual(2048, principal["properties"]["issuer"]["x-maximum-utf8-bytes"])
         self.assertEqual(2048, principal["properties"]["subject"]["x-maximum-utf8-bytes"])
+        self.assertEqual(
+            500,
+            principal["properties"]["displayName"]["anyOf"][0][
+                "x-maximum-utf8-bytes"
+            ],
+        )
+        self.assertNotIn("displayName", principal["required"])
+        self.assertEqual(
+            "#/components/schemas/DirectoryMember",
+            schema["properties"]["staff"]["items"]["$ref"],
+        )
         operation = self.openapi["paths"]["/v1/directory/teams/{team_id}"][
             "put"
         ]
@@ -298,7 +344,33 @@ class GeneratedOpenApiTests(unittest.TestCase):
         )
         self.assertIn("no work-item identifiers", operation["description"])
 
-    def test_directory_target_discovery_is_purpose_bound_and_principal_only(self) -> None:
+    def test_holdings_accepts_a_bounded_page_limit(self) -> None:
+        parameters = {
+            parameter["name"]: parameter
+            for parameter in self.openapi["paths"]["/v1/holdings"]["get"][
+                "parameters"
+            ]
+        }
+        self.assertEqual(
+            {
+                "cursor",
+                "limit",
+                "Registry-Casework-Profile",
+                "Registry-Source-Profile",
+                "traceparent",
+            },
+            set(parameters),
+        )
+        self.assertFalse(parameters["limit"]["required"])
+        self.assertEqual(1, parameters["limit"]["schema"]["minimum"])
+        self.assertEqual(100, parameters["limit"]["schema"]["maximum"])
+        operation = self.openapi["paths"]["/v1/holdings"]["get"]
+        self.assertIn("within this page", operation["description"])
+        self.assertIn("follow every page and sum matching groups", operation["description"])
+        self.assertIn("source_unavailable page contains zero counts", operation["description"])
+        self.assertIn("retries the failed page", parameters["cursor"]["description"])
+
+    def test_directory_target_discovery_is_purpose_bound_and_directory_member_only(self) -> None:
         operation = self.openapi["paths"]["/v1/directory/targets"]["get"]
         parameters = {
             parameter["name"]: parameter for parameter in operation["parameters"]
@@ -321,11 +393,12 @@ class GeneratedOpenApiTests(unittest.TestCase):
             {parameter["name"] for parameter in operation["parameters"]},
         )
         self.assertIn("across teams", operation["description"])
-        self.assertIn("only issuer-qualified principals", operation["description"])
-        self.assertIn("names, teams, and absence details are never returned", operation["description"])
+        self.assertIn("issuer-qualified identity", operation["description"])
+        self.assertIn("display name", operation["description"])
+        self.assertIn("teams and absence details are never returned", operation["description"])
         page = self.openapi["components"]["schemas"]["DirectoryTargetPage"]
         self.assertEqual(
-            "#/components/schemas/IssuerPrincipal",
+            "#/components/schemas/DirectoryMember",
             page["properties"]["items"]["items"]["$ref"],
         )
         self.assertEqual({"items", "nextCursor", "status"}, set(page["properties"]))
@@ -409,8 +482,23 @@ class GeneratedOpenApiTests(unittest.TestCase):
         schemas = self.openapi["components"]["schemas"]
         request = schemas["SourceRequestPolicy"]
         self.assertEqual(
-            {"entity", "queue", "projection", "routing", "clock", "target"},
+            {
+                "entity",
+                "queue",
+                "displayReference",
+                "projection",
+                "routing",
+                "clock",
+                "target",
+            },
             set(request["properties"]),
+        )
+        self.assertEqual(
+            "#/components/schemas/DisplayReferencePolicy",
+            request["properties"]["displayReference"]["anyOf"][0]["$ref"],
+        )
+        self.assertEqual(
+            {"field"}, set(schemas["DisplayReferencePolicy"]["properties"])
         )
         self.assertEqual(32, request["properties"]["projection"]["maxItems"])
         self.assertEqual(64, request["properties"]["routing"]["maxItems"])

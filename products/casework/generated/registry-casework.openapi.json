@@ -1194,6 +1194,44 @@
         ],
         "type": "object"
       },
+      "DirectoryMember": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+                "type": "string",
+                "x-maximum-utf8-bytes": 500
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issuer": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string",
+            "x-maximum-utf8-bytes": 2048
+          },
+          "subject": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string",
+            "x-maximum-utf8-bytes": 2048
+          }
+        },
+        "required": [
+          "issuer",
+          "subject"
+        ],
+        "type": "object"
+      },
       "DirectoryResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1219,7 +1257,7 @@
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/IssuerPrincipal"
+              "$ref": "#/components/schemas/DirectoryMember"
             },
             "type": "array"
           },
@@ -1248,30 +1286,6 @@
         ],
         "type": "object"
       },
-      "DirectoryTeamPrincipal": {
-        "additionalProperties": false,
-        "properties": {
-          "issuer": {
-            "maxLength": 2048,
-            "minLength": 1,
-            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-            "type": "string",
-            "x-maximum-utf8-bytes": 2048
-          },
-          "subject": {
-            "maxLength": 2048,
-            "minLength": 1,
-            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-            "type": "string",
-            "x-maximum-utf8-bytes": 2048
-          }
-        },
-        "required": [
-          "issuer",
-          "subject"
-        ],
-        "type": "object"
-      },
       "DirectoryTeamUpdateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1289,7 +1303,7 @@
           },
           "staff": {
             "items": {
-              "$ref": "#/components/schemas/DirectoryTeamPrincipal"
+              "$ref": "#/components/schemas/DirectoryMember"
             },
             "maxItems": 100,
             "type": "array",
@@ -1297,7 +1311,7 @@
           },
           "supervisors": {
             "items": {
-              "$ref": "#/components/schemas/DirectoryTeamPrincipal"
+              "$ref": "#/components/schemas/DirectoryMember"
             },
             "maxItems": 100,
             "type": "array",
@@ -1308,6 +1322,20 @@
           "staff",
           "supervisors",
           "servedQueues"
+        ],
+        "type": "object"
+      },
+      "DisplayReferencePolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
         ],
         "type": "object"
       },
@@ -3622,6 +3650,16 @@
               }
             ]
           },
+          "displayReference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DisplayReferencePolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "entity": {
             "type": "string"
           },
@@ -3737,7 +3775,7 @@
           },
           "members": {
             "items": {
-              "$ref": "#/components/schemas/IssuerPrincipal"
+              "$ref": "#/components/schemas/DirectoryMember"
             },
             "type": "array"
           },
@@ -3753,7 +3791,7 @@
           },
           "supervisors": {
             "items": {
-              "$ref": "#/components/schemas/IssuerPrincipal"
+              "$ref": "#/components/schemas/DirectoryMember"
             },
             "type": "array"
           }
@@ -3797,6 +3835,13 @@
               "$ref": "#/components/schemas/ClockOccurrenceView"
             },
             "type": "array"
+          },
+          "displayReference": {
+            "description": "Human-facing source reference disclosed by the source to the current caller. Present only for source-backed items whose request policy explicitly names a reference field and whose current caller read discloses that field.",
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string"
           },
           "firstObservedAt": {
             "format": "date-time",
@@ -7771,7 +7816,7 @@
     },
     "/v1/directory/targets": {
       "get": {
-        "description": "Returns only issuer-qualified principals currently eligible for the requested use. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence_person lists people the caller may currently manage; absence_cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and names, teams, and absence details are never returned.",
+        "description": "Returns only directory members currently eligible for the requested use. Each member carries an issuer-qualified identity and may carry the display name stored on an authorized team membership. assignment is available to Staff currently serving the queue and Supervisors currently supervising it, and lists current Staff serving that queue across teams; Administrators use the existing full directory for assignment discovery. absence_person lists people the caller may currently manage; absence_cover rechecks authority over the exact person and lists valid current covers under the existing absence roles. Requester profiles are refused. Empty eligible sets return a complete page. No source profile is accepted, and teams and absence details are never returned.",
         "operationId": "listDirectoryTargets",
         "parameters": [
           {
@@ -8344,6 +8389,7 @@
     },
     "/v1/holdings": {
       "get": {
+        "description": "Supervisor-only caller-visible holdings. Counts are grouped by principal and queue within this page; the same group may occur on later pages, so consumers must follow every page and sum matching groups. A source_unavailable page contains zero counts and supplies a cursor that retries the failed page.",
         "operationId": "getHoldings",
         "parameters": [
           {
@@ -8380,12 +8426,23 @@
             }
           },
           {
-            "description": "Opaque cursor.",
+            "description": "Opaque cursor for the next caller-visible holdings page. Follow every page and sum matching principal and queue groups to obtain totals across the caller-visible caseload. When status is source_unavailable, the page contains zero counts and nextCursor retries the failed page.",
             "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 100; values outside that range are request.invalid.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -10462,7 +10519,7 @@
     },
     "/v1/work-items": {
       "get": {
-        "description": "With Registry-Source-Profile, reads BReg-backed work under that separate authority. An optional complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject; callers must follow every page and handle every visible occurrence rather than assuming the subject is unique. The cursor is bound to the full selector. Without Registry-Source-Profile, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order; hosted requests reject the subject selector.",
+        "description": "With Registry-Source-Profile, reads BReg-backed work under that separate authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. An exact reference lookup first uses the explicitly retained source field as a bounded candidate index, then returns an item only when the current caller read still discloses the same reference. Callers must follow every page and handle every visible occurrence rather than assuming a subject or reference is unique. The cursor is bound to the full selector, including a hash of the reference, and the selected sort; the raw reference is not stored in the cursor context. Without Registry-Source-Profile, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order; hosted requests reject subject and reference selectors and non-default sorts.",
         "operationId": "listWorkItems",
         "parameters": [
           {
@@ -10515,6 +10572,21 @@
             }
           },
           {
+            "description": "Source-backed ordering. due orders by effective due date with undated items last, then age and item id; age orders oldest first; type orders by source-neutral subject kind, then age and item id. Defaults to due. Hosted inboxes reject age and type.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "due",
+              "enum": [
+                "due",
+                "age",
+                "type"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "description": "Optional queue identifier.",
             "in": "query",
             "name": "queue",
@@ -10550,6 +10622,18 @@
             "required": false,
             "schema": {
               "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact case-sensitive human reference. Available only for source-backed requests whose source policy explicitly names a displayReference field. Mutually exclusive with the three-part subject selector.",
+            "in": "query",
+            "name": "reference",
+            "required": false,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
               "type": "string"
             }
           },
@@ -10763,6 +10847,7 @@
     },
     "/v1/work-items/next": {
       "get": {
+        "description": "Returns a WorkItemPage containing at most one caller-visible item. Empty complete and budget_exhausted pages remain successful responses; follow nextCursor when present. servedQueues is preserved on every page.",
         "operationId": "getNextWorkItem",
         "parameters": [
           {
@@ -10808,7 +10893,7 @@
             }
           },
           {
-            "description": "Opaque cursor.",
+            "description": "Opaque cursor bound to the authenticated actor, selected Casework and source profiles, optional queue, the next-item feed, and due ordering.",
             "in": "query",
             "name": "cursor",
             "required": false,
@@ -10822,19 +10907,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkItem"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkItemPage"
+                    },
+                    {
+                      "properties": {
+                        "items": {
+                          "maxItems": 1
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
                 }
               }
             },
             "description": "Success",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "204": {
-            "description": "No currently visible item.",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
