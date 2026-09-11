@@ -1082,6 +1082,7 @@ class RegistryReleaseTest(TestCase):
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
         installer = ROOT / "crates/registry-casework/install.sh"
         installer_text = installer.read_text(encoding="utf-8")
         self.assertIn("release_minor >= 30", workflow)
@@ -1091,6 +1092,15 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("CASEWORK_ASSET_DIR", workflow)
         self.assertIn("CASEWORK_INSTALL_DIR", workflow)
         self.assertIn("--template standalone-decision", workflow)
+        self.assertIn(
+            '"caseworkctl-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n'
+            '                "mint-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n'
+            "                > SHA256SUMS",
+            assemble,
+        )
+        self.assertIn(
+            "for casework_binary in casework caseworkctl mint; do", assemble
+        )
         self.assertIn('caseworkctl\" check', workflow)
         self.assertIn('caseworkctl\" test', workflow)
         self.assertIn('caseworkctl\" package', workflow)
