@@ -331,6 +331,24 @@ readiness. Directory readiness requires a serving team for every declared queue.
 Directory setup is an ordinary authenticated Administrator API call;
 administrator status does not grant BReg review or application authority.
 
+Every credential in the operator file is an exact `secret:env/NAME` or
+`secret:file/name` reference. Casework reads no other form and accepts no
+inline value. A file reference names one path component under
+`secretProviders.file.root`, and the opened file must be a regular file owned by
+the runtime user, with mode `0400` or `0600`, and exactly one hard link. Every
+resolved value, from either provider, must be non-empty text of at most 64 KiB
+containing no NUL byte, so binary key material has to be encoded as text before
+it is stored. Generate the audit journal secret as hexadecimal text:
+
+```sh
+umask 077
+printf '%s' "$(openssl rand -hex 32)" > secrets/casework-audit-key
+chmod 0400 secrets/casework-audit-key
+```
+
+A refused reference names itself and the rule it broke. It never carries the
+resolved value.
+
 The `casework` runtime serves plain HTTP behind operator-controlled TLS
 termination. Runtime configuration must declare
 `tlsTermination: operator-controlled-upstream`; `networkExposure` defaults to

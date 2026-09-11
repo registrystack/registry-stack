@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Document the secret reference grammar, the owner-only file rules, and the
+  requirement that every resolved secret value be non-empty NUL-free text of at
+  most 64 KiB, with a command that generates the audit journal secret.
 - Document the static `authentication.oidc.jwksSource` alternative to issuer
   discovery, when to prefer it, and that it performs no rotation of its own.
 - Name `GET /v1/work-items/{itemId}/hosted-history` as the staff hosted
