@@ -16,8 +16,8 @@ use registry_casework_core::{
     OccurrenceState, OperationName, PageStatus, PrepareActionRequest, PreparedSourceAttempt,
     QueuePolicy, RecoveryEvidence, SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy,
     SourceReceipt, SourceRequestPolicy, StaffingDiagnostic, SubjectRef, TransitionHint,
-    MAXIMUM_DIRECTORY_IDENTIFIER_BYTES, MAXIMUM_DIRECTORY_PRINCIPALS,
-    MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES,
+    MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES, MAXIMUM_DIRECTORY_IDENTIFIER_BYTES,
+    MAXIMUM_DIRECTORY_PRINCIPALS, MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -114,6 +114,7 @@ struct Fixture {
     service: CaseworkService,
     store: PostgresStore,
     database: tokio_postgres::Client,
+    scoped_url: String,
     requester: ActorContext,
     staff_a: ActorContext,
     staff_b: ActorContext,
@@ -285,6 +286,7 @@ async fn fixture(reads: impl IntoIterator<Item = (Uuid, ReadMode)>) -> Fixture {
         service,
         store,
         database: connect_scoped(&scoped_url).await,
+        scoped_url,
         requester: actor("requester", CaseworkRole::Requester, "requester"),
         staff_a,
         staff_b,
@@ -375,6 +377,214 @@ async fn directory_bootstrap_rejects_unconfigured_and_unbounded_memberships_befo
     assert_eq!(revision, 1);
     assert_eq!(teams.len(), 1);
     assert_eq!(teams[0].id, "review-team");
+}
+
+#[tokio::test]
+async fn directory_read_holds_one_revision_snapshot_through_all_content_reads() {
+    let fixture = fixture([]).await;
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    let mut blocker = connect_scoped(&fixture.scoped_url).await;
+    let blocker_transaction = blocker.transaction().await.expect("blocker transaction");
+    blocker_transaction
+        .batch_execute("LOCK TABLE casework_memberships IN ACCESS EXCLUSIVE MODE")
+        .await
+        .expect("block directory membership read");
+
+    let read_store = fixture.store.clone();
+    let read_actor = administrator.clone();
+    let directory_read = tokio::spawn(async move { read_store.directory(&read_actor).await });
+    wait_for_blocked_query(
+        &fixture.database,
+        "SELECT issuer,subject,display_name FROM casework_memberships",
+    )
+    .await;
+
+    let update_service = fixture.service.clone();
+    let update_actor = administrator.clone();
+    let staff_b = fixture.staff_b.principal.clone();
+    let supervisor = fixture.supervisor.principal.clone();
+    let directory_update = tokio::spawn(async move {
+        update_service
+            .update_directory_team(
+                &update_actor,
+                1,
+                "review-team",
+                &DirectoryTeamUpdateRequest {
+                    staff: vec![member(&staff_b)],
+                    supervisors: vec![member(&supervisor)],
+                    served_queues: vec![QUEUE.to_owned()],
+                },
+                "concurrent-directory-update",
+            )
+            .await
+    });
+    wait_for_blocked_query(
+        &fixture.database,
+        "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR UPDATE",
+    )
+    .await;
+
+    blocker_transaction
+        .commit()
+        .await
+        .expect("release membership read");
+    let (revision, teams) = directory_read
+        .await
+        .expect("directory task")
+        .expect("consistent directory snapshot");
+    assert_eq!(revision, 1);
+    assert_eq!(teams.len(), 1);
+    assert_eq!(teams[0].members.len(), 3);
+    assert_eq!(
+        directory_update
+            .await
+            .expect("directory update task")
+            .expect("directory update after reader"),
+        2
+    );
+}
+
+#[tokio::test]
+async fn oversized_directory_update_rolls_back_every_effect() {
+    let fixture = fixture([]).await;
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    let people = large_directory_members(90);
+    let accepted_revision = fixture
+        .service
+        .update_directory_team(
+            &administrator,
+            1,
+            "large-a",
+            &DirectoryTeamUpdateRequest {
+                staff: people.clone(),
+                supervisors: people.clone(),
+                served_queues: Vec::new(),
+            },
+            "large-a",
+        )
+        .await
+        .expect("directory below response byte limit");
+    assert_eq!(accepted_revision, 2);
+    let (revision, teams) = fixture
+        .store
+        .directory(&administrator)
+        .await
+        .expect("bounded accepted directory");
+    let serialized =
+        serde_json::to_vec(&registry_casework_core::DirectoryResponse { revision, teams })
+            .expect("serialize accepted directory");
+    assert!(serialized.len() <= 2 * 1024 * 1024);
+    assert!(serialized.len() > 1024 * 1024);
+
+    let event_count: i64 = fixture
+        .database
+        .query_one("SELECT count(*) FROM casework_directory_events", &[])
+        .await
+        .expect("count directory events")
+        .get(0);
+    let replay_count: i64 = fixture
+        .database
+        .query_one("SELECT count(*) FROM casework_idempotency", &[])
+        .await
+        .expect("count directory replays")
+        .get(0);
+    assert!(matches!(
+        fixture
+            .service
+            .update_directory_team(
+                &administrator,
+                accepted_revision,
+                "large-b",
+                &DirectoryTeamUpdateRequest {
+                    staff: people.clone(),
+                    supervisors: people.clone(),
+                    served_queues: Vec::new(),
+                },
+                "large-b",
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Invalid))
+    ));
+    let bootstrap = BootstrapDirectoryRequest {
+        team_id: "large-bootstrap".to_owned(),
+        staff: people
+            .iter()
+            .map(|person| IssuerPrincipal {
+                issuer: person.issuer.clone(),
+                subject: person.subject.clone(),
+            })
+            .collect(),
+        supervisors: people
+            .iter()
+            .map(|person| IssuerPrincipal {
+                issuer: person.issuer.clone(),
+                subject: person.subject.clone(),
+            })
+            .collect(),
+        queue_id: "large-bootstrap-queue".to_owned(),
+    };
+    assert!(matches!(
+        fixture
+            .store
+            .bootstrap_directory(
+                &administrator,
+                accepted_revision,
+                &bootstrap,
+                "large-bootstrap",
+            )
+            .await,
+        Err(StoreError::Invalid)
+    ));
+    let row = fixture
+        .database
+        .query_one(
+            "SELECT (SELECT directory_revision FROM casework_meta WHERE singleton=true),(SELECT count(*) FROM casework_teams WHERE team_id IN ('large-b','large-bootstrap')),(SELECT count(*) FROM casework_memberships WHERE team_id IN ('large-b','large-bootstrap')),(SELECT count(*) FROM casework_queue_service WHERE queue_id='large-bootstrap-queue'),(SELECT count(*) FROM casework_directory_events),(SELECT count(*) FROM casework_idempotency)",
+            &[],
+        )
+        .await
+        .expect("inspect rejected directory update");
+    assert_eq!(row.get::<_, i64>(0), accepted_revision);
+    assert_eq!(row.get::<_, i64>(1), 0);
+    assert_eq!(row.get::<_, i64>(2), 0);
+    assert_eq!(row.get::<_, i64>(3), 0);
+    assert_eq!(row.get::<_, i64>(4), event_count);
+    assert_eq!(row.get::<_, i64>(5), replay_count);
+}
+
+async fn wait_for_blocked_query(database: &tokio_postgres::Client, fragment: &str) {
+    for _ in 0..200 {
+        let blocked: bool = database
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%' || $1 || '%')",
+                &[&fragment],
+            )
+            .await
+            .expect("inspect blocked directory query")
+            .get(0);
+        if blocked {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("query did not block at expected snapshot boundary: {fragment}");
+}
+
+fn large_directory_members(count: usize) -> Vec<DirectoryMember> {
+    (0..count)
+        .map(|index| DirectoryMember {
+            issuer: format!("{}i{index:03}", "\"".repeat(2_042)),
+            subject: format!("{}s{index:03}", "\\".repeat(2_042)),
+            display_name: Some("\"".repeat(MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES)),
+        })
+        .collect()
 }
 
 async fn connect_scoped(url: &str) -> tokio_postgres::Client {
@@ -1956,6 +2166,53 @@ async fn absence_pages_are_complete_unique_and_bounded() {
             .await,
         Err(ServiceError::Store(StoreError::Invalid))
     ));
+}
+
+#[tokio::test]
+async fn absence_pages_stop_at_the_serialized_response_budget_and_resume() {
+    let fixture = fixture([]).await;
+    let escaped = "\"\\".repeat(1_023);
+    let person_issuer = format!("{escaped}a");
+    let person_subject = format!("{escaped}b");
+    let cover_issuer = format!("{escaped}c");
+    let cover_subject = format!("{escaped}d");
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_absences(absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision) SELECT md5('large-absence-' || series::text)::uuid,$1,$2,timestamptz '2030-01-01 00:00:00+00' + series * interval '1 minute',timestamptz '2030-01-01 00:00:30+00' + series * interval '1 minute',$3,$4,1 FROM generate_series(0,299) series",
+            &[&person_issuer, &person_subject, &cover_issuer, &cover_subject],
+        )
+        .await
+        .expect("insert large absence records");
+    let administrator = actor(
+        "administrator",
+        CaseworkRole::Administrator,
+        "administrator",
+    );
+    let mut cursor = None;
+    let mut seen = BTreeSet::new();
+    let mut pages = 0;
+    loop {
+        let page = fixture
+            .service
+            .absences_page(&administrator, 1_000, cursor.as_deref())
+            .await
+            .expect("bounded large absence page");
+        assert!(
+            serde_json::to_vec(&page)
+                .expect("serialize absence page")
+                .len()
+                <= 2 * 1024 * 1024
+        );
+        seen.extend(page.items.iter().map(|absence| absence.absence_id));
+        pages += 1;
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert!(pages > 1);
+    assert_eq!(seen.len(), 300);
 }
 
 #[tokio::test]

@@ -7,9 +7,9 @@ use registry_casework_core::{
     transition, ActorContext, AssignmentContext, AttemptSettlement, AttemptSettlementOutcome,
     AttemptSettlementReport, AttemptState, AttemptStatus, AuthoritativeObservation,
     BootstrapDirectoryRequest, CaseworkRole, CorrectionRoutingCopy, DirectoryMember,
-    DiscoveryCursor, Draft, DurableEvent, HistoryEntry, HistoryKind, InboxSort, InboxView,
-    IssuerPrincipal, OccurrenceEvent, OccurrenceKind, OccurrenceState, OperationName, Page,
-    PageStatus, PreparedSourceAttempt, SourceBinding, SourceReceipt, StaffingDiagnostic,
+    DirectoryResponse, DiscoveryCursor, Draft, DurableEvent, HistoryEntry, HistoryKind, InboxSort,
+    InboxView, IssuerPrincipal, OccurrenceEvent, OccurrenceKind, OccurrenceState, OperationName,
+    Page, PageStatus, PreparedSourceAttempt, SourceBinding, SourceReceipt, StaffingDiagnostic,
     SubjectRef, TeamRecord, TransitionHint, WorkItem, WorkItemRouting,
     MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES, MAXIMUM_SETTLEMENT_REASON_BYTES,
 };
@@ -59,6 +59,7 @@ const MIGRATIONS: [(i64, &str); 12] = [
 /// waits here instead of racing the ledger primary key. The key spells the
 /// ASCII bytes of "casework".
 const MIGRATION_LOCK_KEY: i64 = 0x6361_7365_776f_726b;
+pub(crate) const MAXIMUM_BOUNDED_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub(crate) struct InboxPosition {
@@ -311,6 +312,7 @@ impl PostgresStore {
                 &[&next],
             )
             .await?;
+        directory_snapshot(&transaction, next).await?;
         let event_id = Uuid::new_v4();
         let now = Utc::now();
         let detail = json!({"teamId":request.team_id,"queueId":request.queue_id});
@@ -350,36 +352,17 @@ impl PostgresStore {
         if actor.role != CaseworkRole::Administrator {
             return Err(StoreError::Forbidden);
         }
-        let client = self.client().await?;
-        let revision: i64 = client
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let revision: i64 = transaction
             .query_one(
-                "SELECT directory_revision FROM casework_meta WHERE singleton=true",
+                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
                 &[],
             )
             .await?
             .get(0);
-        let rows = client
-            .query(
-                "SELECT team_id, revision FROM casework_teams ORDER BY team_id",
-                &[],
-            )
-            .await?;
-        let mut teams = Vec::with_capacity(rows.len());
-        for row in rows {
-            let team_id: String = row.get(0);
-            let members = membership_list(&client, &team_id, "staff").await?;
-            let supervisors = membership_list(&client, &team_id, "supervisor").await?;
-            let served_queues = client.query(
-                "SELECT queue_id FROM casework_queue_service WHERE team_id=$1 ORDER BY queue_id", &[&team_id]
-            ).await?.into_iter().map(|row| row.get(0)).collect();
-            teams.push(TeamRecord {
-                id: team_id,
-                members,
-                supervisors,
-                served_queues,
-                revision: row.get(1),
-            });
-        }
+        let teams = directory_snapshot(&transaction, revision).await?;
+        transaction.commit().await?;
         Ok((revision, teams))
     }
 
@@ -2814,11 +2797,66 @@ async fn insert_membership(
     Ok(())
 }
 async fn membership_list(
-    client: &deadpool_postgres::Client,
+    transaction: &tokio_postgres::Transaction<'_>,
     team_id: &str,
     kind: &str,
 ) -> Result<Vec<DirectoryMember>, StoreError> {
-    Ok(client.query("SELECT issuer,subject,display_name FROM casework_memberships WHERE team_id=$1 AND membership_kind=$2 ORDER BY issuer,subject", &[&team_id,&kind]).await?.into_iter().map(|row|DirectoryMember{issuer:row.get(0),subject:row.get(1),display_name:row.get(2)}).collect())
+    Ok(transaction.query("SELECT issuer,subject,display_name FROM casework_memberships WHERE team_id=$1 AND membership_kind=$2 ORDER BY issuer,subject", &[&team_id,&kind]).await?.into_iter().map(|row|DirectoryMember{issuer:row.get(0),subject:row.get(1),display_name:row.get(2)}).collect())
+}
+
+pub(crate) async fn directory_snapshot(
+    transaction: &tokio_postgres::Transaction<'_>,
+    revision: i64,
+) -> Result<Vec<TeamRecord>, StoreError> {
+    let empty = DirectoryResponse {
+        // Absences and calendar changes also advance this revision. Reserve
+        // its widest encoding so an accepted directory remains readable.
+        revision: i64::MAX,
+        teams: Vec::new(),
+    };
+    let mut serialized_bytes = serde_json::to_vec(&empty)?.len();
+    let mut teams = Vec::new();
+    let mut after = String::new();
+    loop {
+        let rows = transaction
+            .query(
+                "SELECT team_id,revision FROM casework_teams WHERE team_id>$1 ORDER BY team_id LIMIT 100",
+                &[&after],
+            )
+            .await?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            let team_id: String = row.get(0);
+            let members = membership_list(transaction, &team_id, "staff").await?;
+            let supervisors = membership_list(transaction, &team_id, "supervisor").await?;
+            let served_queues = transaction.query(
+                "SELECT queue_id FROM casework_queue_service WHERE team_id=$1 ORDER BY queue_id", &[&team_id]
+            ).await?.into_iter().map(|row| row.get(0)).collect();
+            let team = TeamRecord {
+                id: team_id.clone(),
+                members,
+                supervisors,
+                served_queues,
+                revision: row.get(1),
+            };
+            serialized_bytes = serialized_bytes
+                .checked_add(serde_json::to_vec(&team)?.len())
+                .and_then(|size| size.checked_add(usize::from(!teams.is_empty())))
+                .ok_or(StoreError::Corrupt)?;
+            if serialized_bytes > MAXIMUM_BOUNDED_RESPONSE_BYTES {
+                return Err(StoreError::Invalid);
+            }
+            after = team_id;
+            teams.push(team);
+        }
+    }
+    let response = DirectoryResponse { revision, teams };
+    if serde_json::to_vec(&response)?.len() > MAXIMUM_BOUNDED_RESPONSE_BYTES {
+        return Err(StoreError::Invalid);
+    }
+    Ok(response.teams)
 }
 
 async fn is_staff_for_queue(

@@ -327,6 +327,7 @@ impl PostgresStore {
                 &[&next],
             )
             .await?;
+        crate::store::directory_snapshot(&transaction, next).await?;
         append_directory_assignment_event(
             &transaction,
             actor,
@@ -414,12 +415,31 @@ impl PostgresStore {
                 &[&role_name(actor.role), &actor.principal.issuer, &actor.principal.subject, &after_starts_at, &after_absence_id, &query_limit],
             )
             .await?;
-        let more = rows.len() > limit;
-        let items = rows
-            .into_iter()
-            .take(limit)
-            .map(absence_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
+        let fetched = rows.len();
+        let cursor_placeholder = Some(Uuid::nil().to_string());
+        let empty_page = AbsenceList {
+            directory_revision,
+            items: Vec::new(),
+            next_cursor: cursor_placeholder,
+        };
+        let mut serialized_bytes = serde_json::to_vec(&empty_page)?.len();
+        let mut items = Vec::with_capacity(limit.min(fetched));
+        for row in rows.into_iter().take(limit) {
+            let item = absence_from_row(row)?;
+            let next_size = serialized_bytes
+                .checked_add(serde_json::to_vec(&item)?.len())
+                .and_then(|size| size.checked_add(usize::from(!items.is_empty())))
+                .ok_or(StoreError::Corrupt)?;
+            if next_size > crate::store::MAXIMUM_BOUNDED_RESPONSE_BYTES {
+                break;
+            }
+            serialized_bytes = next_size;
+            items.push(item);
+        }
+        if items.is_empty() && fetched > 0 {
+            return Err(StoreError::Corrupt);
+        }
+        let more = items.len() < fetched;
         let next_cursor = if more {
             let last = items.last().ok_or(StoreError::Corrupt)?;
             let cursor_id = Uuid::new_v4();
@@ -434,12 +454,16 @@ impl PostgresStore {
         } else {
             None
         };
-        transaction.commit().await?;
-        Ok(AbsenceList {
+        let page = AbsenceList {
             directory_revision,
             items,
             next_cursor,
-        })
+        };
+        if serde_json::to_vec(&page)?.len() > crate::store::MAXIMUM_BOUNDED_RESPONSE_BYTES {
+            return Err(StoreError::Corrupt);
+        }
+        transaction.commit().await?;
+        Ok(page)
     }
 
     pub async fn erase_expired_absence_cursors(&self) -> Result<usize, StoreError> {
