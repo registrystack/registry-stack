@@ -238,12 +238,12 @@ impl CaseworkProject {
     }
 }
 
-/// The selected profile carries the caller's role, so the token must be what
-/// separates one role from another. Every higher-role profile must require a
-/// scope absent from the union of all lower-role profiles, otherwise their
-/// combined grants can also select the higher profile. An
-/// Administrator must additionally require a scope absent from the union of
-/// every non-Administrator profile.
+/// The selected profile carries the caller's identity and role, so every
+/// profile must require a scope absent from the combined scopes of all other
+/// profiles at the same or a lower role. Otherwise credentials assembled from
+/// those grants could select authority belonging to this profile, including
+/// authority retained under an earlier hosted-kind policy. A higher-role
+/// credential may still explicitly carry the scopes required by a lower role.
 fn access_roles_are_separately_scoped(profiles: &[AccessProfile]) -> bool {
     fn role_rank(role: CaseworkRole) -> u8 {
         match role {
@@ -253,35 +253,21 @@ fn access_roles_are_separately_scoped(profiles: &[AccessProfile]) -> bool {
             CaseworkRole::Administrator => 3,
         }
     }
-    fn scopes(profile: &AccessProfile) -> BTreeSet<&String> {
-        profile.required_scopes.iter().collect()
-    }
-
-    let ranked_profiles_are_separate = profiles.iter().all(|higher| {
-        let higher_rank = role_rank(higher.role);
-        let lower_role_scopes: BTreeSet<&String> = profiles
+    profiles.iter().enumerate().all(|(target_index, target)| {
+        let target_rank = role_rank(target.role);
+        let other_same_or_lower_scopes: BTreeSet<&String> = profiles
             .iter()
-            .filter(|profile| role_rank(profile.role) < higher_rank)
-            .flat_map(|profile| profile.required_scopes.iter())
-            .collect();
-        !scopes(higher).is_subset(&lower_role_scopes)
-    });
-    let non_administrator_scopes: BTreeSet<&String> = profiles
-        .iter()
-        .filter(|profile| profile.role != CaseworkRole::Administrator)
-        .flat_map(|profile| profile.required_scopes.iter())
-        .collect();
-
-    ranked_profiles_are_separate
-        && profiles
-            .iter()
-            .filter(|profile| profile.role == CaseworkRole::Administrator)
-            .all(|profile| {
-                profile
-                    .required_scopes
-                    .iter()
-                    .any(|scope| !non_administrator_scopes.contains(scope))
+            .enumerate()
+            .filter(|(index, profile)| {
+                *index != target_index && role_rank(profile.role) <= target_rank
             })
+            .flat_map(|(_, profile)| profile.required_scopes.iter())
+            .collect();
+        target
+            .required_scopes
+            .iter()
+            .any(|scope| !other_same_or_lower_scopes.contains(scope))
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -431,7 +417,9 @@ pub enum ConfigError {
     DefaultQueue,
     #[error("staff, supervisor, and administrator access profiles are required")]
     AccessProfiles,
-    #[error("every higher-role access profile must require a scope absent from the combined lower-role profiles, and every administrator profile must require a scope absent from all non-administrator profiles")]
+    #[error(
+        "every access profile must require a scope absent from the combined scopes of every other profile at the same or a lower role"
+    )]
     AccessProfileScopes,
     #[error("the hosted kind policy or its profile grants are invalid")]
     HostedKinds,
@@ -496,6 +484,16 @@ mod tests {
         }
     }
 
+    fn hosted_kind(id: &str, deciding_profiles: &[&str]) -> HostedKindPolicy {
+        let mut kind = standalone_decision_starter_kind();
+        kind.id = id.to_owned();
+        kind.deciding_profiles = deciding_profiles
+            .iter()
+            .map(|profile| (*profile).to_owned())
+            .collect();
+        kind
+    }
+
     fn project_with_source_queue(queue: &str) -> CaseworkProject {
         let mut candidate = project();
         candidate.queues[0].id = queue.to_owned();
@@ -537,6 +535,86 @@ mod tests {
         let mut candidate = project();
         candidate.access_profiles[2].kinds = vec!["decision".to_owned()];
         assert_eq!(candidate.check(), Err(ConfigError::HostedKinds));
+    }
+
+    #[test]
+    fn every_same_role_profile_requires_an_independently_selectable_scope() {
+        let mut candidate = project();
+        candidate
+            .hosted_kinds
+            .push(hosted_kind("appeal", &["staff"]));
+        let mut appeal_requester =
+            profile("appeal-requester", CaseworkRole::Requester, &["appeal"]);
+        appeal_requester.required_scopes = candidate.access_profiles[3].required_scopes.clone();
+        candidate.access_profiles.push(appeal_requester);
+        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+
+        let mut candidate = project();
+        // Current equality cannot prove that retained items pinned the same
+        // deciding-profile set under an earlier policy.
+        let mut retained_profile = profile("retained-staff", CaseworkRole::Staff, &[]);
+        retained_profile.required_scopes = candidate.access_profiles[0].required_scopes.clone();
+        candidate.access_profiles.push(retained_profile);
+        candidate.hosted_kinds[0]
+            .deciding_profiles
+            .push("retained-staff".to_owned());
+        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+
+        let mut combined = project();
+        combined.access_profiles[0].required_scopes = vec!["casework:a".to_owned()];
+        let mut staff_b = profile("staff-b", CaseworkRole::Staff, &[]);
+        staff_b.required_scopes = vec!["casework:b".to_owned()];
+        combined.access_profiles.push(staff_b);
+        let mut appeal_staff = profile("appeal-staff", CaseworkRole::Staff, &[]);
+        appeal_staff.required_scopes = vec!["casework:a".to_owned(), "casework:b".to_owned()];
+        combined.access_profiles.push(appeal_staff);
+        combined
+            .hosted_kinds
+            .push(hosted_kind("appeal", &["appeal-staff"]));
+        assert_eq!(combined.check(), Err(ConfigError::AccessProfileScopes));
+
+        let mut remapped = project();
+        let mut alternate = profile("staff-by-sub", CaseworkRole::Staff, &[]);
+        alternate.principal_claim = "sub".to_owned();
+        alternate.required_scopes = remapped.access_profiles[0].required_scopes.clone();
+        remapped.access_profiles.push(alternate);
+        remapped.hosted_kinds[0]
+            .deciding_profiles
+            .push("staff-by-sub".to_owned());
+        assert_eq!(remapped.check(), Err(ConfigError::AccessProfileScopes));
+    }
+
+    #[test]
+    fn one_profile_cannot_be_selected_by_combining_lower_and_same_role_scopes() {
+        let mut candidate = project();
+        candidate.access_profiles[0].required_scopes =
+            vec!["casework:a".to_owned(), "casework:b".to_owned()];
+        candidate.access_profiles[3].required_scopes = vec!["casework:a".to_owned()];
+        let mut peer = profile("staff-b", CaseworkRole::Staff, &[]);
+        peer.required_scopes = vec!["casework:b".to_owned()];
+        candidate.access_profiles.push(peer);
+
+        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+    }
+
+    #[test]
+    fn same_role_profiles_may_share_base_scopes_when_each_has_its_own_scope() {
+        let mut candidate = project();
+        candidate.access_profiles[0].required_scopes = vec![
+            "casework:staff".to_owned(),
+            "casework:staff-primary".to_owned(),
+        ];
+        let mut alternate = profile("staff-by-sub", CaseworkRole::Staff, &[]);
+        alternate.principal_claim = "sub".to_owned();
+        alternate.required_scopes = vec![
+            "casework:staff".to_owned(),
+            "casework:staff-alternate".to_owned(),
+        ];
+        candidate.access_profiles.push(alternate);
+        candidate.hosted_kinds[0]
+            .deciding_profiles
+            .push("staff-by-sub".to_owned());
+        assert_eq!(candidate.check(), Ok(()));
     }
 
     #[test]
@@ -686,6 +764,7 @@ mod tests {
         candidate.access_profiles[1].required_scopes = vec![
             "casework:shared".to_owned(),
             "casework:supervisor".to_owned(),
+            "casework:supervisor-primary".to_owned(),
         ];
         candidate.access_profiles[2].required_scopes = vec![
             "casework:staff".to_owned(),
@@ -695,7 +774,11 @@ mod tests {
         candidate.access_profiles.push(AccessProfile {
             id: "supervisor-secondary".to_owned(),
             principal_claim: "registry_principal".to_owned(),
-            required_scopes: candidate.access_profiles[1].required_scopes.clone(),
+            required_scopes: vec![
+                "casework:shared".to_owned(),
+                "casework:supervisor".to_owned(),
+                "casework:supervisor-secondary".to_owned(),
+            ],
             role: CaseworkRole::Supervisor,
             kinds: Vec::new(),
         });

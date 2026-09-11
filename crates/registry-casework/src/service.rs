@@ -340,6 +340,18 @@ impl CaseworkService {
         source_profile_id: &str,
         token: &str,
     ) -> Result<(WorkItem, CallerSubjectView), ServiceError> {
+        self.caller_item_for_attempt(actor, item_id, source_profile_id, token, None)
+            .await
+    }
+
+    async fn caller_item_for_attempt(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        token: &str,
+        completed_attempt: Option<&AttemptStatus>,
+    ) -> Result<(WorkItem, CallerSubjectView), ServiceError> {
         let item = self.store.item(item_id).await?;
         if !self.store.can_view_item(actor, &item).await? {
             return Err(ServiceError::NotFound);
@@ -353,7 +365,14 @@ impl CaseworkService {
             )
             .await?;
         let item = self
-            .assemble_caller_visible_item(actor, item_id, source_profile_id, &view, None)
+            .assemble_caller_visible_item(
+                actor,
+                item_id,
+                source_profile_id,
+                &view,
+                None,
+                completed_attempt,
+            )
             .await?;
         Ok((item, view))
     }
@@ -365,6 +384,7 @@ impl CaseworkService {
         source_profile_id: &str,
         view: &CallerSubjectView,
         known_holder_timing: Option<(i64, Option<chrono::DateTime<chrono::Utc>>)>,
+        completed_attempt: Option<&AttemptStatus>,
     ) -> Result<WorkItem, ServiceError> {
         // The source call is intentionally outside a database transaction.
         // Read local projections only after source disclosure succeeds, then
@@ -417,13 +437,46 @@ impl CaseworkService {
         };
         item.live_attempt = live_attempt;
         item.display_reference = view.display_reference.clone();
-        if view.binding.generation != item.binding.generation {
+        if view.binding != item.binding {
             if item.live_attempt.is_some() {
                 item.routing = routing;
                 item.clock_occurrences = clock_occurrences;
                 return Ok(item);
             }
-            return Err(ServiceError::BindingMoved);
+            // A successful source action commonly advances the authoritative
+            // binding before readback updates the local occurrence. Expose
+            // that caller-owned result only while this exact local revision is
+            // synchronizing and the receipt's full binding is what the source
+            // currently discloses. The local binding remains retained until
+            // reconciliation, and no action is offered across the mismatch.
+            let completed_attempt_matches_current_binding =
+                completed_attempt.is_some_and(|attempt| {
+                    attempt.state == AttemptState::Completed
+                        && attempt.item_id == item.item_id
+                        && attempt.item_revision == item.revision
+                        && item.state == OccurrenceState::Synchronizing
+                        && attempt.receipt.as_ref().is_some_and(|receipt| {
+                            receipt.binding == view.binding
+                                && receipt.binding.generation == item.binding.generation
+                        })
+                });
+            if completed_attempt_matches_current_binding {
+                item.routing = routing;
+                item.clock_occurrences = clock_occurrences;
+                item.actions.clear();
+                return Ok(item);
+            }
+            // Terminal occurrences are historical, read-only records. Within
+            // one source generation, the disclosed subject may have advanced
+            // since that occurrence ended.
+            if item.state.is_active() || view.binding.generation != item.binding.generation {
+                return Err(ServiceError::BindingMoved);
+            }
+            item.routing = routing;
+            item.clock_occurrences = clock_occurrences;
+            item.routing_copy = routing_copy;
+            item.actions.clear();
+            return Ok(item);
         }
         item.routing = routing;
         item.clock_occurrences = clock_occurrences;
@@ -982,6 +1035,7 @@ impl CaseworkService {
                             source_profile_id,
                             &view,
                             holder_timings.get(&item.item_id).cloned(),
+                            None,
                         )
                         .await
                     {
@@ -1113,17 +1167,33 @@ impl CaseworkService {
                 .preflight_erased_attempt(actor, item_id, idempotency_key, &request_hash)
                 .await?;
         }
-        let (item, view) = self
-            .caller_item(actor, item_id, source_profile_id, token)
-            .await?;
+        let existing_attempt = if is_staff {
+            self.store
+                .attempt_by_key(actor, item_id, idempotency_key, &request_hash)
+                .await
+        } else {
+            Ok(None)
+        };
+        let (item, view) = match &existing_attempt {
+            Ok(Some(attempt)) => {
+                self.caller_item_for_attempt(
+                    actor,
+                    item_id,
+                    source_profile_id,
+                    token,
+                    Some(attempt),
+                )
+                .await?
+            }
+            Ok(None) | Err(_) => {
+                self.caller_item(actor, item_id, source_profile_id, token)
+                    .await?
+            }
+        };
         if !is_staff {
             return Err(ServiceError::Forbidden);
         }
-        if let Some(attempt) = self
-            .store
-            .attempt_by_key(actor, item_id, idempotency_key, &request_hash)
-            .await?
-        {
+        if let Some(attempt) = existing_attempt? {
             return Ok((attempt.clone(), attempt.receipt));
         }
         if let Some(attempt_id) = self
@@ -1254,12 +1324,26 @@ impl CaseworkService {
         requested_source_profile_id: &str,
         token: &str,
     ) -> Result<(AttemptStatus, Option<SourceReceipt>), ServiceError> {
-        let (item, _) = self
-            .caller_item(actor, item_id, requested_source_profile_id, token)
-            .await?;
-        if let Some((saved_profile, attempt)) =
-            self.store.terminal_attempt_by_id(actor, attempt_id).await?
-        {
+        let terminal_attempt = self.store.terminal_attempt_by_id(actor, attempt_id).await;
+        let (item, _) = match &terminal_attempt {
+            Ok(Some((saved_profile, attempt)))
+                if saved_profile == requested_source_profile_id && attempt.item_id == item_id =>
+            {
+                self.caller_item_for_attempt(
+                    actor,
+                    item_id,
+                    requested_source_profile_id,
+                    token,
+                    Some(attempt),
+                )
+                .await?
+            }
+            Ok(None) | Ok(Some(_)) | Err(_) => {
+                self.caller_item(actor, item_id, requested_source_profile_id, token)
+                    .await?
+            }
+        };
+        if let Some((saved_profile, attempt)) = terminal_attempt? {
             if saved_profile != requested_source_profile_id || attempt.item_id != item_id {
                 return Err(ServiceError::NotFound);
             }
@@ -1344,14 +1428,27 @@ impl CaseworkService {
         idempotency_key: &str,
         token: &str,
     ) -> Result<(AttemptStatus, Option<SourceReceipt>), ServiceError> {
-        let (item, _) = self
-            .caller_item(actor, item_id, requested_source_profile_id, token)
-            .await?;
-        if let Some((saved_profile, attempt)) = self
+        let terminal_attempt = self
             .store
             .terminal_attempt_by_key(actor, item_id, idempotency_key)
-            .await?
-        {
+            .await;
+        let (item, _) = match &terminal_attempt {
+            Ok(Some((saved_profile, attempt))) if saved_profile == requested_source_profile_id => {
+                self.caller_item_for_attempt(
+                    actor,
+                    item_id,
+                    requested_source_profile_id,
+                    token,
+                    Some(attempt),
+                )
+                .await?
+            }
+            Ok(None) | Ok(Some(_)) | Err(_) => {
+                self.caller_item(actor, item_id, requested_source_profile_id, token)
+                    .await?
+            }
+        };
+        if let Some((saved_profile, attempt)) = terminal_attempt? {
             if saved_profile != requested_source_profile_id {
                 return Err(ServiceError::Forbidden);
             }
@@ -1498,7 +1595,7 @@ impl CaseworkService {
         attempt: AttemptStatus,
     ) -> Result<MutationResponse, ServiceError> {
         let item = match self
-            .caller_item(actor, item_id, source_profile_id, token)
+            .caller_item_for_attempt(actor, item_id, source_profile_id, token, Some(&attempt))
             .await
         {
             Ok((item, _)) => item,

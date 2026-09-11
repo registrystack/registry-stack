@@ -38,9 +38,11 @@ const REFERENCE_LOOKUP_AND_SORT_MIGRATION: &str =
 const SOURCE_RECONCILIATION_PROGRESS_MIGRATION: &str =
     include_str!("../migrations/0011_source_reconciliation_progress.sql");
 const ABSENCE_CURSORS_MIGRATION: &str = include_str!("../migrations/0012_absence_cursors.sql");
+const SYNC_CLAIM_INDEXES_MIGRATION: &str =
+    include_str!("../migrations/0013_sync_claim_indexes.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 12] = [
+const MIGRATIONS: [(i64, &str); 13] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -53,6 +55,7 @@ const MIGRATIONS: [(i64, &str); 12] = [
     (10, REFERENCE_LOOKUP_AND_SORT_MIGRATION),
     (11, SOURCE_RECONCILIATION_PROGRESS_MIGRATION),
     (12, ABSENCE_CURSORS_MIGRATION),
+    (13, SYNC_CLAIM_INDEXES_MIGRATION),
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
@@ -2361,9 +2364,55 @@ impl PostgresStore {
         limit: i64,
         lease_seconds: i64,
     ) -> Result<Vec<SubjectRef>, StoreError> {
+        if limit < 0 {
+            return Err(StoreError::Invalid);
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let retry_quota = (limit / 2).max(1);
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE erased_at IS NULL AND sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY source_id,subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $1", &[&limit]).await?;
+        // Bound both indexed streams by the caller's batch size, reserve retry
+        // and fresh capacity, then use either stream to fill unused capacity.
+        // A one-row batch favors the oldest retry; runtime batches are 100.
+        let rows = transaction
+            .query(
+                r#"WITH retry_candidates AS MATERIALIZED (
+                       SELECT source_id,subject_kind,subject_id,sync_lease_until
+                       FROM casework_subjects
+                       WHERE erased_at IS NULL AND sync_pending=true AND sync_lease_until<now()
+                       ORDER BY sync_lease_until,source_id,subject_kind,subject_id
+                       FOR UPDATE SKIP LOCKED LIMIT $1
+                   ), fresh_candidates AS MATERIALIZED (
+                       SELECT source_id,subject_kind,subject_id,sync_lease_until
+                       FROM casework_subjects
+                       WHERE erased_at IS NULL AND sync_pending=true AND sync_lease_until IS NULL
+                       ORDER BY source_id,subject_kind,subject_id
+                       FOR UPDATE SKIP LOCKED LIMIT $1
+                   ), ranked AS (
+                       SELECT source_id,subject_kind,subject_id,true AS retry,
+                              row_number() OVER (ORDER BY sync_lease_until,source_id,subject_kind,subject_id) AS class_rank
+                       FROM retry_candidates
+                       UNION ALL
+                       SELECT source_id,subject_kind,subject_id,false AS retry,
+                              row_number() OVER (ORDER BY source_id,subject_kind,subject_id) AS class_rank
+                       FROM fresh_candidates
+                   ), chosen AS (
+                       SELECT source_id,subject_kind,subject_id
+                       FROM ranked
+                       ORDER BY CASE
+                                    WHEN (retry AND class_rank<=$2)
+                                      OR (NOT retry AND class_rank<=($1-$2)) THEN 0
+                                    ELSE 1
+                                END,
+                                class_rank,retry DESC,source_id,subject_kind,subject_id
+                       LIMIT $1
+                   )
+                   SELECT source_id,subject_kind,subject_id FROM chosen"#,
+                &[&limit, &retry_quota],
+            )
+            .await?;
         let subjects: Vec<_> = rows
             .into_iter()
             .map(|row| SubjectRef {
@@ -2386,9 +2435,55 @@ impl PostgresStore {
         limit: i64,
         lease_seconds: i64,
     ) -> Result<Vec<SubjectRef>, StoreError> {
+        if limit < 0 {
+            return Err(StoreError::Invalid);
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let retry_quota = (limit / 2).max(1);
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2 AND erased_at IS NULL AND sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $3", &[&source_id,&generation,&limit]).await?;
+        // Match the global worker's fairness within this source generation.
+        let rows = transaction
+            .query(
+                r#"WITH retry_candidates AS MATERIALIZED (
+                       SELECT source_id,subject_kind,subject_id,sync_lease_until
+                       FROM casework_subjects
+                       WHERE source_id=$1 AND binding_generation=$2
+                         AND erased_at IS NULL AND sync_pending=true AND sync_lease_until<now()
+                       ORDER BY sync_lease_until,subject_kind,subject_id
+                       FOR UPDATE SKIP LOCKED LIMIT $3
+                   ), fresh_candidates AS MATERIALIZED (
+                       SELECT source_id,subject_kind,subject_id,sync_lease_until
+                       FROM casework_subjects
+                       WHERE source_id=$1 AND binding_generation=$2
+                         AND erased_at IS NULL AND sync_pending=true AND sync_lease_until IS NULL
+                       ORDER BY subject_kind,subject_id
+                       FOR UPDATE SKIP LOCKED LIMIT $3
+                   ), ranked AS (
+                       SELECT source_id,subject_kind,subject_id,true AS retry,
+                              row_number() OVER (ORDER BY sync_lease_until,subject_kind,subject_id) AS class_rank
+                       FROM retry_candidates
+                       UNION ALL
+                       SELECT source_id,subject_kind,subject_id,false AS retry,
+                              row_number() OVER (ORDER BY subject_kind,subject_id) AS class_rank
+                       FROM fresh_candidates
+                   ), chosen AS (
+                       SELECT source_id,subject_kind,subject_id
+                       FROM ranked
+                       ORDER BY CASE
+                                    WHEN (retry AND class_rank<=$4)
+                                      OR (NOT retry AND class_rank<=($3-$4)) THEN 0
+                                    ELSE 1
+                                END,
+                                class_rank,retry DESC,subject_kind,subject_id
+                       LIMIT $3
+                   )
+                   SELECT source_id,subject_kind,subject_id FROM chosen"#,
+                &[&source_id, &generation, &limit, &retry_quota],
+            )
+            .await?;
         let subjects: Vec<_> = rows
             .into_iter()
             .map(|row| SubjectRef {

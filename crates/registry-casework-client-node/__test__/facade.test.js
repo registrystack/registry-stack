@@ -504,6 +504,69 @@ test('clock views and recompute expiry preserve source authority and explicit re
   assert.deepEqual(observed[2].body, { previewId });
 });
 
+test('native client refuses nested unsafe integers before HTTP and preserves safe numbers', async (context) => {
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    let bytes = '';
+    request.on('data', (chunk) => { bytes += chunk; });
+    request.on('end', () => {
+      requests.push({ path: request.url, body: JSON.parse(bytes) });
+      response.writeHead(201, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        itemId: '00000000-0000-4000-8000-000000000001',
+        requesterReference: requests.at(-1).body.requesterReference,
+        kind: requests.at(-1).body.kind,
+        version: '1',
+        display: requests.at(-1).body.display,
+        state: 'open',
+        revision: 1,
+        kindPolicyDigest: `sha256:${'a'.repeat(64)}`,
+        createdAt: '2026-09-11T00:00:00Z',
+        updatedAt: '2026-09-11T00:00:00Z',
+      }));
+    });
+  });
+  await listen(server);
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { CaseworkClient: NativeCaseworkClient } = require('../index');
+  const client = new NativeCaseworkClient({
+    baseUrl: `http://127.0.0.1:${server.address().port}/`,
+  });
+  const document = { holidaySet: 'office', revision: Number.MAX_SAFE_INTEGER + 1, dates: [] };
+  await assert.rejects(
+    client.createHolidayRevision('synthetic-token', 'administrator', 'unsafe-revision', { document }),
+    (error) => JSON.parse(error.message).kind === 'invalid_request',
+  );
+  assert.equal(requests.length, 0);
+
+  for (const unsafeInteger of [1e20, -1e20]) {
+    await assert.rejects(
+      client.createHostedItem('synthetic-token', 'administrator', 'unsafe-display', {
+        kind: 'review', requesterReference: 'requester', display: { nested: unsafeInteger },
+      }),
+      (error) => JSON.parse(error.message).kind === 'invalid_request',
+    );
+  }
+  assert.equal(requests.length, 0);
+
+  const display = {
+    positiveBoundary: Number.MAX_SAFE_INTEGER,
+    negativeBoundary: Number.MIN_SAFE_INTEGER,
+    fraction: 1.25,
+  };
+  const outcome = await client.createHostedItem('synthetic-token', 'administrator', 'safe-display', {
+    kind: 'review', requesterReference: 'requester', display,
+  });
+  assert.deepEqual(outcome.value.display, display);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].path, '/v1/hosted-items');
+  assert.deepEqual(requests[0].body.display, display);
+});
+
 function listen(server) {
   return new Promise((resolve, reject) => {
     server.once('error', reject);

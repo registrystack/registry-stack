@@ -369,6 +369,14 @@ Project validation requires unique source IDs. Each required scope is a
 1–256 byte OAuth scope token using the RFC 6749 character set; empty scope
 values and embedded whitespace are refused before packaging.
 
+Each access profile must also require a scope unavailable from the combined
+scopes of every other profile at the same or a lower role. Profiles may share
+common scopes when each has its own scope discriminator. This keeps a token
+with several valid lower or peer grants from selecting another profile's
+identity or authority, including authority pinned to an existing hosted item
+under an earlier policy. A higher-role credential may explicitly include a
+lower profile's required scopes when it is intended to select that profile.
+
 Casework accepts Administrator, Supervisor, and Staff credentials only when
 the trusted issuer asserts the configured human identity claim. The operator
 binding defaults to `humanIdentity: {claim: registry_actor_kind, value: human}`.
@@ -414,6 +422,22 @@ occurrence, including attachment verification changes. The representation ETag
 is an equality check, not an ordering value or an action precondition. Periodic
 readback repairs missed events while preserving claims, first-observation
 timing, and unresolved action recovery.
+
+Pending readback reserves batch capacity for both never-attempted subjects and
+expired retries, then fills unused capacity from either group. Retries run in
+oldest-attempt order, so sustained fresh arrivals do not prevent recovery.
+Concealed or unavailable subjects keep their retry lease without repeatedly
+taking priority over later work. Active items must
+match the current source revision, proposal version, integrity, and binding
+generation before offering coordination or decision actions. When that binding
+moves, a caller-owned live attempt remains visible for recovery with no actions.
+A successful action can also return or replay its completed receipt before
+readback finishes when the current source binding exactly matches that receipt
+within the same generation. The response retains the synchronizing item's local
+binding and offers no actions.
+Completed, cancelled, and superseded occurrences remain readable under current
+source disclosure within the same source generation, with their retained
+binding and no actions.
 
 Source-backed retention is an explicit operator decision for one exact source
 request. `caseworkctl retention erase PROJECT [--operator FILE] --source-id ID

@@ -4551,17 +4551,16 @@ fn assert_request_action_shape(value: &Value) -> Result<(), FixtureError> {
         .get("id")
         .and_then(Value::as_str)
         .ok_or(FixtureError::ResponseShapeRefused)?;
-    let actor_reference = object
-        .get("actorReference")
-        .and_then(Value::as_str)
-        .ok_or(FixtureError::ResponseShapeRefused)?;
+    assert_actor_reference(
+        object
+            .get("actorReference")
+            .ok_or(FixtureError::ResponseShapeRefused)?,
+    )?;
     if object
         .get("revision")
         .and_then(Value::as_u64)
         .is_none_or(|revision| revision == 0)
         || !uuid::Uuid::parse_str(identifier).is_ok_and(|parsed| parsed.to_string() == identifier)
-        || actor_reference.is_empty()
-        || actor_reference.len() > 512
     {
         return Err(FixtureError::ResponseShapeRefused);
     }
@@ -4814,6 +4813,8 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
                 | "review"
                 | "reviewTiming"
                 | "detailErased"
+                | "submitterReference"
+                | "applierReference"
         )
     }) || !["bregState", "proposalVersion"]
         .iter()
@@ -4823,6 +4824,11 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
     }
     assert_request_state(request)?;
     assert_optional_proposal_version(request.get("proposalVersion"))?;
+    for key in ["submitterReference", "applierReference"] {
+        if let Some(actor_reference) = request.get(key) {
+            assert_actor_reference(actor_reference)?;
+        }
+    }
     if let Some(digest) = request.get("effectDigest") {
         assert_optional_effect_digest(digest)?;
     }
@@ -5078,7 +5084,7 @@ fn assert_request_decisions_shape(value: &Value) -> Result<(), FixtureError> {
         if decision.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "stageId" | "kind" | "decidedAt" | "reasonPresent" | "reason"
+                "stageId" | "kind" | "decidedAt" | "reasonPresent" | "actorReference" | "reason"
             )
         }) || decision
             .get("stageId")
@@ -5096,6 +5102,9 @@ fn assert_request_decisions_shape(value: &Value) -> Result<(), FixtureError> {
         {
             return Err(FixtureError::ResponseShapeRefused);
         }
+        if let Some(actor_reference) = decision.get("actorReference") {
+            assert_actor_reference(actor_reference)?;
+        }
         if let Some(reason) = decision.get("reason") {
             let reason = reason.as_str().ok_or(FixtureError::ResponseShapeRefused)?;
             if decision.get("reasonPresent") != Some(&json!(true))
@@ -5105,6 +5114,16 @@ fn assert_request_decisions_shape(value: &Value) -> Result<(), FixtureError> {
                 return Err(FixtureError::ResponseShapeRefused);
             }
         }
+    }
+    Ok(())
+}
+
+fn assert_actor_reference(value: &Value) -> Result<(), FixtureError> {
+    if value
+        .as_str()
+        .is_none_or(|actor_reference| actor_reference.is_empty() || actor_reference.len() > 512)
+    {
+        return Err(FixtureError::ResponseShapeRefused);
     }
     Ok(())
 }
@@ -6345,6 +6364,15 @@ mod tests {
     fn fixture_decisions_allow_redacted_presence_and_refuse_private_fields() {
         let mut decisions = json!([{"stageId":"review", "kind":"request_revision", "decidedAt":"2026-09-09T00:00:00Z", "reasonPresent":true}]);
         assert!(assert_request_decisions_shape(&decisions).is_ok());
+        decisions[0]["actorReference"] = json!("reviewer-reference");
+        assert!(assert_request_decisions_shape(&decisions).is_ok());
+        decisions[0]["actorReference"] = json!("x".repeat(512));
+        assert!(assert_request_decisions_shape(&decisions).is_ok());
+        for invalid in [Value::Null, json!(""), json!("x".repeat(513)), json!(false)] {
+            decisions[0]["actorReference"] = invalid;
+            assert!(assert_request_decisions_shape(&decisions).is_err());
+        }
+        decisions[0]["actorReference"] = json!("reviewer-reference");
         decisions[0]["reason"] = json!(" สาเหตุ ");
         assert!(assert_request_decisions_shape(&decisions).is_ok());
         decisions[0]["actor"] = json!("private");
@@ -6382,6 +6410,21 @@ mod tests {
         });
 
         assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
+        request["submitterReference"] = json!("submitter-reference");
+        request["applierReference"] = json!("applier-reference");
+        assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
+        for key in ["submitterReference", "applierReference"] {
+            request[key] = json!("x".repeat(512));
+            assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
+            for invalid in [Value::Null, json!(""), json!("x".repeat(513)), json!(false)] {
+                request[key] = invalid;
+                assert_eq!(
+                    assert_request_record_metadata_shape(&request),
+                    Err(FixtureError::ResponseShapeRefused)
+                );
+            }
+            request[key] = json!(format!("{key}-value"));
+        }
         request["review"]["pendingStage"] = Value::Null;
         request["review"]["stageEnteredAt"] = Value::Null;
         request["reviewTiming"]["completedAt"] = json!("2026-09-11T12:05:00Z");
