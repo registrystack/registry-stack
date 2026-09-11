@@ -140,6 +140,8 @@ async fn transactional_checkpoint_invariants_hold_in_postgresql() {
     let store = PostgresStore::connect_migration(&config, &secrets).expect("migration pool");
     store.migrate().await.expect("migrate");
     let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("runtime pool");
+    synchronization_claims_never_attempted_subjects_before_expired_failures(&client, &runtime)
+        .await;
     item_identity_does_not_require_a_subject_ledger_parent(&client, &runtime).await;
 
     let admin = actor("admin", CaseworkRole::Administrator, "administrator");
@@ -688,6 +690,71 @@ async fn transactional_checkpoint_invariants_hold_in_postgresql() {
             .count(),
         history.len()
     );
+}
+
+async fn synchronization_claims_never_attempted_subjects_before_expired_failures(
+    client: &tokio_postgres::Client,
+    store: &PostgresStore,
+) {
+    client
+        .batch_execute(
+            "INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT 'fair-global','request',format('a-%s',lpad(value::text,3,'0')),'generation',1,0,true,true,now()-interval '1 second' FROM generate_series(0,99) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) VALUES('fair-global','request','y-oldest-retry','generation',1,0,true,true,now()-interval '1 hour'),('fair-global','request','z-never-attempted','generation',1,0,true,true,NULL),('fair-global','request','zz-live-lease','generation',1,0,true,true,now()+interval '1 hour')",
+        )
+        .await
+        .expect("seed globally ordered expired failures and untouched subject");
+    let global = store
+        .claim_sync_batch(100, 30)
+        .await
+        .expect("claim fair global synchronization batch");
+    assert_eq!(global.len(), 100);
+    assert!(
+        global
+            .iter()
+            .any(|subject| subject.id == "z-never-attempted"),
+        "an expired lexical prefix must not starve untouched global work"
+    );
+    assert!(
+        global.iter().any(|subject| subject.id == "y-oldest-retry"),
+        "the oldest expired global attempt must receive a fair retry"
+    );
+    assert!(!global.iter().any(|subject| subject.id == "zz-live-lease"));
+    client
+        .execute(
+            "DELETE FROM casework_subjects WHERE source_id='fair-global'",
+            &[],
+        )
+        .await
+        .expect("remove global fairness fixture");
+
+    client
+        .batch_execute(
+            "INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) SELECT 'fair-source','request',format('a-%s',lpad(value::text,3,'0')),'generation',1,0,true,true,now()-interval '1 second' FROM generate_series(0,99) AS value; INSERT INTO casework_subjects(source_id,subject_kind,subject_id,binding_generation,wanted_revision,applied_revision,active,sync_pending,sync_lease_until) VALUES('fair-source','request','y-oldest-retry','generation',1,0,true,true,now()-interval '1 hour'),('fair-source','request','z-never-attempted','generation',1,0,true,true,NULL),('fair-source','request','zz-live-lease','generation',1,0,true,true,now()+interval '1 hour')",
+        )
+        .await
+        .expect("seed source-scoped expired failures and untouched subject");
+    let source = store
+        .claim_source_sync_batch("fair-source", "generation", 100, 30)
+        .await
+        .expect("claim fair source synchronization batch");
+    assert_eq!(source.len(), 100);
+    assert!(
+        source
+            .iter()
+            .any(|subject| subject.id == "z-never-attempted"),
+        "an expired lexical prefix must not starve untouched source work"
+    );
+    assert!(
+        source.iter().any(|subject| subject.id == "y-oldest-retry"),
+        "the oldest expired source attempt must receive a fair retry"
+    );
+    assert!(!source.iter().any(|subject| subject.id == "zz-live-lease"));
+    client
+        .execute(
+            "DELETE FROM casework_subjects WHERE source_id='fair-source'",
+            &[],
+        )
+        .await
+        .expect("remove source fairness fixture");
 }
 
 async fn item_identity_does_not_require_a_subject_ledger_parent(

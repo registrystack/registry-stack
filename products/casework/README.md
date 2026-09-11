@@ -370,6 +370,16 @@ is an equality check, not an ordering value or an action precondition. Periodic
 readback repairs missed events while preserving claims, first-observation
 timing, and unresolved action recovery.
 
+Pending readback processes never-attempted subjects first, then retries in
+oldest-attempt order. Concealed or unavailable subjects keep their retry lease
+without repeatedly taking priority over later work. Active items must
+match the current source revision, proposal version, integrity, and binding
+generation before offering coordination or decision actions. When that binding
+moves, a caller-owned live attempt remains visible for recovery with no actions.
+Completed, cancelled, and superseded occurrences remain readable under current
+source disclosure within the same source generation, with their retained
+binding and no actions.
+
 Source-backed retention is an explicit operator decision for one exact source
 request. `caseworkctl retention erase PROJECT [--operator FILE] --source-id ID
 --request-kind KIND --request-id ID` previews a count-only report under

@@ -431,6 +431,25 @@ impl SourceAdapter for MockSource {
             view.binding.generation = "generation-2".into();
             return Ok(view);
         }
+        if let Some(component) = credential.strip_prefix("moved-binding-") {
+            let mut view = Self::visible(subject, "moved-binding");
+            match component {
+                "revision" => view.binding.source_revision = "2".into(),
+                "version" => view.binding.version = "2".into(),
+                "integrity" => view.binding.integrity = Some("sha256:moved".into()),
+                _ => return Err(SourceAdapterError::Invalid),
+            }
+            view.permitted_operations
+                .push(OperationName::parse("approve").expect("approve operation"));
+            return Ok(view);
+        }
+        if credential == "advanced-terminal-binding" {
+            let mut view = Self::visible(subject, "advanced-terminal");
+            view.binding.source_revision = "3".into();
+            view.binding.version = "2".into();
+            view.binding.integrity = Some("sha256:advanced".into());
+            return Ok(view);
+        }
         if let Some((id, verified)) = &self.attachment_verification {
             if id == &subject.id {
                 let mut view = Self::visible(subject, "attachment");
@@ -819,6 +838,7 @@ async fn service_visibility_boundaries() {
     definitive_refusal_during_recovery_releases_the_attempt_fence().await;
     inbox_views_filter_before_candidate_pagination().await;
     source_claim_requires_a_current_permitted_operation().await;
+    full_source_binding_movement_fences_stale_items_and_claims().await;
     supervisor_release_and_holder_timing_obey_current_authority().await;
     exact_subject_selector_is_complete_and_cursor_bound().await;
 }
@@ -1262,6 +1282,61 @@ async fn source_claim_requires_a_current_permitted_operation() {
         )
         .await
         .expect("an existing holder can still release work");
+}
+
+async fn full_source_binding_movement_fences_stale_items_and_claims() {
+    let subject_id = Uuid::from_u128(35);
+    let fixture = fixture(
+        [(subject_id, CallerRead::Visible("current reader"))],
+        policy(10, 1_000),
+    )
+    .await;
+    add_item(&fixture.service, subject_id, None).await;
+    let item = fixture
+        .service
+        .store()
+        .inbox_candidates(&fixture.staff, 1, None, None)
+        .await
+        .expect("local candidate")
+        .items
+        .pop()
+        .expect("source item");
+
+    for (token, idempotency_key) in [
+        ("moved-binding-revision", "stale-revision-claim"),
+        ("moved-binding-version", "stale-version-claim"),
+        ("moved-binding-integrity", "stale-integrity-claim"),
+    ] {
+        assert!(matches!(
+            fixture
+                .service
+                .caller_item(&fixture.staff, item.item_id, "reader", token)
+                .await,
+            Err(ServiceError::BindingMoved)
+        ));
+        assert!(matches!(
+            fixture
+                .service
+                .claim_source_item(
+                    &fixture.staff,
+                    item.item_id,
+                    item.revision,
+                    "reader",
+                    idempotency_key,
+                    token,
+                )
+                .await,
+            Err(ServiceError::BindingMoved)
+        ));
+    }
+    assert!(fixture
+        .service
+        .store()
+        .item(item.item_id)
+        .await
+        .expect("stale local item remains")
+        .holder
+        .is_none());
 }
 
 async fn exact_subject_selector_is_complete_and_cursor_bound() {
@@ -1840,6 +1915,20 @@ async fn caller_owned_live_attempt_survives_a_fresh_session_without_cross_actor_
     assert_eq!(moved_generation.live_attempt, Some(uncertain.clone()));
     assert!(moved_generation.actions.is_empty());
 
+    for token in [
+        "moved-binding-revision",
+        "moved-binding-version",
+        "moved-binding-integrity",
+    ] {
+        let (moved_binding, _) = fixture
+            .service
+            .caller_item(&fresh_session_actor, claimed.item_id, "reader", token)
+            .await
+            .unwrap();
+        assert_eq!(moved_binding.live_attempt, Some(uncertain.clone()));
+        assert!(moved_binding.actions.is_empty());
+    }
+
     let (other_actor_view, _) = fixture
         .service
         .caller_item(
@@ -1962,7 +2051,7 @@ async fn inbox_views_filter_before_candidate_pagination() {
         .inbox_for_view(
             &fixture.staff,
             "reader",
-            "token",
+            "advanced-terminal-binding",
             registry_casework_core::InboxView::CompletedByMe,
             1,
             None,
@@ -1973,6 +2062,25 @@ async fn inbox_views_filter_before_candidate_pagination() {
         .unwrap();
     assert_eq!(completed.items.len(), 1);
     assert_eq!(completed.items[0].item_id, claimed.item_id);
+    assert_eq!(completed.items[0].binding.source_revision, "2");
+    assert!(completed.items[0].actions.is_empty());
+
+    assert!(matches!(
+        fixture
+            .service
+            .inbox_for_view(
+                &fixture.staff,
+                "reader",
+                "moved-generation-token",
+                registry_casework_core::InboxView::CompletedByMe,
+                1,
+                None,
+                None,
+                None,
+            )
+            .await,
+        Err(ServiceError::BindingMoved)
+    ));
 }
 
 #[tokio::test]

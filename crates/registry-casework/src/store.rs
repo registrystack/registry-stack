@@ -2363,7 +2363,9 @@ impl PostgresStore {
     ) -> Result<Vec<SubjectRef>, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE erased_at IS NULL AND sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY source_id,subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $1", &[&limit]).await?;
+        // Null leases are never-attempted or newly invalidated work. Once that
+        // work is claimed, the oldest expired attempt gets the next fair retry.
+        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE erased_at IS NULL AND sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY sync_lease_until NULLS FIRST,source_id,subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $1", &[&limit]).await?;
         let subjects: Vec<_> = rows
             .into_iter()
             .map(|row| SubjectRef {
@@ -2388,7 +2390,8 @@ impl PostgresStore {
     ) -> Result<Vec<SubjectRef>, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2 AND erased_at IS NULL AND sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $3", &[&source_id,&generation,&limit]).await?;
+        // Match the global worker's fairness within this source generation.
+        let rows=transaction.query("SELECT source_id,subject_kind,subject_id FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2 AND erased_at IS NULL AND sync_pending=true AND (sync_lease_until IS NULL OR sync_lease_until<now()) ORDER BY sync_lease_until NULLS FIRST,subject_kind,subject_id FOR UPDATE SKIP LOCKED LIMIT $3", &[&source_id,&generation,&limit]).await?;
         let subjects: Vec<_> = rows
             .into_iter()
             .map(|row| SubjectRef {
