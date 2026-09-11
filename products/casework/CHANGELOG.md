@@ -66,8 +66,12 @@
 
 This checkpoint does not include bulk decisions, consultation, automatic
 outcomes, or outbound delivery. Clock policies compute due reminder and
-escalation occurrences and expose them for review; an Administrator applies a
-reviewed recompute, and the service neither acts nor notifies on its own.
+escalation occurrences. When one falls due, the runtime confirms the item with a
+fresh source read, then records the reminder in the item's history or, for a
+due step, releases the holder and moves the item to the queue the step names,
+under the `system:clock` actor. A clock decides no outcome, changes nothing at
+the source, and sends nothing outward; an Administrator applies a reviewed
+recompute after a policy change.
 
 These changes are unreleased. The workspace version alone does not identify a
 published client package containing Casework; the demo builds a matching local
