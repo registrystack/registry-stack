@@ -280,14 +280,18 @@ async fn worker_stop(mut stopped: mpsc::Receiver<&'static str>) {
 /// Resolve the audit journal's keying secret, naming the reference on refusal.
 ///
 /// The journal is keyed before the listener binds, so this refusal is the
-/// first line an operator sees on a mis-provisioned deployment. It carries the
-/// configured reference and the rule that broke, never the key bytes.
+/// first line an operator sees on a mis-provisioned deployment. It carries a
+/// valid configured reference and the rule that broke, never the key bytes.
 fn resolve_audit_secret(
     secrets: &SecretResolver,
     reference: &str,
 ) -> Result<registry_platform_config::ProtectedSecret, RuntimeError> {
     secrets.resolve(reference).map_err(|error| {
-        RuntimeError::AuditSecret(crate::describe_secret_failure(reference, &error))
+        RuntimeError::AuditSecret(crate::describe_secret_failure(
+            "audit.secretRef",
+            reference,
+            &error,
+        ))
     })
 }
 
@@ -480,18 +484,23 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_audit_secret_reference_names_the_reference_grammar() {
+    fn a_literal_audit_secret_is_redacted_while_the_field_and_grammar_are_named() {
         let root = tempfile::tempdir().expect("temporary secret root");
         let secrets = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
+        let literal_secret = "literal-audit-credential-canary";
 
-        let error = resolve_audit_secret(&secrets, "/etc/casework/audit.key")
-            .expect_err("a path is not a secret reference");
+        let error = resolve_audit_secret(&secrets, literal_secret)
+            .expect_err("a literal credential is not a secret reference");
 
         let message = error.to_string();
         assert!(
-            message.contains("/etc/casework/audit.key")
+            message.contains("audit.secretRef")
                 && message.contains("secret:env/NAME or secret:file/name"),
-            "the failure does not explain the reference grammar: {message}"
+            "the failure does not name the field and reference grammar: {message}"
+        );
+        assert!(
+            !message.contains(literal_secret),
+            "the failure renders the literal credential: {message}"
         );
     }
 

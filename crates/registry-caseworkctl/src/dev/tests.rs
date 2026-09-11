@@ -249,6 +249,80 @@ fn binding_accepts_directory_members_with_matching_roles() {
 }
 
 #[test]
+fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+
+    for (role, existing_id, second_id, membership_kind) in [
+        (CaseworkRole::Staff, "staff", "second-staff", "staff"),
+        (
+            CaseworkRole::Supervisor,
+            "supervisor",
+            "second-supervisor",
+            "supervisor",
+        ),
+    ] {
+        let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+        let profile = policy
+            .access_profiles
+            .iter_mut()
+            .find(|profile| profile.role == role)
+            .unwrap();
+        profile.principal_claim = "registry_principal".to_owned();
+        let mut second_profile = profile.clone();
+        second_profile.id = second_id.to_owned();
+        policy.access_profiles.push(second_profile);
+
+        let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+        let client = clients
+            .clients
+            .iter_mut()
+            .find(|client| client.id == existing_id)
+            .unwrap();
+        client
+            .claims
+            .insert("registry_principal".to_owned(), "shared-person".to_owned());
+        let mut second_client = client.clone();
+        second_client.id = second_id.to_owned();
+        second_client.access_profile = second_id.to_owned();
+        clients.clients.push(second_client);
+        match role {
+            CaseworkRole::Staff => clients.directory[0].staff.push(second_id.to_owned()),
+            CaseworkRole::Supervisor => clients.directory[0].supervisors.push(second_id.to_owned()),
+            _ => unreachable!(),
+        }
+
+        let refusal = format!("{:#}", config::bind(&clients, &policy).unwrap_err());
+        assert!(refusal.contains("decisions-team"), "{refusal}");
+        assert!(refusal.contains(membership_kind), "{refusal}");
+        assert!(refusal.contains(second_id), "{refusal}");
+        assert!(refusal.contains("unique principals"), "{refusal}");
+    }
+}
+
+#[test]
+fn binding_accepts_one_resolved_principal_in_each_membership_kind() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    for profile in &mut policy.access_profiles {
+        if matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor) {
+            profile.principal_claim = "registry_principal".to_owned();
+        }
+    }
+    let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    for client in &mut clients.clients {
+        if client.id == "staff" || client.id == "supervisor" {
+            client
+                .claims
+                .insert("registry_principal".to_owned(), "shared-person".to_owned());
+        }
+    }
+
+    config::bind(&clients, &policy).unwrap();
+}
+
+#[test]
 fn binding_refuses_directory_members_with_mismatched_roles() {
     let root = tempfile::tempdir().unwrap();
     let project = standalone(root.path());
@@ -618,6 +692,176 @@ fn a_completed_session_can_be_reclaimed_after_its_ports_are_reused() {
     assert!(service_ports_must_be_free(&Status::Starting));
     assert!(service_ports_must_be_free(&Status::Ready));
     assert!(service_ports_must_be_free(&Status::Stopping));
+}
+
+struct DockerInventory {
+    _root: tempfile::TempDir,
+    executable: PathBuf,
+    container: PathBuf,
+    volume: PathBuf,
+    fail_create: PathBuf,
+}
+
+impl DockerInventory {
+    fn new(state: &State) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("docker");
+        let container = root.path().join("container-active");
+        let volume = root.path().join("volume-active");
+        let fail_create = root.path().join("fail-create");
+        fs::write(
+            &executable,
+            br#"#!/bin/sh
+set -eu
+fixture=$(dirname "$0")
+if [ "$1" = "ps" ]; then
+    if [ -f "$fixture/container-active" ]; then printf 'container\n'; fi
+elif [ "$1" = "inspect" ]; then
+    cat "$fixture/container.json"
+elif [ "$1" = "volume" ] && [ "$2" = "create" ]; then
+    touch "$fixture/volume-active"
+    cat "$fixture/volume-name"
+elif [ "$1" = "volume" ] && [ "$2" = "ls" ]; then
+    if [ -f "$fixture/volume-active" ]; then cat "$fixture/volume-name"; fi
+elif [ "$1" = "volume" ] && [ "$2" = "inspect" ]; then
+    cat "$fixture/volume.json"
+elif [ "$1" = "create" ]; then
+    if [ -f "$fixture/fail-create" ]; then
+        printf 'injected container creation failure\n' >&2
+        exit 42
+    fi
+    touch "$fixture/container-active"
+    cat "$fixture/container-id"
+else
+    printf 'unexpected fake Docker command: %s\n' "$*" >&2
+    exit 43
+fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let id = "a".repeat(64);
+        fs::write(root.path().join("container-id"), format!("{id}\n")).unwrap();
+        fs::write(
+            root.path().join("container.json"),
+            serde_json::to_vec(&json!([{
+                "Id": id,
+                "Name": format!("/{}", state.container_name()),
+                "Config": {
+                    "Labels": { (LABEL): state.owner.clone() },
+                    "Image": IMAGE,
+                },
+                "State": { "Running": false },
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("volume-name"),
+            format!("{}\n", state.volume_name()),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("volume.json"),
+            serde_json::to_vec(&json!([{
+                "Name": state.volume_name(),
+                "Labels": { (LABEL): state.owner.clone() },
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        Self {
+            _root: root,
+            executable,
+            container,
+            volume,
+            fail_create,
+        }
+    }
+
+    fn deactivate(&self) {
+        for path in [&self.container, &self.volume] {
+            if path.exists() {
+                fs::remove_file(path).unwrap();
+            }
+        }
+    }
+}
+
+fn persisted_session(project: &Path) -> State {
+    let state = session(project);
+    private::directory(&project.join(".casework")).unwrap();
+    private::directory(&state.root()).unwrap();
+    private::directory(&state.root().join("logs")).unwrap();
+    state.save().unwrap();
+    state
+}
+
+#[test]
+fn config_change_keeps_the_owner_after_container_creation_fails() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = standalone(workspace.path());
+    let mut state = persisted_session(&project);
+    let docker = DockerInventory::new(&state);
+    fs::write(&docker.fail_create, b"").unwrap();
+
+    let refusal = format!(
+        "{:#}",
+        database(&docker.executable, &mut state, &AtomicBool::new(false)).unwrap_err()
+    );
+    assert!(refusal.contains("create-database failed"), "{refusal}");
+    let retained = read_state(&state.root()).unwrap();
+    assert_eq!(retained.owner, state.owner);
+    assert!(retained.container_id.is_none());
+    assert!(docker.volume.exists());
+    assert!(!docker.container.exists());
+
+    let refusal = format!(
+        "{:#}",
+        discard_changed_state(&state.root(), &retained, Some(&docker.executable)).unwrap_err()
+    );
+    assert!(
+        refusal.contains("still owns database resources"),
+        "{refusal}"
+    );
+    assert_eq!(read_state(&state.root()).unwrap().owner, retained.owner);
+
+    docker.deactivate();
+    discard_changed_state(&state.root(), &retained, Some(&docker.executable)).unwrap();
+    assert!(!state.root().exists());
+}
+
+#[test]
+fn config_change_keeps_the_owner_after_created_container_cannot_be_saved() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = standalone(workspace.path());
+    let mut state = persisted_session(&project);
+    let docker = DockerInventory::new(&state);
+    fs::set_permissions(state.root(), fs::Permissions::from_mode(0o500)).unwrap();
+
+    let result = database(&docker.executable, &mut state, &AtomicBool::new(false));
+    fs::set_permissions(state.root(), fs::Permissions::from_mode(0o700)).unwrap();
+    let refusal = format!("{:#}", result.unwrap_err());
+    assert!(refusal.contains("cannot be created"), "{refusal}");
+    let retained = read_state(&state.root()).unwrap();
+    assert_eq!(retained.owner, state.owner);
+    assert!(retained.container_id.is_none());
+    assert!(docker.volume.exists());
+    assert!(docker.container.exists());
+
+    let refusal = format!(
+        "{:#}",
+        discard_changed_state(&state.root(), &retained, Some(&docker.executable)).unwrap_err()
+    );
+    assert!(
+        refusal.contains("still owns database resources"),
+        "{refusal}"
+    );
+    assert_eq!(read_state(&state.root()).unwrap().owner, retained.owner);
+
+    docker.deactivate();
+    discard_changed_state(&state.root(), &retained, Some(&docker.executable)).unwrap();
+    assert!(!state.root().exists());
 }
 
 #[test]

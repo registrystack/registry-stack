@@ -17,12 +17,14 @@ use thiserror::Error;
 /// Explain one refused secret reference without disclosing what it protects.
 ///
 /// A startup refusal reaches an operator as a single line, and the resolver
-/// reports only which rule broke, never which reference broke it. The
-/// reference is operator-authored configuration text, so naming it is what
-/// makes the line actionable when several references are in play. The reason
-/// restates the rule the resolver enforces; the resolved bytes and the opened
-/// path never appear.
-pub(crate) fn describe_secret_failure(reference: &str, error: &SecretError) -> String {
+/// reports only which rule broke. A valid reference is safe and useful to name,
+/// but invalid operator-authored text might itself be a literal credential, so
+/// only its field is named. The resolved bytes and opened path never appear.
+pub(crate) fn describe_secret_failure(
+    field: &'static str,
+    reference: &str,
+    error: &SecretError,
+) -> String {
     let reason = match error {
         SecretError::InvalidReference => {
             "it is not an exact secret:env/NAME or secret:file/name reference".to_owned()
@@ -45,7 +47,11 @@ pub(crate) fn describe_secret_failure(reference: &str, error: &SecretError) -> S
              without NUL bytes"
         ),
     };
-    format!("the secret reference {reference} could not be resolved: {reason}")
+    if error == &SecretError::InvalidReference {
+        format!("the secret reference configured at {field} could not be resolved: {reason}")
+    } else {
+        format!("the secret reference {reference} could not be resolved: {reason}")
+    }
 }
 
 pub const POLICY_PACKAGE_API_VERSION: &str =
@@ -529,6 +535,7 @@ impl RuntimeConfig {
             OidcJwksSource::Static { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
                     RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
+                        "authentication.oidc.jwksSource.documentRef",
                         document_ref,
                         &error,
                     ))
@@ -768,7 +775,7 @@ sources:
         let operator = root.path().join("operator.yaml");
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
 
-        let config = RuntimeConfig::load(&operator).expect("static JWKS source is accepted");
+        let mut config = RuntimeConfig::load(&operator).expect("static JWKS source is accepted");
         assert!(matches!(
             &config.authentication.oidc.jwks_source,
             OidcJwksSource::Static { document_ref } if document_ref == "secret:file/jwks.json"
@@ -788,6 +795,28 @@ sources:
         assert!(
             message.contains("secret:file/jwks.json") && message.contains("0400 or 0600"),
             "the failure does not name the reference and the mode rule: {message}"
+        );
+
+        let literal_secret = "literal-jwks-credential-canary";
+        let OidcJwksSource::Static { document_ref } = &mut config.authentication.oidc.jwks_source
+        else {
+            panic!("configured static JWKS source changed kind")
+        };
+        *document_ref = literal_secret.to_owned();
+        let message = config
+            .oidc_verifier(&secrets)
+            .await
+            .map(|_| ())
+            .expect_err("a literal credential is not a secret reference")
+            .to_string();
+        assert!(
+            message.contains("authentication.oidc.jwksSource.documentRef")
+                && message.contains("secret:env/NAME or secret:file/name"),
+            "the failure does not name the field and reference grammar: {message}"
+        );
+        assert!(
+            !message.contains(literal_secret),
+            "the failure renders the literal credential: {message}"
         );
     }
 

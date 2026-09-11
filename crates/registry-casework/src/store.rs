@@ -102,23 +102,34 @@ impl PostgresStore {
         config: &DatabaseConfig,
         secrets: &SecretResolver,
     ) -> Result<Self, StoreError> {
-        Self::connect_reference(config, secrets, &config.runtime_url_ref)
+        Self::connect_reference(
+            config,
+            secrets,
+            "database.runtimeUrlRef",
+            &config.runtime_url_ref,
+        )
     }
 
     pub fn connect_migration(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
     ) -> Result<Self, StoreError> {
-        Self::connect_reference(config, secrets, &config.migration_url_ref)
+        Self::connect_reference(
+            config,
+            secrets,
+            "database.migrationUrlRef",
+            &config.migration_url_ref,
+        )
     }
 
     fn connect_reference(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        field: &'static str,
         reference: &str,
     ) -> Result<Self, StoreError> {
         let protected = secrets.resolve(reference).map_err(|error| {
-            StoreError::SecretConfiguration(describe_secret_failure(reference, &error))
+            StoreError::SecretConfiguration(describe_secret_failure(field, reference, &error))
         })?;
         let url = std::str::from_utf8(protected.expose_secret())
             .map_err(|_| StoreError::Configuration)?;
@@ -2855,7 +2866,11 @@ fn tls_connector(
     }
     if let Some(reference) = &config.trusted_root_certificate_ref {
         let certificate = secrets.resolve(reference).map_err(|error| {
-            StoreError::SecretConfiguration(describe_secret_failure(reference, &error))
+            StoreError::SecretConfiguration(describe_secret_failure(
+                "database.trustedRootCertificateRef",
+                reference,
+                &error,
+            ))
         })?;
         let mut roots = rustls::RootCertStore::empty();
         use rustls::pki_types::pem::PemObject as _;

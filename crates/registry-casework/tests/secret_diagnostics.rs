@@ -3,9 +3,9 @@
 //! A startup secret failure names the reference and the rule it broke.
 //!
 //! `migrate` and the audit journal resolve operator secrets before anything
-//! else runs, so their failures are the first thing an operator reads. Each
-//! assertion below names one flattened path and proves the message carries the
-//! failing reference and its reason without carrying the resolved bytes.
+//! else runs, so their failures are the first thing an operator reads. The
+//! assertions prove valid references remain actionable while invalid configured
+//! text is replaced by its flattened field path and never retained.
 
 use registry_casework::{DatabaseConfig, PostgresStore};
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -38,6 +38,27 @@ fn a_missing_database_reference_names_the_reference_and_says_it_is_missing() {
     assert!(
         message.contains("no readable"),
         "the failure does not say the secret is missing: {message}"
+    );
+}
+
+#[test]
+fn a_literal_database_credential_is_never_rendered_in_the_diagnostic() {
+    let root = tempfile::tempdir().expect("temporary secret root");
+    let secrets = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
+    let literal_credential = "postgresql://casework:literal-password-canary@localhost/casework";
+
+    let error = PostgresStore::connect_migration(&database(literal_credential), &secrets)
+        .expect_err("a literal credential is not a secret reference");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("database.migrationUrlRef")
+            && message.contains("secret:env/NAME or secret:file/name"),
+        "the failure does not name the field and reference grammar: {message}"
+    );
+    assert!(
+        !message.contains(literal_credential) && !message.contains("literal-password-canary"),
+        "the failure renders the literal credential: {message}"
     );
 }
 

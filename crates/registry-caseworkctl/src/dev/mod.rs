@@ -496,11 +496,8 @@ fn start(args: StartArgs) -> Result<Value> {
                 || args.mint_port.is_some_and(|p| p != state.mint_port)
                 || args.database_port.is_some_and(|p| p != state.database_port) =>
         {
-            if state.container_id.is_some() {
-                bail!("the authored project, clients or ports differ from the retained development session, which still holds records; run caseworkctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records");
-            }
             let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
-            fs::remove_dir_all(&root).context("cannot replace the owned development session")?;
+            discard_changed_state(&root, &state, args.docker_bin.as_deref())?;
             previous = Some(state);
             None
         }
@@ -753,6 +750,24 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
         reclaim(&docker, &mut state)?;
     }
     Ok(state.report())
+}
+
+/// Discard a never-populated session after its inputs change. A failed Docker
+/// create can leave the labeled volume, and a successful create followed by a
+/// failed state save can leave both resources while the retained container ID
+/// is still absent. Keep the only journal holding their owner until Docker
+/// proves that neither exact owner-derived resource exists.
+fn discard_changed_state(root: &Path, state: &State, docker_bin: Option<&Path>) -> Result<()> {
+    if state.container_id.is_some() {
+        bail!("the authored project, clients or ports differ from the retained development session, which still holds records; run caseworkctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records");
+    }
+    let docker = executable("docker", docker_bin)?;
+    let container = inspect(&docker, state)?;
+    let volume = inspect_volume_with_termination(&docker, state, None)?;
+    if container.is_some() || volume.is_some() {
+        bail!("the authored project, clients or ports differ from the retained development session, which still owns database resources; run caseworkctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the resources");
+    }
+    fs::remove_dir_all(root).context("cannot replace the owned development session")
 }
 
 fn service_ports_must_be_free(status: &Status) -> bool {

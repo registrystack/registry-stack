@@ -245,6 +245,7 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
                 team.queue
             );
         }
+        let mut staff_principals = BTreeSet::new();
         for member in &team.staff {
             let entry = bound
                 .iter()
@@ -262,7 +263,14 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
                     team.team
                 );
             }
+            if !staff_principals.insert(entry.principal.as_str()) {
+                bail!(
+                    "local directory team {} staff clients must resolve to unique principals; client {member} repeats a resolved principal",
+                    team.team
+                );
+            }
         }
+        let mut supervisor_principals = BTreeSet::new();
         for member in &team.supervisors {
             let entry = bound
                 .iter()
@@ -277,6 +285,12 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
             if entry.role != CaseworkRole::Supervisor {
                 bail!(
                     "local directory team {} names client {member} as a supervisor, but that client does not bind a Supervisor profile",
+                    team.team
+                );
+            }
+            if !supervisor_principals.insert(entry.principal.as_str()) {
+                bail!(
+                    "local directory team {} supervisor clients must resolve to unique principals; client {member} repeats a resolved principal",
                     team.team
                 );
             }
