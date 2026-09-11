@@ -3649,6 +3649,7 @@ dependencies = [
  "serde_norway",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

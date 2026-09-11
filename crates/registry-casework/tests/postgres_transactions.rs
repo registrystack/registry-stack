@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 use std::env;
 use std::sync::Arc;
 
-use registry_casework::{DatabaseConfig, PostgresStore, StoreError};
+use registry_casework::{AttemptSettlementError, DatabaseConfig, PostgresStore, StoreError};
 use registry_casework_core::{
-    ActorContext, AuthoritativeObservation, BootstrapDirectoryRequest, CaseworkRole,
+    ActorContext, AttemptSettlement, AttemptSettlementOutcome, AttemptState,
+    AuthoritativeObservation, BootstrapDirectoryRequest, CaseworkRole, HistoryKind,
     IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PreparedSourceAttempt,
     RecoveryEvidence, SourceBinding, SourceReceipt, SubjectRef, TransitionHint,
 };
@@ -778,4 +779,530 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
         index,
         "the second migration leaves the occurrence identity index in place"
     );
+}
+
+const SETTLEMENT_REASON: &str =
+    "The source refused the saved evidence version; the registrar confirmed no change was made.";
+const SETTLEMENT_DECIDED_BY: &str = "Registrar duty officer, ticket OPS-4411";
+
+/// One claimed item whose only attempt is left live by its executor, the way
+/// a saved-evidence version the binary refuses leaves it.
+struct SettlementFixture {
+    store: PostgresStore,
+    client: tokio_postgres::Client,
+    holder: ActorContext,
+    item_id: uuid::Uuid,
+    attempt_id: uuid::Uuid,
+    binding_reference: String,
+}
+
+async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFixture {
+    let (store, client, _schema) = isolated_schema(prefix).await;
+    store.migrate().await.expect("migrate");
+    let admin = actor("admin", CaseworkRole::Administrator, "administrator");
+    let holder = actor("officer-1", CaseworkRole::Staff, "staff");
+    let supervisor = actor("supervisor", CaseworkRole::Supervisor, "supervisor");
+    store
+        .bootstrap_directory(
+            &admin,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team-a".to_owned(),
+                staff: vec![holder.principal.clone()],
+                supervisors: vec![supervisor.principal.clone()],
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap-settlement",
+        )
+        .await
+        .expect("authorized bootstrap");
+    let opened = observation(
+        1,
+        "proposal-1",
+        OccurrenceKind::Review,
+        OccurrenceState::Open,
+    );
+    store
+        .ingest_transition(
+            "binding-a",
+            &TransitionHint {
+                subject: opened.subject.clone(),
+                deduplication_key: "settlement-event-1".to_owned(),
+                ordered_revision: 1,
+            },
+        )
+        .await
+        .expect("source hint records the subject");
+    let item = store
+        .apply_observation(&opened, "default", Some(172_800))
+        .await
+        .expect("initial observation")
+        .expect("item opened");
+    let claimed = store
+        .claim(&holder, item.item_id, item.revision, "claim-settlement")
+        .await
+        .expect("holder claims the item");
+    let prepared = PreparedSourceAttempt {
+        source_binding: claimed.binding.clone(),
+        recovery_evidence: RecoveryEvidence::new(b"inert recovery capsule".to_vec())
+            .expect("bounded evidence"),
+    };
+    let (attempt, execution_token) = store
+        .reserve_attempt_for_execution(
+            &holder,
+            claimed.item_id,
+            claimed.revision,
+            "reviewer",
+            OperationName::parse("approve").expect("approve operation"),
+            None,
+            &[],
+            "decision-settlement",
+            "sha256:request-settlement",
+            &prepared,
+        )
+        .await
+        .expect("attempt reserved before egress");
+    if mark_uncertain {
+        store
+            .mark_attempt_uncertain(&holder, attempt.attempt_id, execution_token)
+            .await
+            .expect("the executor leaves the attempt uncertain");
+    }
+    SettlementFixture {
+        store,
+        client,
+        holder,
+        item_id: claimed.item_id,
+        attempt_id: attempt.attempt_id,
+        binding_reference: claimed.binding_reference,
+    }
+}
+
+impl SettlementFixture {
+    fn settlement(&self, outcome: AttemptSettlementOutcome) -> AttemptSettlement {
+        AttemptSettlement {
+            attempt_id: self.attempt_id,
+            outcome,
+            reason: SETTLEMENT_REASON.to_owned(),
+            decided_by: SETTLEMENT_DECIDED_BY.to_owned(),
+        }
+    }
+
+    /// The executor's lease has lapsed. Set on the database clock, the clock
+    /// the settlement reads, so host and container clock skew cannot flake it.
+    async fn lapse_execution_lease(&self) {
+        self.client
+            .execute(
+                "UPDATE casework_attempts SET execution_lease_until=now()-interval '1 second' WHERE attempt_id=$1",
+                &[&self.attempt_id],
+            )
+            .await
+            .expect("lapse the execution lease");
+    }
+
+    /// Every row a settlement may write, so a refusal or a preview can be
+    /// shown to have written nothing.
+    async fn snapshot(&self) -> serde_json::Value {
+        self.client
+            .query_one(
+                "SELECT jsonb_build_object('history',(SELECT count(*) FROM casework_history),'events',(SELECT count(*) FROM casework_events),'audit',(SELECT count(*) FROM casework_audit_outbox),'attempt',(SELECT to_jsonb(a) FROM casework_attempts a WHERE attempt_id=$1),'item',(SELECT to_jsonb(i) FROM casework_items i WHERE item_id=$2),'subject',(SELECT to_jsonb(s) FROM casework_subjects s WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'))",
+                &[&self.attempt_id, &self.item_id],
+            )
+            .await
+            .expect("settlement snapshot")
+            .get(0)
+    }
+
+    async fn attempt_row(&self) -> (String, Option<serde_json::Value>) {
+        let row = self
+            .client
+            .query_one(
+                "SELECT state,receipt FROM casework_attempts WHERE attempt_id=$1",
+                &[&self.attempt_id],
+            )
+            .await
+            .expect("attempt row");
+        (row.get(0), row.get(1))
+    }
+
+    /// The single settlement event, checked against the exact recorded detail.
+    async fn assert_settlement_recorded(&self, outcome: &str, item_revision: i64) {
+        let history = self
+            .store
+            .history(&self.holder, self.item_id, 100)
+            .await
+            .expect("history");
+        let settled: Vec<_> = history
+            .iter()
+            .filter(|event| event.kind == HistoryKind::AttemptSettled)
+            .collect();
+        assert_eq!(settled.len(), 1, "one settlement event");
+        let settled = settled[0];
+        assert_eq!(settled.actor, None, "an operator settlement has no actor");
+        assert_eq!(settled.item_revision, item_revision);
+        assert_eq!(
+            settled.detail,
+            serde_json::json!({
+                "attemptId": self.attempt_id,
+                "bindingReference": self.binding_reference,
+                "operation": "approve",
+                "outcome": outcome,
+                "reason": SETTLEMENT_REASON,
+                "decidedBy": SETTLEMENT_DECIDED_BY,
+            })
+        );
+        let durable = self
+            .client
+            .query_one(
+                "SELECT e.event_kind,e.detail,a.audit_record FROM casework_events e JOIN casework_audit_outbox a USING(event_id) WHERE e.event_id=$1",
+                &[&settled.event_id],
+            )
+            .await
+            .expect("the settlement is a durable event with an audit record");
+        assert_eq!(durable.get::<_, String>(0), "attempt_settled");
+        assert_eq!(durable.get::<_, serde_json::Value>(1), settled.detail);
+        let audit: serde_json::Value = durable.get(2);
+        assert_eq!(audit["event"], "casework.attempt_settled");
+        assert_eq!(audit["itemRevision"], item_revision);
+        assert!(audit["actor"].is_null());
+    }
+}
+
+#[tokio::test]
+async fn a_not_applied_settlement_refuses_the_attempt_and_returns_the_item_to_its_holder() {
+    let fixture = settlement_fixture("settle_not_applied", true).await;
+    let before = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("wedged item");
+    assert_eq!(before.state, OccurrenceState::Synchronizing);
+
+    let report = fixture
+        .store
+        .settle_attempt(&fixture.settlement(AttemptSettlementOutcome::NotApplied))
+        .await
+        .expect("an uncertain attempt with a lapsed lease settles");
+    assert!(report.applied);
+    assert_eq!(report.attempt_id, fixture.attempt_id);
+    assert_eq!(report.item_id, fixture.item_id);
+    assert_eq!(report.attempt_state, AttemptState::Refused);
+    assert_eq!(report.item_state, OccurrenceState::Claimed);
+
+    assert_eq!(fixture.attempt_row().await, ("refused".to_owned(), None));
+    let after = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("settled item");
+    assert_eq!(after.state, OccurrenceState::Claimed);
+    assert_eq!(after.holder, Some(fixture.holder.principal.clone()));
+    assert_eq!(after.revision, before.revision + 1);
+    fixture
+        .assert_settlement_recorded("not_applied", after.revision)
+        .await;
+
+    let prepared = PreparedSourceAttempt {
+        source_binding: after.binding.clone(),
+        recovery_evidence: RecoveryEvidence::new(b"inert recovery capsule".to_vec())
+            .expect("bounded evidence"),
+    };
+    fixture
+        .store
+        .reserve_attempt_for_execution(
+            &fixture.holder,
+            after.item_id,
+            after.revision,
+            "reviewer",
+            OperationName::parse("approve").expect("approve operation"),
+            None,
+            &[],
+            "decision-after-settlement",
+            "sha256:request-after-settlement",
+            &prepared,
+        )
+        .await
+        .expect("the settled item accepts the holder's next action");
+}
+
+#[tokio::test]
+async fn an_applied_settlement_completes_the_attempt_without_a_receipt_and_awaits_the_source() {
+    let fixture = settlement_fixture("settle_applied", true).await;
+    let before = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("wedged item");
+
+    let report = fixture
+        .store
+        .settle_attempt(&fixture.settlement(AttemptSettlementOutcome::Applied))
+        .await
+        .expect("an uncertain attempt with a lapsed lease settles");
+    assert!(report.applied);
+    assert_eq!(report.attempt_state, AttemptState::Completed);
+    assert_eq!(report.item_state, OccurrenceState::Synchronizing);
+
+    assert_eq!(fixture.attempt_row().await, ("completed".to_owned(), None));
+    let after = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("settled item");
+    assert_eq!(after.state, OccurrenceState::Synchronizing);
+    assert_eq!(after.revision, before.revision + 1);
+    let terminal = fixture
+        .store
+        .terminal_attempt_by_id(&fixture.holder, fixture.attempt_id)
+        .await
+        .expect("terminal lookup by attempt id")
+        .expect("the settled attempt is terminal");
+    assert_eq!(terminal.1.state, AttemptState::Completed);
+    assert_eq!(terminal.1.receipt, None);
+    let sync_pending: bool = fixture
+        .client
+        .query_one(
+            "SELECT sync_pending FROM casework_subjects WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'",
+            &[],
+        )
+        .await
+        .expect("subject synchronization state")
+        .get(0);
+    assert!(
+        sync_pending,
+        "the next source observation is requested to settle the item"
+    );
+    fixture
+        .assert_settlement_recorded("applied", after.revision)
+        .await;
+}
+
+#[tokio::test]
+async fn a_live_execution_lease_refuses_settlement_and_writes_nothing() {
+    let fixture = settlement_fixture("settle_live_lease", true).await;
+    fixture
+        .store
+        .acquire_recovery_execution(&fixture.holder, fixture.attempt_id)
+        .await
+        .expect("a recovery executor holds a live lease");
+    let before = fixture.snapshot().await;
+
+    for outcome in [
+        AttemptSettlementOutcome::Applied,
+        AttemptSettlementOutcome::NotApplied,
+    ] {
+        assert!(matches!(
+            fixture
+                .store
+                .preview_attempt_settlement(&fixture.settlement(outcome))
+                .await,
+            Err(AttemptSettlementError::LeaseLive)
+        ));
+        assert!(matches!(
+            fixture
+                .store
+                .settle_attempt(&fixture.settlement(outcome))
+                .await,
+            Err(AttemptSettlementError::LeaseLive)
+        ));
+    }
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
+async fn only_an_uncertain_attempt_can_be_settled() {
+    let pending = settlement_fixture("settle_pending", false).await;
+    pending.lapse_execution_lease().await;
+    let before = pending.snapshot().await;
+    assert!(matches!(
+        pending
+            .store
+            .settle_attempt(&pending.settlement(AttemptSettlementOutcome::NotApplied))
+            .await,
+        Err(AttemptSettlementError::NotUncertain("pending"))
+    ));
+    assert_eq!(pending.snapshot().await, before);
+
+    let settled = settlement_fixture("settle_terminal", true).await;
+    settled
+        .store
+        .settle_attempt(&settled.settlement(AttemptSettlementOutcome::Applied))
+        .await
+        .expect("first settlement");
+    let before = settled.snapshot().await;
+    for outcome in [
+        AttemptSettlementOutcome::Applied,
+        AttemptSettlementOutcome::NotApplied,
+    ] {
+        assert!(matches!(
+            settled
+                .store
+                .preview_attempt_settlement(&settled.settlement(outcome))
+                .await,
+            Err(AttemptSettlementError::NotUncertain("completed"))
+        ));
+        assert!(matches!(
+            settled
+                .store
+                .settle_attempt(&settled.settlement(outcome))
+                .await,
+            Err(AttemptSettlementError::NotUncertain("completed"))
+        ));
+    }
+    assert_eq!(settled.snapshot().await, before);
+
+    let unknown = AttemptSettlement {
+        attempt_id: uuid::Uuid::new_v4(),
+        ..settled.settlement(AttemptSettlementOutcome::NotApplied)
+    };
+    assert!(matches!(
+        settled.store.settle_attempt(&unknown).await,
+        Err(AttemptSettlementError::NotFound)
+    ));
+    assert!(matches!(
+        settled.store.preview_attempt_settlement(&unknown).await,
+        Err(AttemptSettlementError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn a_settlement_preview_reports_the_outcome_and_writes_nothing() {
+    let fixture = settlement_fixture("settle_preview", true).await;
+    let before = fixture.snapshot().await;
+
+    let not_applied = fixture
+        .store
+        .preview_attempt_settlement(&fixture.settlement(AttemptSettlementOutcome::NotApplied))
+        .await
+        .expect("preview of a not-applied settlement");
+    assert!(!not_applied.applied);
+    assert_eq!(not_applied.attempt_id, fixture.attempt_id);
+    assert_eq!(not_applied.item_id, fixture.item_id);
+    assert_eq!(not_applied.operation.as_str(), "approve");
+    assert_eq!(not_applied.binding_reference, fixture.binding_reference);
+    assert_eq!(not_applied.outcome, AttemptSettlementOutcome::NotApplied);
+    assert_eq!(not_applied.reason, SETTLEMENT_REASON);
+    assert_eq!(not_applied.decided_by, SETTLEMENT_DECIDED_BY);
+    assert_eq!(not_applied.attempt_state, AttemptState::Refused);
+    assert_eq!(not_applied.item_state, OccurrenceState::Claimed);
+
+    let applied = fixture
+        .store
+        .preview_attempt_settlement(&fixture.settlement(AttemptSettlementOutcome::Applied))
+        .await
+        .expect("preview of an applied settlement");
+    assert!(!applied.applied);
+    assert_eq!(applied.attempt_state, AttemptState::Completed);
+    assert_eq!(applied.item_state, OccurrenceState::Synchronizing);
+
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
+async fn a_settlement_needs_a_bounded_reason_and_decider() {
+    let fixture = settlement_fixture("settle_bounds", true).await;
+    let before = fixture.snapshot().await;
+    let base = fixture.settlement(AttemptSettlementOutcome::NotApplied);
+    for (settlement, field) in [
+        (
+            AttemptSettlement {
+                reason: String::new(),
+                ..base.clone()
+            },
+            "reason",
+        ),
+        (
+            AttemptSettlement {
+                reason: "   ".to_owned(),
+                ..base.clone()
+            },
+            "reason",
+        ),
+        (
+            AttemptSettlement {
+                reason: "x".repeat(2_001),
+                ..base.clone()
+            },
+            "reason",
+        ),
+        (
+            AttemptSettlement {
+                decided_by: String::new(),
+                ..base.clone()
+            },
+            "decided-by",
+        ),
+        (
+            AttemptSettlement {
+                decided_by: "duty\nofficer".to_owned(),
+                ..base.clone()
+            },
+            "decided-by",
+        ),
+        (
+            AttemptSettlement {
+                decided_by: "x".repeat(257),
+                ..base.clone()
+            },
+            "decided-by",
+        ),
+    ] {
+        for result in [
+            fixture.store.preview_attempt_settlement(&settlement).await,
+            fixture.store.settle_attempt(&settlement).await,
+        ] {
+            match result {
+                Err(AttemptSettlementError::Invalid { field: refused, .. }) => {
+                    assert_eq!(refused, field);
+                }
+                other => panic!("expected an invalid {field}, got {other:?}"),
+            }
+        }
+    }
+    let at_bound = AttemptSettlement {
+        reason: "x".repeat(2_000),
+        decided_by: "x".repeat(256),
+        ..base
+    };
+    fixture
+        .store
+        .preview_attempt_settlement(&at_bound)
+        .await
+        .expect("values at the bound are accepted");
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
+async fn a_settlement_needs_the_item_to_await_the_source_outcome() {
+    let fixture = settlement_fixture("settle_item_state", true).await;
+    fixture.lapse_execution_lease().await;
+    fixture
+        .client
+        .execute(
+            "UPDATE casework_items SET state='superseded' WHERE item_id=$1",
+            &[&fixture.item_id],
+        )
+        .await
+        .expect("supersede the item");
+    let before = fixture.snapshot().await;
+    for outcome in [
+        AttemptSettlementOutcome::Applied,
+        AttemptSettlementOutcome::NotApplied,
+    ] {
+        assert!(matches!(
+            fixture
+                .store
+                .preview_attempt_settlement(&fixture.settlement(outcome))
+                .await,
+            Err(AttemptSettlementError::ItemNotSynchronizing("superseded"))
+        ));
+        assert!(matches!(
+            fixture
+                .store
+                .settle_attempt(&fixture.settlement(outcome))
+                .await,
+            Err(AttemptSettlementError::ItemNotSynchronizing("superseded"))
+        ));
+    }
+    assert_eq!(fixture.snapshot().await, before);
 }

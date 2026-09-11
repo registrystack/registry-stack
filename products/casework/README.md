@@ -335,8 +335,21 @@ request. `caseworkctl retention erase PROJECT [--operator FILE] --source-id ID
 migration database authority; repeat it with `--apply` only after review. Apply
 removes local payload copies and cancels local clock work while retaining
 bounded tombstones. A pending or uncertain source attempt blocks erasure until
-it is recovered. The command makes no BReg call and does not erase the external
-audit JSONL file.
+it is recovered or settled. The command makes no BReg call and does not erase
+the external audit JSONL file.
+
+Settling an uncertain source attempt is an explicit operator decision for one
+attempt whose outcome recovery cannot observe. `caseworkctl attempt settle
+PROJECT [--operator FILE] --attempt-id UUID --outcome applied|not-applied
+--reason TEXT --decided-by TEXT` previews the settlement under migration
+database authority; repeat it with `--apply` only after the source owner has
+confirmed the outcome. Only an uncertain attempt whose execution lease has
+expired can be settled. `not-applied` refuses the attempt and returns the work
+item to its holder; `applied` completes the attempt without a source receipt and
+leaves the work item synchronizing until the next source observation. Apply
+records an `attempt_settled` history event with the attempt, binding reference,
+operation, outcome, reason, and decider, and no actor, in the same transaction
+as the state change. The command makes no BReg call.
 
 The HTTP contract is generated deterministically from the Rust-owned problem
 catalog and per-operation response table. The generator also checks the exact

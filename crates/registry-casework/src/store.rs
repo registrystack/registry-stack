@@ -4,12 +4,13 @@ use std::time::Duration;
 use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_casework_core::{
-    transition, ActorContext, AssignmentContext, AttemptState, AttemptStatus,
-    AuthoritativeObservation, BootstrapDirectoryRequest, CaseworkRole, CorrectionRoutingCopy,
-    Draft, DurableEvent, HistoryEntry, HistoryKind, InboxView, IssuerPrincipal, OccurrenceEvent,
-    OccurrenceKind, OccurrenceState, OperationName, Page, PageStatus, PreparedSourceAttempt,
-    SourceBinding, SourceReceipt, StaffingDiagnostic, SubjectRef, TeamRecord, TransitionHint,
-    WorkItem, WorkItemRouting,
+    transition, ActorContext, AssignmentContext, AttemptSettlement, AttemptSettlementOutcome,
+    AttemptSettlementReport, AttemptState, AttemptStatus, AuthoritativeObservation,
+    BootstrapDirectoryRequest, CaseworkRole, CorrectionRoutingCopy, Draft, DurableEvent,
+    HistoryEntry, HistoryKind, InboxView, IssuerPrincipal, OccurrenceEvent, OccurrenceKind,
+    OccurrenceState, OperationName, Page, PageStatus, PreparedSourceAttempt, SourceBinding,
+    SourceReceipt, StaffingDiagnostic, SubjectRef, TeamRecord, TransitionHint, WorkItem,
+    WorkItemRouting, MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES, MAXIMUM_SETTLEMENT_REASON_BYTES,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
@@ -1408,6 +1409,138 @@ impl PostgresStore {
         })
     }
 
+    /// Preview an operator settlement of one uncertain attempt. The preview
+    /// takes the same locks and checks as the settlement and writes nothing.
+    pub async fn preview_attempt_settlement(
+        &self,
+        settlement: &AttemptSettlement,
+    ) -> Result<AttemptSettlementReport, AttemptSettlementError> {
+        self.settle_uncertain_attempt(settlement, false).await
+    }
+
+    /// Settle one uncertain attempt whose execution lease has expired from an
+    /// operator decision. The attempt, its work item, and the decision's
+    /// history event change in one transaction.
+    pub async fn settle_attempt(
+        &self,
+        settlement: &AttemptSettlement,
+    ) -> Result<AttemptSettlementReport, AttemptSettlementError> {
+        self.settle_uncertain_attempt(settlement, true).await
+    }
+
+    async fn settle_uncertain_attempt(
+        &self,
+        settlement: &AttemptSettlement,
+        apply: bool,
+    ) -> Result<AttemptSettlementReport, AttemptSettlementError> {
+        validate_settlement_text(
+            "reason",
+            &settlement.reason,
+            MAXIMUM_SETTLEMENT_REASON_BYTES,
+        )?;
+        validate_settlement_text(
+            "decided-by",
+            &settlement.decided_by,
+            MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES,
+        )?;
+        let attempt_id = settlement.attempt_id;
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        // The lease is read on the database clock, the clock recovery acquisition reads.
+        let row=transaction.query_opt("SELECT item_id,operation,state,displayed_binding,decision_reason,flagged_fields,execution_lease_until<=now() FROM casework_attempts WHERE attempt_id=$1 FOR UPDATE", &[&attempt_id]).await?.ok_or(AttemptSettlementError::NotFound)?;
+        let state = parse_attempt_state(&row.get::<_, String>(2))?;
+        if state != AttemptState::Uncertain {
+            return Err(AttemptSettlementError::NotUncertain(attempt_state_name(
+                state,
+            )));
+        }
+        if !row.get::<_, bool>(6) {
+            return Err(AttemptSettlementError::LeaseLive);
+        }
+        let item_id: Uuid = row.get(0);
+        let operation = parse_operation(&row.get::<_, String>(1))?;
+        let item_row = transaction
+            .query_one(
+                "SELECT * FROM casework_items WHERE item_id=$1 FOR UPDATE",
+                &[&item_id],
+            )
+            .await?;
+        let mut item = row_to_item(&item_row)?;
+        let (attempt_state, occurrence_event) = match settlement.outcome {
+            AttemptSettlementOutcome::Applied => {
+                (AttemptState::Completed, OccurrenceEvent::AttemptCompleted)
+            }
+            AttemptSettlementOutcome::NotApplied => {
+                (AttemptState::Refused, OccurrenceEvent::AttemptRefused)
+            }
+        };
+        let item_state = transition(item.state, occurrence_event)
+            .map_err(|_| AttemptSettlementError::ItemNotSynchronizing(state_name(item.state)))?;
+        let displayed_binding: SourceBinding = serde_json::from_value(row.get(3))?;
+        let mut report = AttemptSettlementReport {
+            attempt_id,
+            item_id,
+            operation: operation.clone(),
+            binding_reference: binding_reference(&item.subject, &displayed_binding)?,
+            outcome: settlement.outcome,
+            reason: settlement.reason.clone(),
+            decided_by: settlement.decided_by.clone(),
+            attempt_state,
+            item_state,
+            applied: false,
+        };
+        if !apply {
+            transaction.rollback().await?;
+            return Ok(report);
+        }
+        let now = Utc::now();
+        // A fresh execution token fences any executor still holding the old one.
+        transaction.execute("UPDATE casework_attempts SET state=$2,receipt=NULL,execution_token=$3,execution_lease_until=now(),updated_at=$4 WHERE attempt_id=$1", &[&attempt_id,&attempt_state_name(attempt_state),&Uuid::new_v4(),&now]).await?;
+        let next = item.revision + 1;
+        transaction
+            .execute(
+                "UPDATE casework_items SET state=$2,revision=$3,updated_at=$4 WHERE item_id=$1",
+                &[&item_id, &state_name(item_state), &next, &now],
+            )
+            .await?;
+        item.state = item_state;
+        item.revision = next;
+        item.updated_at = now;
+        transaction
+            .execute(
+                "UPDATE casework_attempts SET item_revision=$2 WHERE attempt_id=$1",
+                &[&attempt_id, &next],
+            )
+            .await?;
+        append_item_event(
+            &transaction,
+            &item,
+            HistoryKind::AttemptSettled,
+            None,
+            "system:operator",
+            json!({
+                "attemptId": attempt_id,
+                "bindingReference": report.binding_reference,
+                "operation": operation.as_str(),
+                "outcome": settlement.outcome,
+                "reason": settlement.reason,
+                "decidedBy": settlement.decided_by,
+            }),
+        )
+        .await?;
+        if settlement.outcome == AttemptSettlementOutcome::Applied {
+            if operation.as_str() == "request_correction" {
+                let reason: Option<String> = row.get(4);
+                let reason = reason.ok_or(StoreError::Corrupt)?;
+                transaction.execute("INSERT INTO casework_correction_context(item_id,source_binding,reason,flagged_fields,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(item_id) DO UPDATE SET source_binding=EXCLUDED.source_binding,reason=EXCLUDED.reason,flagged_fields=EXCLUDED.flagged_fields,created_at=EXCLUDED.created_at", &[&item_id,&row.get::<_,Value>(3),&reason,&row.get::<_,Value>(5),&now]).await?;
+            }
+            transaction.execute("UPDATE casework_subjects SET sync_pending=true WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3", &[&item.subject.source_id,&item.subject.kind,&item.subject.id]).await?;
+        }
+        transaction.commit().await?;
+        report.applied = true;
+        Ok(report)
+    }
+
     /// Record that the caller opened the Casework task. This is a task-view
     /// accountability fact and deliberately does not change the item revision.
     pub async fn record_opened(
@@ -2722,6 +2855,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn settlement_text_is_bounded_non_empty_and_free_of_control_characters() {
+        let at_bound = "x".repeat(256);
+        let over_bound = "x".repeat(257);
+        for value in ["Registrar duty officer", at_bound.as_str()] {
+            assert!(validate_settlement_text("decided-by", value, 256).is_ok());
+        }
+        for value in [
+            "",
+            "   ",
+            "duty\nofficer",
+            "duty\tofficer",
+            over_bound.as_str(),
+        ] {
+            assert!(matches!(
+                validate_settlement_text("decided-by", value, 256),
+                Err(AttemptSettlementError::Invalid {
+                    field: "decided-by",
+                    maximum: 256
+                })
+            ));
+        }
+    }
+
+    #[test]
     fn binding_reference_distinguishes_proposal_version_and_generation() {
         let subject = SubjectRef {
             source_id: "source-a".to_owned(),
@@ -2842,6 +2999,7 @@ fn history_kind_name(value: HistoryKind) -> &'static str {
         HistoryKind::AttemptReserved => "attempt_reserved",
         HistoryKind::AttemptUncertain => "attempt_uncertain",
         HistoryKind::ActionCompleted => "action_completed",
+        HistoryKind::AttemptSettled => "attempt_settled",
         HistoryKind::ClockReminder => "clock_reminder",
         HistoryKind::ClockStepApplied => "clock_step_applied",
         HistoryKind::ClockRecomputed => "clock_recomputed",
@@ -2862,6 +3020,7 @@ fn parse_history(value: &str) -> Result<HistoryKind, StoreError> {
         "attempt_reserved" => Ok(HistoryKind::AttemptReserved),
         "attempt_uncertain" => Ok(HistoryKind::AttemptUncertain),
         "action_completed" => Ok(HistoryKind::ActionCompleted),
+        "attempt_settled" => Ok(HistoryKind::AttemptSettled),
         "clock_reminder" => Ok(HistoryKind::ClockReminder),
         "clock_step_applied" => Ok(HistoryKind::ClockStepApplied),
         "clock_recomputed" => Ok(HistoryKind::ClockRecomputed),
@@ -2869,6 +3028,17 @@ fn parse_history(value: &str) -> Result<HistoryKind, StoreError> {
         "completed" => Ok(HistoryKind::Completed),
         _ => Err(StoreError::Corrupt),
     }
+}
+
+fn validate_settlement_text(
+    field: &'static str,
+    value: &str,
+    maximum: usize,
+) -> Result<(), AttemptSettlementError> {
+    if value.trim().is_empty() || value.len() > maximum || value.chars().any(char::is_control) {
+        return Err(AttemptSettlementError::Invalid { field, maximum });
+    }
+    Ok(())
 }
 
 fn map_unique_conflict(error: tokio_postgres::Error) -> StoreError {
@@ -2879,6 +3049,37 @@ fn map_unique_conflict(error: tokio_postgres::Error) -> StoreError {
         StoreError::Conflict
     } else {
         StoreError::Postgres(error)
+    }
+}
+
+/// Why an operator settlement was refused.
+#[derive(Debug, Error)]
+pub enum AttemptSettlementError {
+    #[error("no source attempt has this identifier")]
+    NotFound,
+    #[error("the source attempt is {0}; only an uncertain attempt can be settled")]
+    NotUncertain(&'static str),
+    #[error("the source attempt still holds a live execution lease; wait for it to expire")]
+    LeaseLive,
+    #[error("the work item is {0}; only a work item awaiting its source outcome can be settled")]
+    ItemNotSynchronizing(&'static str),
+    #[error(
+        "--{field} must be non-empty text of at most {maximum} bytes without control characters"
+    )]
+    Invalid { field: &'static str, maximum: usize },
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+impl From<tokio_postgres::Error> for AttemptSettlementError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        Self::Store(StoreError::Postgres(error))
+    }
+}
+
+impl From<serde_json::Error> for AttemptSettlementError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Store(StoreError::Json(error))
     }
 }
 

@@ -105,6 +105,13 @@ function completedAccountability(entry: HistoryEntry): string | undefined {
 }
 void completedAccountability
 
+function settlementDecision(entry: HistoryEntry): string | undefined {
+  if (entry.kind !== 'attempt_settled') return undefined
+  const outcome: 'applied' | 'not_applied' = entry.detail.outcome
+  return `${entry.detail.attemptId}:${entry.detail.bindingReference}:${outcome}:${entry.detail.reason}:${entry.detail.decidedBy}`
+}
+void settlementDecision
+
 function recoveryReference(error: CaseworkClientError): string | undefined {
   const code: CaseworkProblemCode | undefined = error.code
   return code === 'work-item.recovery-pending' ? error.originalAttemptId : undefined

@@ -5,7 +5,10 @@ use registry_casework::{
     secret_resolver, validate_breg_source_description, verify_policy_package,
     PolicyPackageManifest, PostgresStore, RuntimeConfig, POLICY_PACKAGE_MANIFEST_FILE,
 };
-use registry_casework_core::{CaseworkProject, SourceRetentionReport, SourceRetentionSelector};
+use registry_casework_core::{
+    AttemptSettlement, AttemptSettlementReport, CaseworkProject, SourceRetentionReport,
+    SourceRetentionSelector,
+};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
@@ -652,6 +655,40 @@ fn source_retention_output(
     })
 }
 
+pub(super) fn attempt_settle(
+    project: &Path,
+    operator: Option<&Path>,
+    settlement: AttemptSettlement,
+    apply: bool,
+) -> Result<Value> {
+    let (project, operator, config) = load_runtime(project, operator)?;
+    let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let store = PostgresStore::connect_migration(&config.database, &resolver)
+        .context("the Casework migration database configuration is invalid")?;
+    let runtime = async_runtime()?;
+    let report = if apply {
+        runtime.block_on(store.settle_attempt(&settlement))
+    } else {
+        runtime.block_on(store.preview_attempt_settlement(&settlement))
+    }
+    .context("settling the Casework source attempt")?;
+    Ok(attempt_settlement_output(&project, &operator, report))
+}
+
+fn attempt_settlement_output(
+    project: &Path,
+    operator: &Path,
+    report: AttemptSettlementReport,
+) -> Value {
+    json!({
+        "ok": true,
+        "command": "attempt settle",
+        "project": project,
+        "operator": operator,
+        "report": report,
+    })
+}
+
 pub(super) fn dev_start(project: &Path, operator: Option<&Path>) -> Result<Value> {
     let (project, operator, config) = load_runtime(project, operator)?;
     let state = state_paths(&project);
@@ -992,6 +1029,47 @@ mod tests {
         assert_eq!(output["report"]["clockOccurrences"], 11);
         assert_eq!(output["report"]["clockPreviews"], 12);
         assert_eq!(output["report"].as_object().unwrap().len(), 14);
+    }
+
+    #[test]
+    fn attempt_settlement_output_reports_the_recorded_decision() {
+        let attempt_id: uuid::Uuid = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
+        let item_id: uuid::Uuid = "16fd2706-8baf-433b-82eb-8c7fada847da".parse().unwrap();
+        let output = attempt_settlement_output(
+            Path::new("/casework"),
+            Path::new("/casework/operator.yaml"),
+            AttemptSettlementReport {
+                attempt_id,
+                item_id,
+                operation: registry_casework_core::OperationName::parse("approve").unwrap(),
+                binding_reference: "sha256:binding".into(),
+                outcome: registry_casework_core::AttemptSettlementOutcome::NotApplied,
+                reason: "The source refused the saved evidence version.".into(),
+                decided_by: "Registrar duty officer".into(),
+                attempt_state: registry_casework_core::AttemptState::Refused,
+                item_state: registry_casework_core::OccurrenceState::Claimed,
+                applied: false,
+            },
+        );
+
+        assert_eq!(output["ok"], true);
+        assert_eq!(output["command"], "attempt settle");
+        assert_eq!(output["operator"], "/casework/operator.yaml");
+        assert_eq!(
+            output["report"],
+            json!({
+                "attemptId": attempt_id,
+                "itemId": item_id,
+                "operation": "approve",
+                "bindingReference": "sha256:binding",
+                "outcome": "not_applied",
+                "reason": "The source refused the saved evidence version.",
+                "decidedBy": "Registrar duty officer",
+                "attemptState": "refused",
+                "itemState": "claimed",
+                "applied": false,
+            })
+        );
     }
 
     #[test]

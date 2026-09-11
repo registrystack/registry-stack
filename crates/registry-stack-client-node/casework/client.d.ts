@@ -18,7 +18,7 @@ export type OccurrenceState = 'open' | 'claimed' | 'waiting_applicant' | 'waitin
 export type OperationName = string
 export type AttemptState = 'pending' | 'uncertain' | 'completed' | 'refused'
 export type PageStatus = 'complete' | 'budget_exhausted' | 'source_unavailable'
-export type HistoryKind = 'observed' | 'opened' | 'claimed' | 'assigned' | 'delegated' | 'caseload_moved' | 'clock_reminder' | 'clock_step_applied' | 'clock_recomputed' | 'released' | 'draft_saved' | 'attempt_reserved' | 'attempt_uncertain' | 'action_completed' | 'superseded' | 'completed'
+export type HistoryKind = 'observed' | 'opened' | 'claimed' | 'assigned' | 'delegated' | 'caseload_moved' | 'clock_reminder' | 'clock_step_applied' | 'clock_recomputed' | 'released' | 'draft_saved' | 'attempt_reserved' | 'attempt_uncertain' | 'action_completed' | 'attempt_settled' | 'superseded' | 'completed'
 
 export interface IssuerPrincipal { issuer: string; subject: string }
 export interface SubjectRef { sourceId: string; kind: string; id: string }
@@ -146,11 +146,15 @@ export interface ActionCompletedHistoryEntry extends HistoryEntryBase {
   kind: 'action_completed'
   detail: JsonObject & { attemptId: string; bindingReference: string; sourceRevision: string; sourceReceipt: SourceReceipt }
 }
+export interface AttemptSettledHistoryEntry extends HistoryEntryBase {
+  kind: 'attempt_settled'
+  detail: JsonObject & { attemptId: string; bindingReference: string; operation: OperationName; outcome: 'applied' | 'not_applied'; reason: string; decidedBy: string }
+}
 export interface OtherHistoryEntry extends HistoryEntryBase {
-  kind: Exclude<HistoryKind, 'attempt_reserved' | 'attempt_uncertain' | 'action_completed'>
+  kind: Exclude<HistoryKind, 'attempt_reserved' | 'attempt_uncertain' | 'action_completed' | 'attempt_settled'>
   detail: JsonValue
 }
-export type HistoryEntry = AttemptReservedHistoryEntry | AttemptUncertainHistoryEntry | ActionCompletedHistoryEntry | OtherHistoryEntry
+export type HistoryEntry = AttemptReservedHistoryEntry | AttemptUncertainHistoryEntry | ActionCompletedHistoryEntry | AttemptSettledHistoryEntry | OtherHistoryEntry
 export interface HoldingSummary {
   principal: IssuerPrincipal
   queueId: string

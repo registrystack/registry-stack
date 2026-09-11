@@ -345,6 +345,7 @@ pub enum HistoryKind {
     AttemptReserved,
     AttemptUncertain,
     ActionCompleted,
+    AttemptSettled,
     ClockReminder,
     ClockStepApplied,
     ClockRecomputed,
@@ -365,6 +366,8 @@ pub struct HistoryEntry {
     pub profile_id: String,
     /// Event-specific bounded data. Attempt events include the original
     /// `bindingReference`; successful completion also includes `sourceReceipt`.
+    /// An operator settlement records `outcome`, `reason`, and `decidedBy`
+    /// and carries no actor.
     #[serde(default)]
     pub detail: Value,
 }

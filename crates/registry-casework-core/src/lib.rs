@@ -6,6 +6,7 @@
 
 mod adapter;
 mod assignment;
+mod attempt_settlement;
 mod calendar;
 mod clock_runtime;
 mod config;
@@ -20,6 +21,7 @@ mod transition;
 
 pub use adapter::*;
 pub use assignment::*;
+pub use attempt_settlement::*;
 pub use calendar::*;
 pub use clock_runtime::*;
 pub use config::*;

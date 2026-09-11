@@ -146,7 +146,8 @@ then repeat the exact command with `--apply`. Apply marks the local subject and
 items erased, removes drafts and correction context, strips retained attempt,
 receipt, history, event, idempotency, and audit-outbox payload fields, and
 cancels local clock work. A pending or uncertain source attempt blocks erasure;
-recover that attempt before retrying so Casework does not fabricate an outcome.
+recover or settle that attempt before retrying so Casework does not fabricate an
+outcome.
 
 This command makes no Base Registry Engine (BReg) call and does not erase the
 external audit JSONL file. Retention and disposal for that file remain the
@@ -155,6 +156,39 @@ deployment operator's separate policy.
 {/* Evidence: crates/registry-caseworkctl/src/{lib,project}.rs, retention_erase();
     crates/registry-casework/src/source_retention.rs;
     crates/registry-casework-core/src/source_retention.rs. */}
+
+## Settle an uncertain source attempt
+
+When a source attempt stays uncertain and recovery cannot observe its outcome,
+confirm the outcome with the source owner. Then preview the settlement under the
+migration database credential:
+
+```sh
+caseworkctl attempt settle ./casework --operator ./operator.yaml \
+  --attempt-id <attempt-id> --outcome not-applied \
+  --reason "<why the source owner confirmed this outcome>" \
+  --decided-by "<who decided>"
+```
+
+Use `--outcome applied` when the source applied the attempt. Only an uncertain
+attempt whose execution lease has expired can be settled; a live lease, a
+terminal attempt, or an unknown identifier is refused. The JSON report names the
+attempt, work item, operation, binding reference, and outcome, with the attempt
+and work item states the settlement produces. Review it, then repeat the exact
+command with `--apply`.
+
+`not-applied` refuses the attempt and returns the work item to its holder, who
+can act on it again. `applied` completes the attempt without a source receipt;
+the work item stays synchronizing until Casework observes the source's next
+revision. Apply records an `attempt_settled` history event with the outcome,
+reason, and decider, and no actor, in the same transaction as the state change.
+The reason is limited to 2,000 bytes and the decider to 256 bytes.
+
+This command makes no BReg call.
+
+{/* Evidence: crates/registry-caseworkctl/src/{lib,project}.rs, attempt_settle();
+    crates/registry-casework/src/store.rs, settle_attempt();
+    crates/registry-casework-core/src/attempt_settlement.rs. */}
 
 ## Next
 

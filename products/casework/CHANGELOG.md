@@ -29,6 +29,10 @@
   per-item accountability and a passive elapsed queue target.
 - Preserve original attempts through uncertain source responses and expose
   distinct refusal and recovery codes to the maintained Rust and Node clients.
+- Add `caseworkctl attempt settle`, a preview-by-default operator command that
+  settles an uncertain source attempt whose execution lease has expired as
+  applied or not applied, and records the outcome, reason, and decider as an
+  `attempt_settled` history event in the same transaction as the state change.
 - Require an explicit trusted-issuer human identity assertion in addition to
   token verification, selected profile scopes and current directory membership.
 - Publish per-operation OpenAPI responses from the maintained Rust problem

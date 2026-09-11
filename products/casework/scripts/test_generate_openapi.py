@@ -123,7 +123,8 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 "observed", "opened", "claimed", "assigned", "delegated",
                 "caseload_moved", "clock_reminder", "clock_step_applied",
                 "clock_recomputed", "released", "draft_saved", "attempt_reserved",
-                "attempt_uncertain", "action_completed", "superseded", "completed",
+                "attempt_uncertain", "action_completed", "attempt_settled", "superseded",
+                "completed",
             },
             set(schemas["HistoryEntry"]["properties"]["kind"]["enum"]),
         )

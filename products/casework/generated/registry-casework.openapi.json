@@ -1429,6 +1429,7 @@
               "attempt_reserved",
               "attempt_uncertain",
               "action_completed",
+              "attempt_settled",
               "superseded",
               "completed"
             ],
