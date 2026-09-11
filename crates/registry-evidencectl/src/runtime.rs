@@ -90,13 +90,22 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
     let evidence = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
     let base = invoke_check(&evidence, &runtime_config, false, None)?;
     if !base.status.success() {
+        let dependency_failure = runtime_diagnostic_is_dependency_failure(&base.stderr);
         return render_refusal(
             &runtime_config,
             format,
-            "evidence.runtime.configuration-refused",
-            "domain-refusal",
+            if dependency_failure {
+                "evidence.runtime.dependencies-unavailable"
+            } else {
+                "evidence.runtime.configuration-refused"
+            },
+            if dependency_failure {
+                "operational-failure"
+            } else {
+                "domain-refusal"
+            },
             &base.stderr,
-            1,
+            if dependency_failure { 3 } else { 1 },
         );
     }
     let dependency = invoke_check(
@@ -136,6 +145,21 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
         &dependency.stderr,
         3,
     )
+}
+
+fn runtime_diagnostic_is_dependency_failure(diagnostic: &[u8]) -> bool {
+    let diagnostic = String::from_utf8_lossy(diagnostic);
+    [
+        "deployment input is unavailable",
+        "bound extract is stale",
+        "runtime secret initialization failed",
+        "runtime audit initialization failed",
+        "runtime signing initialization failed",
+        "runtime source initialization failed",
+        "runtime rate-limit initialization failed",
+    ]
+    .iter()
+    .any(|message| diagnostic.contains(message))
 }
 
 struct CheckOutcome {
@@ -288,5 +312,23 @@ mod tests {
         assert!(!invoked.contains("serve"));
         assert!(!invoked.contains("evaluate"));
         assert!(!root.path().join("audit.jsonl").exists());
+    }
+
+    #[test]
+    fn missing_runtime_inputs_and_secrets_are_operational_failures() {
+        for diagnostic in [
+            "evidence: deployment input is unavailable\n",
+            "evidence: runtime secret initialization failed\n",
+            "evidence: runtime audit initialization failed: secret unavailable\n",
+            "evidence: runtime signing initialization failed\n",
+            "evidence: bound extract is stale for source registry\n",
+        ] {
+            assert!(runtime_diagnostic_is_dependency_failure(
+                diagnostic.as_bytes()
+            ));
+        }
+        assert!(!runtime_diagnostic_is_dependency_failure(
+            b"evidence: deployment configuration is invalid\n"
+        ));
     }
 }

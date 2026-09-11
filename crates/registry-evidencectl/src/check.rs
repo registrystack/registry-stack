@@ -334,6 +334,7 @@ pub(crate) fn render_human(report: &Value, out: &mut dyn io::Write) -> io::Resul
                 writeln!(out, "  {}", item["id"].as_str().unwrap_or("unknown"))?;
                 write_optional(out, "source", &item["source"])?;
                 write_list(out, "selectors", &item["selectors"])?;
+                write_list(out, "selector profiles", &item["selectorProfiles"])?;
                 write_optional(out, "derivation", &item["derivation"])?;
                 write_list(out, "answers", &item["answers"])?;
                 write_list(out, "response formats", &item["responseFormats"])?;
@@ -886,27 +887,33 @@ fn plain_asset_exists(project: &Path, value: &str, code: &'static str, path: &st
 
 fn inspect_project(project: &Path) -> Result<ProjectInventory> {
     let questions = yaml_inventory(project, "questions", |id, value| {
-        let selectors = value
+        let subjects = value
             .get("subjects")
             .and_then(Value::as_array)
-            .map(|subjects| {
-                subjects
-                    .iter()
-                    .filter_map(|subject| subject.get("selector").and_then(Value::as_str))
-                    .collect::<Vec<_>>()
-            })
-            .or_else(|| {
-                value
-                    .get("subject")
-                    .and_then(|subject| subject.get("selector"))
-                    .and_then(Value::as_str)
-                    .map(|selector| vec![selector])
-            })
+            .map(|subjects| subjects.iter().collect::<Vec<_>>())
+            .or_else(|| value.get("subject").map(|subject| vec![subject]))
             .unwrap_or_default();
+        let selectors = subjects
+            .iter()
+            .filter_map(|subject| subject.get("selector").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        let selector_profiles = subjects
+            .iter()
+            .flat_map(|subject| {
+                subject
+                    .get("profiles")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .chain(subject.get("profile").and_then(Value::as_str))
+            })
+            .collect::<Vec<_>>();
         json!({
             "id": value.get("id").and_then(Value::as_str).unwrap_or(id),
             "source": value.pointer("/source/ref").and_then(Value::as_str),
             "selectors": selectors,
+            "selectorProfiles": selector_profiles,
             "derivation": value.get("derivation").and_then(Value::as_str),
             "answers": value.get("answers").and_then(Value::as_array).map(|answers| answers.iter().filter_map(|answer| answer.get("concept").and_then(Value::as_str)).collect::<Vec<_>>()).unwrap_or_default(),
             "responseFormats": value.get("responseFormats").cloned().unwrap_or_else(|| json!(["signed-jws"])),
@@ -1045,7 +1052,7 @@ fn explain_governance(governance: &Value) -> Value {
         .unwrap_or_default();
     json!({
         "assuranceProfile": governance.get("assuranceProfile"),
-        "serviceId": governance.pointer("/service/id"),
+        "serviceId": governance.pointer("/publication/serviceId"),
         "issuer": governance.pointer("/issuer/id"),
         "authorityProfiles": names("/authorityProfiles"),
         "sourceConnections": names("/sourceConnections"),
@@ -1452,6 +1459,60 @@ mod tests {
         );
         assert_eq!(report["derivations"][0]["id"], "record-status");
         assert_eq!(report["localAccess"]["mode"], "implicit-local-caller");
+    }
+
+    #[test]
+    fn question_inventory_reports_fields_and_profiles_for_both_subject_forms() {
+        let temporary = temporary();
+        fs::create_dir(temporary.path().join("questions")).unwrap();
+        fs::write(
+            temporary.path().join("questions/single.yaml"),
+            "id: single\nsubject:\n  role: record\n  selector: record_reference\n  profile: record-reference-v1\n",
+        )
+        .unwrap();
+        fs::write(
+            temporary.path().join("questions/multiple.yaml"),
+            "id: multiple\nsubjects:\n  - role: child\n    selector: child_reference\n    profile: child-reference-v1\n  - role: guardian\n    profiles: [guardian-reference-v1, guardian-composite-v1]\n",
+        )
+        .unwrap();
+
+        let inventory = inspect_project(temporary.path()).unwrap();
+
+        assert_eq!(inventory.questions[0]["id"], "multiple");
+        assert_eq!(
+            inventory.questions[0]["selectors"],
+            json!(["child_reference"])
+        );
+        assert_eq!(
+            inventory.questions[0]["selectorProfiles"],
+            json!([
+                "child-reference-v1",
+                "guardian-reference-v1",
+                "guardian-composite-v1"
+            ])
+        );
+        assert_eq!(inventory.questions[1]["id"], "single");
+        assert_eq!(
+            inventory.questions[1]["selectors"],
+            json!(["record_reference"])
+        );
+        assert_eq!(
+            inventory.questions[1]["selectorProfiles"],
+            json!(["record-reference-v1"])
+        );
+    }
+
+    #[test]
+    fn target_governance_reports_the_publication_service_identity() {
+        let governance = json!({
+            "assuranceProfile": "evidence-grade",
+            "publication": {"serviceId": "urn:example:services:evidence"},
+            "service": {"id": "urn:obsolete:path"},
+        });
+
+        let explanation = explain_governance(&governance);
+
+        assert_eq!(explanation["serviceId"], "urn:example:services:evidence");
     }
 
     #[test]

@@ -1873,6 +1873,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/casework/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Registry Casework runtime configuration",
+      "description": "Registry Casework runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-casework/src/schema.rs",
+        "sha256": "f65f055644b92ba5b3863ec685e8eedf57caecf918ecd70dbb41a1fdc723148f"
+      },
+      "artifact": {
+        "path": "products/casework/generated/runtime/runtime.schema.json",
+        "sha256": "3cefa3de059d2c807bf2b682f15fd4a25547913a5abb7a43077d224ffb4691dd",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/identifiers/catalog.v1.schema.json",
       "kind": "schema",
       "status": "active",

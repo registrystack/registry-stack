@@ -188,7 +188,7 @@ struct SafeCliFailure {
     operational: bool,
     code: &'static str,
     artifact: String,
-    path: &'static str,
+    path: String,
     message: String,
     suggested_action: String,
 }
@@ -439,6 +439,37 @@ fn safe_command(
     suggested_action: &'static str,
 ) -> anyhow::Result<ExitCode> {
     result.map_err(|error| {
+        if error.downcast_ref::<SafeCliFailure>().is_some() {
+            return error;
+        }
+        if let Some(diagnostic) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<build::TargetDocumentDiagnostic>())
+        {
+            return SafeCliFailure {
+                operational: false,
+                code: diagnostic.code,
+                artifact: "deployment_target".to_owned(),
+                path: diagnostic.path.clone(),
+                message: diagnostic.message.to_owned(),
+                suggested_action: suggested_action.to_owned(),
+            }
+            .into();
+        }
+        if let Some(diagnostic) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<authoring::AuthoredDiagnostic>())
+        {
+            return SafeCliFailure {
+                operational: false,
+                code: diagnostic.code,
+                artifact,
+                path: diagnostic.path.clone(),
+                message: diagnostic.message.clone(),
+                suggested_action: suggested_action.to_owned(),
+            }
+            .into();
+        }
         let operational = error
             .chain()
             .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
@@ -446,7 +477,7 @@ fn safe_command(
             operational,
             code,
             artifact,
-            path: "$",
+            path: "$".to_owned(),
             message: message.to_owned(),
             suggested_action: if operational {
                 "Verify required files and services, and select the matching Evidence binary, then retry the command.".to_owned()
@@ -461,12 +492,27 @@ fn safe_command(
 fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode> {
     match result {
         Err(error) => {
+            if let Some(failure) = error.downcast_ref::<dev::DevStartFailure>() {
+                return Err(SafeCliFailure {
+                    operational: true,
+                    code: "evidence.dev.start-failed",
+                    artifact: "local development session".to_owned(),
+                    path: "logs".to_owned(),
+                    message: "The local Evidence services failed before reaching readiness."
+                        .to_owned(),
+                    suggested_action: format!(
+                        "Inspect the preserved startup logs at {}, correct the failed dependency, and retry dev start.",
+                        failure.logs.display()
+                    ),
+                }
+                .into());
+            }
             if let Some(conflict) = error.downcast_ref::<dev::PortConflict>() {
                 return Err(SafeCliFailure {
                     operational: true,
                     code: "evidence.dev.port-unavailable",
                     artifact: format!("127.0.0.1:{}", conflict.port),
-                    path: "$",
+                    path: "$".to_owned(),
                     message: format!(
                         "Local port {} is already in use, so the local {} cannot start.",
                         conflict.port, conflict.service
@@ -840,6 +886,47 @@ mod tests {
             assert!(human.contains(expected));
             assert!(json.contains(expected));
         }
+    }
+
+    #[test]
+    fn canonical_wrapper_preserves_target_field_diagnostics() {
+        let error = safe_command(
+            Err(anyhow::Error::new(build::TargetDocumentDiagnostic {
+                code: "evidence.target.governance-version",
+                path: "governance.yaml:/version".to_owned(),
+                message: "deployment governance version must be 1",
+            })),
+            "evidence.package.failed",
+            "project".to_owned(),
+            "Evidence could not compile the selected deployment candidate.",
+            "Correct the selected project or target findings and rerun package with a new output directory.",
+        )
+        .expect_err("target refusal");
+        let failure = error
+            .downcast_ref::<SafeCliFailure>()
+            .expect("safe failure");
+        assert!(!failure.operational);
+        assert_eq!(failure.code, "evidence.target.governance-version");
+        assert_eq!(failure.artifact, "deployment_target");
+        assert_eq!(failure.path, "governance.yaml:/version");
+        assert_eq!(failure.message, "deployment governance version must be 1");
+    }
+
+    #[test]
+    fn failed_dev_start_keeps_the_preserved_log_location() {
+        let error = safe_dev_command(Err(dev::DevStartFailure {
+            logs: PathBuf::from("/private/project/.evidence/failed-start"),
+        }
+        .into()))
+        .expect_err("failed start");
+        let failure = error
+            .downcast_ref::<SafeCliFailure>()
+            .expect("safe failure");
+        assert!(failure.operational);
+        assert_eq!(failure.code, "evidence.dev.start-failed");
+        assert!(failure
+            .suggested_action
+            .contains("/private/project/.evidence/failed-start"));
     }
 
     #[test]

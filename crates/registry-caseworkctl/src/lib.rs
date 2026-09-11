@@ -391,7 +391,9 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         .find_map(|cause| cause.downcast_ref::<ConfigError>());
     let runtime_project_error =
         matches!(runtime_error, Some(RuntimeConfigError::Project(_))) && project_error.is_some();
+    let runtime_dependency_unavailable = matches!(runtime_error, Some(RuntimeConfigError::Oidc));
     let domain = !io_failure
+        && !runtime_dependency_unavailable
         && (runtime_error.is_some()
             || project_error.is_some()
             || semantic_error.is_some()
@@ -401,6 +403,12 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
             "filesystem",
             "filesystem".to_owned(),
             "Correct the path or permissions, then retry.",
+        )
+    } else if runtime_dependency_unavailable {
+        (
+            "runtime_dependency",
+            "runtime.yaml:/authentication/oidc".to_owned(),
+            "Restore access to the configured OIDC issuer or mounted JWKS, then retry.",
         )
     } else if runtime_project_error {
         project_diagnostic_location(project_error.expect("runtime project error has source"))
@@ -419,6 +427,8 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
     };
     let code = if io_failure {
         "caseworkctl.io-failure"
+    } else if runtime_dependency_unavailable {
+        "casework.runtime-dependency.unavailable"
     } else if runtime_project_error || project_error.is_some() || semantic_error.is_some() {
         "casework.project.invalid"
     } else if runtime_error.is_some() {
@@ -430,6 +440,8 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
     };
     let message = if io_failure {
         "A required filesystem operation failed.".to_owned()
+    } else if runtime_dependency_unavailable {
+        "The configured OIDC runtime dependency is unavailable.".to_owned()
     } else if runtime_project_error {
         project_error
             .expect("runtime project error has source")
@@ -999,6 +1011,28 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("accessProfiles[].principalClaim"));
+    }
+
+    #[test]
+    fn unavailable_oidc_dependency_uses_operational_exit_and_safe_diagnostic() {
+        let error = anyhow::Error::new(RuntimeConfigError::Oidc);
+        let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
+
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "casework.runtime-dependency.unavailable"
+        );
+        assert_eq!(diagnostic["artifact"], "runtime_dependency");
+        assert_eq!(diagnostic["path"], "runtime.yaml:/authentication/oidc");
+        assert_eq!(
+            diagnostic["message"],
+            "The configured OIDC runtime dependency is unavailable."
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
+        );
     }
 
     #[test]

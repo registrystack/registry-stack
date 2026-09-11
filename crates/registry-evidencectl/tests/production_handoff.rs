@@ -95,6 +95,26 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     );
 
     fixture.provision_target_secrets();
+    let audit_secret = fixture.secrets.join("audit-hmac-key");
+    let audit_secret_bytes = fs::read(&audit_secret).expect("audit secret");
+    fs::remove_file(&audit_secret).expect("temporarily remove audit secret");
+    let unavailable = evidencectl()
+        .arg("doctor")
+        .arg("--runtime-config")
+        .arg(fixture.candidate.join("runtime.yaml"))
+        .env("EVIDENCE_BIN", evidence)
+        .output()
+        .expect("runtime doctor with unavailable secret starts");
+    assert_eq!(
+        unavailable.status.code(),
+        Some(3),
+        "an unavailable mounted runtime secret is an operational failure\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&unavailable.stdout),
+        String::from_utf8_lossy(&unavailable.stderr)
+    );
+    fs::write(&audit_secret, audit_secret_bytes).expect("restore audit secret");
+    fs::set_permissions(&audit_secret, fs::Permissions::from_mode(0o600))
+        .expect("restore audit secret mode");
     assert_success(
         evidencectl()
             .args(["doctor", "--project"])

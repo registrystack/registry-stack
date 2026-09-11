@@ -51,6 +51,7 @@ const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:c
 const LOCAL_REQUESTER_TAG: &str = "local-caller";
 const MINT_AUDIT_KEY_FILENAME: &str = "mint-audit-hmac-key";
 const FAILED_START_LOGS: &str = "failed-start";
+const RETAINED_STOPPED_SESSION: &str = "dev-stopped-before-restart";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
@@ -76,6 +77,19 @@ impl std::fmt::Display for PortConflict {
 }
 
 impl std::error::Error for PortConflict {}
+
+#[derive(Debug)]
+pub(crate) struct DevStartFailure {
+    pub(crate) logs: PathBuf,
+}
+
+impl std::fmt::Display for DevStartFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the local Evidence services failed before reaching readiness")
+    }
+}
+
+impl std::error::Error for DevStartFailure {}
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -428,7 +442,13 @@ fn selected_ports(
     let retained = if evidence_port.is_none() || mint_port.is_none() {
         canonical_project(project)
             .ok()
-            .and_then(|project| read_state(&project.join(".evidence/dev/state.json")).ok())
+            .and_then(|project| {
+                ["dev", RETAINED_STOPPED_SESSION]
+                    .into_iter()
+                    .find_map(|root| {
+                        read_state(&project.join(".evidence").join(root).join("state.json")).ok()
+                    })
+            })
             .filter(|state| state.status == DevStatus::Stopped)
             .and_then(|state| {
                 Some((
@@ -1002,44 +1022,53 @@ fn start_detached(
     let generated_root = ensure_private_generated_root(&project)?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
+    let retained_root = generated_root.join(RETAINED_STOPPED_SESSION);
 
-    match fs::symlink_metadata(&dev_root) {
-        Ok(metadata) => {
-            validate_private_directory_metadata(&dev_root, &metadata)?;
-            remove_completed_dev_root(&project, &dev_root)?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).context("failed to inspect local development state"),
-    }
+    recover_retained_stopped_session(&project, &dev_root, &retained_root)?;
 
+    // A refused restart must leave the stopped session intact so its selected
+    // ports remain available to the next attempt. The services bind again
+    // after this probe, so this is an actionable preflight rather than a lock.
     probe_local_ports(ports)?;
-    create_private_directory(&dev_root)?;
-    let result = prepare_and_start(
-        &project,
-        &dev_root,
-        evidence_override,
-        mint_override,
-        ready_timeout_seconds,
-        ports,
-        target,
-        format,
-    );
+
+    let retained = retain_completed_dev_root(&project, &dev_root, &retained_root)?;
+
+    let result = create_private_directory(&dev_root).and_then(|()| {
+        injected_parent_exit("after-dev-root");
+        prepare_and_start(
+            &project,
+            &dev_root,
+            evidence_override,
+            mint_override,
+            ready_timeout_seconds,
+            ports,
+            target,
+            format,
+        )
+    });
     if let Err(error) = result {
         let kept = preserve_failed_start_logs(&dev_root);
-        if let Err(cleanup) = cleanup_new_dev_root(&dev_root) {
+        if let Err(cleanup) = cleanup_new_dev_root_if_present(&dev_root) {
             return Err(error.context(format!(
                 "failed to roll back the incomplete local session: {cleanup:#}"
             )));
+        }
+        if retained {
+            restore_retained_stopped_session(&project, &dev_root, &retained_root)
+                .context("failed to restore the stopped local session after rollback")?;
         }
         // The rollback is the remedy for the project, not for the reader, so
         // the failure carries the path of the logs it just moved out of the
         // way. Rebuilding the message keeps that sentence last: added as
         // context it would print before the failure it explains.
         return Err(match kept {
-            Ok(Some(kept)) => anyhow!("{error:#}; startup logs kept at {}", kept.display()),
+            Ok(Some(kept)) => DevStartFailure { logs: kept }.into(),
             Ok(None) => error,
             Err(problem) => anyhow!("{error:#}; the startup logs could not be kept: {problem:#}"),
         });
+    }
+    if retained {
+        remove_retained_stopped_session(&retained_root)?;
     }
     result
 }
@@ -1100,7 +1129,118 @@ fn preserve_failed_start_logs(dev_root: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(kept))
 }
 
-fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
+fn retain_completed_dev_root(
+    project: &Path,
+    dev_root: &Path,
+    retained_root: &Path,
+) -> Result<bool> {
+    match fs::symlink_metadata(dev_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Ok(metadata) => validate_private_directory_metadata(dev_root, &metadata)?,
+        Err(error) => return Err(error).context("failed to inspect local development state"),
+    }
+    validate_completed_dev_root(project, dev_root)?;
+    match fs::symlink_metadata(retained_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => bail!("a retained stopped session already exists from an interrupted restart"),
+        Err(error) => return Err(error.into()),
+    }
+    fs::rename(dev_root, retained_root).context("failed to retain the stopped local session")?;
+    sync_directory(
+        dev_root
+            .parent()
+            .ok_or_else(|| anyhow!("local development state has no parent directory"))?,
+    )?;
+    Ok(true)
+}
+
+fn recover_retained_stopped_session(
+    project: &Path,
+    dev_root: &Path,
+    retained_root: &Path,
+) -> Result<()> {
+    let retained = match fs::symlink_metadata(retained_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Ok(metadata) => metadata,
+        Err(error) => return Err(error.into()),
+    };
+    validate_private_directory_metadata(retained_root, &retained)?;
+    match fs::symlink_metadata(dev_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(metadata) => {
+            validate_private_directory_metadata(dev_root, &metadata)?;
+            match fs::symlink_metadata(dev_root.join("state.json")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    preserve_failed_start_logs(dev_root)?;
+                    cleanup_new_dev_root(dev_root)?;
+                    restore_retained_stopped_session(project, dev_root, retained_root)?;
+                    return Ok(());
+                }
+                Ok(_) => {}
+                Err(error) => return Err(error.into()),
+            }
+            if load_ready_state(project).is_ok()
+                || validate_completed_dev_root(project, dev_root).is_ok()
+            {
+                remove_retained_stopped_session(retained_root)?;
+                return Ok(());
+            }
+            bail!(
+                "an interrupted local restart left incomplete replacement state and a retained stopped session"
+            );
+        }
+        Err(error) => return Err(error.into()),
+    }
+    fs::rename(retained_root, dev_root)
+        .context("failed to recover the stopped session from an interrupted restart")?;
+    sync_directory(
+        dev_root
+            .parent()
+            .ok_or_else(|| anyhow!("local development state has no parent directory"))?,
+    )?;
+    validate_completed_dev_root(project, dev_root)
+}
+
+fn restore_retained_stopped_session(
+    project: &Path,
+    dev_root: &Path,
+    retained_root: &Path,
+) -> Result<()> {
+    validate_private_directory(retained_root)?;
+    fs::rename(retained_root, dev_root).context("failed to restore the stopped local session")?;
+    sync_directory(
+        dev_root
+            .parent()
+            .ok_or_else(|| anyhow!("local development state has no parent directory"))?,
+    )?;
+    validate_completed_dev_root(project, dev_root)
+}
+
+fn remove_retained_stopped_session(retained_root: &Path) -> Result<()> {
+    validate_private_directory(retained_root)?;
+    make_tree_removable(retained_root)?;
+    fs::remove_dir_all(retained_root).context("failed to remove the replaced stopped session")?;
+    sync_directory(
+        retained_root
+            .parent()
+            .ok_or_else(|| anyhow!("retained stopped session has no parent directory"))?,
+    )
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+fn cleanup_new_dev_root_if_present(dev_root: &Path) -> Result<()> {
+    match fs::symlink_metadata(dev_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => cleanup_new_dev_root(dev_root),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
     let state = read_state(&dev_root.join("state.json"))?;
     if state.status != DevStatus::Stopped || state.caller.is_some() || state.failure.is_some() {
         bail!("local development state already exists and is not a completed stopped session");
@@ -1112,6 +1252,11 @@ fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
         Ok(_) => bail!("stopped local state still has a control path"),
         Err(error) => return Err(error.into()),
     }
+    Ok(())
+}
+
+fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
+    validate_completed_dev_root(project, dev_root)?;
     make_tree_removable(dev_root)?;
     fs::remove_dir_all(dev_root).context("failed to replace the completed local session")
 }
@@ -1121,6 +1266,11 @@ fn clean_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let generated_root = existing_private_generated_root(&project)?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
+    recover_retained_stopped_session(
+        &project,
+        &dev_root,
+        &generated_root.join(RETAINED_STOPPED_SESSION),
+    )?;
     validate_private_directory(&dev_root)?;
     remove_completed_dev_root(&project, &dev_root)?;
     match format {
@@ -1187,7 +1337,7 @@ fn prepare_and_start(
     let clients = generated.join("clients");
     let mint_audit = generated.join("audit");
     let logs = dev_root.join("logs");
-    for directory in [&generated, &keys, &clients, &mint_audit, &logs] {
+    for directory in [&generated, &keys, &clients, &mint_audit] {
         create_private_directory(directory)?;
     }
 
@@ -1252,8 +1402,14 @@ fn prepare_and_start(
     };
     write_new_state(&dev_root.join("state.json"), &state)?;
 
+    // Logs exist only once startup is about to cross the process boundary.
+    // Earlier authoring refusals therefore remain domain failures and cannot
+    // be mistaken for a failed service start merely because an empty log
+    // directory was staged.
+    create_private_directory(&logs)?;
     let supervisor_log = create_private_file(&logs.join("supervisor.log"))?;
     let supervisor_error = supervisor_log.try_clone()?;
+    injected_parent_exit("before-supervisor");
     let executable = supervisor_executable()?;
     let mut supervisor = match Command::new(executable)
         .arg("__dev-supervisor")
@@ -1360,6 +1516,11 @@ fn stop_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let generated_root = or_inactive_session(existing_private_generated_root(&project))?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
+    recover_retained_stopped_session(
+        &project,
+        &dev_root,
+        &generated_root.join(RETAINED_STOPPED_SESSION),
+    )?;
     or_inactive_session(validate_private_directory(&dev_root))?;
     let state = or_inactive_session(read_state(&dev_root.join("state.json")))?;
     if state.project != project || !matches!(state.status, DevStatus::Starting | DevStatus::Ready) {
@@ -1424,6 +1585,14 @@ fn injected_supervisor_failure(stage: &str) -> Result<()> {
     }
     let _ = stage;
     Ok(())
+}
+
+fn injected_parent_exit(stage: &str) {
+    #[cfg(debug_assertions)]
+    if std::env::var("EVIDENCECTL_TEST_PARENT_EXIT_STAGE").as_deref() == Ok(stage) {
+        std::process::exit(86);
+    }
+    let _ = stage;
 }
 
 fn publish_test_supervisor_pid() -> Result<()> {

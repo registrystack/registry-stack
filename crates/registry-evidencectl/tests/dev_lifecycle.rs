@@ -324,6 +324,90 @@ fn configurable_ports_drive_every_generated_url_and_listener() {
     assert_success(&fixture.dev_stop(), "stop configured ports");
     wait_unavailable(&format!("127.0.0.1:{evidence_port}"));
     wait_unavailable(&format!("127.0.0.1:{mint_port}"));
+
+    let held = TcpListener::bind(("127.0.0.1", evidence_port)).expect("hold Evidence port");
+    let refused = fixture.dev_restart(&evidence, &mint);
+    assert_eq!(refused.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains(&evidence_port.to_string()));
+    let retained: Value =
+        serde_json::from_slice(&fs::read(dev.join("state.json")).unwrap()).unwrap();
+    assert_eq!(retained["status"], "stopped");
+    assert_eq!(
+        retained["evidenceOrigin"],
+        format!("http://127.0.0.1:{evidence_port}")
+    );
+    assert_eq!(
+        retained["mintOrigin"],
+        format!("http://127.0.0.1:{mint_port}")
+    );
+    drop(held);
+
+    let interrupted = fixture.dev_start_with_env(
+        &evidence,
+        &mint,
+        "EVIDENCECTL_TEST_PARENT_EXIT_STAGE",
+        OsStr::new("after-dev-root"),
+    );
+    assert_eq!(interrupted.status.code(), Some(86));
+    let retained_root = fixture.root.join(".evidence/dev-stopped-before-restart");
+    assert!(dev.is_dir());
+    assert!(retained_root.is_dir());
+    let interrupted_logs = dev.join("logs");
+    fs::create_dir(&interrupted_logs).expect("interrupted preparation logs");
+    fs::set_permissions(&interrupted_logs, fs::Permissions::from_mode(0o700))
+        .expect("interrupted preparation log mode");
+    let interrupted_log = interrupted_logs.join("supervisor.log");
+    fs::write(&interrupted_log, "parent interrupted during preparation\n")
+        .expect("interrupted preparation diagnostic");
+    fs::set_permissions(&interrupted_log, fs::Permissions::from_mode(0o600))
+        .expect("interrupted preparation diagnostic mode");
+
+    let inactive = fixture.dev_stop();
+    assert!(
+        !inactive.status.success(),
+        "the restored session is stopped"
+    );
+    assert!(!retained_root.exists());
+    assert_eq!(
+        fs::read_to_string(fixture.root.join(".evidence/failed-start/supervisor.log"))
+            .expect("preserved interrupted preparation diagnostic"),
+        "parent interrupted during preparation\n"
+    );
+    let recovered: Value =
+        serde_json::from_slice(&fs::read(dev.join("state.json")).unwrap()).unwrap();
+    assert_eq!(recovered["status"], "stopped");
+    assert_eq!(
+        recovered["evidenceOrigin"],
+        format!("http://127.0.0.1:{evidence_port}")
+    );
+    assert_eq!(
+        recovered["mintOrigin"],
+        format!("http://127.0.0.1:{mint_port}")
+    );
+
+    let failed = fixture.dev_start_with_env(
+        &evidence,
+        &mint,
+        "EVIDENCECTL_TEST_SUPERVISOR_FAIL_STAGE",
+        OsStr::new("before-socket"),
+    );
+    assert_eq!(failed.status.code(), Some(3));
+    let failed_logs = fixture.root.join(".evidence/failed-start/supervisor.log");
+    assert!(
+        failed_logs.is_file(),
+        "failed restart keeps its diagnostics"
+    );
+    let retained: Value =
+        serde_json::from_slice(&fs::read(dev.join("state.json")).unwrap()).unwrap();
+    assert_eq!(retained["status"], "stopped");
+    assert_eq!(
+        retained["evidenceOrigin"],
+        format!("http://127.0.0.1:{evidence_port}")
+    );
+    assert_eq!(
+        retained["mintOrigin"],
+        format!("http://127.0.0.1:{mint_port}")
+    );
     let restarted = fixture.dev_restart(&evidence, &mint);
     assert_success(&restarted, "canonical restart on retained configured ports");
     assert_eq!(
@@ -338,7 +422,25 @@ fn configurable_ports_drive_every_generated_url_and_listener() {
     ));
     assert!(jwks_ready_at(mint_port));
     assert_success(&fixture.dev_stop(), "stop restarted configured ports");
-    assert_success(&fixture.dev_clean(), "clean configured ports");
+
+    let starting = fixture.dev_start_with_env(
+        &evidence,
+        &mint,
+        "EVIDENCECTL_TEST_PARENT_EXIT_STAGE",
+        OsStr::new("before-supervisor"),
+    );
+    assert_eq!(starting.status.code(), Some(86));
+    assert!(
+        !fixture.dev_clean().status.success(),
+        "potentially live Starting replacement remains fail closed"
+    );
+    assert!(dev.is_dir());
+    assert!(retained_root.is_dir());
+    fs::remove_file(dev.join("state.json")).expect("remove inert injected Starting state");
+    assert_success(
+        &fixture.dev_clean(),
+        "clean demonstrably inactive interrupted replacement",
+    );
 }
 
 #[test]
