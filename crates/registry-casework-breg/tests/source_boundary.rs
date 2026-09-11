@@ -43,6 +43,7 @@ fn adapter_with_routing(base: &str) -> BregAdapter {
                     schema: json!({"type":"string","enum":["north","south"]}),
                 }],
             },
+            display_reference: None,
             binding_generation: "generation-1".into(),
             expected_registry_revision: DIGEST.into(),
             reader_profile: "reader".into(),
@@ -59,6 +60,29 @@ fn adapter_with_routing(base: &str) -> BregAdapter {
     .unwrap()
 }
 fn adapter_with_stages(base: &str, stages: Vec<BregReviewStage>) -> BregAdapter {
+    adapter_with_stages_and_reference(base, stages, None)
+}
+fn adapter_with_reference(base: &str) -> BregAdapter {
+    adapter_with_stages_and_reference(
+        base,
+        vec![BregReviewStage {
+            id: "review".into(),
+            approvals: 1,
+            exclude_submitter: false,
+            exclude_previous_reviewers: false,
+        }],
+        Some(RoutingFieldDescriptor {
+            field: "case-number".into(),
+            api_name: "caseNumber".into(),
+            schema: json!({"type":"string"}),
+        }),
+    )
+}
+fn adapter_with_stages_and_reference(
+    base: &str,
+    stages: Vec<BregReviewStage>,
+    display_reference: Option<RoutingFieldDescriptor>,
+) -> BregAdapter {
     let routing_metadata = RoutingSourceMetadata {
         stages: stages.iter().map(|stage| stage.id.clone()).collect(),
         fields: vec![],
@@ -70,6 +94,7 @@ fn adapter_with_stages(base: &str, stages: Vec<BregReviewStage>) -> BregAdapter 
             route: "correction".into(),
             stages,
             routing_metadata,
+            display_reference,
             binding_generation: "generation-1".into(),
             expected_registry_revision: DIGEST.into(),
             reader_profile: "reader".into(),
@@ -507,6 +532,80 @@ async fn authoritative_read_maps_only_imported_routing_fields_and_redacts_values
     let serialized = serde_json::to_value(&observation).unwrap();
     assert!(serialized.get("routingContext").is_none());
     assert!(!serialized.to_string().contains("SOURCE-CONTENT-CANARY"));
+}
+
+#[tokio::test]
+async fn display_reference_is_retained_only_when_explicitly_configured() {
+    let server = MockServer::start().await;
+    mount_metadata(&server, "reader-token", "reader").await;
+    let mut representation = record("submitted", None);
+    representation["data"]["request"]["review"] = pending_review("review");
+    representation["data"]["domainData"]["caseNumber"] = json!("CASE-2026-0042");
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(response(representation))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let observation = adapter_with_reference(&server.uri())
+        .read_authoritative(&subject())
+        .await
+        .unwrap();
+    assert_eq!(
+        observation.display_reference.as_deref(),
+        Some("CASE-2026-0042")
+    );
+}
+
+#[tokio::test]
+async fn a_missing_optional_reference_does_not_wedge_source_synchronization() {
+    let server = MockServer::start().await;
+    mount_metadata(&server, "reader-token", "reader").await;
+    let mut representation = record("submitted", None);
+    representation["data"]["request"]["review"] = pending_review("review");
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(response(representation))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let observation = adapter_with_reference(&server.uri())
+        .read_authoritative(&subject())
+        .await
+        .expect("the request remains observable");
+    assert_eq!(observation.display_reference, None);
+}
+
+#[tokio::test]
+async fn current_caller_disclosure_controls_the_display_reference() {
+    for (token, disclosed, expected) in [
+        ("alice-token", true, Some("CASE-2026-0042")),
+        ("bob-token", false, None),
+    ] {
+        let server = MockServer::start().await;
+        mount_metadata(&server, token, "reviewer").await;
+        let mut caller_record = record("needs_changes", None);
+        if disclosed {
+            caller_record["data"]["domainData"]["caseNumber"] = json!("CASE-2026-0042");
+        }
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/records/correction/{ID}")))
+            .and(header("authorization", format!("Bearer {token}")))
+            .respond_with(response(caller_record))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let view = adapter_with_reference(&server.uri())
+            .read_for_caller(&subject(), "reviewer", EphemeralCredential::new(token))
+            .await
+            .unwrap();
+        assert_eq!(view.display_reference.as_deref(), expected);
+    }
 }
 
 #[tokio::test]

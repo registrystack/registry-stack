@@ -38,6 +38,7 @@ pub struct BregSourceConfig {
     pub route: String,
     pub stages: Vec<BregReviewStage>,
     pub routing_metadata: RoutingSourceMetadata,
+    pub display_reference: Option<RoutingFieldDescriptor>,
     pub binding_generation: String,
     pub expected_registry_revision: String,
     pub reader_profile: String,
@@ -101,6 +102,13 @@ impl BregAdapter {
                         .iter()
                         .any(|prior| prior.field == field.field || prior.api_name == field.api_name)
                 })
+            || config.display_reference.as_ref().is_some_and(|field| {
+                field.field.is_empty()
+                    || field.api_name.is_empty()
+                    || field.field.len() > 512
+                    || field.api_name.len() > 512
+                    || field.schema.get("type").and_then(Value::as_str) != Some("string")
+            })
         {
             return Err(SourceAdapterError::Invalid);
         }
@@ -176,6 +184,12 @@ impl BregAdapter {
                 self.config
                     .routing_metadata
                     .fields
+                    .iter()
+                    .map(|field| field.field.as_str()),
+            )
+            .chain(
+                self.config
+                    .display_reference
                     .iter()
                     .map(|field| field.field.as_str()),
             )
@@ -399,6 +413,26 @@ impl BregAdapter {
             stage: stage.map(str::to_owned),
             fields,
         }))
+    }
+
+    fn display_reference(
+        &self,
+        record: &RegistryRecordSingleResponse,
+    ) -> Result<Option<String>, SourceAdapterError> {
+        let Some(field) = &self.config.display_reference else {
+            return Ok(None);
+        };
+        match record.data.domain_data.get(&field.api_name) {
+            Some(Value::String(value))
+                if !value.is_empty()
+                    && value.chars().count() <= 512
+                    && !value.chars().any(char::is_control) =>
+            {
+                Ok(Some(value.to_owned()))
+            }
+            None | Some(Value::Null) => Ok(None),
+            _ => Err(SourceAdapterError::Invalid),
+        }
     }
 }
 
@@ -697,6 +731,7 @@ impl SourceAdapter for BregAdapter {
             ordered_revision: ordered_revision(&record.data.revision_identifier)?,
             representation_etag,
             binding,
+            display_reference: self.display_reference(&record)?,
             occurrence_kind: kind,
             stage,
             submitted_at: review
@@ -815,6 +850,7 @@ impl SourceAdapter for BregAdapter {
         Ok(CallerSubjectView {
             subject: subject.clone(),
             binding: self.binding(&record, &request)?,
+            display_reference: self.display_reference(&record)?,
             disclosed,
             permitted_operations: request
                 .advertised_operations()

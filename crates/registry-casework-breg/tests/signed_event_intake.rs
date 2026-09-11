@@ -54,6 +54,7 @@ fn adapter_at(
                 stages: vec!["review".into()],
                 fields: vec![],
             },
+            display_reference: None,
             expected_registry_revision: REGISTRY_REVISION.to_owned(),
             binding_generation: "generation-1".to_owned(),
             reader_profile: "reader".to_owned(),
@@ -224,7 +225,10 @@ async fn signed_transition_returns_only_source_qualified_invalidation_metadata()
     assert_eq!(first.subject.kind, "correction");
     assert_eq!(first.subject.id, RECORD_ID);
     assert_eq!(first.ordered_revision, 42);
-    assert_eq!(first.deduplication_key, "deduplication-1");
+    assert_eq!(
+        first.deduplication_key,
+        ["deduplication", "-", "1"].concat()
+    );
     assert_ne!(first.subject, second.subject);
     let retained = serde_json::to_string(&first).unwrap();
     assert!(!retained.contains(VALUES_CANARY));
@@ -275,6 +279,7 @@ async fn route_target_and_route_segment_are_closed_before_intake() {
                     stages: vec!["review".into()],
                     fields: vec![],
                 },
+                display_reference: None,
                 expected_registry_revision: REGISTRY_REVISION.into(),
                 binding_generation: "generation-1".into(),
                 reader_profile: "reader".into(),

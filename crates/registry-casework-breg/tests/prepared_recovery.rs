@@ -34,6 +34,7 @@ fn adapter(base: &str) -> BregAdapter {
                 stages: vec!["review".into()],
                 fields: vec![],
             },
+            display_reference: None,
             expected_registry_revision: REVISION.into(),
             binding_generation: "generation-1".into(),
             reader_profile: "reader".into(),

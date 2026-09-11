@@ -234,7 +234,7 @@ fn source_projection(project: &Path, source_id: &str, metadata: &Value) -> Resul
         .and_then(|sources| sources.iter().find(|source| source["id"] == source_id))
         .context("source id is not declared in casework.yaml")?;
     let configured = &source["requests"][0];
-    let projection: Vec<String> = match configured.get("projection") {
+    let mut projection: Vec<String> = match configured.get("projection") {
         None => Vec::new(),
         Some(value) => serde_json::from_value(value.clone())
             .context("source projection must be a list of field identifiers")?,
@@ -256,6 +256,25 @@ fn source_projection(project: &Path, source_id: &str, metadata: &Value) -> Resul
         }) {
             bail!("source projection references a field absent from BReg compiled metadata");
         }
+    }
+    if let Some(reference) = configured.get("displayReference") {
+        let field = reference
+            .get("field")
+            .and_then(Value::as_str)
+            .context("displayReference.field must name one source string field")?;
+        let descriptor = metadata["fields"]
+            .as_array()
+            .and_then(|fields| {
+                fields
+                    .iter()
+                    .find(|descriptor| descriptor["field"] == field)
+            })
+            .context("displayReference.field is absent from BReg compiled metadata")?;
+        let schema = &descriptor["schema"];
+        if schema["type"] != "string" {
+            bail!("displayReference.field must be a string");
+        }
+        projection.push(field.to_owned());
     }
     Ok(projection)
 }

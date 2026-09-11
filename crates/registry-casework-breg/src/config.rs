@@ -32,6 +32,15 @@ const DEFAULT_CONNECT_TIMEOUT_MILLISECONDS: u64 = 10_000;
 const MAXIMUM_TIMEOUT_MILLISECONDS: u64 = 300_000;
 const MAXIMUM_DESCRIPTION_BYTES: usize = 8 * 1024 * 1024;
 
+type ValidatedDescription = (
+    String,
+    String,
+    Vec<BregReviewStage>,
+    RoutingSourceMetadata,
+    Option<RoutingFieldDescriptor>,
+    String,
+);
+
 /// Launcher-owned BReg connection material for one authored Casework source.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -93,7 +102,7 @@ pub fn build_adapter(
         return Err(SourceAdapterError::Invalid);
     }
     let description_bytes = read_description(project_root, &source.description)?;
-    let (entity, route, stages, routing_metadata, expected_registry_revision) =
+    let (entity, route, stages, routing_metadata, display_reference, expected_registry_revision) =
         validate_description(source, &description_bytes)?;
 
     let client_id_secret = resolve_secret(secrets, &binding.client_id_ref)?;
@@ -141,6 +150,7 @@ pub fn build_adapter(
             route,
             stages,
             routing_metadata,
+            display_reference,
             expected_registry_revision,
             binding_generation: generation,
             reader_profile: binding.reader_profile.clone(),
@@ -224,16 +234,7 @@ fn read_description(project_root: &Path, relative: &str) -> Result<Vec<u8>, Sour
 fn validate_description(
     source: &SourcePolicy,
     bytes: &[u8],
-) -> Result<
-    (
-        String,
-        String,
-        Vec<BregReviewStage>,
-        RoutingSourceMetadata,
-        String,
-    ),
-    SourceAdapterError,
-> {
+) -> Result<ValidatedDescription, SourceAdapterError> {
     let root = decode_exact_json(bytes).map_err(|_| SourceAdapterError::Invalid)?;
     let object = root.as_object().ok_or(SourceAdapterError::Invalid)?;
     let expected = [
@@ -330,13 +331,32 @@ fn validate_description(
             exclude_previous_reviewers,
         });
     }
-    let routing_metadata =
+    let (routing_metadata, fields_by_name) =
         routing_metadata(request, &source.requests[0].projection, &parsed_stages)?;
+    let display_reference = source.requests[0]
+        .display_reference
+        .as_ref()
+        .map(|configured| {
+            let descriptor = fields_by_name
+                .get(&configured.field)
+                .cloned()
+                .ok_or(SourceAdapterError::Invalid)?;
+            let schema = descriptor
+                .schema
+                .as_object()
+                .ok_or(SourceAdapterError::Invalid)?;
+            if schema.get("type").and_then(Value::as_str) != Some("string") {
+                return Err(SourceAdapterError::Invalid);
+            }
+            Ok(descriptor)
+        })
+        .transpose()?;
     Ok((
         entity.to_owned(),
         route.to_owned(),
         parsed_stages,
         routing_metadata,
+        display_reference,
         expected_registry_revision,
     ))
 }
@@ -347,7 +367,7 @@ pub fn validate_description_input(
     source: &SourcePolicy,
     bytes: &[u8],
 ) -> Result<RoutingSourceMetadata, SourceAdapterError> {
-    let (_, _, _, routing_metadata, _) = validate_description(source, bytes)?;
+    let (_, _, _, routing_metadata, _, _) = validate_description(source, bytes)?;
     Ok(routing_metadata)
 }
 
@@ -355,7 +375,13 @@ fn routing_metadata(
     request: &serde_json::Map<String, Value>,
     projection: &[String],
     stages: &[BregReviewStage],
-) -> Result<RoutingSourceMetadata, SourceAdapterError> {
+) -> Result<
+    (
+        RoutingSourceMetadata,
+        BTreeMap<String, RoutingFieldDescriptor>,
+    ),
+    SourceAdapterError,
+> {
     let fields = request
         .get("fields")
         .and_then(Value::as_array)
@@ -400,10 +426,13 @@ fn routing_metadata(
                 .ok_or(SourceAdapterError::Invalid)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(RoutingSourceMetadata {
-        stages: stages.iter().map(|stage| stage.id.clone()).collect(),
-        fields,
-    })
+    Ok((
+        RoutingSourceMetadata {
+            stages: stages.iter().map(|stage| stage.id.clone()).collect(),
+            fields,
+        },
+        by_logical_name,
+    ))
 }
 
 fn string_field<'a>(
@@ -423,7 +452,7 @@ fn binding_generation(
     client_id: &str,
     description: &[u8],
 ) -> Result<String, SourceAdapterError> {
-    let identity = serde_json::to_vec(&json!({
+    let mut identity = json!({
         "sourceId": source.id,
         "baseUrl": binding.base_url,
         "readerProfile": binding.reader_profile,
@@ -438,8 +467,16 @@ fn binding_generation(
         "requestTimeoutMilliseconds": binding.request_timeout_milliseconds,
         "connectTimeoutMilliseconds": binding.connect_timeout_milliseconds,
         "descriptionSha256": sha256_uri(description),
-    }))
-    .map_err(|_| SourceAdapterError::Invalid)?;
+    });
+    if let Some(display_reference) = source
+        .requests
+        .first()
+        .and_then(|request| request.display_reference.as_ref())
+    {
+        identity["displayReference"] =
+            serde_json::to_value(display_reference).map_err(|_| SourceAdapterError::Invalid)?;
+    }
+    let identity = serde_json::to_vec(&identity).map_err(|_| SourceAdapterError::Invalid)?;
     Ok(sha256_uri(&identity))
 }
 
@@ -516,7 +553,7 @@ mod tests {
             {"id":"authorization","approvals":1,"excludeSubmitter":true,
                 "excludePreviousReviewers":true}
         ]);
-        let (_, _, stages, _, _) =
+        let (_, _, stages, _, _, _) =
             validate_description(&source(), &serde_json::to_vec(&value).unwrap()).unwrap();
         assert_eq!(
             stages,
@@ -544,7 +581,7 @@ mod tests {
     fn imported_description_maps_only_the_configured_routing_projection() {
         let mut source = source();
         source.requests[0].projection = vec!["region".to_owned()];
-        let (_, _, _, metadata, _) =
+        let (_, _, _, metadata, _, _) =
             validate_description(&source, &description("correction")).unwrap();
         assert_eq!(metadata.stages, ["review"]);
         assert_eq!(metadata.fields.len(), 1);
@@ -565,6 +602,23 @@ mod tests {
             .unwrap()
             .push(json!({"field":"region","apiName":"otherRegion","schema":{"type":"string"}}));
         assert!(validate_description(&source, &serde_json::to_vec(&duplicate).unwrap()).is_err());
+    }
+
+    #[test]
+    fn display_reference_is_explicit_and_accepts_an_unbounded_source_string_schema() {
+        let mut source = source();
+        source.requests[0].display_reference =
+            Some(registry_casework_core::DisplayReferencePolicy {
+                field: "region".to_owned(),
+            });
+        let (_, _, _, _, reference, _) =
+            validate_description(&source, &description("correction")).unwrap();
+        let reference = reference.expect("configured reference");
+        assert_eq!(reference.field, "region");
+        assert_eq!(reference.api_name, "serviceRegion");
+
+        source.requests[0].display_reference.as_mut().unwrap().field = "missing".to_owned();
+        assert!(validate_description(&source, &description("correction")).is_err());
     }
 
     #[test]
@@ -591,5 +645,19 @@ mod tests {
                 .unwrap();
         assert_ne!(first, changed_client);
         assert_ne!(first, changed_import);
+
+        let mut source_with_reference = source;
+        source_with_reference.requests[0].display_reference =
+            Some(registry_casework_core::DisplayReferencePolicy {
+                field: "region".to_owned(),
+            });
+        let changed_reference = binding_generation(
+            &binding(),
+            &source_with_reference,
+            "casework-client",
+            &description("correction"),
+        )
+        .unwrap();
+        assert_ne!(first, changed_reference);
     }
 }

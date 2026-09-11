@@ -62,6 +62,7 @@ pub const MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES: usize = 128;
 pub const MAXIMUM_DIRECTORY_IDENTIFIER_BYTES: usize = 128;
 pub const MAXIMUM_DIRECTORY_PRINCIPALS: usize = 100;
 pub const MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES: usize = 2_048;
+pub const MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES: usize = 500;
 pub const MAXIMUM_DIRECTORY_SERVED_QUEUES: usize = 100;
 pub const WORK_ITEMS_PATH: &str = "/v1/work-items";
 pub const HOSTED_ITEMS_PATH: &str = "/v1/hosted-items";
@@ -83,10 +84,21 @@ pub enum InboxView {
     CompletedByMe,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InboxSort {
+    #[default]
+    Due,
+    Age,
+    Type,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListWorkItemsQuery {
     pub view: InboxView,
+    #[serde(default)]
+    pub sort: InboxSort,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,6 +107,9 @@ pub struct ListWorkItemsQuery {
     pub subject_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_id: Option<String>,
+    /// Exact, case-sensitive match on an explicitly configured source field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +130,13 @@ impl ListWorkItemsQuery {
     /// The three wire fields are kept flat for query-string interoperability,
     /// but partial selectors are never interpreted as broader searches.
     pub fn subject(&self) -> Result<Option<SubjectRef>, SubjectSelectorError> {
+        if self.reference.is_some()
+            && (self.source_id.is_some()
+                || self.subject_kind.is_some()
+                || self.subject_id.is_some())
+        {
+            return Err(SubjectSelectorError::Incomplete);
+        }
         match (&self.source_id, &self.subject_kind, &self.subject_id) {
             (None, None, None) => Ok(None),
             (Some(source_id), Some(kind), Some(id)) => {
@@ -132,6 +154,22 @@ impl ListWorkItemsQuery {
             }
             _ => Err(SubjectSelectorError::Incomplete),
         }
+    }
+
+    pub fn reference(&self) -> Result<Option<&str>, SubjectSelectorError> {
+        self.reference
+            .as_deref()
+            .map(|value| {
+                if value.is_empty()
+                    || value.chars().count() > 512
+                    || value.chars().any(char::is_control)
+                {
+                    Err(SubjectSelectorError::InvalidComponent)
+                } else {
+                    Ok(value)
+                }
+            })
+            .transpose()
     }
 }
 
@@ -167,6 +205,8 @@ pub struct NextWorkItemQuery {
 pub struct HoldingsQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -309,8 +349,8 @@ pub struct BootstrapDirectoryRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DirectoryTeamUpdateRequest {
-    pub staff: Vec<crate::IssuerPrincipal>,
-    pub supervisors: Vec<crate::IssuerPrincipal>,
+    pub staff: Vec<crate::DirectoryMember>,
+    pub supervisors: Vec<crate::DirectoryMember>,
     pub served_queues: Vec<String>,
 }
 
@@ -347,7 +387,7 @@ pub struct WorkItemPage {
 }
 
 pub type HoldingsPage = Page<HoldingSummary>;
-pub type DirectoryTargetPage = Page<IssuerPrincipal>;
+pub type DirectoryTargetPage = Page<crate::DirectoryMember>;
 pub type HistoryPage = Page<crate::HistoryEntry>;
 pub type HostedNotePage = Page<crate::HostedNote>;
 pub type HostedHistoryPage = Page<HostedHistoryEntry>;
@@ -484,6 +524,49 @@ mod tests {
                 .source_id
                 .len(),
             512
+        );
+    }
+
+    #[test]
+    fn list_query_binds_exact_reference_and_closed_sort_values() {
+        let query: ListWorkItemsQuery = serde_json::from_value(serde_json::json!({
+            "view": "my_teams",
+            "sort": "type",
+            "reference": "案件-42"
+        }))
+        .expect("reference query decodes");
+        assert_eq!(query.sort, InboxSort::Type);
+        assert_eq!(query.reference().unwrap(), Some("案件-42"));
+        assert_eq!(query.subject().unwrap(), None);
+
+        for invalid in [
+            serde_json::json!({
+                "view": "my_teams",
+                "reference": "CASE-42",
+                "sourceId": "source-one",
+                "subjectKind": "resident-record",
+                "subjectId": "42"
+            }),
+            serde_json::json!({"view": "my_teams", "reference": ""}),
+            serde_json::json!({"view": "my_teams", "reference": "x\ny"}),
+        ] {
+            let query: ListWorkItemsQuery =
+                serde_json::from_value(invalid).expect("wire shape decodes");
+            assert!(query.subject().is_err() || query.reference().is_err());
+        }
+        let too_long: String = std::iter::repeat_n('案', 513).collect();
+        let query: ListWorkItemsQuery = serde_json::from_value(serde_json::json!({
+            "view": "my_teams",
+            "reference": too_long
+        }))
+        .expect("wire shape decodes");
+        assert!(query.reference().is_err());
+        assert!(
+            serde_json::from_value::<ListWorkItemsQuery>(serde_json::json!({
+                "view": "my_teams",
+                "sort": "unknown"
+            }))
+            .is_err()
         );
     }
 

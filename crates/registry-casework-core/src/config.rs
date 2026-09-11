@@ -26,6 +26,15 @@ fn default_concurrency() -> usize {
 fn default_deadline_ms() -> u64 {
     2_000
 }
+
+fn valid_profile_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= crate::MAXIMUM_CASEWORK_PROFILE_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CaseworkProject {
@@ -70,12 +79,17 @@ impl CaseworkProject {
         {
             return Err(ConfigError::DefaultQueue);
         }
+        if self
+            .access_profiles
+            .iter()
+            .any(|profile| !valid_profile_identifier(&profile.id))
+        {
+            return Err(ConfigError::Identifier);
+        }
         let profiles: BTreeSet<_> = self.access_profiles.iter().map(|p| &p.id).collect();
         if profiles.len() != self.access_profiles.len()
             || self.access_profiles.iter().any(|profile| {
-                profile.id.is_empty()
-                    || profile.principal_claim.is_empty()
-                    || profile.required_scopes.is_empty()
+                profile.principal_claim.is_empty() || profile.required_scopes.is_empty()
             })
             || !self
                 .access_profiles
@@ -159,6 +173,11 @@ impl CaseworkProject {
             }
             for request in &source.requests {
                 if request.entity.is_empty()
+                    || request.display_reference.as_ref().is_some_and(|reference| {
+                        reference.field.is_empty()
+                            || reference.field.len() > 512
+                            || reference.field.chars().any(char::is_control)
+                    })
                     || !queues.contains(&request.queue)
                     || request.target.as_ref().is_some_and(|target| {
                         target.id.is_empty()
@@ -269,6 +288,10 @@ pub struct SourcePolicy {
 pub struct SourceRequestPolicy {
     pub entity: String,
     pub queue: String,
+    /// One source-owned string field that may be retained for exact officer
+    /// lookup. It remains subject to the current caller's source disclosure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_reference: Option<DisplayReferencePolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projection: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -277,6 +300,12 @@ pub struct SourceRequestPolicy {
     pub clock: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<PassiveTargetPolicy>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DisplayReferencePolicy {
+    pub field: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -301,10 +330,8 @@ pub fn parse_elapsed_seconds(value: &str) -> Option<i64> {
         (number, 60 * 60)
     } else if let Some(number) = body.strip_suffix('M') {
         (number, 60)
-    } else if let Some(number) = body.strip_suffix('S') {
-        (number, 1)
     } else {
-        return None;
+        (body.strip_suffix('S')?, 1)
     };
     let amount = number.parse::<i64>().ok()?;
     (amount > 0)
@@ -459,6 +486,27 @@ mod tests {
         candidate.access_profiles[1].required_scopes =
             candidate.access_profiles[0].required_scopes.clone();
         assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+    }
+
+    #[test]
+    fn access_profile_ids_match_the_http_selection_contract() {
+        for valid in ["staff.review:v1_2-3".to_owned(), "x".repeat(128)] {
+            let mut candidate = project();
+            candidate.access_profiles[2].id = valid;
+            assert_eq!(candidate.check(), Ok(()));
+        }
+
+        for invalid in [
+            String::new(),
+            "x".repeat(129),
+            "staff/reviewer".to_owned(),
+            "staff reviewer".to_owned(),
+            "stáff".to_owned(),
+        ] {
+            let mut candidate = project();
+            candidate.access_profiles[2].id = invalid;
+            assert_eq!(candidate.check(), Err(ConfigError::Identifier));
+        }
     }
 
     #[test]

@@ -38,6 +38,10 @@ pub struct AuthoritativeObservation {
     /// distinguishes representations at an equal ordered revision.
     pub representation_etag: String,
     pub binding: SourceBinding,
+    /// Explicitly configured, bounded source value retained only for exact
+    /// candidate lookup. Public projection requires a caller-scoped read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_reference: Option<String>,
     pub occurrence_kind: OccurrenceKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,

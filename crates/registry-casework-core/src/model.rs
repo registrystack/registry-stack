@@ -15,6 +15,64 @@ pub struct IssuerPrincipal {
     pub subject: String,
 }
 
+/// A directory-scoped presentation of a person. The optional name belongs to
+/// one team membership and never enters accountable actor identity.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DirectoryMember {
+    pub issuer: String,
+    pub subject: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+impl From<IssuerPrincipal> for DirectoryMember {
+    fn from(principal: IssuerPrincipal) -> Self {
+        Self {
+            issuer: principal.issuer,
+            subject: principal.subject,
+            display_name: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod directory_member_tests {
+    use super::*;
+
+    #[test]
+    fn display_names_remain_directory_scoped() {
+        let member: DirectoryMember = serde_json::from_value(serde_json::json!({
+            "issuer": "https://issuer.example",
+            "subject": "officer-1",
+            "displayName": "Officer One"
+        }))
+        .expect("directory member with display name");
+        assert_eq!(member.display_name.as_deref(), Some("Officer One"));
+
+        let unnamed: DirectoryMember = IssuerPrincipal {
+            issuer: member.issuer.clone(),
+            subject: member.subject.clone(),
+        }
+        .into();
+        assert_eq!(
+            serde_json::to_value(unnamed).expect("unnamed member"),
+            serde_json::json!({
+                "issuer": "https://issuer.example",
+                "subject": "officer-1"
+            })
+        );
+        assert!(
+            serde_json::from_value::<IssuerPrincipal>(serde_json::json!({
+                "issuer": "https://issuer.example",
+                "subject": "officer-1",
+                "displayName": "must not enter accountable identity"
+            }))
+            .is_err()
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaseworkRole {
@@ -112,6 +170,9 @@ pub struct WorkItem {
     /// A stable, non-authoritative correlation reference for this exact
     /// subject and displayed source binding.
     pub binding_reference: String,
+    /// Human-facing source reference disclosed by the source to this caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_reference: Option<String>,
     pub state: OccurrenceState,
     pub queue_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -325,6 +386,10 @@ mod operation_name_tests {
 pub struct CallerSubjectView {
     pub subject: SubjectRef,
     pub binding: SourceBinding,
+    /// Present only when the current caller's source response disclosed the
+    /// configured field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_reference: Option<String>,
     #[serde(default)]
     pub disclosed: BTreeMap<String, Value>,
     #[serde(default)]
@@ -444,8 +509,8 @@ pub struct QueueRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TeamRecord {
     pub id: String,
-    pub members: Vec<IssuerPrincipal>,
-    pub supervisors: Vec<IssuerPrincipal>,
+    pub members: Vec<DirectoryMember>,
+    pub supervisors: Vec<DirectoryMember>,
     pub served_queues: Vec<String>,
     pub revision: i64,
 }
