@@ -9,6 +9,7 @@ use registry_casework_core::{
     AttemptSettlement, AttemptSettlementReport, CaseworkProject, SourceRetentionReport,
     SourceRetentionSelector,
 };
+use registry_platform_config::{SecretProvider, SecretReference};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Read as _;
@@ -715,23 +716,36 @@ fn secret_file_refusal(root: &Path, name: &str) -> Option<&'static str> {
     None
 }
 
-/// Check every `secret:file/...` reference before the live checks, and report
-/// one bounded result per reference. A reference served by another provider is
-/// reported as outside this check rather than silently omitted.
+/// Parse every configured secret reference before the live checks, then inspect
+/// each `secret:file/...` value and report one bounded result per reference. A
+/// reference served by another provider is reported as outside this check
+/// rather than silently omitted.
 fn secret_file_checks(config: &RuntimeConfig) -> Result<Vec<Value>> {
     let root = &config.secret_providers.file.root;
     let mut checks = Vec::new();
     let mut refused = Vec::new();
-    for (setting, reference) in secret_references(config) {
-        let check = match reference.strip_prefix("secret:file/") {
-            Some(name) => match secret_file_refusal(root, name) {
+    let references = secret_references(config)
+        .into_iter()
+        .map(|(setting, reference)| {
+            SecretReference::parse(reference)
+                .with_context(|| {
+                    format!(
+                        "{setting} must be an exact secret:env/NAME or secret:file/name reference"
+                    )
+                })
+                .map(|reference| (setting, reference))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (setting, reference) in references {
+        let check = match reference.provider() {
+            SecretProvider::File => match secret_file_refusal(root, reference.name()) {
                 None => json!({"setting": setting, "provider": "file", "status": "ready"}),
                 Some(refusal) => {
                     refused.push(format!("{setting} is {refusal}"));
                     json!({"setting": setting, "provider": "file", "status": "refused", "refusal": refusal})
                 }
             },
-            None => json!({
+            SecretProvider::Environment => json!({
                 "setting": setting,
                 "provider": "environment",
                 "status": "not-checked",
@@ -1235,6 +1249,49 @@ mod tests {
         let refusal = format!("{:#}", secret_file_checks(&config).unwrap_err());
         assert!(refusal.contains("audit.secretRef"), "{refusal}");
         assert!(refusal.contains("0400 or 0600"), "{refusal}");
+    }
+
+    #[test]
+    fn doctor_refuses_malformed_secret_references_before_live_checks() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let secrets = project.join("secrets");
+        fs::create_dir(&secrets).unwrap();
+        let audit = secrets.join("casework-audit-key");
+        fs::write(&audit, "0".repeat(64)).unwrap();
+        fs::set_permissions(&audit, fs::Permissions::from_mode(0o600)).unwrap();
+        let operator = project.join("operator.yaml");
+        let valid = OPERATOR_YAML
+            .split("\nsources:")
+            .next()
+            .unwrap()
+            .replace("listen: 127.0.0.1:8091", "listen: 127.0.0.1:8092");
+
+        for (setting, authored, malformed) in [
+            (
+                "database.runtimeUrlRef",
+                "secret:env/CASEWORK_DATABASE_URL",
+                "CASEWORK_DATABASE_URL",
+            ),
+            (
+                "database.migrationUrlRef",
+                "secret:env/CASEWORK_MIGRATION_DATABASE_URL",
+                "secret:file/../token",
+            ),
+        ] {
+            fs::write(&operator, valid.replace(authored, malformed)).unwrap();
+
+            let refusal = format!("{:#}", doctor(&project, Some(&operator)).unwrap_err());
+            assert!(refusal.contains(setting), "{refusal}");
+            assert!(
+                refusal.contains("secret:env/NAME or secret:file/name"),
+                "{refusal}"
+            );
+            assert!(refusal.contains("secret reference is invalid"), "{refusal}");
+        }
     }
 
     #[test]

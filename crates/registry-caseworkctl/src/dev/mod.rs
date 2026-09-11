@@ -927,7 +927,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
     let mut children = Children::default();
     let result = (|| {
         ensure_active(&terminate)?;
-        database(&args.docker_bin, &mut state)?;
+        database(&args.docker_bin, &mut state, &terminate)?;
         ensure_active(&terminate)?;
         children.mint = Some(service(
             &args.mint_bin,
@@ -946,7 +946,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         // Migrations are idempotent and guarded by an advisory lock. Run them
         // on every start so a retained database is upgraded with the binaries
         // that now own it; this is the only step using the migration credential.
-        command(
+        command_cancellable(
             Command::new(&args.casework_bin)
                 .arg("--config")
                 .arg(root.join("operator.yaml"))
@@ -954,8 +954,9 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
             &root,
             "migrate",
             None,
+            &terminate,
         )?;
-        grants(&args.docker_bin, &state)?;
+        grants(&args.docker_bin, &state, &terminate)?;
         state.migrated = true;
         state.save()?;
         ensure_active(&terminate)?;
@@ -979,8 +980,10 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         // A client token lives 300 seconds, which the child and readiness
         // deadlines of a slow first start can exhaust before the seed runs.
         // Mint the seeding tokens once Casework is ready, not before it.
-        tokens(&args.mint_bin, &state, &clients)?;
-        seed(&mut state, &clients)?;
+        tokens(&args.mint_bin, &state, &clients, &terminate)?;
+        ensure_active(&terminate)?;
+        seed(&mut state, &clients, &terminate)?;
+        ensure_active(&terminate)?;
         let control_root = control_directory(&root)?;
         private::directory(&control_root)?;
         let listener = UnixListener::bind(control_root.join("control.sock"))?;
@@ -989,6 +992,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
             fs::Permissions::from_mode(0o600),
         )?;
         listener.set_nonblocking(true)?;
+        ensure_active(&terminate)?;
         state.status = Status::Ready;
         state.save()?;
         let mut stop_stream = None;
@@ -1638,6 +1642,55 @@ struct NativeOutput {
     stderr: Vec<u8>,
 }
 
+type NativePumpTask = Box<dyn FnOnce() -> Result<Vec<u8>> + Send + 'static>;
+
+struct NativeRun<'a> {
+    root: &'a Path,
+    name: &'a str,
+    log: File,
+    input: Option<Input<'a>>,
+    aggregate_deadline: Option<Instant>,
+    terminate: Option<&'a AtomicBool>,
+}
+
+/// Own a spawned prerequisite through pipe setup and execution. Any unwind
+/// forcefully stops and reaps the child before joining every reader that was
+/// started, so a partial setup cannot strand either resource.
+struct StartingNative {
+    child: Option<Child>,
+    pumps: Vec<thread::JoinHandle<Result<Vec<u8>>>>,
+}
+
+impl StartingNative {
+    fn new(child: Child) -> Self {
+        Self {
+            child: Some(child),
+            pumps: Vec::new(),
+        }
+    }
+
+    fn child(&mut self) -> Result<&mut Child> {
+        self.child.as_mut().context("prerequisite child missing")
+    }
+
+    fn finish_reaped(mut self) -> Vec<thread::JoinHandle<Result<Vec<u8>>>> {
+        self.child.take();
+        std::mem::take(&mut self.pumps)
+    }
+}
+
+impl Drop for StartingNative {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        for pump in self.pumps.drain(..) {
+            let _ = pump.join();
+        }
+    }
+}
+
 /// Replace every run of bytes that also occurs in `secret` with a fixed marker,
 /// keeping the surrounding diagnostics readable.
 fn redact(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
@@ -1676,20 +1729,31 @@ fn output(
     name: &str,
     input: Option<Input<'_>>,
 ) -> Result<NativeOutput> {
-    output_with_deadline(command, root, name, input, None)
+    output_with_deadline(command, root, name, input, None, None)
+}
+
+fn output_cancellable(
+    command: &mut Command,
+    root: &Path,
+    name: &str,
+    input: Option<Input<'_>>,
+    terminate: &AtomicBool,
+) -> Result<NativeOutput> {
+    output_with_deadline(command, root, name, input, None, Some(terminate))
 }
 
 /// Run a prerequisite that belongs to an already-active aggregate deadline.
 /// Unlike ordinary prerequisite commands, expiry kills this probe immediately
 /// so its cleanup cannot extend the aggregate readiness budget by 35 seconds.
-fn output_before(
+fn output_before_cancellable(
     command: &mut Command,
     root: &Path,
     name: &str,
     input: Option<Input<'_>>,
     deadline: Instant,
+    terminate: &AtomicBool,
 ) -> Result<NativeOutput> {
-    output_with_deadline(command, root, name, input, Some(deadline))
+    output_with_deadline(command, root, name, input, Some(deadline), Some(terminate))
 }
 
 fn output_with_deadline(
@@ -1698,13 +1762,13 @@ fn output_with_deadline(
     name: &str,
     input: Option<Input<'_>>,
     aggregate_deadline: Option<Instant>,
+    terminate: Option<&AtomicBool>,
 ) -> Result<NativeOutput> {
+    if let Some(terminate) = terminate {
+        ensure_active(terminate)?;
+    }
     let log = log_file(root, name)?;
-    let secret = input
-        .as_ref()
-        .and_then(|input| input.secret)
-        .map(|secret| Zeroizing::new(secret.to_vec()));
-    let mut child = command
+    let child = command
         .stdin(if input.is_some() {
             Stdio::piped()
         } else {
@@ -1714,65 +1778,135 @@ fn output_with_deadline(
         .stderr(Stdio::piped())
         .spawn()
         .context("cannot launch native development prerequisite")?;
-    let stdout = child.stdout.take().context("command output pipe missing")?;
-    let stderr = child
+    output_from_child_with_pump_spawner(
+        child,
+        NativeRun {
+            root,
+            name,
+            log,
+            input,
+            aggregate_deadline,
+            terminate,
+        },
+        |stream, task| {
+            thread::Builder::new()
+                .name(format!("casework-dev-prerequisite-{name}-{stream}"))
+                .spawn(task)
+        },
+    )
+}
+
+fn output_from_child_with_pump_spawner(
+    child: Child,
+    run: NativeRun<'_>,
+    mut spawn: impl FnMut(&str, NativePumpTask) -> std::io::Result<thread::JoinHandle<Result<Vec<u8>>>>,
+) -> Result<NativeOutput> {
+    let NativeRun {
+        root,
+        name,
+        log,
+        input,
+        aggregate_deadline,
+        terminate,
+    } = run;
+    let secret = input
+        .as_ref()
+        .and_then(|input| input.secret)
+        .map(|secret| Zeroizing::new(secret.to_vec()));
+    let mut starting = StartingNative::new(child);
+    let stdout = starting
+        .child()?
+        .stdout
+        .take()
+        .context("command output pipe missing")?;
+    let stderr = starting
+        .child()?
         .stderr
         .take()
         .context("command diagnostic pipe missing")?;
-    let out = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        pump(stdout, &mut bytes).map(|()| bytes)
-    });
+    starting.pumps.push(
+        spawn(
+            "stdout",
+            Box::new(move || {
+                let mut bytes = Vec::new();
+                pump(stdout, &mut bytes).map(|()| bytes)
+            }),
+        )
+        .context("cannot start native prerequisite output reader")?,
+    );
     // Capture every diagnostic stream so a failed native command can surface
     // its bounded machine-readable refusal. Redact before either returning or
     // persisting bytes that could carry a secret.
     let redacting = secret.clone();
-    let err = thread::spawn(move || {
-        let mut captured = Zeroizing::new(Vec::new());
-        pump(stderr, &mut *captured)?;
-        let persisted = match redacting {
-            Some(secret) => redact(&captured, &secret),
-            None => std::mem::take(&mut *captured),
-        };
-        let mut log = log;
-        log.write_all(&persisted)?;
-        Ok::<_, anyhow::Error>(persisted)
-    });
+    starting.pumps.push(
+        spawn(
+            "stderr",
+            Box::new(move || {
+                let mut captured = Zeroizing::new(Vec::new());
+                pump(stderr, &mut *captured)?;
+                let persisted = match redacting {
+                    Some(secret) => redact(&captured, &secret),
+                    None => std::mem::take(&mut *captured),
+                };
+                let mut log = log;
+                log.write_all(&persisted)?;
+                Ok(persisted)
+            }),
+        )
+        .context("cannot start native prerequisite diagnostic reader")?,
+    );
     if let Some(input) = &input {
-        child
+        starting
+            .child()?
             .stdin
             .take()
             .context("command input missing")?
-            .write_all(input.bytes)?;
+            .write_all(input.bytes)
+            .context("cannot write native prerequisite input")?;
     }
     // Preserve the full per-command allowance for ordinary prerequisites.
     // An aggregate readiness deadline instead includes all probe setup time.
     let deadline = aggregate_deadline.unwrap_or_else(|| Instant::now() + CHILD_DEADLINE);
+    let mut interrupted = false;
     let status = loop {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = starting.child()?.try_wait()? {
             break Some(status);
+        }
+        if terminate.is_some_and(|terminate| terminate.load(Ordering::Relaxed)) {
+            starting.child()?.kill()?;
+            starting.child()?.wait()?;
+            interrupted = true;
+            break None;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             if aggregate_deadline.is_some() {
-                child.kill()?;
-                child.wait()?;
+                starting.child()?.kill()?;
+                starting.child()?.wait()?;
             } else {
-                stop_child(&mut child)?;
+                stop_child(starting.child()?)?;
             }
             break None;
         }
         thread::sleep(Duration::from_millis(50).min(remaining));
     };
-    let mut bytes = out
+    let mut pumps = starting.finish_reaped().into_iter();
+    let out = pumps.next().context("command output reader missing")?;
+    let err = pumps.next().context("command diagnostic reader missing")?;
+    let bytes = out
         .join()
-        .map_err(|_| anyhow::anyhow!("command output reader failed"))??;
+        .map_err(|_| anyhow::anyhow!("command output reader failed"));
     let stderr = err
         .join()
-        .map_err(|_| anyhow::anyhow!("command diagnostic reader failed"))??;
+        .map_err(|_| anyhow::anyhow!("command diagnostic reader failed"));
+    let mut bytes = bytes??;
+    let stderr = stderr??;
     if let Some(secret) = &secret {
         let echoed = Zeroizing::new(std::mem::take(&mut bytes));
         bytes = redact(&echoed, secret);
+    }
+    if interrupted {
+        bail!("local start interrupted; owned prerequisite stopped");
     }
     let Some(status) = status else {
         bail!("native local prerequisite timed out; inspect private logs");
@@ -1814,14 +1948,26 @@ fn command(
     checked_output(output, root, name)
 }
 
-fn command_before(
+fn command_cancellable(
+    command: &mut Command,
+    root: &Path,
+    name: &str,
+    input: Option<Input<'_>>,
+    terminate: &AtomicBool,
+) -> Result<Vec<u8>> {
+    let output = output_cancellable(command, root, name, input, terminate)?;
+    checked_output(output, root, name)
+}
+
+fn command_before_cancellable(
     command: &mut Command,
     root: &Path,
     name: &str,
     input: Option<Input<'_>>,
     deadline: Instant,
+    terminate: &AtomicBool,
 ) -> Result<Vec<u8>> {
-    let output = output_before(command, root, name, input, deadline)?;
+    let output = output_before_cancellable(command, root, name, input, deadline, terminate)?;
     checked_output(output, root, name)
 }
 
@@ -1888,56 +2034,93 @@ fn docker_command(
     command(Command::new(docker).args(args), &state.root(), name, input)
 }
 
-fn docker_command_before(
+fn docker_command_cancellable(
+    docker: &Path,
+    state: &State,
+    name: &str,
+    args: &[&str],
+    input: Option<Input<'_>>,
+    terminate: &AtomicBool,
+) -> Result<Vec<u8>> {
+    command_cancellable(
+        Command::new(docker).args(args),
+        &state.root(),
+        name,
+        input,
+        terminate,
+    )
+}
+
+fn docker_command_before_cancellable(
     docker: &Path,
     state: &State,
     name: &str,
     args: &[&str],
     deadline: Instant,
+    terminate: &AtomicBool,
 ) -> Result<Vec<u8>> {
-    command_before(
+    command_before_cancellable(
         Command::new(docker).args(args),
         &state.root(),
         name,
         None,
         deadline,
+        terminate,
     )
 }
 
 /// Listing by exact generated name distinguishes absence from a daemon failure
 /// without treating arbitrary stderr as a trustworthy classifier.
 fn listed(docker: &Path, state: &State) -> Result<bool> {
-    let listing = docker_command(
-        docker,
-        state,
-        "inspect-list",
-        &[
-            "ps",
-            "--all",
-            "--filter",
-            &format!("name=^/{}$", state.container_name()),
-            "--format",
-            "{{.ID}}",
-        ],
-        None,
-    )?;
+    listed_with_termination(docker, state, None)
+}
+
+fn listed_with_termination(
+    docker: &Path,
+    state: &State,
+    terminate: Option<&AtomicBool>,
+) -> Result<bool> {
+    let filter = format!("name=^/{}$", state.container_name());
+    let args = [
+        "ps",
+        "--all",
+        "--filter",
+        filter.as_str(),
+        "--format",
+        "{{.ID}}",
+    ];
+    let listing = match terminate {
+        Some(terminate) => {
+            docker_command_cancellable(docker, state, "inspect-list", &args, None, terminate)?
+        }
+        None => docker_command(docker, state, "inspect-list", &args, None)?,
+    };
     Ok(!listing.iter().all(u8::is_ascii_whitespace))
 }
 
 fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
-    if !listed(docker, state)? {
+    inspect_with_termination(docker, state, None)
+}
+
+fn inspect_with_termination(
+    docker: &Path,
+    state: &State,
+    terminate: Option<&AtomicBool>,
+) -> Result<Option<Value>> {
+    if !listed_with_termination(docker, state, terminate)? {
         if state.container_id.is_some() {
             bail!("retained database container is missing; restore its owned data or use a new project directory; no empty replacement was created");
         }
         return Ok(None);
     }
-    let output = docker_command(
-        docker,
-        state,
-        "inspect-database",
-        &["inspect", &state.container_name()],
-        None,
-    )?;
+    let container_name = state.container_name();
+    let args = ["inspect", container_name.as_str()];
+    let output = match terminate {
+        Some(terminate) => {
+            docker_command_cancellable(docker, state, "inspect-database", &args, None, terminate)?
+        }
+        None => docker_command(docker, state, "inspect-database", &args, None)?,
+    };
     let values: Vec<Value> =
         serde_json::from_slice(&output).context("Docker returned invalid container inventory")?;
     let container = values
@@ -1957,10 +2140,10 @@ fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
     Ok(Some(container))
 }
 
-fn database(docker: &Path, state: &mut State) -> Result<()> {
+fn database(docker: &Path, state: &mut State, terminate: &AtomicBool) -> Result<()> {
     let root = state.root();
-    if inspect(docker, state)?.is_none() {
-        let created = docker_command(
+    if inspect_with_termination(docker, state, Some(terminate))?.is_none() {
+        let created = docker_command_cancellable(
             docker,
             state,
             "create-database",
@@ -1981,6 +2164,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 IMAGE,
             ],
             None,
+            terminate,
         )?;
         let id = std::str::from_utf8(&created)?.trim();
         if id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -1989,7 +2173,8 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
         state.container_id = Some(id.to_owned());
         state.save()?;
     }
-    let container = inspect(docker, state)?.context("owned database was not created")?;
+    let container = inspect_with_termination(docker, state, Some(terminate))?
+        .context("owned database was not created")?;
     state.container_id = Some(
         container["Id"]
             .as_str()
@@ -2003,7 +2188,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
             ("tls/server.pem", "server.pem"),
             ("tls/server.key", "server.key"),
         ] {
-            docker_command(
+            docker_command_cancellable(
                 docker,
                 state,
                 "copy-database-tls",
@@ -2015,18 +2200,20 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                     &format!("{}:/tmp/casework-dev-{target}", state.container_id()?),
                 ],
                 None,
+                terminate,
             )?;
         }
         state.tls_files_copied = true;
         state.save()?;
     }
     if container["State"]["Running"] != true {
-        docker_command(
+        docker_command_cancellable(
             docker,
             state,
             "start-database",
             &["start", state.container_id()?],
             None,
+            terminate,
         )?;
     }
     let deadline = Instant::now() + READY_DEADLINE;
@@ -2034,7 +2221,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
         if deadline.saturating_duration_since(Instant::now()).is_zero() {
             bail!("owned PostgreSQL did not become ready; inspect private logs");
         }
-        let result = docker_command_before(
+        let result = docker_command_before_cancellable(
             docker,
             state,
             "database-readiness",
@@ -2048,10 +2235,12 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 "postgres",
             ],
             deadline,
+            terminate,
         );
         if result.is_ok() {
             break;
         }
+        ensure_active(terminate)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             bail!("owned PostgreSQL did not become ready; inspect private logs");
@@ -2059,7 +2248,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
         thread::sleep(Duration::from_millis(200).min(remaining));
     }
     if !state.database_ready {
-        docker_command(
+        docker_command_cancellable(
             docker,
             state,
             "tls-ownership",
@@ -2075,8 +2264,9 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 "/tmp/casework-dev-pg_hba.conf",
             ],
             None,
+            terminate,
         )?;
-        docker_command(
+        docker_command_cancellable(
             docker,
             state,
             "tls-permissions",
@@ -2090,8 +2280,9 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 "/tmp/casework-dev-server.key",
             ],
             None,
+            terminate,
         )?;
-        sql(docker,state,"postgres",b"ALTER SYSTEM SET hba_file = '/tmp/casework-dev-pg_hba.conf';\nALTER SYSTEM SET ssl = 'on';\nALTER SYSTEM SET ssl_cert_file = '/tmp/casework-dev-server.pem';\nALTER SYSTEM SET ssl_key_file = '/tmp/casework-dev-server.key';\nSELECT pg_reload_conf();\n",None)?;
+        sql(docker,state,"postgres",b"ALTER SYSTEM SET hba_file = '/tmp/casework-dev-pg_hba.conf';\nALTER SYSTEM SET ssl = 'on';\nALTER SYSTEM SET ssl_cert_file = '/tmp/casework-dev-server.pem';\nALTER SYSTEM SET ssl_key_file = '/tmp/casework-dev-server.key';\nSELECT pg_reload_conf();\n",None,terminate)?;
         for (role, filename) in [
             (MIGRATION_ROLE, "migration-password"),
             (RUNTIME_ROLE, "runtime-password"),
@@ -2107,6 +2298,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 "postgres",
                 statement.as_bytes(),
                 Some(password.as_bytes()),
+                terminate,
             )?;
         }
         let exists = sql(
@@ -2115,6 +2307,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
             "postgres",
             format!("SELECT count(*) FROM pg_database WHERE datname='{DATABASE_NAME}';").as_bytes(),
             None,
+            terminate,
         )?;
         if String::from_utf8_lossy(&exists).trim() == "0" {
             sql(
@@ -2123,12 +2316,13 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 "postgres",
                 format!("CREATE DATABASE {DATABASE_NAME};").as_bytes(),
                 None,
+                terminate,
             )?;
         }
         // Casework's migrations create ordinary tables in `public` and declare
         // no extension and no other schema, so the migration role owns that one
         // schema and the runtime role only reads and writes through it.
-        sql(docker,state,DATABASE_NAME,format!("REVOKE ALL ON DATABASE {DATABASE_NAME} FROM PUBLIC; GRANT CONNECT ON DATABASE {DATABASE_NAME} TO {MIGRATION_ROLE},{RUNTIME_ROLE}; ALTER SCHEMA public OWNER TO {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO {RUNTIME_ROLE}; ALTER DEFAULT PRIVILEGES FOR ROLE {MIGRATION_ROLE} IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {RUNTIME_ROLE}; ALTER DEFAULT PRIVILEGES FOR ROLE {MIGRATION_ROLE} IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO {RUNTIME_ROLE};").as_bytes(),None)?;
+        sql(docker,state,DATABASE_NAME,format!("REVOKE ALL ON DATABASE {DATABASE_NAME} FROM PUBLIC; GRANT CONNECT ON DATABASE {DATABASE_NAME} TO {MIGRATION_ROLE},{RUNTIME_ROLE}; ALTER SCHEMA public OWNER TO {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO {RUNTIME_ROLE}; ALTER DEFAULT PRIVILEGES FOR ROLE {MIGRATION_ROLE} IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {RUNTIME_ROLE}; ALTER DEFAULT PRIVILEGES FOR ROLE {MIGRATION_ROLE} IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO {RUNTIME_ROLE};").as_bytes(),None,terminate)?;
         state.database_ready = true;
         state.save()?;
     }
@@ -2138,8 +2332,8 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
 /// Grant the runtime role what the just-applied migrations created. Default
 /// privileges cover every later object; this covers the ones already there
 /// when an older session's database is reused.
-fn grants(docker: &Path, state: &State) -> Result<()> {
-    sql(docker,state,DATABASE_NAME,format!("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {RUNTIME_ROLE}; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {RUNTIME_ROLE};").as_bytes(),None)?;
+fn grants(docker: &Path, state: &State, terminate: &AtomicBool) -> Result<()> {
+    sql(docker,state,DATABASE_NAME,format!("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {RUNTIME_ROLE}; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {RUNTIME_ROLE};").as_bytes(),None,terminate)?;
     Ok(())
 }
 
@@ -2149,8 +2343,9 @@ fn sql(
     database: &str,
     bytes: &[u8],
     secret: Option<&[u8]>,
+    terminate: &AtomicBool,
 ) -> Result<Vec<u8>> {
-    docker_command(
+    docker_command_cancellable(
         docker,
         state,
         "database-bootstrap",
@@ -2170,6 +2365,7 @@ fn sql(
             database,
         ],
         Some(Input { bytes, secret }),
+        terminate,
     )
 }
 
@@ -2195,13 +2391,16 @@ fn stop_database(docker: &Path, state: &State) -> Result<()> {
     Ok(())
 }
 
-fn tokens(mint: &Path, state: &State, clients: &Clients) -> Result<()> {
-    issue_tokens(state, clients, |id| token(mint, state, id))
+fn tokens(mint: &Path, state: &State, clients: &Clients, terminate: &AtomicBool) -> Result<()> {
+    issue_tokens(state, clients, terminate, |id| {
+        token(mint, state, id, terminate)
+    })
 }
 
 fn issue_tokens(
     state: &State,
     clients: &Clients,
+    terminate: &AtomicBool,
     mut issue: impl FnMut(&str) -> Result<()>,
 ) -> Result<()> {
     let administrator = state.administrator()?;
@@ -2214,17 +2413,19 @@ fn issue_tokens(
     }
     for client in &clients.clients {
         if client.id != administrator.id {
+            ensure_active(terminate)?;
             issue(&client.id)?;
         }
     }
     // This token authorizes the immediately following directory seed. Issue
     // it after every other client so a maximum-sized file cannot age it first.
+    ensure_active(terminate)?;
     issue(&administrator.id)
 }
 
-fn token(mint: &Path, state: &State, id: &str) -> Result<()> {
+fn token(mint: &Path, state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
     let root = state.root();
-    let bytes = Zeroizing::new(command(
+    let bytes = Zeroizing::new(command_cancellable(
         Command::new(mint)
             .arg("token")
             .arg("--url")
@@ -2236,6 +2437,7 @@ fn token(mint: &Path, state: &State, id: &str) -> Result<()> {
         &root,
         "token",
         None,
+        terminate,
     )?);
     let value = std::str::from_utf8(&bytes)
         .context("Mint token output must be ASCII")?
@@ -2252,14 +2454,23 @@ fn token(mint: &Path, state: &State, id: &str) -> Result<()> {
     )
 }
 
-fn http(
+fn http_cancellable(
     method: &str,
     url: &str,
     token: Option<&str>,
     headers: &[(&str, &str)],
     body: Option<Value>,
+    terminate: &AtomicBool,
 ) -> Result<(u16, Value)> {
-    http_with_timeout(method, url, token, headers, body, HTTP_TIMEOUT)
+    http_with_timeout(
+        method,
+        url,
+        token,
+        headers,
+        body,
+        HTTP_TIMEOUT,
+        Some(terminate),
+    )
 }
 
 fn http_with_timeout(
@@ -2269,6 +2480,7 @@ fn http_with_timeout(
     headers: &[(&str, &str)],
     body: Option<Value>,
     timeout: Duration,
+    terminate: Option<&AtomicBool>,
 ) -> Result<(u16, Value)> {
     if timeout.is_zero() {
         bail!("local HTTP prerequisite is unavailable");
@@ -2276,41 +2488,59 @@ fn http_with_timeout(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
+    if let Some(terminate) = terminate {
+        ensure_active(terminate)?;
+    }
     runtime.block_on(async {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeout)
-            .build()?;
-        let mut request = match method {
-            "POST" => client.post(url),
-            _ => client.get(url),
-        };
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-        if let Some(token) = token {
-            request = request.bearer_auth(token);
-        }
-        for (name, value) in headers {
-            request = request.header(*name, *value);
-        }
-        let mut response = request
-            .send()
-            .await
-            .map_err(|_| anyhow::anyhow!("local HTTP prerequisite is unavailable"))?;
-        let status = response.status().as_u16();
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            if bytes.len() + chunk.len() > MAX_BYTES as usize {
-                bail!("local HTTP response exceeded its bound");
+        let request = async {
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(timeout)
+                .build()?;
+            let mut request = match method {
+                "POST" => client.post(url),
+                _ => client.get(url),
+            };
+            if let Some(body) = body {
+                request = request.json(&body);
             }
-            bytes.extend_from_slice(&chunk);
+            if let Some(token) = token {
+                request = request.bearer_auth(token);
+            }
+            for (name, value) in headers {
+                request = request.header(*name, *value);
+            }
+            let mut response = request
+                .send()
+                .await
+                .map_err(|_| anyhow::anyhow!("local HTTP prerequisite is unavailable"))?;
+            let status = response.status().as_u16();
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await? {
+                if bytes.len() + chunk.len() > MAX_BYTES as usize {
+                    bail!("local HTTP response exceeded its bound");
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok((
+                status,
+                serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            ))
+        };
+        match terminate {
+            Some(terminate) => {
+                tokio::select! {
+                    result = request => result,
+                    () = async {
+                        while !terminate.load(Ordering::Relaxed) {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    } => bail!("local start interrupted; active HTTP prerequisite stopped"),
+                }
+            }
+            None => request.await,
         }
-        Ok((
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        ))
     })
 }
 
@@ -2333,6 +2563,7 @@ fn ready_before(
                 &[],
                 None,
                 readiness_http_timeout(remaining),
+                Some(terminate),
             ),
             Ok((200, _))
         )
@@ -2373,7 +2604,8 @@ fn ready_with_probe(
 /// open the inbox. One authored team per declared queue, created as the
 /// Administrator the clients file binds. A team that already serves its queue
 /// is left exactly as it is: retained records survive every restart.
-fn seed(state: &mut State, clients: &Clients) -> Result<()> {
+fn seed(state: &mut State, clients: &Clients, terminate: &AtomicBool) -> Result<()> {
+    ensure_active(terminate)?;
     let administrator = state.administrator()?.clone();
     let token = Zeroizing::new(String::from_utf8(private::read(
         &state
@@ -2384,12 +2616,13 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
     )?)?);
     let profile = administrator.profile.clone();
     let read_directory = |token: &str| -> Result<Value> {
-        let (status, body) = http(
+        let (status, body) = http_cancellable(
             "GET",
             &format!("{}/v1/directory", state.casework_origin()),
             Some(token),
             &[("registry-casework-profile", profile.as_str())],
             None,
+            terminate,
         )?;
         if status != 200 {
             bail!("the local Casework directory could not be read as an Administrator (HTTP {status}); inspect private logs");
@@ -2404,6 +2637,7 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
         .map(|client| (client.id.as_str(), client.principal.as_str()))
         .collect();
     for team in &clients.directory {
+        ensure_active(terminate)?;
         let serving = directory["teams"].as_array().is_some_and(|teams| {
             teams.iter().any(|record| {
                 record["id"] == team.team
@@ -2429,7 +2663,7 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
                 })
                 .collect()
         };
-        let (status, body) = http(
+        let (status, body) = http_cancellable(
             "POST",
             &format!("{}/v1/directory/bootstrap", state.casework_origin()),
             Some(&token),
@@ -2443,6 +2677,7 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
             ],
             Some(json!({"teamId":team.team,"queueId":team.queue,
                 "staff":members(&team.staff)?,"supervisors":members(&team.supervisors)?})),
+            terminate,
         )?;
         if status != 200 {
             bail!("the local Casework directory refused team {} for queue {} (HTTP {status}); inspect the clients file and private logs", team.team, team.queue);

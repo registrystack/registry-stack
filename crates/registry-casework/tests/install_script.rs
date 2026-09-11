@@ -79,6 +79,105 @@ fn failed_atomic_pointer_switch_preserves_a_command_the_pointer_does_not_carry()
 }
 
 #[test]
+fn failed_atomic_pointer_switch_preserves_bregs_mint_link() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_casework_with_breg_mint();
+    let mint_link = fixture.install_dir.join("mint");
+    let previous_mint_target = fs::read_link(&mint_link).unwrap();
+    assert_eq!(previous_mint_target, PathBuf::from(".breg-current/mint"));
+    let previous_casework_target =
+        fs::read_link(fixture.install_dir.join(".casework-current")).unwrap();
+
+    // The pointer is already a symbolic link, so the injected failure is the
+    // first rename onto it.
+    let output = fixture.run_failing_pointer_switch(1);
+
+    assert!(!output.status.success());
+    assert_eq!(fs::read_link(&mint_link).unwrap(), previous_mint_target);
+    assert_eq!(
+        fs::read_to_string(&mint_link).unwrap(),
+        "mint other product binary\n"
+    );
+    assert_eq!(
+        fs::read_link(fixture.install_dir.join(".casework-current")).unwrap(),
+        previous_casework_target
+    );
+}
+
+#[test]
+fn successful_pointer_switch_adopts_another_products_mint_link() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_casework_with_breg_mint();
+
+    let output = fixture.run(false);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_release_toolset_active();
+    assert_eq!(
+        fs::read_link(fixture.install_dir.join("mint")).unwrap(),
+        PathBuf::from(".casework-current/mint")
+    );
+}
+
+#[test]
+fn failed_post_switch_adoption_restores_every_changed_command_and_pointer() {
+    for signal in [None, Some(("INT", 130)), Some(("TERM", 143))] {
+        let fixture = InstallerFixture::new();
+        fixture.preinstall_casework_with_breg_mint();
+        let caseworkctl = fixture.install_dir.join("caseworkctl");
+        fs::remove_file(&caseworkctl).unwrap();
+        fs::write(&caseworkctl, "caseworkctl local wrapper\n").unwrap();
+        fs::set_permissions(&caseworkctl, fs::Permissions::from_mode(0o740)).unwrap();
+        let previous_casework_target =
+            fs::read_link(fixture.install_dir.join(".casework-current")).unwrap();
+        let previous_mint_target = fs::read_link(fixture.install_dir.join("mint")).unwrap();
+        let previous_caseworkctl_mode = fs::metadata(&caseworkctl).unwrap().permissions().mode();
+
+        // `caseworkctl` is adopted first. The injected second adoption moves
+        // the staged `mint` link into place and then either reports failure or
+        // terminates the installer, so both EXIT paths must roll back.
+        let output = match signal {
+            Some((name, _)) => fixture.run_signalled_command_adoption(2, name),
+            None => fixture.run_failing_command_adoption(2),
+        };
+
+        assert!(!output.status.success());
+        if let Some((_, code)) = signal {
+            assert_eq!(output.status.code(), Some(code));
+        }
+        assert_eq!(
+            fs::read_link(fixture.install_dir.join(".casework-current")).unwrap(),
+            previous_casework_target
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.install_dir.join("casework")).unwrap(),
+            "casework previous binary\n"
+        );
+        assert!(!caseworkctl.is_symlink());
+        assert_eq!(
+            fs::read(&caseworkctl).unwrap(),
+            b"caseworkctl local wrapper\n"
+        );
+        assert_eq!(
+            fs::metadata(&caseworkctl).unwrap().permissions().mode(),
+            previous_caseworkctl_mode
+        );
+        assert_eq!(
+            fs::read_link(fixture.install_dir.join("mint")).unwrap(),
+            previous_mint_target
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.install_dir.join("mint")).unwrap(),
+            "mint other product binary\n"
+        );
+    }
+}
+
+#[test]
 fn a_command_the_pointer_does_not_carry_is_adopted_after_the_switch() {
     let fixture = InstallerFixture::new();
     fixture.preinstall_pointer_toolset_without_mint();
@@ -321,6 +420,41 @@ exec /bin/mv "${arguments[@]}"
         fs::write(self.install_dir.join("mint"), "mint previous binary\n").unwrap();
     }
 
+    /// An existing Casework toolset that carries `mint`, while another product
+    /// owns the public shared `mint` command through its own toolset pointer.
+    fn preinstall_casework_with_breg_mint(&self) {
+        let casework_toolset = self.install_dir.join(".casework-toolset.earlier");
+        let breg_toolset = self.install_dir.join(".breg-toolset.earlier");
+        fs::create_dir_all(&casework_toolset).unwrap();
+        fs::create_dir_all(&breg_toolset).unwrap();
+        for binary in BINARIES {
+            let path = casework_toolset.join(binary);
+            fs::write(&path, format!("{binary} previous binary\n")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let breg_mint = breg_toolset.join("mint");
+        fs::write(&breg_mint, "mint other product binary\n").unwrap();
+        fs::set_permissions(&breg_mint, fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(
+            ".casework-toolset.earlier",
+            self.install_dir.join(".casework-current"),
+        )
+        .unwrap();
+        for binary in ["casework", "caseworkctl"] {
+            std::os::unix::fs::symlink(
+                format!(".casework-current/{binary}"),
+                self.install_dir.join(binary),
+            )
+            .unwrap();
+        }
+        std::os::unix::fs::symlink(
+            ".breg-toolset.earlier",
+            self.install_dir.join(".breg-current"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(".breg-current/mint", self.install_dir.join("mint")).unwrap();
+    }
+
     fn command(&self) -> Command {
         let path = format!(
             "{}:{}",
@@ -362,13 +496,38 @@ exec /bin/mv "${arguments[@]}"
             .unwrap()
     }
 
+    /// Runs an install whose `nth` post-pointer command adoption moves the new
+    /// link into place and then reports failure.
+    fn run_failing_command_adoption(&self, nth: u32) -> Output {
+        self.install_failing_mv();
+        self.command()
+            .env("REAL_MV", "/bin/mv")
+            .env("FAKE_MV_COMMAND_COUNT", self.root.join("mv-command-count"))
+            .env("FAKE_MV_COMMAND_FAIL_AT", nth.to_string())
+            .output()
+            .unwrap()
+    }
+
+    /// Runs an install terminated immediately after the `nth` post-pointer
+    /// command adoption has moved the new link into place.
+    fn run_signalled_command_adoption(&self, nth: u32, signal: &str) -> Output {
+        self.install_failing_mv();
+        self.command()
+            .env("REAL_MV", "/bin/mv")
+            .env("FAKE_MV_COMMAND_COUNT", self.root.join("mv-command-count"))
+            .env("FAKE_MV_COMMAND_SIGNAL_AT", nth.to_string())
+            .env("FAKE_MV_COMMAND_SIGNAL", signal)
+            .output()
+            .unwrap()
+    }
+
     fn install_failing_mv(&self) {
         write_executable(
             &self.fake_bin.join("mv"),
             r#"#!/usr/bin/env bash
 set -euo pipefail
 destination="${@: -1}"
-if [[ "$destination" == */.casework-current ]]; then
+if [[ "$destination" == */.casework-current && -n "${FAKE_MV_FAIL_AT:-}" ]]; then
   count=0
   if [[ -f "$FAKE_MV_COUNT" ]]; then
     read -r count < "$FAKE_MV_COUNT"
@@ -377,6 +536,24 @@ if [[ "$destination" == */.casework-current ]]; then
   printf '%s\n' "$count" > "$FAKE_MV_COUNT"
   if [[ "$count" -eq "$FAKE_MV_FAIL_AT" ]]; then
     exit 73
+  fi
+fi
+if [[ "$destination" != */.casework-current &&
+      ( -n "${FAKE_MV_COMMAND_FAIL_AT:-}" || -n "${FAKE_MV_COMMAND_SIGNAL_AT:-}" ) ]]; then
+  count=0
+  if [[ -f "$FAKE_MV_COMMAND_COUNT" ]]; then
+    read -r count < "$FAKE_MV_COMMAND_COUNT"
+  fi
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$FAKE_MV_COMMAND_COUNT"
+  if [[ "$count" -eq "${FAKE_MV_COMMAND_FAIL_AT:-0}" ]]; then
+    "$REAL_MV" "$@"
+    exit 73
+  fi
+  if [[ "$count" -eq "${FAKE_MV_COMMAND_SIGNAL_AT:-0}" ]]; then
+    "$REAL_MV" "$@"
+    kill -s "$FAKE_MV_COMMAND_SIGNAL" "$PPID"
+    exit 0
   fi
 fi
 exec "$REAL_MV" "$@"

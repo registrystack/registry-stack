@@ -719,21 +719,219 @@ fn database_readiness_commands_stop_at_the_aggregate_deadline() {
     private::directory(&root.path().join("logs")).unwrap();
     let started = Instant::now();
     let deadline = started + Duration::from_millis(75);
+    let terminate = AtomicBool::new(false);
 
     let refusal = format!(
         "{:#}",
-        command_before(
+        command_before_cancellable(
             Command::new("/bin/sh").args(["-c", "while :; do :; done"]),
             root.path(),
             "database-readiness",
             None,
             deadline,
+            &terminate,
         )
         .unwrap_err()
     );
 
     assert!(refusal.contains("timed out"), "{refusal}");
     assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn interrupted_native_prerequisite_is_killed_and_reaped() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    let marker = root.path().join("prerequisite.pid");
+    let terminate = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&terminate);
+    let marker_for_signal = marker.clone();
+    let interrupter = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !marker_for_signal.exists() {
+            assert!(Instant::now() < deadline, "prerequisite did not start");
+            thread::sleep(Duration::from_millis(5));
+        }
+        signal.store(true, Ordering::Relaxed);
+    });
+    let started = Instant::now();
+
+    let refusal = format!(
+        "{:#}",
+        command_cancellable(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("printf '%s' \"$$\" > \"$1\"; while :; do :; done")
+                .arg("prerequisite")
+                .arg(&marker),
+            root.path(),
+            "interruptible-prerequisite",
+            None,
+            &terminate,
+        )
+        .unwrap_err()
+    );
+    interrupter.join().unwrap();
+    let pid = fs::read_to_string(&marker).unwrap().parse::<i32>().unwrap();
+    let pid = rustix::process::Pid::from_raw(pid).unwrap();
+
+    assert!(refusal.contains("interrupted"), "{refusal}");
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(rustix::process::test_kill_process(pid).is_err());
+}
+
+#[test]
+fn native_pump_setup_failures_reap_the_child_and_join_started_pumps() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    for fail_on in [1, 2] {
+        let child = Command::new("/bin/sleep")
+            .arg("5")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = rustix::process::Pid::from_raw(child.id() as i32).unwrap();
+        let log = log_file(root.path(), "pump-setup").unwrap();
+        let joined = Arc::new(AtomicBool::new(false));
+        let mut calls = 0;
+        let started = Instant::now();
+
+        let refusal = format!(
+            "{:#}",
+            output_from_child_with_pump_spawner(
+                child,
+                NativeRun {
+                    root: root.path(),
+                    name: "pump-setup",
+                    log,
+                    input: None,
+                    aggregate_deadline: None,
+                    terminate: None,
+                },
+                |_stream, task| {
+                    calls += 1;
+                    if calls == fail_on {
+                        return Err(std::io::Error::other("injected pump spawn failure"));
+                    }
+                    let joined = Arc::clone(&joined);
+                    thread::Builder::new().spawn(move || {
+                        let result = task();
+                        joined.store(true, Ordering::Relaxed);
+                        result
+                    })
+                },
+            )
+            .err()
+            .expect("selected pump spawn must fail")
+        );
+
+        let reader = if fail_on == 1 { "output" } else { "diagnostic" };
+        assert!(refusal.contains(reader), "{refusal}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(joined.load(Ordering::Relaxed), fail_on == 2);
+        assert!(rustix::process::test_kill_process(pid).is_err());
+    }
+}
+
+#[test]
+fn failed_native_stdin_write_reaps_the_child_and_joins_pumps() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    let child = Command::new("/bin/sh")
+        .args(["-c", "exec 0<&-; while :; do :; done"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = rustix::process::Pid::from_raw(child.id() as i32).unwrap();
+    let log = log_file(root.path(), "closed-stdin").unwrap();
+    let input = vec![b'x'; MAX_BYTES as usize];
+    let stdout_joined = Arc::new(AtomicBool::new(false));
+    let stderr_joined = Arc::new(AtomicBool::new(false));
+    let started = Instant::now();
+
+    let refusal = format!(
+        "{:#}",
+        output_from_child_with_pump_spawner(
+            child,
+            NativeRun {
+                root: root.path(),
+                name: "closed-stdin",
+                log,
+                input: Some(Input {
+                    bytes: &input,
+                    secret: None,
+                }),
+                aggregate_deadline: None,
+                terminate: None,
+            },
+            |stream, task| {
+                let joined = if stream == "stdout" {
+                    Arc::clone(&stdout_joined)
+                } else {
+                    Arc::clone(&stderr_joined)
+                };
+                thread::Builder::new().spawn(move || {
+                    let result = task();
+                    joined.store(true, Ordering::Relaxed);
+                    result
+                })
+            },
+        )
+        .err()
+        .expect("closed stdin must refuse the input")
+    );
+
+    assert!(
+        refusal.contains("write native prerequisite input"),
+        "{refusal}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(stdout_joined.load(Ordering::Relaxed));
+    assert!(stderr_joined.load(Ordering::Relaxed));
+    assert!(rustix::process::test_kill_process(pid).is_err());
+}
+
+#[test]
+fn active_http_prerequisite_stops_promptly_when_interrupted() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let terminate = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&terminate);
+    let release_server = Arc::clone(&release);
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut request = [0u8; 1];
+        assert_eq!(stream.read(&mut request).unwrap(), 1);
+        signal.store(true, Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !release_server.load(Ordering::Relaxed) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+    let started = Instant::now();
+
+    let result = http_cancellable(
+        "GET",
+        &format!("http://{address}/never-respond"),
+        None,
+        &[],
+        None,
+        &terminate,
+    );
+    let elapsed = started.elapsed();
+    release.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    let refusal = format!("{:#}", result.unwrap_err());
+
+    assert!(refusal.contains("interrupted"), "{refusal}");
+    assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
 }
 
 #[test]
@@ -1097,8 +1295,9 @@ fn seeding_administrator_token_is_issued_after_every_other_client() {
         })
         .collect();
     let mut issued = Vec::new();
+    let terminate = AtomicBool::new(false);
 
-    issue_tokens(&state, &clients, |id| {
+    issue_tokens(&state, &clients, &terminate, |id| {
         issued.push(id.to_owned());
         Ok(())
     })
@@ -1114,6 +1313,60 @@ fn seeding_administrator_token_is_issued_after_every_other_client() {
             .map(|client| client.id.clone())
             .collect()
     );
+}
+
+#[test]
+fn token_issuance_stops_between_clients_when_interrupted() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    let mut state = session(&project);
+    let clients = Clients {
+        version: 1,
+        clients: vec![
+            config::Client {
+                id: "administrator".to_owned(),
+                access_profile: "administrator".to_owned(),
+                scopes: vec!["casework:admin".to_owned()],
+                claims: BTreeMap::new(),
+            },
+            config::Client {
+                id: "requester".to_owned(),
+                access_profile: "requester".to_owned(),
+                scopes: vec!["casework:request".to_owned()],
+                claims: BTreeMap::new(),
+            },
+        ],
+        directory: Vec::new(),
+    };
+    state.clients = vec![
+        ReportedClient {
+            id: "administrator".to_owned(),
+            profile: "administrator".to_owned(),
+            role: CaseworkRole::Administrator,
+            principal: config::principal("administrator"),
+        },
+        ReportedClient {
+            id: "requester".to_owned(),
+            profile: "requester".to_owned(),
+            role: CaseworkRole::Requester,
+            principal: config::principal("requester"),
+        },
+    ];
+    let terminate = AtomicBool::new(false);
+    let mut issued = Vec::new();
+
+    let refusal = format!(
+        "{:#}",
+        issue_tokens(&state, &clients, &terminate, |id| {
+            issued.push(id.to_owned());
+            terminate.store(true, Ordering::Relaxed);
+            Ok(())
+        })
+        .unwrap_err()
+    );
+
+    assert!(refusal.contains("interrupted"), "{refusal}");
+    assert_eq!(issued, ["requester"]);
 }
 
 #[test]
