@@ -800,19 +800,24 @@ impl PostgresStore {
         let now = Utc::now();
         let holder = claim.then_some(&actor.principal);
         let previous_holder = item.holder.clone();
-        transaction.execute(
-            "UPDATE casework_items SET holder_issuer=$2,holder_subject=$3,state=$4,revision=$5,updated_at=$6,assignment_owner_issuer=$7,assignment_owner_subject=$8,assigned_by_issuer=NULL,assigned_by_subject=NULL,assignment_absence_ids='{}',staffing_diagnostic=NULL WHERE item_id=$1",
-            &[&item_id,&holder.map(|p| &p.issuer),&holder.map(|p| &p.subject),&state_name(next_state),&next_revision,&now,&holder.map(|p| &p.issuer),&holder.map(|p| &p.subject)]
-        ).await?;
+        transaction
+            .execute(
+                &format!(
+                    "UPDATE casework_items SET {},state=$4,revision=$5,updated_at=$6 WHERE item_id=$1",
+                    holder_columns_set("$2", "$3")
+                ),
+                &[
+                    &item_id,
+                    &holder.map(|p| &p.issuer),
+                    &holder.map(|p| &p.subject),
+                    &state_name(next_state),
+                    &next_revision,
+                    &now,
+                ],
+            )
+            .await?;
         let mut updated = item;
-        updated.holder = holder.cloned();
-        updated.held_since = None;
-        updated.assignment = holder.cloned().map(|owner| AssignmentContext {
-            owner: Some(owner),
-            assigned_by: None,
-            absence_ids: Vec::new(),
-            staffing_diagnostic: None,
-        });
+        set_holder(&mut updated, holder.cloned());
         updated.state = next_state;
         updated.revision = next_revision;
         updated.updated_at = now;
@@ -2456,6 +2461,31 @@ async fn ensure_no_live_attempt(
     }
 }
 
+/// Every `casework_items` column that belongs to the current holder: the
+/// holder principal and the assignment context bound to it. A statement that
+/// moves or drops the holder sets all of them together, so no caseload or
+/// staffing view keeps a value that belonged to the previous holder. The two
+/// arguments are the SQL expressions for the new holder: bind placeholders
+/// when the statement carries one, `NULL` when it clears one.
+fn holder_columns_set(holder_issuer: &str, holder_subject: &str) -> String {
+    format!(
+        "holder_issuer={holder_issuer},holder_subject={holder_subject},assignment_owner_issuer={holder_issuer},assignment_owner_subject={holder_subject},assigned_by_issuer=NULL,assigned_by_subject=NULL,assignment_absence_ids='{{}}',staffing_diagnostic=NULL"
+    )
+}
+
+/// Apply to an in-memory item the holder change that `holder_columns_set`
+/// applies to its row.
+fn set_holder(item: &mut WorkItem, holder: Option<IssuerPrincipal>) {
+    item.assignment = holder.clone().map(|owner| AssignmentContext {
+        owner: Some(owner),
+        assigned_by: None,
+        absence_ids: Vec::new(),
+        staffing_diagnostic: None,
+    });
+    item.held_since = None;
+    item.holder = holder;
+}
+
 async fn update_observed_item(
     transaction: &tokio_postgres::Transaction<'_>,
     item: &WorkItem,
@@ -2465,9 +2495,11 @@ async fn update_observed_item(
 ) -> Result<WorkItem, StoreError> {
     if transaction.query_one("SELECT EXISTS(SELECT 1 FROM casework_attempts WHERE item_id=$1 AND state IN ('pending','uncertain'))", &[&item.item_id]).await?.get::<_,bool>(0) { return Ok(item.clone()); }
     let state = transition(item.state, event).map_err(|_| StoreError::Corrupt)?;
-    let holder = (state == OccurrenceState::Claimed)
-        .then(|| item.holder.clone())
-        .flatten();
+    // Only a claimed occurrence carries a holder. Any other observed state
+    // displaces the officer, so the claim and the assignment bound to it are
+    // cleared together and the loss is recorded below as a release.
+    let keeps_holder = state == OccurrenceState::Claimed;
+    let displaced_holder = (!keeps_holder).then(|| item.holder.clone()).flatten();
     let next = item.revision + 1;
     let next_binding = if state == OccurrenceState::Superseded {
         &item.binding
@@ -2475,12 +2507,24 @@ async fn update_observed_item(
         &observation.binding
     };
     let binding = serde_json::to_value(next_binding)?;
-    transaction.execute("UPDATE casework_items SET binding=$2,state=$3,holder_issuer=$4,holder_subject=$5,revision=$6,updated_at=$7 WHERE item_id=$1", &[&item.item_id,&binding,&state_name(state),&holder.as_ref().map(|p|&p.issuer),&holder.as_ref().map(|p|&p.subject),&next,&now]).await?;
     let mut updated = item.clone();
+    if keeps_holder {
+        transaction.execute("UPDATE casework_items SET binding=$2,state=$3,revision=$4,updated_at=$5 WHERE item_id=$1", &[&item.item_id,&binding,&state_name(state),&next,&now]).await?;
+    } else {
+        transaction
+            .execute(
+                &format!(
+                    "UPDATE casework_items SET {},binding=$2,state=$3,revision=$4,updated_at=$5 WHERE item_id=$1",
+                    holder_columns_set("NULL", "NULL")
+                ),
+                &[&item.item_id, &binding, &state_name(state), &next, &now],
+            )
+            .await?;
+        set_holder(&mut updated, None);
+    }
     updated.binding = next_binding.clone();
     updated.binding_reference = binding_reference(&updated.subject, &updated.binding)?;
     updated.state = state;
-    updated.holder = holder;
     updated.revision = next;
     updated.updated_at = now;
     let kind = if state == OccurrenceState::Superseded {
@@ -2502,6 +2546,17 @@ async fn update_observed_item(
         json!({"sourceRevision":observation.ordered_revision}),
     )
     .await?;
+    if let Some(previous_holder) = displaced_holder {
+        append_item_event(
+            transaction,
+            &updated,
+            HistoryKind::Released,
+            None,
+            "system:reconciliation",
+            json!({"previousHolder":previous_holder,"reason":"source_observation","sourceRevision":observation.ordered_revision}),
+        )
+        .await?;
+    }
     Ok(updated)
 }
 

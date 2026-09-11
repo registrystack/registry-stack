@@ -11,11 +11,11 @@ use registry_casework_core::{
     CaseloadItemOutcome, CaseloadItemSelection, CaseloadMoveRequest, CaseworkIdentity,
     CaseworkProject, CaseworkRole, DelegateRequest, DirectoryTargetPurpose,
     DirectoryTeamUpdateRequest, DiscoveryCursor, EphemeralCredential, EventRequest,
-    ExecutePreparedRequest, HostedCreateRequest, HostedHistoryKind, HostedKindPolicy,
+    ExecutePreparedRequest, HistoryKind, HostedCreateRequest, HostedHistoryKind, HostedKindPolicy,
     HostedOutcomePolicy, HostedRetentionPolicy, InboxPolicy, IssuerPrincipal, OccurrenceKind,
-    OccurrenceState, PageStatus, PrepareActionRequest, PreparedSourceAttempt, QueuePolicy,
-    SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt,
-    SourceRequestPolicy, StaffingDiagnostic, SubjectRef, TransitionHint,
+    OccurrenceState, OperationName, PageStatus, PrepareActionRequest, PreparedSourceAttempt,
+    QueuePolicy, RecoveryEvidence, SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy,
+    SourceReceipt, SourceRequestPolicy, StaffingDiagnostic, SubjectRef, TransitionHint,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -294,29 +294,43 @@ fn binding() -> SourceBinding {
     }
 }
 
+fn source_observation(
+    subject_id: Uuid,
+    ordered_revision: i64,
+    representation_etag: &str,
+    state: OccurrenceState,
+) -> AuthoritativeObservation {
+    AuthoritativeObservation {
+        subject: SubjectRef {
+            source_id: SOURCE_ID.to_owned(),
+            kind: SOURCE_KIND.to_owned(),
+            id: subject_id.to_string(),
+        },
+        occurrence_key: "review:1".to_owned(),
+        ordered_revision,
+        representation_etag: representation_etag.to_owned(),
+        binding: binding(),
+        occurrence_kind: OccurrenceKind::Review,
+        stage: Some("review".to_owned()),
+        submitted_at: None,
+        stage_entered_at: None,
+        review_timing: None,
+        routing_context: None,
+        state,
+        remaining_actions: Vec::new(),
+    }
+}
+
 async fn add_source_item(fixture: &Fixture, subject_id: Uuid) -> registry_casework_core::WorkItem {
     fixture
         .store
         .apply_observation(
-            &AuthoritativeObservation {
-                subject: SubjectRef {
-                    source_id: SOURCE_ID.to_owned(),
-                    kind: SOURCE_KIND.to_owned(),
-                    id: subject_id.to_string(),
-                },
-                occurrence_key: "review:1".to_owned(),
-                ordered_revision: 1,
-                representation_etag: format!("\"{subject_id}\""),
-                binding: binding(),
-                occurrence_kind: OccurrenceKind::Review,
-                stage: Some("review".to_owned()),
-                submitted_at: None,
-                stage_entered_at: None,
-                review_timing: None,
-                routing_context: None,
-                state: OccurrenceState::Open,
-                remaining_actions: Vec::new(),
-            },
+            &source_observation(
+                subject_id,
+                1,
+                &format!("\"{subject_id}\""),
+                OccurrenceState::Open,
+            ),
             QUEUE,
             None,
         )
@@ -1700,4 +1714,154 @@ async fn team_reorganization_revokes_immediately_and_reconciliation_defers_live_
             .get(0);
         assert_eq!(releases, 1);
     }
+}
+
+#[tokio::test]
+async fn source_observation_that_drops_the_holder_clears_the_assignment_and_records_the_release() {
+    let subject_id = Uuid::new_v4();
+    let fixture = fixture([(subject_id, ReadMode::Visible)]).await;
+    let item = add_source_item(&fixture, subject_id).await;
+    let absence = fixture
+        .service
+        .create_absence(
+            &fixture.supervisor,
+            1,
+            &AbsenceInput {
+                person: fixture.staff_a.principal.clone(),
+                from: Utc::now() - TimeDelta::hours(1),
+                until: Utc::now() + TimeDelta::hours(1),
+                cover: fixture.staff_b.principal.clone(),
+            },
+            "absence-observed-open",
+        )
+        .await
+        .expect("record active absence");
+    let assigned = fixture
+        .service
+        .assign_item(
+            &fixture.supervisor,
+            Some("source-profile"),
+            "token",
+            item.item_id,
+            item.revision,
+            &AssignmentRequest {
+                assignee: fixture.staff_a.principal.clone(),
+                reason: Some("cover the review".to_owned()),
+            },
+            "assign-observed-open",
+        )
+        .await
+        .expect("assign the source item through the active absence");
+    assert_eq!(assigned.holder, Some(fixture.staff_b.principal.clone()));
+    let context = assigned.assignment.clone().expect("assignment context");
+    assert_eq!(context.owner, Some(fixture.staff_a.principal.clone()));
+    assert_eq!(
+        context.assigned_by,
+        Some(fixture.supervisor.principal.clone())
+    );
+    assert_eq!(context.absence_ids, vec![absence.absence_id]);
+
+    // An attempt that has already settled leaves the item synchronizing with
+    // no execution in flight, which is the state a source observation may move
+    // back to open.
+    let prepared = PreparedSourceAttempt {
+        source_binding: assigned.binding.clone(),
+        recovery_evidence: RecoveryEvidence::new(b"inert recovery capsule".to_vec())
+            .expect("bounded recovery evidence"),
+    };
+    let attempt = fixture
+        .store
+        .reserve_attempt(
+            &fixture.staff_b,
+            item.item_id,
+            assigned.revision,
+            "source-profile",
+            OperationName::parse("approve").expect("approve operation"),
+            None,
+            &[],
+            "attempt-observed-open",
+            "sha256:request-observed-open",
+            &prepared,
+        )
+        .await
+        .expect("the holder reserves an attempt");
+    fixture
+        .store
+        .complete_attempt(
+            &fixture.staff_b,
+            attempt.attempt_id,
+            &SourceReceipt {
+                source_revision: "2".to_owned(),
+                resulting_state: "approved".to_owned(),
+                binding: assigned.binding.clone(),
+                actor_reference: None,
+                metadata: BTreeMap::new(),
+            },
+        )
+        .await
+        .expect("settle the attempt");
+    let synchronizing = fixture
+        .store
+        .item(item.item_id)
+        .await
+        .expect("item after the settled attempt");
+    assert_eq!(synchronizing.state, OccurrenceState::Synchronizing);
+    assert_eq!(
+        synchronizing.holder,
+        Some(fixture.staff_b.principal.clone())
+    );
+
+    let observed = fixture
+        .store
+        .apply_observation(
+            &source_observation(subject_id, 2, "\"reopened\"", OccurrenceState::Open),
+            QUEUE,
+            None,
+        )
+        .await
+        .expect("apply the reopening observation")
+        .expect("the observation updates the existing item");
+    assert_eq!(observed.item_id, item.item_id);
+    assert_eq!(observed.state, OccurrenceState::Open);
+    assert_eq!(observed.holder, None);
+    assert_eq!(observed.assignment, None);
+
+    let row = fixture
+        .database
+        .query_one(
+            "SELECT holder_issuer,holder_subject,assignment_owner_issuer,assignment_owner_subject,assigned_by_issuer,assigned_by_subject,assignment_absence_ids,staffing_diagnostic FROM casework_items WHERE item_id=$1",
+            &[&item.item_id],
+        )
+        .await
+        .expect("read the observed item row");
+    for column in 0..6 {
+        assert_eq!(row.get::<_, Option<String>>(column), None);
+    }
+    assert!(row.get::<_, Vec<Uuid>>(6).is_empty());
+    assert_eq!(row.get::<_, Option<String>>(7), None);
+
+    let history = fixture
+        .store
+        .history(&fixture.supervisor, item.item_id, 100)
+        .await
+        .expect("supervisor reads the item history");
+    let observation_event = history
+        .iter()
+        .find(|event| {
+            event.kind == HistoryKind::Observed && event.item_revision == observed.revision
+        })
+        .expect("the observation is recorded");
+    assert_eq!(observation_event.detail["sourceRevision"], json!(2));
+    let release = history
+        .iter()
+        .find(|event| {
+            event.kind == HistoryKind::Released && event.item_revision == observed.revision
+        })
+        .expect("the displaced claim is recorded as a release");
+    assert_eq!(
+        release.detail["previousHolder"],
+        json!(fixture.staff_b.principal)
+    );
+    assert_eq!(release.detail["reason"], json!("source_observation"));
+    assert_eq!(release.detail["sourceRevision"], json!(2));
 }
