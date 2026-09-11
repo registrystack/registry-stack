@@ -19,7 +19,7 @@ relevant product pages on this site rather than duplicating release notes.
 ## Unreleased
 
 - Base Registry Engine warns about unknown or disallowed access-token key
-  identifiers on the `registry_breg::auth` target, at most once per minute
+  identifiers in its JSON log messages, at most once per minute
   per authenticator. Caller refusals remain value-free. The warning does
   not establish provider key rotation. The operations guide describes how
   to confirm rotation and replace a static `documentRef` pin supplied by
