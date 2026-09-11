@@ -621,6 +621,133 @@ fn a_completed_session_can_be_reclaimed_after_its_ports_are_reused() {
 }
 
 #[test]
+fn volume_removal_requires_the_retained_owner_label() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    let state = session(&project);
+    let mut wrong_labels = serde_json::Map::new();
+    wrong_labels.insert(LABEL.to_owned(), Value::String("another-owner".to_owned()));
+    let unrelated = json!({
+        "Name": state.volume_name(),
+        "Labels": Value::Object(wrong_labels),
+    });
+    let mut removed = false;
+
+    let refusal = format!(
+        "{:#}",
+        remove_verified_volume(&state, Some(unrelated), None, |_| {
+            removed = true;
+            Ok(())
+        })
+        .unwrap_err()
+    );
+
+    assert!(refusal.contains("volume ownership differs"), "{refusal}");
+    assert!(!removed);
+
+    let mut owned_labels = serde_json::Map::new();
+    owned_labels.insert(LABEL.to_owned(), Value::String(state.owner.clone()));
+    let owned = json!({
+        "Name": state.volume_name(),
+        "Labels": Value::Object(owned_labels),
+    });
+    remove_verified_volume(&state, Some(owned), None, |name| {
+        assert_eq!(name, state.volume_name());
+        removed = true;
+        Ok(())
+    })
+    .unwrap();
+    assert!(removed);
+}
+
+fn legacy_database_container(state: &State, volume_name: &str, destination: &str) -> Value {
+    let mut labels = serde_json::Map::new();
+    labels.insert(LABEL.to_owned(), Value::String(state.owner.clone()));
+    json!({
+        "Id": state.container_id.as_ref().unwrap(),
+        "Name": format!("/{}", state.container_name()),
+        "Config": {
+            "Labels": Value::Object(labels),
+            "Image": IMAGE,
+        },
+        "Mounts": [{
+            "Type": "volume",
+            "Name": volume_name,
+            "Destination": destination,
+        }],
+    })
+}
+
+#[test]
+fn legacy_unlabeled_volume_requires_the_exact_retained_container_and_mount() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    let mut state = session(&project);
+    state.container_id = Some("retained-container-id".to_owned());
+    let volume = json!({
+        "Name": state.volume_name(),
+        "Labels": null,
+    });
+    let container =
+        legacy_database_container(&state, &state.volume_name(), "/var/lib/postgresql/data");
+    let mut removed = false;
+
+    remove_verified_volume(&state, Some(volume.clone()), Some(&container), |name| {
+        assert_eq!(name, state.volume_name());
+        removed = true;
+        Ok(())
+    })
+    .unwrap();
+    assert!(removed);
+
+    for (container, expected) in [
+        (None, "retained container is absent"),
+        (
+            Some(legacy_database_container(
+                &state,
+                "different-volume",
+                "/var/lib/postgresql/data",
+            )),
+            "is not mounted",
+        ),
+        (
+            Some(legacy_database_container(
+                &state,
+                &state.volume_name(),
+                "/different-destination",
+            )),
+            "is not mounted",
+        ),
+    ] {
+        removed = false;
+        let refusal = format!(
+            "{:#}",
+            remove_verified_volume(&state, Some(volume.clone()), container.as_ref(), |_| {
+                removed = true;
+                Ok(())
+            })
+            .unwrap_err()
+        );
+        assert!(refusal.contains(expected), "{refusal}");
+        assert!(!removed);
+    }
+
+    let mut wrong_container = container.clone();
+    wrong_container["Id"] = Value::String("different-container-id".to_owned());
+    removed = false;
+    let refusal = format!(
+        "{:#}",
+        remove_verified_volume(&state, Some(volume), Some(&wrong_container), |_| {
+            removed = true;
+            Ok(())
+        })
+        .unwrap_err()
+    );
+    assert!(refusal.contains("container ownership differs"), "{refusal}");
+    assert!(!removed);
+}
+
+#[test]
 fn foreground_interruption_terminates_and_reaps_its_owned_supervisor() {
     let workspace = tempfile::tempdir().unwrap();
     let project = standalone(workspace.path());
@@ -633,8 +760,8 @@ fn foreground_interruption_terminates_and_reaps_its_owned_supervisor() {
     let mut supervisor = Command::new("/bin/sh")
         .args(["-c", "while :; do :; done"])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn()
         .unwrap();
     let interrupted = AtomicBool::new(true);
@@ -1215,6 +1342,254 @@ fn invalid_service_journal_is_refused_before_the_child_starts() {
 }
 
 #[test]
+fn service_guard_process_helper() {
+    let Some(encoded) = std::env::var_os("CASEWORKCTL_TEST_SERVICE_GUARD_ARGV") else {
+        return;
+    };
+    let mut arguments: Vec<String> = serde_json::from_str(&encoded.to_string_lossy()).unwrap();
+    let binary = arguments.remove(0);
+    let interruption = StartInterruption::install().unwrap();
+    let mut command = Command::new(binary);
+    command.args(arguments).stdin(Stdio::null());
+    let forced = guard_service_command(
+        command,
+        std::io::stdin(),
+        Arc::clone(&interruption.requested),
+        Duration::from_millis(500),
+        Duration::from_millis(500),
+    )
+    .unwrap();
+    if forced {
+        std::process::exit(i32::from(SERVICE_GUARD_FORCED_EXIT));
+    }
+}
+
+#[test]
+fn service_guard_supervisor_helper() {
+    let Some(root) = std::env::var_os("CASEWORKCTL_TEST_GUARD_ROOT").map(PathBuf::from) else {
+        return;
+    };
+    let binary = PathBuf::from(std::env::var_os("CASEWORKCTL_TEST_GUARD_BINARY").unwrap());
+    private::directory(&root.join("logs")).unwrap();
+    let _service = service(
+        &binary,
+        &[],
+        &root.join("service.pid"),
+        &[],
+        &root,
+        "guarded",
+    )
+    .unwrap();
+    loop {
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+#[test]
+fn guarded_service_stops_after_its_supervisor_is_killed() {
+    let root = tempfile::tempdir().unwrap();
+    let binary = root.path().join("service.sh");
+    fs::write(
+        &binary,
+        b"#!/bin/sh\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.02; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut supervisor = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "dev::tests::service_guard_supervisor_helper",
+            "--nocapture",
+        ])
+        .env("CASEWORKCTL_TEST_GUARD_ROOT", root.path())
+        .env("CASEWORKCTL_TEST_GUARD_BINARY", &binary)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let service_pid_file = root.path().join("service.pid");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !service_pid_file.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !service_pid_file.exists() {
+        supervisor.kill().unwrap();
+        supervisor.wait().unwrap();
+        panic!("guarded service did not start");
+    }
+    let service_pid = fs::read_to_string(&service_pid_file)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    let service_pid = rustix::process::Pid::from_raw(service_pid).unwrap();
+    let started = Instant::now();
+
+    // SIGKILL skips every supervisor destructor. The kernel still closes the
+    // supervisor's liveness writer, which must stop the exact guarded child.
+    supervisor.kill().unwrap();
+    supervisor.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while rustix::process::test_kill_process(service_pid).is_ok() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let stopped = rustix::process::test_kill_process(service_pid).is_err();
+    if !stopped {
+        rustix::process::kill_process(service_pid, rustix::process::Signal::KILL).unwrap();
+    }
+
+    assert!(stopped, "guarded service survived supervisor death");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn service_guard_owns_a_stubborn_child_during_startup_interruption() {
+    let root = tempfile::tempdir().unwrap();
+    let binary = root.path().join("stubborn.sh");
+    let service_pid_file = root.path().join("service.pid");
+    fs::write(
+        &binary,
+        b"#!/bin/sh\ntrap '' TERM\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.02; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let (reader, writer) = UnixStream::pair().unwrap();
+    let terminate = Arc::new(AtomicBool::new(false));
+    let request = Arc::clone(&terminate);
+    let marker = service_pid_file.clone();
+    let requester = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let ready = marker.exists();
+        if ready {
+            request.store(true, Ordering::Relaxed);
+        }
+        // EOF is also a cleanup request if readiness failed, so the assertion
+        // below cannot strand whatever the guard managed to spawn.
+        drop(writer);
+        ready
+    });
+    let mut command = Command::new(&binary);
+    command.arg(&service_pid_file).stdin(Stdio::null());
+
+    let forced = guard_service_command(
+        command,
+        reader,
+        terminate,
+        Duration::from_millis(50),
+        Duration::from_millis(50),
+    )
+    .unwrap();
+    let ready = requester.join().unwrap();
+    assert!(
+        ready,
+        "stubborn service did not reach its startup handshake"
+    );
+    let service_pid = fs::read_to_string(&service_pid_file)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    let service_pid = rustix::process::Pid::from_raw(service_pid).unwrap();
+
+    assert!(forced);
+    assert!(rustix::process::test_kill_process(service_pid).is_err());
+}
+
+#[test]
+fn service_guard_does_not_force_kill_after_a_fast_term_exit() {
+    let (reader, writer) = UnixStream::pair().unwrap();
+    drop(writer);
+    let mut command = Command::new("/bin/sleep");
+    command.arg("5").stdin(Stdio::null());
+
+    let forced = guard_service_command(
+        command,
+        reader,
+        Arc::new(AtomicBool::new(false)),
+        Duration::from_millis(100),
+        Duration::from_millis(100),
+    )
+    .unwrap();
+
+    assert!(!forced);
+}
+
+#[test]
+fn established_service_keeps_its_graceful_shutdown_window() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    let binary = root.path().join("service.sh");
+    let graceful = root.path().join("graceful");
+    fs::write(
+        &binary,
+        b"#!/bin/sh\ntrap 'sleep 0.2; printf graceful > \"$2\"; exit 0' TERM\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.02; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let service_pid_file = root.path().join("service.pid");
+    let mut service = service(
+        &binary,
+        &[],
+        &service_pid_file,
+        &[graceful.to_str().unwrap()],
+        root.path(),
+        "guarded",
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !service_pid_file.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    if !service_pid_file.exists() {
+        let _ = service.stop();
+        panic!("service did not reach its startup handshake");
+    }
+
+    let started = Instant::now();
+    service.stop().unwrap();
+
+    assert!(graceful.exists(), "guardian truncated graceful shutdown");
+    assert!(started.elapsed() >= Duration::from_millis(150));
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn established_stubborn_service_reports_forced_shutdown() {
+    let root = tempfile::tempdir().unwrap();
+    private::directory(&root.path().join("logs")).unwrap();
+    let binary = root.path().join("stubborn.sh");
+    let service_pid_file = root.path().join("service.pid");
+    fs::write(
+        &binary,
+        b"#!/bin/sh\ntrap '' TERM\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.02; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut service =
+        service(&binary, &[], &service_pid_file, &[], root.path(), "guarded").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !service_pid_file.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    if !service_pid_file.exists() {
+        let _ = service.stop();
+        panic!("stubborn service did not reach its startup handshake");
+    }
+    let service_pid = fs::read_to_string(&service_pid_file)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    let service_pid = rustix::process::Pid::from_raw(service_pid).unwrap();
+
+    let refusal = format!("{:#}", service.stop().unwrap_err());
+
+    assert!(refusal.contains("required forced shutdown"), "{refusal}");
+    assert!(rustix::process::test_kill_process(service_pid).is_err());
+}
+
+#[test]
 fn service_pump_setup_failures_reap_the_child_and_join_started_pumps() {
     let root = tempfile::tempdir().unwrap();
     let logs = root.path().join("logs");
@@ -1256,6 +1631,59 @@ fn service_pump_setup_failures_reap_the_child_and_join_started_pumps() {
         assert_eq!(joined.load(Ordering::Relaxed), fail_on == 2);
         assert!(rustix::process::test_kill_process(pid).is_err());
     }
+}
+
+#[test]
+fn guardian_pump_setup_failure_reaps_a_stubborn_owned_service() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("logs");
+    private::directory(&logs).unwrap();
+    let binary = root.path().join("stubborn.sh");
+    let service_pid_file = root.path().join("service.pid");
+    fs::write(
+        &binary,
+        b"#!/bin/sh\ntrap '' TERM\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.02; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut guardian =
+        service_guard_command(&binary, &[service_pid_file.as_os_str().to_owned()]).unwrap();
+    let child = guardian
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let journal = RetainedJournal::open(&logs.join("casework.log")).unwrap();
+    let started = Instant::now();
+    let mut ready = false;
+
+    let refusal = format!(
+        "{:#}",
+        service_with_pump_spawner(child, journal, |_stream, _task| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !service_pid_file.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            ready = service_pid_file.exists();
+            Err(std::io::Error::other("injected pump spawn failure"))
+        })
+        .err()
+        .expect("injected guardian pump spawn must fail")
+    );
+    assert!(
+        ready,
+        "stubborn service did not reach its startup handshake"
+    );
+    let service_pid = fs::read_to_string(&service_pid_file)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    let service_pid = rustix::process::Pid::from_raw(service_pid).unwrap();
+
+    assert!(refusal.contains("output reader"), "{refusal}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(rustix::process::test_kill_process(service_pid).is_err());
 }
 
 #[test]

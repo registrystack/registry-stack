@@ -9,10 +9,9 @@ use registry_casework_core::{
     AttemptSettlement, AttemptSettlementReport, CaseworkProject, SourceRetentionReport,
     SourceRetentionSelector,
 };
-use registry_platform_config::{SecretProvider, SecretReference};
+use registry_platform_config::{SecretError, SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Value};
 use std::fs;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 const CASEWORK_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
@@ -666,61 +665,36 @@ fn secret_references(config: &RuntimeConfig) -> Vec<(String, &str)> {
     references
 }
 
-/// Why one `secret:file/...` reference is not usable, or `None` when the shared
-/// secret reader will accept it. The conditions are the reader's own, checked
-/// here so an operator reads which file to correct instead of one opaque
-/// refusal from the first live check (GitHub issue #977).
-fn secret_file_refusal(root: &Path, name: &str) -> Option<&'static str> {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-    let path = root.join(name);
-    let metadata = match fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(_) => return Some("missing under the configured file secret root"),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Some("not one ordinary file");
+/// Why one parsed file reference is unusable, or `None` when the runtime's
+/// shared descriptor-relative resolver accepts it. Nothing from the resolved
+/// bytes is retained or reported.
+fn secret_file_refusal(
+    resolver: &SecretResolver,
+    reference: &SecretReference,
+) -> Option<&'static str> {
+    match resolver.resolve_reference(reference) {
+        Ok(_) => None,
+        Err(SecretError::Unavailable) => {
+            Some("missing or unreadable under the configured file secret root")
+        }
+        Err(SecretError::UnsafeFile) => {
+            Some("not an owner-only ordinary single-link file with mode 0400 or 0600")
+        }
+        Err(SecretError::Read) => Some("unreadable"),
+        Err(SecretError::InvalidValue) => Some("not non-empty bounded text without NUL bytes"),
+        Err(SecretError::InvalidReference) => Some("not a valid secret reference"),
+        Err(SecretError::ProviderDisabled) => Some("served by a disabled file secret provider"),
+        Err(SecretError::InvalidProviderConfiguration) => {
+            Some("served by an invalid file secret provider configuration")
+        }
     }
-    if metadata.uid() != rustix::process::geteuid().as_raw() {
-        return Some("owned by another user");
-    }
-    if !matches!(metadata.permissions().mode() & 0o7777, 0o400 | 0o600) {
-        return Some("readable beyond its owner; set mode 0400 or 0600");
-    }
-    if metadata.nlink() != 1 {
-        return Some("hard-linked elsewhere");
-    }
-    // Read only to classify. Bound the read before allocation exactly as the
-    // shared resolver does; nothing from the content is retained or reported.
-    let mut bytes = zeroize::Zeroizing::new(Vec::new());
-    let file = match fs::File::open(&path) {
-        Ok(file) => file,
-        Err(_) => return Some("unreadable"),
-    };
-    if file
-        .take((registry_platform_config::MAX_SECRET_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .is_err()
-    {
-        return Some("unreadable");
-    }
-    if bytes.is_empty() {
-        return Some("empty");
-    }
-    if bytes.len() > registry_platform_config::MAX_SECRET_BYTES {
-        return Some("larger than the shared secret bound of 64 KiB");
-    }
-    if bytes.contains(&0) {
-        return Some("holds a NUL byte; write secrets as text, such as openssl rand -hex 32");
-    }
-    None
 }
 
 /// Parse every configured secret reference before the live checks, then inspect
 /// each `secret:file/...` value and report one bounded result per reference. A
 /// reference served by another provider is reported as outside this check
 /// rather than silently omitted.
-fn secret_file_checks(config: &RuntimeConfig) -> Result<Vec<Value>> {
+fn secret_file_checks(config: &RuntimeConfig, resolver: &SecretResolver) -> Result<Vec<Value>> {
     let root = &config.secret_providers.file.root;
     let mut checks = Vec::new();
     let mut refused = Vec::new();
@@ -738,7 +712,7 @@ fn secret_file_checks(config: &RuntimeConfig) -> Result<Vec<Value>> {
         .collect::<Result<Vec<_>>>()?;
     for (setting, reference) in references {
         let check = match reference.provider() {
-            SecretProvider::File => match secret_file_refusal(root, reference.name()) {
+            SecretProvider::File => match secret_file_refusal(resolver, &reference) {
                 None => json!({"setting": setting, "provider": "file", "status": "ready"}),
                 Some(refusal) => {
                     refused.push(format!("{setting} is {refusal}"));
@@ -767,8 +741,8 @@ fn secret_file_checks(config: &RuntimeConfig) -> Result<Vec<Value>> {
 pub(super) fn doctor(project: &Path, operator: Option<&Path>) -> Result<Value> {
     let (project, operator, config) = load_runtime(project, operator)?;
     check_source_descriptions(&project)?;
-    let secret_files = secret_file_checks(&config)?;
     let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let secret_files = secret_file_checks(&config, &resolver)?;
     // Resolve the audit key as a readiness check without retaining or reporting
     // its bytes. Database references are resolved inside PostgresStore.
     resolver
@@ -1179,24 +1153,32 @@ mod tests {
             0o600,
         );
 
-        assert_eq!(secret_file_refusal(&secrets, "ready"), None);
+        let resolver = SecretResolver::new([SecretProvider::File], &secrets).unwrap();
+        let refusal = |name: &str| {
+            let reference = SecretReference::parse(format!("secret:file/{name}")).unwrap();
+            secret_file_refusal(&resolver, &reference)
+        };
+        assert_eq!(refusal("ready"), None);
         assert_eq!(
-            secret_file_refusal(&secrets, "absent"),
-            Some("missing under the configured file secret root")
+            refusal("absent"),
+            Some("missing or unreadable under the configured file secret root")
         );
         assert_eq!(
-            secret_file_refusal(&secrets, "readable"),
-            Some("readable beyond its owner; set mode 0400 or 0600")
-        );
-        assert_eq!(secret_file_refusal(&secrets, "empty"), Some("empty"));
-        assert_eq!(secret_file_refusal(&secrets, "at-limit"), None);
-        assert_eq!(
-            secret_file_refusal(&secrets, "over-limit"),
-            Some("larger than the shared secret bound of 64 KiB")
+            refusal("readable"),
+            Some("not an owner-only ordinary single-link file with mode 0400 or 0600")
         );
         assert_eq!(
-            secret_file_refusal(&secrets, "with-nul"),
-            Some("holds a NUL byte; write secrets as text, such as openssl rand -hex 32")
+            refusal("empty"),
+            Some("not non-empty bounded text without NUL bytes")
+        );
+        assert_eq!(refusal("at-limit"), None);
+        assert_eq!(
+            refusal("over-limit"),
+            Some("not non-empty bounded text without NUL bytes")
+        );
+        assert_eq!(
+            refusal("with-nul"),
+            Some("not non-empty bounded text without NUL bytes")
         );
     }
 
@@ -1223,8 +1205,9 @@ mod tests {
         )
         .unwrap();
         let config = RuntimeConfig::load(&operator).unwrap();
+        let resolver = secret_resolver(&config).unwrap();
 
-        let checks = secret_file_checks(&config).unwrap();
+        let checks = secret_file_checks(&config, &resolver).unwrap();
         let settings: Vec<&str> = checks
             .iter()
             .map(|check| check["setting"].as_str().unwrap())
@@ -1246,9 +1229,53 @@ mod tests {
         assert!(!serde_json::to_string(&checks).unwrap().contains("00000"));
 
         fs::set_permissions(&audit, fs::Permissions::from_mode(0o644)).unwrap();
-        let refusal = format!("{:#}", secret_file_checks(&config).unwrap_err());
+        let refusal = format!("{:#}", secret_file_checks(&config, &resolver).unwrap_err());
         assert!(refusal.contains("audit.secretRef"), "{refusal}");
         assert!(refusal.contains("0400 or 0600"), "{refusal}");
+    }
+
+    #[test]
+    fn doctor_refuses_a_symlinked_file_root_for_a_migration_only_file_reference() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let actual_secrets = root.path().join("actual-secrets");
+        fs::create_dir(&actual_secrets).unwrap();
+        let migration = actual_secrets.join("migration-database-url");
+        fs::write(&migration, "postgresql://migration.example.test/casework").unwrap();
+        fs::set_permissions(&migration, fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&actual_secrets, project.join("secrets")).unwrap();
+        let operator = project.join("operator.yaml");
+        let document = OPERATOR_YAML
+            .split("\nsources:")
+            .next()
+            .unwrap()
+            .replace("listen: 127.0.0.1:8091", "listen: 127.0.0.1:8092")
+            .replace(
+                "secret:env/CASEWORK_MIGRATION_DATABASE_URL",
+                "secret:file/migration-database-url",
+            )
+            .replace(
+                "secret:file/casework-audit-key",
+                "secret:env/CASEWORK_AUDIT_KEY",
+            );
+        fs::write(&operator, document).unwrap();
+        let config = RuntimeConfig::load(&operator).unwrap();
+        let resolver = secret_resolver(&config).unwrap();
+        let migration = SecretReference::parse(&config.database.migration_url_ref).unwrap();
+
+        assert_eq!(
+            resolver.resolve_reference(&migration).unwrap_err(),
+            SecretError::Unavailable
+        );
+        let refusal = format!("{:#}", doctor(&project, Some(&operator)).unwrap_err());
+        assert!(refusal.contains("database.migrationUrlRef"), "{refusal}");
+        assert!(
+            refusal.contains("missing or unreadable under the configured file secret root"),
+            "{refusal}"
+        );
     }
 
     #[test]

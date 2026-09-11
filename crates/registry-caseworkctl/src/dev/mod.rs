@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
     fs::{self, File},
     io::{Read, Seek, SeekFrom, Write},
     net::TcpListener,
@@ -30,7 +31,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -76,6 +77,10 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 /// bounds diagnostics across retained starts while keeping the newest run.
 const MAX_PREREQUISITE_LOGS: usize = 64;
 const SUPERVISOR_RELEASE_GRACE: Duration = Duration::from_secs(5);
+const SERVICE_EOF_GRACE: Duration = Duration::from_secs(5);
+const SERVICE_SIGNAL_GRACE: Duration = Duration::from_secs(35);
+const SERVICE_GUARD_STOP_GRACE: Duration = Duration::from_secs(40);
+pub(crate) const SERVICE_GUARD_FORCED_EXIT: u8 = 70;
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -161,6 +166,15 @@ pub struct SupervisorArgs {
     mint_bin: PathBuf,
     #[arg(long)]
     docker_bin: PathBuf,
+}
+
+#[derive(Clone, Debug, Args)]
+#[command(trailing_var_arg = true)]
+pub struct ServiceGuardArgs {
+    #[arg(value_name = "BINARY")]
+    pub(crate) binary: PathBuf,
+    #[arg(value_name = "ARG", allow_hyphen_values = true)]
+    pub(crate) arguments: Vec<OsString>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -750,8 +764,19 @@ fn service_ports_must_be_free(status: &Status) -> bool {
 /// reclamation or a manual removal already took is tolerated; ownership is
 /// still verified for anything that is still there.
 fn reclaim(docker: &Path, state: &mut State) -> Result<()> {
-    if listed(docker, state)? {
-        let container = inspect(docker, state)?.context("owned container listing changed")?;
+    // Preserve a verified container description through removal. It is the
+    // only acceptable proof for a legacy, unlabeled volume created before
+    // volume labels were introduced.
+    let container = if listed(docker, state)? {
+        Some(inspect(docker, state)?.context("owned container listing changed")?)
+    } else {
+        None
+    };
+    let volume = inspect_volume_with_termination(docker, state, None)?;
+    if let Some(volume) = volume.as_ref() {
+        verified_volume_name(state, volume, container.as_ref())?;
+    }
+    if let Some(container) = container.as_ref() {
         let id = container["Id"]
             .as_str()
             .context("verified container ID missing")?
@@ -764,13 +789,20 @@ fn reclaim(docker: &Path, state: &mut State) -> Result<()> {
             None,
         )?;
     }
-    docker_command(
-        docker,
-        state,
-        "remove-database-volume",
-        &["volume", "rm", "--force", &state.volume_name()],
-        None,
-    )?;
+    let current_volume = inspect_volume_with_termination(docker, state, None)?;
+    if current_volume != volume {
+        bail!("database volume changed during removal; no volume was removed");
+    }
+    remove_verified_volume(state, current_volume, container.as_ref(), |name| {
+        docker_command(
+            docker,
+            state,
+            "remove-database-volume",
+            &["volume", "rm", "--force", name],
+            None,
+        )?;
+        Ok(())
+    })?;
     reclaimed(state);
     state.save()
 }
@@ -901,6 +933,83 @@ fn control_response_deadline(message: &str) -> Duration {
 
 pub(crate) fn run_supervisor(args: SupervisorArgs) -> Result<()> {
     run_supervisor_inner(args).map_err(|error| anyhow::anyhow!(bounded_supervisor_error(&error)))
+}
+
+pub(crate) fn run_service_guard(args: ServiceGuardArgs) -> Result<bool> {
+    let interruption = StartInterruption::install()?;
+    let mut command = Command::new(args.binary);
+    command.args(args.arguments).stdin(Stdio::null());
+    guard_service_command(
+        command,
+        std::io::stdin(),
+        Arc::clone(&interruption.requested),
+        SERVICE_EOF_GRACE,
+        SERVICE_SIGNAL_GRACE,
+    )
+}
+
+fn guard_service_command(
+    mut command: Command,
+    mut liveness: impl Read + Send + 'static,
+    terminate: Arc<AtomicBool>,
+    eof_grace: Duration,
+    signal_grace: Duration,
+) -> Result<bool> {
+    let (lost_tx, lost_rx) = mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name("casework-dev-service-liveness".to_owned())
+        .spawn(move || {
+            let mut byte = [0u8; 1];
+            loop {
+                match liveness.read(&mut byte) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
+            let _ = lost_tx.send(());
+        })
+        .context("cannot start service liveness reader")?;
+    let mut child = command
+        .spawn()
+        .context("cannot start guarded local service")?;
+    let result = (|| loop {
+        if let Some(status) = child.try_wait()? {
+            if status.success() {
+                return Ok(false);
+            }
+            bail!("local service exited with {status}");
+        }
+        let grace = if terminate.load(Ordering::Relaxed) {
+            Some(signal_grace)
+        } else {
+            match lost_rx.try_recv() {
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => Some(eof_grace),
+                Err(mpsc::TryRecvError::Empty) => None,
+            }
+        };
+        let Some(grace) = grace else {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+        signal(&mut child)?;
+        let deadline = Instant::now() + grace;
+        while child.try_wait()?.is_none() {
+            if Instant::now() >= deadline {
+                child.kill()?;
+                child.wait()?;
+                return Ok(true);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        return Ok(false);
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
 }
 
 fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
@@ -1146,11 +1255,21 @@ impl StartingService {
 impl Drop for StartingService {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            // Setup failed, so graceful service shutdown is neither available
-            // nor useful. A forceful stop makes every owned pipe reach EOF
-            // before its reader is joined.
-            let _ = child.kill();
-            let _ = child.wait();
+            // Closing liveness first lets a guardian that is still completing
+            // setup stop its already-spawned service on the short EOF budget.
+            // A broken guardian still receives the established bounded stop.
+            let guarded = child.stdin.take().is_some();
+            let stopped = if guarded {
+                let eof_budget = SERVICE_EOF_GRACE + Duration::from_secs(1);
+                matches!(wait_child(&mut child, eof_budget), Ok(Some(_)))
+                    || stop_child_with_grace(&mut child, SERVICE_GUARD_STOP_GRACE).is_ok()
+            } else {
+                stop_child(&mut child).is_ok()
+            };
+            if !stopped {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
         for pump in self.pumps.drain(..) {
             let _ = pump.join();
@@ -1160,7 +1279,17 @@ impl Drop for StartingService {
 
 impl Service {
     fn stop(&mut self) -> Result<()> {
-        let child_result = stop_child(&mut self.child);
+        let child_result =
+            stop_child_with_grace(&mut self.child, SERVICE_GUARD_STOP_GRACE).and_then(|status| {
+                if status.code() == Some(i32::from(SERVICE_GUARD_FORCED_EXIT)) {
+                    bail!("owned local child required forced shutdown; inspect retained audit before reuse");
+                }
+                Ok(())
+            });
+        // A live guard receives TERM first and retains the complete service
+        // grace window. Closing liveness afterwards is the secondary cleanup
+        // request if signaling or waiting for that guard failed.
+        drop(self.child.stdin.take());
         let mut pump_error = None;
         for pump in self.pumps.drain(..) {
             let result = pump
@@ -1216,19 +1345,30 @@ fn interrupted_start(root: &Path, supervisor: &mut Child) -> Result<Value> {
 }
 
 fn stop_child(child: &mut Child) -> Result<()> {
+    stop_child_with_grace(child, Duration::from_secs(35)).map(|_| ())
+}
+
+fn stop_child_with_grace(child: &mut Child, grace: Duration) -> Result<std::process::ExitStatus> {
     signal(child)?;
-    let deadline = Instant::now() + Duration::from_secs(35);
-    while child.try_wait()?.is_none() {
+    if let Some(status) = wait_child(child, grace)? {
+        return Ok(status);
+    }
+    child.kill()?;
+    child.wait()?;
+    bail!("owned local child required forced shutdown; inspect retained audit before reuse")
+}
+
+fn wait_child(child: &mut Child, grace: Duration) -> Result<Option<std::process::ExitStatus>> {
+    let deadline = Instant::now() + grace;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
         if Instant::now() > deadline {
-            child.kill()?;
-            child.wait()?;
-            bail!(
-                "owned local child required forced shutdown; inspect retained audit before reuse"
-            );
+            return Ok(None);
         }
         thread::sleep(Duration::from_millis(50));
     }
-    Ok(())
 }
 fn ensure_active(terminate: &AtomicBool) -> Result<()> {
     if terminate.load(Ordering::Relaxed) {
@@ -1571,19 +1711,57 @@ fn service(
     root: &Path,
     name: &str,
 ) -> Result<Service> {
+    let mut arguments: Vec<OsString> = leading.iter().map(OsString::from).collect();
+    arguments.push(config.as_os_str().to_owned());
+    arguments.extend(trailing.iter().map(OsString::from));
+    let mut guard = service_guard_command(binary, &arguments)?;
+    guard.env("SSL_CERT_FILE", root.join("tls/ca.pem")).env(
+        "RUST_LOG",
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_owned()),
+    );
+    service_with_guard_command(guard, root, name)
+}
+
+fn service_guard_command(binary: &Path, arguments: &[OsString]) -> Result<Command> {
+    #[cfg(not(test))]
+    {
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .arg("__dev-service-guard")
+            .arg("--")
+            .arg(binary)
+            .args(arguments);
+        Ok(command)
+    }
+    #[cfg(test)]
+    {
+        let mut invocation = vec![binary.to_string_lossy().into_owned()];
+        invocation.extend(
+            arguments
+                .iter()
+                .map(|argument| argument.to_string_lossy().into_owned()),
+        );
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .args([
+                "--exact",
+                "dev::tests::service_guard_process_helper",
+                "--nocapture",
+            ])
+            .env(
+                "CASEWORKCTL_TEST_SERVICE_GUARD_ARGV",
+                serde_json::to_string(&invocation)?,
+            );
+        Ok(command)
+    }
+}
+
+fn service_with_guard_command(mut guard: Command, root: &Path, name: &str) -> Result<Service> {
     // Validate and compact the retained destination before a child exists. A
     // refused journal must not leave an otherwise untracked service running.
     let journal = RetainedJournal::open(&root.join("logs").join(format!("{name}.log")))?;
-    let child = Command::new(binary)
-        .args(leading)
-        .arg(config)
-        .args(trailing)
-        .env("SSL_CERT_FILE", root.join("tls/ca.pem"))
-        .env(
-            "RUST_LOG",
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_owned()),
-        )
-        .stdin(Stdio::null())
+    let child = guard
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -2127,6 +2305,11 @@ fn inspect_with_termination(
         .into_iter()
         .next()
         .context("Docker returned no exact container")?;
+    verified_container(state, &container)?;
+    Ok(Some(container))
+}
+
+fn verified_container(state: &State, container: &Value) -> Result<()> {
     if container["Name"] != format!("/{}", state.container_name())
         || container["Config"]["Labels"][LABEL] != state.owner
         || container["Config"]["Image"] != IMAGE
@@ -2137,12 +2320,141 @@ fn inspect_with_termination(
     {
         bail!("container ownership differs from retained local state; no resource was changed");
     }
-    Ok(Some(container))
+    Ok(())
+}
+
+fn inspect_volume_with_termination(
+    docker: &Path,
+    state: &State,
+    terminate: Option<&AtomicBool>,
+) -> Result<Option<Value>> {
+    let name = state.volume_name();
+    let filter = format!("name=^{name}$");
+    let list_args = [
+        "volume",
+        "ls",
+        "--filter",
+        filter.as_str(),
+        "--format",
+        "{{.Name}}",
+    ];
+    let listing = match terminate {
+        Some(terminate) => docker_command_cancellable(
+            docker,
+            state,
+            "inspect-volume-list",
+            &list_args,
+            None,
+            terminate,
+        )?,
+        None => docker_command(docker, state, "inspect-volume-list", &list_args, None)?,
+    };
+    if !String::from_utf8(listing)?
+        .lines()
+        .any(|listed| listed == name)
+    {
+        return Ok(None);
+    }
+    let inspect_args = ["volume", "inspect", name.as_str()];
+    let output = match terminate {
+        Some(terminate) => docker_command_cancellable(
+            docker,
+            state,
+            "inspect-volume",
+            &inspect_args,
+            None,
+            terminate,
+        )?,
+        None => docker_command(docker, state, "inspect-volume", &inspect_args, None)?,
+    };
+    let mut values: Vec<Value> =
+        serde_json::from_slice(&output).context("Docker returned invalid volume inventory")?;
+    if values.len() != 1 {
+        bail!("Docker returned no single exact database volume");
+    }
+    Ok(values.pop())
+}
+
+fn verified_volume_name<'a>(
+    state: &State,
+    volume: &'a Value,
+    legacy_container: Option<&Value>,
+) -> Result<&'a str> {
+    let name = volume["Name"]
+        .as_str()
+        .context("Docker volume name missing")?;
+    if name != state.volume_name() {
+        bail!(
+            "database volume ownership differs from retained local state; no resource was changed"
+        );
+    }
+    if volume["Labels"][LABEL] == state.owner {
+        return Ok(name);
+    }
+    let labels = volume
+        .get("Labels")
+        .context("Docker volume labels missing")?;
+    if !(labels.is_null() || labels.as_object().is_some_and(serde_json::Map::is_empty)) {
+        bail!(
+            "database volume ownership differs from retained local state; no resource was changed"
+        );
+    }
+    let container = legacy_container.context(
+        "legacy database volume has no ownership label and its retained container is absent; no resource was changed",
+    )?;
+    verified_container(state, container)?;
+    let retained_id = state.container_id.as_ref().context(
+        "legacy database volume has no ownership label or retained container ID; no resource was changed",
+    )?;
+    if container["Id"] != *retained_id {
+        bail!("legacy database container ID differs from retained local state; no resource was changed");
+    }
+    let mounted = container["Mounts"].as_array().is_some_and(|mounts| {
+        mounts.iter().any(|mount| {
+            mount["Type"] == "volume"
+                && mount["Name"] == name
+                && mount["Destination"] == "/var/lib/postgresql/data"
+        })
+    });
+    if !mounted {
+        bail!("legacy database volume is not mounted by the retained container at /var/lib/postgresql/data; no resource was changed");
+    }
+    Ok(name)
+}
+
+fn ensure_volume(docker: &Path, state: &State, terminate: &AtomicBool) -> Result<()> {
+    let name = state.volume_name();
+    let label = format!("{LABEL}={}", state.owner);
+    docker_command_cancellable(
+        docker,
+        state,
+        "create-database-volume",
+        &["volume", "create", "--label", &label, &name],
+        None,
+        terminate,
+    )?;
+    let volume = inspect_volume_with_termination(docker, state, Some(terminate))?
+        .context("owned database volume was not created")?;
+    verified_volume_name(state, &volume, None)?;
+    Ok(())
+}
+
+fn remove_verified_volume(
+    state: &State,
+    volume: Option<Value>,
+    legacy_container: Option<&Value>,
+    remove: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    if let Some(volume) = volume {
+        remove(verified_volume_name(state, &volume, legacy_container)?)?;
+    }
+    Ok(())
 }
 
 fn database(docker: &Path, state: &mut State, terminate: &AtomicBool) -> Result<()> {
     let root = state.root();
     if inspect_with_termination(docker, state, Some(terminate))?.is_none() {
+        ensure_volume(docker, state, terminate)?;
         let created = docker_command_cancellable(
             docker,
             state,
