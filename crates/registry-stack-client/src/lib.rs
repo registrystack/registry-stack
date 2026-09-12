@@ -5,8 +5,8 @@
 
 pub mod breg {
     pub use registry_breg_client::{
-        BRegAttachmentClassification, BRegAttachmentError, BRegAttachmentSlot,
-        BRegAttachmentSlotValue, BRegAttachmentState, BRegAttachmentUpload,
+        verify_webhook_delivery, BRegAttachmentClassification, BRegAttachmentError,
+        BRegAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState, BRegAttachmentUpload,
         BRegAttachmentVerificationStatus, BRegComplete, BRegContinuation,
         BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest, BRegDirectWrite,
         BRegEtag, BRegIdempotencyKey, BRegLifecycleAction, BRegLifecycleActionReceipt,
@@ -14,7 +14,8 @@ pub mod breg {
         BRegMetadata, BRegMetadataSelectionError, BRegMutationRequestError, BRegOperationKind,
         BRegPage, BRegPatchBinding, BRegPatchBuilder, BRegPatchRequest, BRegPlanRefusal,
         BRegProbeStatus, BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat,
-        BRegRecordOptions, BRegRequestError, BRegResponseMetadata, BaseRegistryClient,
+        BRegRecordOptions, BRegRequestError, BRegResponseMetadata, BRegVerifiedWebhookDelivery,
+        BRegWebhookDelivery, BRegWebhookVerificationError, BaseRegistryClient,
         BaseRegistryClientConfig, BaseRegistryClientError, Uuid,
     };
 }

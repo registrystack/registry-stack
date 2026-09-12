@@ -79,6 +79,14 @@ mutation automatically. See
 [Exact JSON in Node](https://docs.registrystack.org/reference/client-api/#exact-json-in-node)
 for the full rules.
 
+`breg.verifyWebhookDelivery({ method, path, headers, body, key })` authenticates
+the exact bytes of one Version 1 webhook delivery. The result returns
+`deliveryTime` and `idempotencyKey`; the receiver must bound clock skew and
+deduplicate once-only effects on authenticated `source` plus `id`, or on an
+application business key. See
+[Verify a webhook delivery](https://docs.registrystack.org/reference/client-api/#verify-a-webhook-delivery)
+for a receiver example.
+
 ## Versioning
 
 Install the exact client version that matches the deployment. The unified

@@ -31,6 +31,29 @@ available, `code`, `planRefusal`, `refusalCode`, `status`, `traceId`,
 `transportKind`, and `tokenKind`. Errors do not expose token, private-key,
 record, or lifecycle payload values.
 
+## Webhook verification
+
+`verifyWebhookDelivery({ method, path, headers, body, key })` authenticates one
+exact Base Registry Engine Version 1 delivery with the shared Rust verifier.
+Header lookup is case-insensitive. The result carries the CloudEvents
+attributes, generation, attempt, delivery time, idempotency key, and exact body.
+Generation and attempt remain decimal strings so the Node number boundary
+cannot round a signed value.
+
+Body and key buffers must not use a shared backing store. Accepted buffers are
+copied before native verification so another worker cannot change the bytes
+being authenticated.
+
+The helper does not apply clock-skew or deduplication policy. Bound the returned
+`deliveryTime` against the receiver clock. `idempotencyKey` collapses automatic
+retries within one delivery generation; an effect that must remain once-only
+across operator replay uses a durable apply-once operation keyed by authenticated
+`source` plus `id`, or by an application business key, before acting on `body`.
+
+Refusal throws `BaseRegistryClientError` with kind `webhook_verification` and a
+code from `missing_header`, `malformed_signature`, `signature_mismatch`, or
+`unsupported_version`. The message never includes a header value, body, or key.
+
 ## Exact values and application metadata
 
 Use the public server-side package `@registrystack/client` and its `breg`

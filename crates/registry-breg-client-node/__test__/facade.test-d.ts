@@ -23,6 +23,9 @@ import {
   ListContinuation,
   ListOptions,
   RecordEnvelope,
+  VerifiedWebhookDelivery,
+  WebhookVerificationRefusalCode,
+  verifyWebhookDelivery,
 } from '..'
 
 declare const client: BaseRegistryClient
@@ -48,6 +51,30 @@ declare const asOfContinuation: AsOfListContinuation
 declare const snapshotContinuation: SnapshotListContinuation
 declare const relationshipContinuation: RelationshipListContinuation
 declare const geoJsonContinuation: GeoJsonListContinuation
+
+const verifiedWebhook: VerifiedWebhookDelivery = verifyWebhookDelivery({
+  method: 'POST',
+  path: '/hooks/registry',
+  headers: { 'X-Registry-Signature': 'v1=opaque' },
+  body: Buffer.from('{}'),
+  key: Buffer.alloc(32),
+})
+verifiedWebhook.id.toUpperCase()
+verifiedWebhook.source.toUpperCase()
+verifiedWebhook.type.toUpperCase()
+verifiedWebhook.time.toUpperCase()
+verifiedWebhook.dataschema.toUpperCase()
+verifiedWebhook.generation.toUpperCase()
+verifiedWebhook.attempt.toUpperCase()
+verifiedWebhook.deliveryTime.toUpperCase()
+verifiedWebhook.idempotencyKey.toUpperCase()
+verifiedWebhook.body.byteLength
+const webhookRefusal: WebhookVerificationRefusalCode = 'signature_mismatch'
+webhookRefusal.toUpperCase()
+// @ts-expect-error Webhook bodies must remain exact bytes.
+verifyWebhookDelivery({ method: 'POST', path: '/', headers: {}, body: '{}', key: Buffer.alloc(32) })
+// @ts-expect-error Header values must be exact strings.
+verifyWebhookDelivery({ method: 'POST', path: '/', headers: { 'ce-id': 1 }, body: Buffer.from('{}'), key: Buffer.alloc(32) })
 
 const options: ListOptions = { top: 25, filter: 'status eq active', count: true, bbox: ['100.1', '13.1', '100.2', '13.2'] }
 client.listRecords('people', options)

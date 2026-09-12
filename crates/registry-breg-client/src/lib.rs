@@ -21,6 +21,7 @@ mod recovery;
 mod response;
 mod strict_json;
 mod transport;
+mod webhook;
 
 pub use actions::*;
 pub use attachment::*;
@@ -51,6 +52,7 @@ pub use registry_record::{
 };
 pub use response::*;
 pub use uuid::Uuid;
+pub use webhook::*;
 
 pub const DEFAULT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);

@@ -8,6 +8,7 @@ import assert from 'node:assert';
 import { breg, casework, discovery, evidence, relay } from '@registrystack/client';
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
+assert.strictEqual(typeof breg.verifyWebhookDelivery, 'function');
 assert.strictEqual(typeof discovery.DiscoveryClient, 'function');
 assert.strictEqual(typeof evidence.EvidenceClient, 'function');
 assert.strictEqual(typeof relay.RelayClient, 'function');
