@@ -105,17 +105,6 @@ impl std::fmt::Display for RetiredMintDevelopment {
 
 impl std::error::Error for RetiredMintDevelopment {}
 
-#[derive(Debug)]
-pub(crate) struct TaskGrantAuthorityRequired;
-
-impl std::fmt::Display for TaskGrantAuthorityRequired {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("task grants must come from the configured Casework authority")
-    }
-}
-
-impl std::error::Error for TaskGrantAuthorityRequired {}
-
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 pub struct DevArgs {
@@ -177,16 +166,23 @@ enum DevAction {
     Clean(CleanArgs),
     /// Acquire a fresh local service token and report its private header-file path.
     Token(TokenArgs),
-    /// Retained only to explain the authority-backed task-grant workflow.
-    #[command(hide = true)]
-    Grant(RetiredGrantArgs),
+    /// Exchange an existing Casework approval using an explicit configured issuer connection.
+    Grant(GrantArgs),
 }
 
 #[derive(Debug, Args)]
-#[command(trailing_var_arg = true)]
-struct RetiredGrantArgs {
-    #[arg(value_name = "ARG", allow_hyphen_values = true)]
-    _arguments: Vec<String>,
+struct GrantArgs {
+    /// Registered agent client ID in the owner-only connection file.
+    client: String,
+    /// Existing Casework-approved grant UUID; this command does not approve tasks.
+    #[arg(long)]
+    grant: String,
+    /// Owner-only task connection v1 file with the registered agent key and fixed target.
+    #[arg(long, value_name = "FILE")]
+    connection: PathBuf,
+    /// Existing project whose private directory receives the grant-specific header.
+    #[arg(value_name = "PROJECT", default_value = ".")]
+    project: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -471,7 +467,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
             clean_dev(&clean.project, format)
         }
         Some(DevAction::Token(token)) => fresh_token(&token.project, &token.client, format),
-        Some(DevAction::Grant(_)) => Err(TaskGrantAuthorityRequired.into()),
+        Some(DevAction::Grant(args)) => approved_grant(args, format),
         None => {
             if !args.detach {
                 bail!("the local development lifecycle requires `evidencectl dev --detach`");
@@ -524,6 +520,30 @@ fn selected_ports(
             .or(retained.map(|ports| ports.1))
             .unwrap_or(8081),
     )
+}
+
+fn approved_grant(args: GrantArgs, format: OutputFormat) -> Result<ExitCode> {
+    let project = fs::canonicalize(&args.project).context("the grant output project must exist")?;
+    let output = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(registry_thunderid_tooling::grant_file::acquire_to_header(
+            &args.connection,
+            &project.join(".evidence"),
+            &args.client,
+            &args.grant,
+        ))?;
+    match format {
+        OutputFormat::Human => println!(
+            "Wrote approved task authorization header to {}",
+            output.header_file.display()
+        ),
+        OutputFormat::Json => println!(
+            "{}",
+            json!({"operation":"dev-grant","status":"ready","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at})
+        ),
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn fresh_token(project: &Path, client_id: &str, format: OutputFormat) -> Result<ExitCode> {
@@ -2610,38 +2630,36 @@ mod tests {
         let keys = root.path().join("keys");
         generate_holder_key(&keys).expect("generate dev key");
 
-        for name in ["holder"] {
-            let private_path = keys.join(format!("{name}-private.jwk"));
-            let private = registry_platform_crypto::PrivateJwk::parse(
-                &fs::read_to_string(&private_path).expect("private JWK"),
-            )
-            .expect("private JWK parses");
-            let public_path = keys.join("holder-public.jwk.json");
-            let public = registry_platform_crypto::PublicJwk::parse(
-                &fs::read_to_string(&public_path).expect("public JWK"),
-            )
-            .expect("public JWK parses");
-            assert_eq!(private.kty, "EC");
-            assert_eq!(private.crv.as_deref(), Some("P-256"));
-            assert_eq!(private.alg.as_deref(), Some("ES256"));
-            assert_eq!(private.kid, public.kid);
-            assert_eq!(
-                fs::metadata(private_path)
-                    .expect("private JWK metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                PRIVATE_FILE_MODE
-            );
-            assert_eq!(
-                fs::metadata(public_path)
-                    .expect("public JWK metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                PRIVATE_FILE_MODE
-            );
-        }
+        let private_path = keys.join("holder-private.jwk");
+        let private = registry_platform_crypto::PrivateJwk::parse(
+            &fs::read_to_string(&private_path).expect("private JWK"),
+        )
+        .expect("private JWK parses");
+        let public_path = keys.join("holder-public.jwk.json");
+        let public = registry_platform_crypto::PublicJwk::parse(
+            &fs::read_to_string(&public_path).expect("public JWK"),
+        )
+        .expect("public JWK parses");
+        assert_eq!(private.kty, "EC");
+        assert_eq!(private.crv.as_deref(), Some("P-256"));
+        assert_eq!(private.alg.as_deref(), Some("ES256"));
+        assert_eq!(private.kid, public.kid);
+        assert_eq!(
+            fs::metadata(private_path)
+                .expect("private JWK metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            PRIVATE_FILE_MODE
+        );
+        assert_eq!(
+            fs::metadata(public_path)
+                .expect("public JWK metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            PRIVATE_FILE_MODE
+        );
         let before = fs::read(keys.join("holder-private.jwk")).expect("holder private JWK");
         assert!(generate_holder_key(&keys).is_err());
         assert_eq!(

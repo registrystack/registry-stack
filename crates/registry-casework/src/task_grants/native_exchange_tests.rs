@@ -524,7 +524,6 @@ async fn approved_casework_task_exchanges_on_stock_thunderid_and_revokes_breg_wr
     )
     .await;
     assert_eq!(code, StatusCode::OK);
-    let assertion = issued["assertion"].as_str().unwrap();
     let exchange = provider(
         &issuer.url(),
         "task-agent",
@@ -532,7 +531,63 @@ async fn approved_casework_task_exchanges_on_stock_thunderid_and_revokes_breg_wr
         BREG_RESOURCE,
         "records:get",
     );
-    let token = bearer(&exchange.exchange(assertion).await.unwrap());
+    let agent_key_file = root.path().join("agent-key.json");
+    std::fs::write(&agent_key_file, serde_json::to_vec(&json!({"kty":agent_key.kty,"alg":agent_key.alg,"kid":agent_key.kid,"n":agent_key.n,"e":agent_key.e,"d":agent_key.d,"p":agent_key.p,"q":agent_key.q,"dp":agent_key.dp,"dq":agent_key.dq,"qi":agent_key.qi})).unwrap()).unwrap();
+    std::fs::set_permissions(&agent_key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let connection_file = root.path().join("task-connection.yaml");
+    std::fs::write(&connection_file, serde_json::to_vec(&json!({
+        "version":1,"caseworkUrl":format!("http://127.0.0.1:{casework_port}"),
+        "tokenEndpoint":format!("{}/oauth2/token",issuer.url()),
+        "clientAssertionAudience":issuer.url(),"bootstrapResource":CASEWORK_RESOURCE,
+        "clients":{"task-agent":{"assertionKeyFile":agent_key_file,"resource":BREG_RESOURCE,"scopes":["records:get"]}}
+    })).unwrap()).unwrap();
+    std::fs::set_permissions(&connection_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let private_output = root.path().join("product-private");
+    use registry_thunderid_tooling::grant_file::acquire_to_header;
+    assert!(acquire_to_header(
+        &connection_file,
+        &private_output,
+        "unknown-client",
+        grant_id
+    )
+    .await
+    .is_err());
+    assert!(acquire_to_header(
+        &connection_file,
+        &private_output,
+        "task-agent",
+        &Uuid::new_v4().to_string()
+    )
+    .await
+    .is_err());
+    let acquired = acquire_to_header(&connection_file, &private_output, "task-agent", grant_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        acquired.grant_expires_at,
+        grant["expiresAt"].as_u64().unwrap()
+    );
+    assert_eq!(
+        std::fs::metadata(&acquired.header_file)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let header = zeroize::Zeroizing::new(std::fs::read_to_string(&acquired.header_file).unwrap());
+    let token = header
+        .trim()
+        .strip_prefix("Authorization: Bearer ")
+        .unwrap()
+        .to_string();
+    // A fresh command rerun uses the retained connection and preserves the immutable deadline.
+    let acquired_again =
+        acquire_to_header(&connection_file, &private_output, "task-agent", grant_id)
+            .await
+            .unwrap();
+    assert_eq!(acquired_again.header_file, acquired.header_file);
+    assert_eq!(acquired_again.grant_expires_at, acquired.grant_expires_at);
     let claims = payload(&token);
     assert_eq!(claims["registry_grant_id"], grant_id);
     assert_eq!(claims["registry_grant_source_issuer"], AUTHORITY);
@@ -674,6 +729,16 @@ async fn approved_casework_task_exchanges_on_stock_thunderid_and_revokes_breg_wr
     )
     .await;
     assert_eq!(code, StatusCode::FORBIDDEN);
+    let previous_header = std::fs::read(&acquired.header_file).unwrap();
+    assert!(
+        acquire_to_header(&connection_file, &private_output, "task-agent", grant_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        previous_header == std::fs::read(&acquired.header_file).unwrap(),
+        "a refused grant command must not replace an existing header"
+    );
     drop(app);
     db.cleanup().await;
     server.abort();

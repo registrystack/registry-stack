@@ -88,12 +88,29 @@ enum DevAction {
     ExportClient(export_client::ExportClientArgs),
     /// Acquire a fresh local client token and report its private header-file path.
     Token(TokenArgs),
+    /// Exchange an existing Casework approval using an explicit configured issuer connection.
+    Grant(GrantArgs),
     /// Review or prepare a bounded lookup successor for a stopped retained registry.
     ///
     /// `evidencectl source add` drives this operation for an adopter, so the
     /// lifecycle help lists only the commands run by hand.
     #[command(hide = true)]
     PrepareSource(Box<prepare_source::PrepareSourceArgs>),
+}
+
+#[derive(Debug, Args)]
+struct GrantArgs {
+    /// Registered agent client ID in the owner-only connection file.
+    client: String,
+    /// Existing Casework-approved grant UUID; this command does not approve tasks.
+    #[arg(long)]
+    grant: String,
+    /// Owner-only task connection v1 file with the registered agent key and fixed target.
+    #[arg(long, value_name = "FILE")]
+    connection: PathBuf,
+    /// Existing project whose private directory receives the grant-specific header.
+    #[arg(value_name = "PROJECT", default_value = ".")]
+    project: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -311,9 +328,26 @@ pub fn run(args: DevArgs) -> Result<Value> {
         Some(DevAction::Start(args)) => start(args),
         Some(DevAction::ExportClient(args)) => export_client::run(args),
         Some(DevAction::Token(args)) => fresh_token(&args.project, &args.client),
+        Some(DevAction::Grant(args)) => approved_grant(args),
         Some(DevAction::PrepareSource(args)) => prepare_source::run(*args),
         None => start(args.start),
     }
+}
+
+fn approved_grant(args: GrantArgs) -> Result<Value> {
+    let project = project(&args.project)?;
+    let output = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(registry_thunderid_tooling::grant_file::acquire_to_header(
+            &args.connection,
+            &project.join(".breg"),
+            &args.client,
+            &args.grant,
+        ))?;
+    Ok(
+        json!({"ok":true,"command":"dev grant","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at}),
+    )
 }
 
 fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {

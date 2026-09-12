@@ -630,20 +630,6 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
                 }
                 .into());
             }
-            if error
-                .downcast_ref::<dev::TaskGrantAuthorityRequired>()
-                .is_some()
-            {
-                return Err(SafeCliFailure {
-                    operational: false,
-                    code: "evidence.dev.grant-authority-required",
-                    artifact: "task grant".to_owned(),
-                    path: "$".to_owned(),
-                    message: "evidencectl does not issue or forge task grants.".to_owned(),
-                    suggested_action: "Approve the task through the configured Casework authority, then exchange its signed assertion at the configured issuer.".to_owned(),
-                }
-                .into());
-            }
             safe_command(
                 Err(error),
                 "evidence.dev.failed",

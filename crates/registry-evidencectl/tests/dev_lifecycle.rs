@@ -162,19 +162,14 @@ fn retired_mint_flags_are_refused_before_private_state_is_created() {
 }
 
 #[test]
-fn retired_grant_command_points_to_the_casework_authority() {
+fn approved_grant_command_requires_connection_and_refuses_arbitrary_requirements() {
     let output = evidencectl()
         .args(["dev", "grant", "--requirement", "adult-status"])
         .output()
-        .expect("retired grant command");
+        .expect("approved grant command");
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        error.contains("evidence.dev.grant-authority-required"),
-        "{error}"
-    );
-    assert!(error.contains("configured Casework authority"), "{error}");
-    assert!(error.contains("signed assertion"), "{error}");
+    assert!(error.contains("evidencectl.usage"), "{error}");
 
     let help = evidencectl()
         .args(["dev", "--help"])
@@ -182,8 +177,8 @@ fn retired_grant_command_points_to_the_casework_authority() {
         .expect("dev help");
     assert_success(&help, "dev help");
     assert!(
-        !String::from_utf8_lossy(&help.stdout).contains("grant"),
-        "retired grant command must stay hidden"
+        String::from_utf8_lossy(&help.stdout).contains("grant"),
+        "approved grant acquisition must be discoverable"
     );
 }
 
