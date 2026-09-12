@@ -9,7 +9,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const TEST_VERSION: &str = "v9.8.7";
-const BINARIES: [&str; 3] = ["breg", "bregctl", "mint"];
+const BINARIES: [&str; 2] = ["breg", "bregctl"];
 
 // Distinguishes fixture roots built within the same process. The wall clock alone is not
 // enough: macOS reports CLOCK_REALTIME at 1 microsecond resolution, so two fixtures built in
@@ -62,7 +62,7 @@ fn failed_atomic_pointer_switch_preserves_the_previous_toolset() {
 #[test]
 fn failed_atomic_pointer_switch_preserves_a_command_the_pointer_does_not_carry() {
     let fixture = InstallerFixture::new();
-    fixture.preinstall_pointer_toolset_without_mint();
+    fixture.preinstall_pointer_toolset_without_ctl();
 
     // The pointer is already a symbolic link, so no migration precedes the
     // switch and the switch is the first rename onto it.
@@ -81,7 +81,7 @@ fn failed_atomic_pointer_switch_preserves_a_command_the_pointer_does_not_carry()
 #[test]
 fn a_command_the_pointer_does_not_carry_is_adopted_after_the_switch() {
     let fixture = InstallerFixture::new();
-    fixture.preinstall_pointer_toolset_without_mint();
+    fixture.preinstall_pointer_toolset_without_ctl();
 
     let output = fixture.run(false);
 
@@ -92,7 +92,7 @@ fn a_command_the_pointer_does_not_carry_is_adopted_after_the_switch() {
     );
     fixture.assert_release_toolset_active();
     assert!(
-        fixture.install_dir.join("mint").is_symlink(),
+        fixture.install_dir.join("bregctl").is_symlink(),
         "an adopted command must become a stable command link"
     );
 }
@@ -298,12 +298,12 @@ exec /bin/mv "${arguments[@]}"
     }
 
     /// A machine an earlier toolset installed through the pointer, carrying a
-    /// `mint` that another product's installer wrote directly. The pointer is
+    /// standalone CLI installed outside the pointer. The pointer is
     /// already a symbolic link, so the one-time migration does not run.
-    fn preinstall_pointer_toolset_without_mint(&self) {
+    fn preinstall_pointer_toolset_without_ctl(&self) {
         let toolset = self.install_dir.join(".breg-toolset.earlier");
         fs::create_dir_all(&toolset).unwrap();
-        for binary in ["breg", "bregctl"] {
+        for binary in ["breg"] {
             let path = toolset.join(binary);
             fs::write(&path, format!("{binary} previous binary\n")).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
@@ -318,7 +318,7 @@ exec /bin/mv "${arguments[@]}"
             self.install_dir.join(".breg-current"),
         )
         .unwrap();
-        fs::write(self.install_dir.join("mint"), "mint previous binary\n").unwrap();
+        fs::write(self.install_dir.join("bregctl"), "bregctl previous binary\n").unwrap();
     }
 
     fn command(&self) -> Command {
