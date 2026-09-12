@@ -5,11 +5,11 @@ issuer: {id: https://authority.example.org}
 publication: {serviceId: urn:example:staging:evidence-service, title: Staging Evidence service, description: Staging minimum-disclosure Evidence service, endpointUrl: https://evidence.staging.example.org, jurisdictions: [urn:example:jurisdiction:staging]}
 authentication:
   kind: oidc-access-token
-  issuer: https://mint.staging.example.org
+  issuer: https://issuer.staging.example.org
   audiences: [evidence.staging.example.org]
   tokenTypes: [at+jwt]
   algorithms: [ES256]
-  jwksUri: https://mint.staging.example.org/.well-known/jwks.json
+  jwksUri: https://issuer.staging.example.org/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience

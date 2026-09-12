@@ -5,11 +5,11 @@ issuer: {id: https://authority.example.org}
 publication: {serviceId: urn:example:production:evidence-service, title: Production Evidence service, description: Production minimum-disclosure Evidence service, endpointUrl: https://evidence.example.org, jurisdictions: [urn:example:jurisdiction:production]}
 authentication:
   kind: oidc-access-token
-  issuer: https://mint.example.org
+  issuer: https://issuer.example.org
   audiences: [evidence.example.org]
   tokenTypes: [at+jwt]
   algorithms: [ES256]
-  jwksUri: https://mint.example.org/.well-known/jwks.json
+  jwksUri: https://issuer.example.org/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience

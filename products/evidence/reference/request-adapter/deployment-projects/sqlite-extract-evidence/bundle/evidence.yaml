@@ -6,10 +6,9 @@ service:
   trustDomain: urn:gov:example:trust-domain:professional-registration
 issuer:
   id: urn:gov:example:issuer:licence-authority
-# Inbound callers present access tokens from the deployment's own issuer. A
-# deployment with no identity provider runs Registry Mint as that issuer.
-# Nothing about that changes with the source transport: the extract is a local
-# file, so this is the only credential in the project.
+# Inbound callers present access tokens from the deployment's operated OIDC
+# issuer. The extract is a local file, so this is the only network credential
+# contract in the project.
 authentication:
   kind: oidc-access-token
   issuer: https://tokens.gov.example

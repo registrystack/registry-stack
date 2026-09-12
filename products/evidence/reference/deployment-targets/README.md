@@ -11,8 +11,8 @@ The examples deliberately repeat complete environment documents. They use no
 overlays, environment branches, symlinks, or runtime substitutions. Replace the
 reserved `example.org` identities with controlled endpoints and replace the
 example public keys with the exact public projections of independently created
-environment keys. Evidence signing, Mint signing, Evidence audit, Mint audit,
-subject binding, and client keys must all remain distinct.
+environment keys. Evidence signing, Evidence audit, subject binding, and issuer
+client keys must all remain distinct.
 
 Run `./check-public-key-separation.sh` after replacing keys. It uses Python 3
 and PyYAML to parse client registrations structurally, fingerprints the complete
@@ -26,14 +26,11 @@ shared/
 environments/
   local/
     evidence/{governance.yaml,runtime.yaml,public-keys/}
-    mint/{mint.yaml,clients/,public-keys/}
   staging/
     evidence/{governance.yaml,runtime.yaml,public-keys/}
-    mint/{mint.yaml,clients/,public-keys/}
     transit/{proxy-configs/,policies/}
   production/
     evidence/{governance.yaml,runtime.yaml,public-keys/}
-    mint/{mint.yaml,clients/,public-keys/}
     transit/{proxy-configs/,policies/}
 ```
 
@@ -45,7 +42,7 @@ and production separately from the same source revision. Do not promote a
 staging candidate by editing its bytes.
 
 The proxy configurations use a dedicated Unix socket, force the proxy's
-auto-auth token, and require the `X-Vault-Request` header Evidence and Mint send.
+auto-auth token, and require the `X-Vault-Request` header Evidence sends.
 They explicitly disable provider retries so one application signing attempt is
 one Transit signing request. Leave `VAULT_MAX_RETRIES` unset for these workloads
 because it overrides the reviewed proxy value. The application timeout remains
@@ -58,7 +55,7 @@ per service.
 
 ACLs grant read metadata and sign access to one named key. Their required and
 allowed parameter constraints admit only the exact signing request shape and
-the version pinned by Evidence or Mint. During planned rotation, add the next
+the version pinned by Evidence. During planned rotation, add the next
 numeric version to `allowed_parameters.key_version`, deploy the overlap, then
 remove the old version after the token or assertion validity window and
 consumer skew have elapsed. Raising the Transit key's
@@ -72,8 +69,8 @@ path; the local target documents the generated bindings and is not passed to
 the strict deployment compiler.
 
 Before routing an environment, run `evidencectl doctor`, all Evidence fixtures,
-`evidence check --require-runtime-dependencies`, and `mint check`, then confirm
-both `/ready` endpoints. A
+`evidence check --require-runtime-dependencies`, then confirm the Evidence
+`/ready` endpoint. A
 signer whose controls, pinned version, or public key differ from these governed
 files must fail the handoff.
 

@@ -80,11 +80,9 @@ before derivation runs, so an absent region can never be read as a region.
 
 ## Authentication
 
-Inbound callers present access tokens from the deployment's own issuer. A
-deployment with no identity provider runs Registry Mint as that issuer:
-Evidence verifies Mint-issued tokens exactly the way it verifies any other OIDC
-issuer, and the protected registry API in front of the source data is pointed
-at the same issuer. Neither service depends on the other.
+Inbound callers present access tokens from the deployment's operated OIDC
+issuer. Evidence and the protected registry API verify that issuer under their
+independently configured resource-server policies.
 
 Outbound, the source authenticates to the registry API with the OAuth 2.0
 client-credentials grant against that same issuer, placing the credentials in

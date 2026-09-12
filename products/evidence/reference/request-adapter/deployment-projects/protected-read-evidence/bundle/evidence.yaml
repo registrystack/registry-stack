@@ -6,11 +6,9 @@ service:
   trustDomain: urn:gov:example:trust-domain:social-protection
 issuer:
   id: urn:gov:example:issuer:residence-authority
-# Inbound callers present access tokens from the deployment's own issuer. A
-# deployment with no identity provider runs Registry Mint as that issuer:
-# Evidence verifies Mint-issued tokens exactly the way it verifies any other
-# OIDC issuer, and the protected registry API in front of the source data is
-# pointed at the same issuer. Neither service depends on the other.
+# Inbound callers present access tokens from the deployment's operated OIDC
+# issuer. Evidence and the protected registry API verify that issuer under
+# their independently configured resource-server policies.
 authentication:
   kind: oidc-access-token
   issuer: https://tokens.gov.example
