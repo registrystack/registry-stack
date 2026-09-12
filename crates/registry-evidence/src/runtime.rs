@@ -1110,10 +1110,12 @@ impl EvidenceRuntime {
                 Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                     self.append_authorization_refusal(
                         operation,
-                        refusal_requester_pseudonym,
-                        refusal_actor_pseudonym,
-                        context.actor_kind(),
-                        refusal_client_pseudonym,
+                        AuditCaller {
+                            requester_pseudonym: refusal_requester_pseudonym,
+                            actor_pseudonym: refusal_actor_pseudonym,
+                            actor_kind: context.actor_kind(),
+                            client_pseudonym: refusal_client_pseudonym,
+                        },
                         refusal_grant_pseudonym,
                         started,
                     )
@@ -1133,10 +1135,12 @@ impl EvidenceRuntime {
             {
                 self.append_authorization_refusal(
                     operation,
-                    refusal_requester_pseudonym,
-                    refusal_actor_pseudonym,
-                    context.actor_kind(),
-                    refusal_client_pseudonym,
+                    AuditCaller {
+                        requester_pseudonym: refusal_requester_pseudonym,
+                        actor_pseudonym: refusal_actor_pseudonym,
+                        actor_kind: context.actor_kind(),
+                        client_pseudonym: refusal_client_pseudonym,
+                    },
                     refusal_grant_pseudonym,
                     started,
                 )
@@ -1162,10 +1166,12 @@ impl EvidenceRuntime {
                 Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                     self.append_authorization_refusal(
                         operation,
-                        refusal_requester_pseudonym,
-                        refusal_actor_pseudonym,
-                        context.actor_kind(),
-                        refusal_client_pseudonym,
+                        AuditCaller {
+                            requester_pseudonym: refusal_requester_pseudonym,
+                            actor_pseudonym: refusal_actor_pseudonym,
+                            actor_kind: context.actor_kind(),
+                            client_pseudonym: refusal_client_pseudonym,
+                        },
                         refusal_grant_pseudonym,
                         started,
                     )
@@ -1544,10 +1550,12 @@ impl EvidenceRuntime {
             Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                 self.append_authorization_refusal(
                     operation,
-                    refusal_requester_pseudonym,
-                    refusal_actor_pseudonym,
-                    context.actor_kind(),
-                    refusal_client_pseudonym,
+                    AuditCaller {
+                        requester_pseudonym: refusal_requester_pseudonym,
+                        actor_pseudonym: refusal_actor_pseudonym,
+                        actor_kind: context.actor_kind(),
+                        client_pseudonym: refusal_client_pseudonym,
+                    },
                     refusal_grant_pseudonym,
                     started,
                 )
@@ -1568,10 +1576,12 @@ impl EvidenceRuntime {
         {
             self.append_authorization_refusal(
                 operation,
-                refusal_requester_pseudonym,
-                refusal_actor_pseudonym,
-                context.actor_kind(),
-                refusal_client_pseudonym,
+                AuditCaller {
+                    requester_pseudonym: refusal_requester_pseudonym,
+                    actor_pseudonym: refusal_actor_pseudonym,
+                    actor_kind: context.actor_kind(),
+                    client_pseudonym: refusal_client_pseudonym,
+                },
                 refusal_grant_pseudonym,
                 started,
             )
@@ -1623,10 +1633,12 @@ impl EvidenceRuntime {
             Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                 self.append_authorization_refusal(
                     operation,
-                    refusal_requester_pseudonym,
-                    refusal_actor_pseudonym,
-                    context.actor_kind(),
-                    refusal_client_pseudonym,
+                    AuditCaller {
+                        requester_pseudonym: refusal_requester_pseudonym,
+                        actor_pseudonym: refusal_actor_pseudonym,
+                        actor_kind: context.actor_kind(),
+                        client_pseudonym: refusal_client_pseudonym,
+                    },
                     refusal_grant_pseudonym,
                     started,
                 )
@@ -1683,10 +1695,12 @@ impl EvidenceRuntime {
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
         let material = self.audit_material(
             &issuance_scope,
-            requester_pseudonym,
-            actor_pseudonym,
-            context.actor_kind(),
-            client_pseudonym,
+            AuditCaller {
+                requester_pseudonym,
+                actor_pseudonym,
+                actor_kind: context.actor_kind(),
+                client_pseudonym,
+            },
             &resolved,
             format,
         )?;
@@ -3172,13 +3186,16 @@ impl EvidenceRuntime {
     fn audit_material(
         &self,
         scope: &str,
-        requester_pseudonym: String,
-        actor_pseudonym: Option<String>,
-        actor_kind: ActorKind,
-        client_pseudonym: Option<String>,
+        caller: AuditCaller,
         resolved: &ResolvedAuthorization,
         format: ResponseFormat,
     ) -> Result<AuditMaterial, RuntimeFailure> {
+        let AuditCaller {
+            requester_pseudonym,
+            actor_pseudonym,
+            actor_kind,
+            client_pseudonym,
+        } = caller;
         let grant_pseudonym = resolved
             .grant_id
             .as_deref()
@@ -3224,13 +3241,16 @@ impl EvidenceRuntime {
     async fn append_authorization_refusal(
         &self,
         operation: &str,
-        requester_pseudonym: String,
-        actor_pseudonym: Option<String>,
-        actor_kind: ActorKind,
-        client_pseudonym: Option<String>,
+        caller: AuditCaller,
         grant_pseudonym: Option<String>,
         started: Instant,
     ) -> Result<(), RuntimeFailure> {
+        let AuditCaller {
+            requester_pseudonym,
+            actor_pseudonym,
+            actor_kind,
+            client_pseudonym,
+        } = caller;
         let mut event = EvidenceAuthorizationRefusalAuditEvent::new(
             self.bundle().config.assurance_profile,
             operation.to_owned(),
@@ -3454,6 +3474,13 @@ struct SourceStageOutcome {
 enum SourceStageLookup {
     Lookup(LookupResult),
     DeclaredUnresolved,
+}
+
+struct AuditCaller {
+    requester_pseudonym: String,
+    actor_pseudonym: Option<String>,
+    actor_kind: ActorKind,
+    client_pseudonym: Option<String>,
 }
 
 struct AuditMaterial {
