@@ -21,26 +21,29 @@ CHECKER = Path(__file__).with_name("check-advisory-baselines.py")
 LIVE_BASELINES = (
     ROOT / "products/relay-v2/security/advisory-baseline.json",
     ROOT / "release/security/breg-advisory-baseline.json",
+    ROOT / "release/security/casework-advisory-baseline.json",
     ROOT / "release/security/discovery-advisory-baseline.json",
     ROOT / "release/security/evidence-advisory-baseline.json",
     ROOT / "release/security/mint-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:39b47fa94cdff8427b2633dddf3c8978388294a965f8dd4b1a96bbe544bd2111",
-    "breg": "sha256:b047d86f73184c5ccea5e5f1569b18562439766db9607faaaa86e6ccdac00b87",
-    "discovery": "sha256:d95cf965e1946fadc70118016022ef25be22884054f2238036ba5f6c45de0c9e",
-    "evidence": "sha256:ab60f2cc2d89f8a288c9f5d778805a09b1155a45b81dd01f27b24a46d12a0d4f",
-    "mint": "sha256:73ef40425d3f9a382063bd8f02e8d87efa4b5d16d7da1aab9c01c1a114527d74",
+    "relay": "sha256:7d25a3324cfc459dbdc4f85a67fb0758a948230535a5b4c0d84b7bd05a614a0a",
+    "breg": "sha256:adc60c9f54f383c84496bb48d2675012e742e0ce8151d55a62ead5c0906e54a3",
+    "casework": "sha256:f2618e193c83f07501ec0af237dc7841c8cc279f06c7121f04815889fc90a7e2",
+    "discovery": "sha256:9151a7242173be13ee42cabfcc3604efaebc2561efc3d70881a580e10b78e36e",
+    "evidence": "sha256:0ff66e94c746ccad1fcc1913f2f0eb46e6fb21c590b27a9a0fbde60f21bc260b",
+    "mint": "sha256:d485eb3b24eff8d0aaea73afdeb28984e38bddc9a52a0512228a2e77fbfb7bbe",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "df8860670fa3e0fa1668caef640e7e3c37ded689"
+LIVE_REFERENCE_SOURCE_REVISION = "6bdeb66a8e37693ef13e0fa629e551a75f109f0c"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
 # exception. Move it forward by hand when the baselines are renewed.
-LIVE_REVIEW_EVALUATION_DATE = "2026-09-09"
+LIVE_REVIEW_EVALUATION_DATE = "2026-09-12"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "local_reproduction",
     "breg": "local_reproduction",
+    "casework": "local_reproduction",
     "discovery": "local_reproduction",
     "evidence": "local_reproduction",
     "mint": "local_reproduction",
@@ -48,6 +51,7 @@ LIVE_REFERENCE_PROVENANCE = {
 LIVE_EXECUTABLES = {
     "relay": "/usr/local/bin/relay",
     "breg": "/usr/local/bin/breg",
+    "casework": "/usr/local/bin/casework",
     "discovery": "/usr/local/bin/discovery",
     "evidence": "/usr/local/bin/evidence",
     "mint": "/usr/local/bin/mint",
