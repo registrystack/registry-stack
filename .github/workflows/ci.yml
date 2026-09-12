@@ -1331,13 +1331,15 @@ jobs:
         working-directory: docs/site
         run: npm run check:tutorial:casework:dry-run
 
-      - name: Build the Registry Casework toolset under test
+      - name: Build the Registry Casework and BReg toolset under test
         shell: bash
         run: |
           set -euo pipefail
           CARGO_TARGET_DIR="target/casework-tutorial-source" \
             cargo build --locked --profile ci \
-            -p registry-casework -p registry-caseworkctl --bins
+            -p registry-casework -p registry-caseworkctl \
+            -p registry-breg --features registry-breg/runtime \
+            -p registry-bregctl --bins
 
       - name: Verify the retained local development lifecycle
         shell: bash
@@ -1354,6 +1356,8 @@ jobs:
         env:
           CASEWORK_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/casework
           CASEWORKCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/caseworkctl
+          BREG_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/breg
+          BREGCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/bregctl
         run: |
           set -euo pipefail
           # The tutorial passes no port flags, and this runner listens on none
