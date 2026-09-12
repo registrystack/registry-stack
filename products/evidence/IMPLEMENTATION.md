@@ -866,7 +866,7 @@ Exit gate: the frozen runtime contract and its release evidence are complete.
 The remaining adopter build phase may not change request, assertion,
 authorization, source, signing, audit, or verification semantics.
 
-### Phase 7: production build and optional Mint handoff
+### Phase 7: production build and issuer handoff
 
 - Extend local authoring with an empty `fixtures/` directory and optional,
   exact question governance metadata without weakening local development.
@@ -881,12 +881,11 @@ authorization, source, signing, audit, or verification semantics.
 - Add the target-host ceremony for independently provisioned secrets, real
   startup, retained signed-response verification under independent production
   policy, and audit-chain verification.
-- Add the optional read-only Mint compatibility check. It compares only
-  mechanical protocol bindings and pin tests for every mismatch without
-  printing protected values.
+- Verify explicit issuer, JWKS, audience, algorithm, token-type, and claim
+  bindings through a real authorized request and named negative cases without
+  printing protected values. Local development uses pinned stock ThunderID.
 - Document, but do not generate, the Compose adapter and the released-bare-
-  binary tutorial journey. State Mint's single-process, memory-only replay
-  cache limit.
+  binary tutorial journey.
 
 Exit gate: every Definition of Done row is satisfied with focused tests,
 contract and source-neutrality checks, documentation checks, and grouped
@@ -923,8 +922,8 @@ follow-up issue.
 | Operability | An adopter can author, test, deploy, and maintain a source integration from the configuration, adapter API, fixture contract, complete DHIS2/OpenCRVS-shaped projects, and the complete SQLite extract project without editing Rust. The documented extract handoff covers publication metadata, canonical time representation where lexical comparison is used, checkpointing, least-data conversion, immutable mounting, new-path replacement, restart, and fixture/startup verification. An operator can independently bind the immutable governed bundle to listener, secret, audit, private-CA, extract, and Transit proxy paths for each environment without overriding evidence semantics, configure authentication, authority mappings, source bindings, planned and emergency signing rotation, audit epochs, rate limits, and verifier trust using documented supported paths, and let an authenticated consumer discover the exact revision-bound request shapes it may invoke. Static onboarding still owns token acquisition, human and legal descriptions, endpoint trust, and verifier policy. |
 | Production build | An editable project remains local until its author supplies exact governance metadata, stable concept identifiers, and one synthetic fixture per question. `evidencectl package` consumes one explicit closed production target, follows no symlink or outside-project reference, creates no secret or runtime residue, delegates bundle validation and every fixture to the real `evidence` binary, atomically publishes only a complete candidate, and reproduces identical bundle bytes and revision from identical inputs. It creates no keys, callers, approvals, deployments, or network side effects. |
 | Target-host handoff | A reviewed candidate with independently provisioned owner-only production secrets passes `evidencectl doctor --runtime-config <absolute-file>`, `evidencectl test`, and real startup. One authorized synthetic-subject HTTP request yields a signed assertion that `evidence verify` accepts only under independent `production` policy and trusted keys; the resulting access and disclosure audit events pass `evidence verify-audit`. |
-| Optional Mint pairing | External HTTPS OIDC builds without Mint. When Mint is selected, `mint check`, the paired read-only doctor check, registered-client token acquisition, and Evidence acceptance pass. Issuer, JWKS URI, audience, algorithm, token type, and all configured claim-name mismatches fail generically without keys, tokens, credentials, selectors, or source values in output. Mint remains a single process with a memory-only replay cache. |
-| Compose and bare-binary journey | The maintained Compose guidance mounts the candidate bundle unchanged and read-only, uses a distinct container runtime revision, separate read-only secrets, persistent audit storage, a private listener, and operator TLS. It documents service UID and secret modes, public-HTTPS Mint routing, and image provenance without generating Compose output. The production and optional-Mint tutorials execute from released bare binaries and include a real Curl boundary. |
+| Issuer handoff | External HTTPS OIDC is independently configured. Registered-client token acquisition and Evidence acceptance pass; issuer, audience, scope and grant-boundary mismatches fail without credentials, selectors, or source values in output. Local tooling uses pinned stock ThunderID. |
+| Compose and bare-binary journey | The maintained Compose guidance mounts the candidate bundle unchanged and read-only, uses a distinct container runtime revision, separate read-only secrets, persistent audit storage, a private listener, and operator TLS. It documents service UID and secret modes, public HTTPS issuer routing, and image provenance without generating Compose output. The production tutorials execute from released bare binaries and include a real Curl boundary. |
 | Stop boundary | No capability from `CONCEPT.md` section 4 or section 15 is implemented or stubbed beyond the explicitly closed acquisition kinds, each of which fixes every call it may make in configuration before any call is made. This includes document evidence, credential lifecycle, OID4VCI, status lists, presentation verification, nonce or replay storage beyond stateless request-nonce echo and comparison, OOTS XML or AS4, agents or MCP, federation, workflow, a public requester-entitlement or definition catalog, searchable, mutable, aggregate, or federated catalogs, runtime bundle mutation, script-selected transport, response-led or general multi-call planning, an evidence-data call no declared acquisition fixed, response-led multi-source fulfillment, a policy engine, application database, message broker, or worker process. The package-derived public provider advertisement remains inside the boundary as a closed publication for external indexing, not a catalog runtime. |
 
 ## Required Version 1 acceptance tests
