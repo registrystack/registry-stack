@@ -67,6 +67,8 @@ impl Bootstrap<'_> {
         let mut args: Vec<String> = vec![
             "run".into(),
             "--rm".into(),
+            "--user".into(),
+            crate::container::bind_mount_user(),
             "--entrypoint".into(),
             "./thunderid".into(),
         ];
@@ -258,6 +260,8 @@ mod tests {
         // The entrypoint is the upstream binary, so the container runs no
         // shell and no server.
         assert!(args.contains(&"./thunderid".to_owned()));
+        let owner = crate::container::bind_mount_user();
+        assert!(args.windows(2).any(|pair| pair == ["--user", &owner]));
         assert!(!args.iter().any(|argument| argument == "serve"));
 
         runner.success = false;

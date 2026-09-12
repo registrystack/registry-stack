@@ -103,9 +103,10 @@ impl Session<'_> {
         // Seed the shipped schema into a fresh session's database directory.
         // The image's databases carry the table layout setup.sh's bootstrap
         // writes into; an empty directory has no tables and setup cannot
-        // create them. The copy runs as root inside the container only to
-        // hand ownership to the image's non-root user, exactly as upstream
-        // deployment guidance does for a fresh volume.
+        // create them. Run bind-mounted lifecycle steps as the invoking host
+        // user. Linux Docker Engine preserves host ownership, so the image's
+        // fixed uid cannot otherwise write these directories. This also keeps
+        // retained private state owned by the caller.
         let database_is_empty = std::fs::read_dir(&database)
             .map(|entries| entries.count() == 0)
             .unwrap_or(false);
@@ -114,14 +115,14 @@ impl Session<'_> {
                 "run".into(),
                 "--rm".into(),
                 "--user".into(),
-                "0:0".into(),
+                bind_mount_user(),
                 "--mount".into(),
                 format!("type=bind,src={},dst=/seed", database.display()),
                 "--entrypoint".into(),
                 "sh".to_owned(),
                 self.image.to_owned(),
                 "-c".to_owned(),
-                "cp -r /opt/thunderid/database/. /seed/ && chown -R 10001:10001 /seed".to_owned(),
+                "cp -r /opt/thunderid/database/. /seed/".to_owned(),
             ];
             let outcome = runner.run("docker", &seed, &[])?;
             if !outcome.success {
@@ -131,7 +132,12 @@ impl Session<'_> {
             }
         }
 
-        let mut args: Vec<String> = vec!["run".into(), "--rm".into()];
+        let mut args: Vec<String> = vec![
+            "run".into(),
+            "--rm".into(),
+            "--user".into(),
+            bind_mount_user(),
+        ];
         for (host, container) in self.setup_mounts() {
             args.push("--mount".into());
             args.push(format!(
@@ -266,6 +272,8 @@ impl Session<'_> {
         let mut args: Vec<String> = vec![
             "run".into(),
             "-d".into(),
+            "--user".into(),
+            bind_mount_user(),
             "--name".into(),
             name.clone(),
             "--label".into(),
@@ -391,6 +399,14 @@ passkey:
   allowed_origins:
     - "{host_only}"
 "#
+    )
+}
+
+pub(crate) fn bind_mount_user() -> String {
+    format!(
+        "{}:{}",
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw()
     )
 }
 
@@ -568,6 +584,36 @@ mod tests {
             std::fs::metadata(&secrets).unwrap().permissions().mode() & 0o777,
             0o700
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fresh_prepare_runs_every_bind_mount_as_the_host_owner() {
+        let root = std::env::temp_dir().join(format!(
+            "thunderid-bind-owner-test-{}-{}",
+            std::process::id(),
+            random_urlsafe(8).unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let session = Session {
+            label: "owned-test",
+            id: "0197aaaa-0000-7000-8000-0000000000a1",
+            port: 18091,
+            state_root: &root,
+            image: "pinned-test-image",
+        };
+        session.save_state(&SessionState::default()).unwrap();
+        let mut runner = Runner::default();
+
+        session.prepare(&mut runner).unwrap();
+
+        assert_eq!(runner.commands.len(), 2);
+        let owner = bind_mount_user();
+        for command in &runner.commands {
+            assert!(command.windows(2).any(|pair| pair == ["--user", &owner]));
+        }
+        assert!(!runner.commands[0].join(" ").contains("chown"));
+        assert!(session.load_state().unwrap().setup_complete);
         std::fs::remove_dir_all(root).unwrap();
     }
 }
