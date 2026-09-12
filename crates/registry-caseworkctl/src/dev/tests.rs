@@ -814,9 +814,8 @@ struct RegistrySession {
 }
 
 impl RegistrySession {
-    fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
-        let project = root.path().join("registry");
+    fn create_project(root: &Path, name: &str) -> PathBuf {
+        let project = root.join(name);
         fs::create_dir(&project).unwrap();
         fs::write(
             project.join("registry.yaml"),
@@ -827,6 +826,19 @@ impl RegistrySession {
             .unwrap(),
         )
         .unwrap();
+        fs::write(
+            project.join(".fixture-token-endpoint"),
+            "http://127.0.0.1:8191/token",
+        )
+        .unwrap();
+        fs::write(project.join(".fixture-audience"), "urn:breg:dev:fixture").unwrap();
+        fs::write(project.join(".fixture-credential"), "shared-key").unwrap();
+        fs::canonicalize(project).unwrap()
+    }
+
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let project = Self::create_project(root.path(), "registry");
         let executable = root.path().join("bregctl");
         fs::write(
             &executable,
@@ -835,36 +847,43 @@ set -eu
 fixture=$(dirname "$0")
 printf '%s
 ' "$*" >> "$fixture/calls"
-audience=$(cat "$fixture/audience")
+project=""
 client=""
 id_file=""
 key_file=""
 while [ $# -gt 0 ]; do
     case "$1" in
+        export-client) project=$2; shift 2;;
         --client) client=$2; shift 2;;
         --client-id-file) id_file=$2; shift 2;;
         --assertion-key-file) key_file=$2; shift 2;;
         *) shift;;
     esac
 done
+audience=$(cat "$project/.fixture-audience")
+token_endpoint=$(cat "$project/.fixture-token-endpoint")
+credential=$(cat "$project/.fixture-credential")
 umask 077
 printf '%s' "$client" > "$id_file"
-printf '{"kty":"EC"}' > "$key_file"
-printf '{"ok":true,"command":"dev export-client","client":"%s","bregUrl":"http://127.0.0.1:8090","tokenEndpoint":"http://127.0.0.1:8191/token","audience":"%s"}
-' "$client" "$audience"
+printf '{"kty":"EC","fixture":"%s"}' "$credential" > "$key_file"
+printf '{"ok":true,"command":"dev export-client","client":"%s","bregUrl":"http://127.0.0.1:8090","tokenEndpoint":"%s","audience":"%s"}
+' "$client" "$token_endpoint" "$audience"
 "#,
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let audience = root.path().join("audience");
-        fs::write(&audience, "urn:breg:dev:fixture").unwrap();
+        let audience = project.join(".fixture-audience");
         Self {
             calls: root.path().join("calls"),
             audience,
             _root: root,
             executable,
-            project: fs::canonicalize(project).unwrap(),
+            project,
         }
+    }
+
+    fn add_project(&self, name: &str) -> PathBuf {
+        Self::create_project(self._root.path(), name)
     }
 
     fn calls(&self) -> Vec<String> {
@@ -878,6 +897,58 @@ printf '{"ok":true,"command":"dev export-client","client":"%s","bregUrl":"http:/
     fn recreate(&self) {
         fs::write(&self.audience, "urn:breg:dev:replacement").unwrap();
     }
+
+    fn set_audience(project: &Path, audience: &str) {
+        fs::write(project.join(".fixture-audience"), audience).unwrap();
+    }
+
+    fn set_credentials(project: &Path, credential: &str) {
+        fs::write(project.join(".fixture-credential"), credential).unwrap();
+    }
+}
+
+fn prepare_source_export_destinations(state: &State, clients: &Clients) {
+    let root = state.root();
+    for directory in ["credentials", "secrets"] {
+        private::directory(&root.join(directory)).unwrap();
+    }
+    for client in &clients.clients {
+        private::directory(&root.join("credentials").join(&client.id)).unwrap();
+    }
+}
+
+fn retained_credential_canaries(state: &State, clients: &Clients) -> BTreeMap<PathBuf, Vec<u8>> {
+    let root = state.root();
+    let mut canaries = BTreeMap::new();
+    for client in &clients.clients {
+        let directory = root.join("credentials").join(&client.id);
+        for (name, bytes) in [
+            ("client-id", b"RETAINED-CLIENT-ID".as_slice()),
+            (
+                "assertion-key.jwk",
+                b"RETAINED-CLIENT-ASSERTION-KEY".as_slice(),
+            ),
+        ] {
+            let path = directory.join(name);
+            private::create(&path, bytes).unwrap();
+            canaries.insert(path, bytes.to_vec());
+        }
+    }
+    for id in state.sources.keys() {
+        for (suffix, bytes) in [
+            ("reader-client-id", b"RETAINED-READER-ID".as_slice()),
+            (
+                "reader-assertion-key.jwk",
+                b"RETAINED-READER-ASSERTION-KEY".as_slice(),
+            ),
+            ("webhook-key", b"RETAINED-WEBHOOK-KEY".as_slice()),
+        ] {
+            let path = root.join("secrets").join(format!("{id}-{suffix}"));
+            private::create(&path, bytes).unwrap();
+            canaries.insert(path, bytes.to_vec());
+        }
+    }
+    canaries
 }
 
 #[test]
@@ -966,6 +1037,159 @@ fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_sessio
         webhook,
         fs::read_to_string(root.join("secrets/professional-register-webhook-key")).unwrap()
     );
+}
+
+#[test]
+fn incompatible_source_mints_leave_retained_credentials_unchanged() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = workspace.path().join("project");
+    crate::project::init(&project, "professional-review").unwrap();
+    let registry = RegistrySession::new();
+    let other_registry = registry.add_project("other-registry");
+    RegistrySession::set_audience(&other_registry, "urn:breg:dev:other");
+    let mut state = persisted_session(&project);
+    let clients = config::clients(&fs::read(project.join("dev-clients.yaml")).unwrap()).unwrap();
+    state.sources.insert(
+        "alpha".into(),
+        SourceSession {
+            project: registry.project.clone(),
+            binding: None,
+        },
+    );
+    state.sources.insert(
+        "beta".into(),
+        SourceSession {
+            project: other_registry,
+            binding: None,
+        },
+    );
+    state.save().unwrap();
+    prepare_source_export_destinations(&state, &clients);
+    let canaries = retained_credential_canaries(&state, &clients);
+    let retained_state = fs::read(state.root().join("state.json")).unwrap();
+
+    let refusal = format!(
+        "{:#}",
+        export_sources(&registry.executable, &mut state, &clients).unwrap_err()
+    );
+
+    assert!(refusal.contains("different local Mints"), "{refusal}");
+    assert_eq!(
+        fs::read(state.root().join("state.json")).unwrap(),
+        retained_state
+    );
+    for (path, bytes) in canaries {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    assert!(state
+        .sources
+        .values()
+        .all(|source| source.binding.is_none()));
+}
+
+#[test]
+fn sources_need_the_same_shared_casework_client_credentials() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = workspace.path().join("project");
+    crate::project::init(&project, "professional-review").unwrap();
+    let registry = RegistrySession::new();
+    let other_registry = registry.add_project("other-registry");
+    RegistrySession::set_credentials(&other_registry, "other-key");
+    let mut state = persisted_session(&project);
+    let clients = config::clients(&fs::read(project.join("dev-clients.yaml")).unwrap()).unwrap();
+    state.sources.insert(
+        "alpha".into(),
+        SourceSession {
+            project: registry.project.clone(),
+            binding: None,
+        },
+    );
+    state.sources.insert(
+        "beta".into(),
+        SourceSession {
+            project: other_registry,
+            binding: None,
+        },
+    );
+    state.save().unwrap();
+    prepare_source_export_destinations(&state, &clients);
+    let canaries = retained_credential_canaries(&state, &clients);
+    let retained_state = fs::read(state.root().join("state.json")).unwrap();
+
+    let refusal = format!(
+        "{:#}",
+        export_sources(&registry.executable, &mut state, &clients).unwrap_err()
+    );
+
+    assert!(refusal.contains("sources alpha and beta"), "{refusal}");
+    assert!(
+        refusal.contains("different credentials for Casework client"),
+        "{refusal}"
+    );
+    assert_eq!(
+        fs::read(state.root().join("state.json")).unwrap(),
+        retained_state
+    );
+    for (path, bytes) in canaries {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    assert!(state
+        .sources
+        .values()
+        .all(|source| source.binding.is_none()));
+}
+
+#[test]
+fn two_sources_can_share_one_registry_client_registration() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = workspace.path().join("project");
+    crate::project::init(&project, "professional-review").unwrap();
+    let registry = RegistrySession::new();
+    let mut state = persisted_session(&project);
+    let clients = config::clients(&fs::read(project.join("dev-clients.yaml")).unwrap()).unwrap();
+    for id in ["alpha", "beta"] {
+        state.sources.insert(
+            id.into(),
+            SourceSession {
+                project: registry.project.clone(),
+                binding: None,
+            },
+        );
+    }
+    state.save().unwrap();
+    prepare_source_export_destinations(&state, &clients);
+
+    export_sources(&registry.executable, &mut state, &clients).unwrap();
+
+    assert!(state
+        .sources
+        .values()
+        .all(|source| source.binding.is_some()));
+    for id in state.sources.keys() {
+        assert_eq!(
+            fs::read_to_string(
+                state
+                    .root()
+                    .join("secrets")
+                    .join(format!("{id}-reader-client-id"))
+            )
+            .unwrap(),
+            "casework-reader"
+        );
+    }
+    for client in &clients.clients {
+        let directory = state.root().join("credentials").join(&client.id);
+        assert_eq!(
+            fs::read_to_string(directory.join("client-id")).unwrap(),
+            client.id
+        );
+        assert_eq!(
+            fs::read_to_string(directory.join("assertion-key.jwk")).unwrap(),
+            r#"{"kty":"EC","fixture":"shared-key"}"#
+        );
+    }
+    assert_eq!(registry.calls().len(), 2 * (1 + clients.clients.len()));
+    assert_eq!(read_state(&state.root()).unwrap().sources, state.sources);
 }
 
 /// A loopback issuer answering its discovery document and published keys once each.

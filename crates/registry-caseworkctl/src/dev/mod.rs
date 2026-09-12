@@ -253,6 +253,23 @@ struct SourceBinding {
     event_source: String,
 }
 
+struct StagedCredentialPair {
+    client_id: PathBuf,
+    assertion_key: PathBuf,
+}
+
+struct StagedSourceExport {
+    binding: SourceBinding,
+    reader: StagedCredentialPair,
+    clients: BTreeMap<String, StagedCredentialPair>,
+}
+
+struct StagedSourceExports {
+    /// Own the scratch tree until every staged credential has been published.
+    _scratch: tempfile::TempDir,
+    sources: BTreeMap<String, StagedSourceExport>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ReportedClient {
@@ -665,55 +682,146 @@ fn bind_sources(bregctl: &Path, state: &mut State, clients: &Clients) -> Result<
 }
 
 /// Export the Casework reader and every local client from each source's
-/// registry session, recording what the session reports about itself.
+/// registry session into private scratch space. Only after every report names
+/// one shared issuer and every source exports the same Casework client pairs
+/// are the retained copies replaced. Source readers remain source-specific.
 fn export_sources(bregctl: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     let root = state.root();
-    let mut bound = BTreeMap::new();
-    for (id, source) in &state.sources {
+    let scratch = tempfile::Builder::new()
+        .prefix(".source-export-")
+        .tempdir_in(&root)
+        .context("creating private source export directory")?;
+    fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o700))?;
+    private::check(scratch.path(), true)?;
+    let mut staged = BTreeMap::new();
+    for (index, (id, source)) in state.sources.iter().enumerate() {
+        let stage = scratch.path().join(format!("source-{index}"));
+        private::directory(&stage)?;
         let event_source = event_source(&source.project)?;
-        let secrets = root.join("secrets");
+        let reader = StagedCredentialPair {
+            client_id: stage.join("reader-client-id"),
+            assertion_key: stage.join("reader-assertion-key.jwk"),
+        };
         let report = export_client(
             bregctl,
             &root,
             &source.project,
             "casework-reader",
-            &secrets.join(format!("{id}-reader-client-id")),
-            &secrets.join(format!("{id}-reader-assertion-key.jwk")),
+            &reader.client_id,
+            &reader.assertion_key,
         )?;
-        for client in &clients.clients {
-            let directory = root.join("credentials").join(&client.id);
-            export_client(
+        let binding = source_binding(&report, event_source.clone())?;
+        let mut exported_clients = BTreeMap::new();
+        for (client_index, client) in clients.clients.iter().enumerate() {
+            let pair = StagedCredentialPair {
+                client_id: stage.join(format!("client-{client_index}-id")),
+                assertion_key: stage.join(format!("client-{client_index}-assertion-key.jwk")),
+            };
+            let report = export_client(
                 bregctl,
                 &root,
                 &source.project,
                 &client.id,
-                &directory.join("client-id"),
-                &directory.join("assertion-key.jwk"),
+                &pair.client_id,
+                &pair.assertion_key,
             )?;
+            if source_binding(&report, event_source.clone())? != binding {
+                bail!(
+                    "the registry session serving source {id} changed while exporting Casework client {}; retry after its local session is stable",
+                    client.id
+                );
+            }
+            exported_clients.insert(client.id.clone(), pair);
         }
-        let binding = source_binding(&report, event_source)?;
+        staged.insert(
+            id.clone(),
+            StagedSourceExport {
+                binding,
+                reader,
+                clients: exported_clients,
+            },
+        );
+    }
+    let staged = StagedSourceExports {
+        _scratch: scratch,
+        sources: staged,
+    };
+    // One issuer serves the session, so every registry must share a local Mint.
+    let mut issuers = staged
+        .sources
+        .values()
+        .map(|source| (&source.binding.token_endpoint, &source.binding.audience));
+    let first = issuers.next();
+    if issuers.any(|issuer| Some(issuer) != first) {
+        bail!("the registry sessions serving this project's sources use different local Mints; a local session borrows exactly one issuer");
+    }
+    let mut sources = staged.sources.iter();
+    if let Some((first_id, first)) = sources.next() {
+        for (id, source) in sources {
+            for client in &clients.clients {
+                let first_pair = &first.clients[&client.id];
+                let pair = &source.clients[&client.id];
+                if !credential_pairs_match(first_pair, pair)? {
+                    bail!(
+                        "the registry sessions serving sources {first_id} and {id} export different credentials for Casework client {}; every source must share one local Mint client registration",
+                        client.id
+                    );
+                }
+            }
+        }
+    }
+    let secrets = root.join("secrets");
+    for (id, source) in &staged.sources {
+        publish_credential_pair(
+            &source.reader,
+            &secrets.join(format!("{id}-reader-client-id")),
+            &secrets.join(format!("{id}-reader-assertion-key.jwk")),
+        )?;
         // The registry session routes its events to its own receiver; this
         // key authenticates the receiver Casework publishes regardless.
         let webhook = secrets.join(format!("{id}-webhook-key"));
         if !webhook.exists() {
             private::create(&webhook, config::hex_secret()?.as_bytes())?;
         }
-        bound.insert(id.clone(), binding);
     }
-    // One issuer serves the session, so every registry must share a local Mint.
-    let mut issuers = bound
-        .values()
-        .map(|binding| (&binding.token_endpoint, &binding.audience));
-    let first = issuers.next();
-    if issuers.any(|issuer| Some(issuer) != first) {
-        bail!("the registry sessions serving this project's sources use different local Mints; a local session borrows exactly one issuer");
+    if let Some(source) = staged.sources.values().next() {
+        for client in &clients.clients {
+            let directory = root.join("credentials").join(&client.id);
+            publish_credential_pair(
+                &source.clients[&client.id],
+                &directory.join("client-id"),
+                &directory.join("assertion-key.jwk"),
+            )?;
+        }
     }
-    for (id, binding) in bound {
+    for (id, source_export) in staged.sources {
         if let Some(source) = state.sources.get_mut(&id) {
-            source.binding = Some(binding);
+            source.binding = Some(source_export.binding);
         }
     }
     state.save()
+}
+
+fn credential_pairs_match(
+    first: &StagedCredentialPair,
+    other: &StagedCredentialPair,
+) -> Result<bool> {
+    let first_id = Zeroizing::new(private::read(&first.client_id, MAX_BYTES)?);
+    let other_id = Zeroizing::new(private::read(&other.client_id, MAX_BYTES)?);
+    let first_key = Zeroizing::new(private::read(&first.assertion_key, MAX_BYTES)?);
+    let other_key = Zeroizing::new(private::read(&other.assertion_key, MAX_BYTES)?);
+    Ok(*first_id == *other_id && *first_key == *other_key)
+}
+
+fn publish_credential_pair(
+    staged: &StagedCredentialPair,
+    client_id: &Path,
+    assertion_key: &Path,
+) -> Result<()> {
+    let id = Zeroizing::new(private::read(&staged.client_id, MAX_BYTES)?);
+    let key = Zeroizing::new(private::read(&staged.assertion_key, MAX_BYTES)?);
+    private::replace(client_id, &id)?;
+    private::replace(assertion_key, &key)
 }
 
 fn source_binding(report: &Value, event_source: String) -> Result<SourceBinding> {
@@ -760,8 +868,7 @@ fn require_active_source_bindings(bregctl: &Path, state: &State) -> Result<()> {
     Ok(())
 }
 
-/// Export one client pair from a registry session. The session owns the
-/// retained pair, so any earlier copy is replaced rather than compared.
+/// Export one client pair from a registry session into prepared scratch paths.
 fn export_client(
     bregctl: &Path,
     root: &Path,
@@ -770,12 +877,6 @@ fn export_client(
     client_id_file: &Path,
     assertion_key_file: &Path,
 ) -> Result<Value> {
-    for path in [client_id_file, assertion_key_file] {
-        if path.exists() {
-            private::check(path, false)?;
-            fs::remove_file(path)?;
-        }
-    }
     let bytes = command(
         Command::new(bregctl)
             .args(["--format", "json", "dev", "export-client"])
@@ -794,6 +895,9 @@ fn export_client(
         .context("bregctl dev export-client returned no JSON report")?;
     if report["ok"] != true {
         bail!("bregctl dev export-client did not report success for client {client}");
+    }
+    if report["client"] != client {
+        bail!("bregctl dev export-client reported a different client than {client}");
     }
     for path in [client_id_file, assertion_key_file] {
         private::check(path, false)?;
